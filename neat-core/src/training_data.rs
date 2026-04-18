@@ -296,7 +296,7 @@ impl TrainingDataIterator {
 
             let file = fs::File::open(path)?;
             self.current_reader = Some(io::BufReader::new(file));
-            self.records_remaining = file_size / record_size;
+            self.records_remaining = file_size.checked_div(record_size).unwrap_or(0);
             return Ok(true);
         }
 
@@ -337,7 +337,7 @@ impl TrainingDataIterator {
 
         for path in &files {
             let file_size = validate_file_size(path, config)?;
-            total += file_size / record_size;
+            total += file_size.checked_div(record_size).unwrap_or(0);
         }
 
         Ok(total)
@@ -358,11 +358,7 @@ impl SeekingRecordReader {
         validate_config(&config)?;
         let file_size = validate_file_size(path, &config)?;
         let record_size = config.bytes_per_record() as u64;
-        let total_records = if record_size > 0 {
-            file_size / record_size
-        } else {
-            0
-        };
+        let total_records = file_size.checked_div(record_size).unwrap_or(0);
 
         let file = fs::File::open(path)?;
         let record_buffer = vec![0u8; config.bytes_per_record()];
