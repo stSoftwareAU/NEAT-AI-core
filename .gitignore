@@ -1,3 +1,9 @@
+# Ignore invisible
+.*
+!.github
+!.gitignore
+!.codespellrc
+
 /target/
 **/*.rs.bk
 .DS_Store

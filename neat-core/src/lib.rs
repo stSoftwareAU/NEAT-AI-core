@@ -24,6 +24,7 @@ pub mod score_scan;
 pub mod simd;
 pub mod squash;
 pub mod synapse_type;
+pub mod training_bin_stream;
 pub mod training_data;
 pub mod training_state;
 pub mod unsquash;

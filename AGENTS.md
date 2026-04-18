@@ -17,6 +17,7 @@ Name tests after the behaviour or outcome (e.g. `relu_maps_negative_to_zero`), n
 ## Repository layout
 
 - **`neat-core/`** — shared native library; **WASM** stays in **NEAT-AI** (`wasm_activation`).
+- **`training_bin_stream`** (`neat-core/src/training_bin_stream.rs`) — **one** chunked `.bin` scan API: pipelined double-buffer reads on native hosts, sequential `File::read` chunks on `wasm32` (same `for_each_read_chunk` callback). Used by **NEAT-AI-scorer** for production-sized forward-only scoring.
 - Root **`Cargo.toml`** is a **virtual workspace**; **`[workspace.package].version`** is what the PR **auto-bump** job edits; **`neat-core`** uses `version.workspace = true`.
 
 ## CI / secrets

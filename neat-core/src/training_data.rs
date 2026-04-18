@@ -8,6 +8,9 @@
 //! Provides both a streaming iterator interface (low memory) and a batch reader
 //! for loading all records into memory.
 //!
+//! For large forward-only scans, use `training_bin_stream::for_each_read_chunk` — one API
+//! on all targets (pipelined reads natively, sequential chunked reads on wasm32).
+//!
 //! Issue #1966 – Implement binary training data reader in Rust.
 
 use std::fs;
@@ -293,7 +296,7 @@ impl TrainingDataIterator {
 
             let file = fs::File::open(path)?;
             self.current_reader = Some(io::BufReader::new(file));
-            self.records_remaining = file_size / record_size;
+            self.records_remaining = file_size.checked_div(record_size).unwrap_or(0);
             return Ok(true);
         }
 
@@ -334,7 +337,7 @@ impl TrainingDataIterator {
 
         for path in &files {
             let file_size = validate_file_size(path, config)?;
-            total += file_size / record_size;
+            total += file_size.checked_div(record_size).unwrap_or(0);
         }
 
         Ok(total)
@@ -355,11 +358,7 @@ impl SeekingRecordReader {
         validate_config(&config)?;
         let file_size = validate_file_size(path, &config)?;
         let record_size = config.bytes_per_record() as u64;
-        let total_records = if record_size > 0 {
-            file_size / record_size
-        } else {
-            0
-        };
+        let total_records = file_size.checked_div(record_size).unwrap_or(0);
 
         let file = fs::File::open(path)?;
         let record_buffer = vec![0u8; config.bytes_per_record()];
