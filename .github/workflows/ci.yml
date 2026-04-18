@@ -18,7 +18,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_BUILD_JOBS: "2"
 
 jobs:
   version-increment:
@@ -52,10 +51,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install cargo-outdated and cargo-edit
-        run: |
-          cargo install cargo-outdated
-          cargo install cargo-edit
+      - name: Install cargo-edit and cargo-outdated
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit,cargo-outdated
 
       - name: Bump crate version (if needed) and upgrade dependencies
         run: |
@@ -198,24 +197,15 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Disk usage (before cache)
-        run: df -h
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Disk usage (after cache restore)
-        run: df -h
+          workspaces: ". -> target"
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
 
       - name: cargo deny
         run: cargo deny check
@@ -223,33 +213,20 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      # Clippy compiles the workspace; skip redundant cargo check / cargo build here.
       - name: Run linter
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Check types
-        run: cargo check --workspace --all-targets --all-features
-
-      - name: Build workspace
-        run: cargo build --workspace
-
-      - name: Clean intermediate artefacts before tests
-        run: |
-          df -h /
-          find target -name "incremental" -type d -exec rm -rf {} + 2>/dev/null || true
-          find target -name ".fingerprint" -type d -exec rm -rf {} + 2>/dev/null || true
-          find target -name "build" -type d -exec rm -rf {} + 2>/dev/null || true
-          df -h /
-
       - name: Run tests
-        run: cargo test --workspace --lib --tests --bins --all-features --verbose -- --test-threads=2
+        run: cargo test --workspace --lib --tests --all-features -- --test-threads=2
 
       - name: Build documentation
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --no-deps
 
-  shellcheck:
-    name: Shellcheck
+  scripts-and-spelling:
+    name: Scripts & spelling
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: [version-increment]
@@ -273,6 +250,22 @@ jobs:
             shellcheck -s bash "$script" || failed=1
           done < <(find . -name "*.sh" -not -path "./target/*" -not -path "./.git/*")
           exit "$failed"
+
+      - name: Check bash script syntax (bash -n)
+        run: |
+          exit_code=0
+          while IFS= read -r script; do
+            bash -n "$script" || exit_code=1
+          done < <(find . -name "*.sh" -not -path "./target/*" -not -path "./.git/*")
+          exit "$exit_code"
+
+      - name: Run codespell
+        uses: codespell-project/actions-codespell@v2
+        with:
+          check_filenames: true
+          check_hidden: true
+          skip: "./target,./.git"
+          ignore_words_list: renderD,mape
 
   security:
     uses: ./.github/workflows/security.yml
@@ -351,44 +344,3 @@ jobs:
             exit 1
           fi
 
-  shell-checks:
-    name: Shell Script Quality (bash -n)
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    needs: [version-increment]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Check bash script syntax
-        run: |
-          exit_code=0
-          while IFS= read -r script; do
-            bash -n "$script" || exit_code=1
-          done < <(find . -name "*.sh" -not -path "./target/*" -not -path "./.git/*")
-          exit "$exit_code"
-
-  spell-check:
-    name: Spell Check
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    needs: [version-increment]
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-
-      - name: Run codespell
-        uses: codespell-project/actions-codespell@v2
-        with:
-          check_filenames: true
-          check_hidden: true
-          skip: "./target,./.git"
-          ignore_words_list: renderD,mape

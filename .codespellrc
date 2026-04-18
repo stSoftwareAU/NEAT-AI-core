@@ -1,6 +1,7 @@
 [codespell]
 skip = ./target,./.git
-check-hidden = true
-check-filenames = true
+# Boolean flags: use `key =` with nothing after `=` (not `= true` — that breaks argparse).
+check-filenames =
+check-hidden =
 # renderD: serde/JSON field name; mape: MAPE (mean absolute percentage error) acronym
 ignore-words-list = renderD,mape
