@@ -312,7 +312,9 @@ pub fn weighted_sum_simd_4records(
     {
         if std::arch::is_x86_feature_detected!("fma") {
             return unsafe {
-                x86::weighted_sum_simd_4records_fma(synapses, act0, act1, act2, act3, start, end, bias)
+                x86::weighted_sum_simd_4records_fma(
+                    synapses, act0, act1, act2, act3, start, end, bias,
+                )
             };
         }
     }
@@ -321,7 +323,9 @@ pub fn weighted_sum_simd_4records(
     {
         if std::arch::is_aarch64_feature_detected!("neon") {
             return unsafe {
-                aarch64::weighted_sum_simd_4records_neon(synapses, act0, act1, act2, act3, start, end, bias)
+                aarch64::weighted_sum_simd_4records_neon(
+                    synapses, act0, act1, act2, act3, start, end, bias,
+                )
             };
         }
     }

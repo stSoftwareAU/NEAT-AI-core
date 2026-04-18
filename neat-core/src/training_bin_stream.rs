@@ -38,7 +38,9 @@ const MAX_READ_BYTES: usize = 64 * 1024 * 1024;
 /// rounding down to whole records; callers should still do `(target / record_bytes) * record_bytes`.
 pub fn training_read_tuning_from_env(record_bytes: usize) -> (TrainingReadMode, usize) {
     let mode = match std::env::var("NEAT_SCORER_IO_MODE") {
-        Ok(s) if s.trim().eq_ignore_ascii_case("single") => TrainingReadMode::SingleBufferSequential,
+        Ok(s) if s.trim().eq_ignore_ascii_case("single") => {
+            TrainingReadMode::SingleBufferSequential
+        }
         Ok(s) if s.trim().eq_ignore_ascii_case("double") => TrainingReadMode::PipelinedDoubleBuffer,
         Ok(_) => TrainingReadMode::PipelinedDoubleBuffer,
         Err(_) => TrainingReadMode::PipelinedDoubleBuffer,
@@ -67,7 +69,11 @@ pub fn io_backend_label(mode: TrainingReadMode) -> &'static str {
 }
 
 /// Sequential large `read` calls into one buffer (all targets).
-fn for_each_read_chunk_sequential<F>(bin_files: &[PathBuf], read_buf_len: usize, mut on_chunk: F) -> Result<(), String>
+fn for_each_read_chunk_sequential<F>(
+    bin_files: &[PathBuf],
+    read_buf_len: usize,
+    mut on_chunk: F,
+) -> Result<(), String>
 where
     F: FnMut(&[u8]) -> Result<(), String>,
 {
@@ -76,19 +82,12 @@ where
     }
     let mut read_buf = vec![0u8; read_buf_len];
     for path in bin_files {
-        let mut file = File::open(path).map_err(|e| {
-            format!(
-                "Failed to open training file '{}': {e}",
-                path.display()
-            )
-        })?;
+        let mut file = File::open(path)
+            .map_err(|e| format!("Failed to open training file '{}': {e}", path.display()))?;
         loop {
-            let n = file.read(&mut read_buf).map_err(|e| {
-                format!(
-                    "Failed reading training file '{}': {e}",
-                    path.display()
-                )
-            })?;
+            let n = file
+                .read(&mut read_buf)
+                .map_err(|e| format!("Failed reading training file '{}': {e}", path.display()))?;
             if n > 0 {
                 on_chunk(&read_buf[..n])?;
             }
@@ -128,7 +127,11 @@ where
     }
 }
 
-pub fn for_each_read_chunk<F>(bin_files: &[PathBuf], read_buf_len: usize, on_chunk: F) -> Result<(), String>
+pub fn for_each_read_chunk<F>(
+    bin_files: &[PathBuf],
+    read_buf_len: usize,
+    on_chunk: F,
+) -> Result<(), String>
 where
     F: FnMut(&[u8]) -> Result<(), String>,
 {
@@ -141,7 +144,11 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn for_each_read_chunk_native_double<F>(bin_files: &[PathBuf], read_buf_len: usize, mut on_chunk: F) -> Result<(), String>
+fn for_each_read_chunk_native_double<F>(
+    bin_files: &[PathBuf],
+    read_buf_len: usize,
+    mut on_chunk: F,
+) -> Result<(), String>
 where
     F: FnMut(&[u8]) -> Result<(), String>,
 {
@@ -166,21 +173,14 @@ where
     let paths: Vec<PathBuf> = bin_files.to_vec();
     let reader_handle = thread::spawn(move || -> Result<(), String> {
         for path in &paths {
-            let mut file = File::open(path).map_err(|e| {
-                format!(
-                    "Failed to open training file '{}': {e}",
-                    path.display()
-                )
-            })?;
+            let mut file = File::open(path)
+                .map_err(|e| format!("Failed to open training file '{}': {e}", path.display()))?;
             loop {
                 let mut buf = empty_rx
                     .recv()
                     .map_err(|_| "read buffer pool closed unexpectedly".to_string())?;
                 let n = file.read(&mut buf).map_err(|e| {
-                    format!(
-                        "Failed reading training file '{}': {e}",
-                        path.display()
-                    )
+                    format!("Failed reading training file '{}': {e}", path.display())
                 })?;
                 if fill_tx.send(ReaderMsg::Chunk(buf, n)).is_err() {
                     return Ok(());
@@ -195,7 +195,10 @@ where
     });
 
     loop {
-        match fill_rx.recv().map_err(|_| "reader disconnected".to_string())? {
+        match fill_rx
+            .recv()
+            .map_err(|_| "reader disconnected".to_string())?
+        {
             ReaderMsg::Chunk(buf, n) => {
                 let return_buf = if n > 0 {
                     let r = on_chunk(&buf[..n]);
