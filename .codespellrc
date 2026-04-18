@@ -1,0 +1,6 @@
+[codespell]
+skip = ./target,./.git
+check-hidden = true
+check-filenames = true
+# renderD: serde/JSON field name; mape: MAPE (mean absolute percentage error) acronym
+ignore-words-list = renderD,mape

@@ -391,4 +391,4 @@ jobs:
           check_filenames: true
           check_hidden: true
           skip: "./target,./.git"
-          ignore_words_list: renderD
+          ignore_words_list: renderD,mape

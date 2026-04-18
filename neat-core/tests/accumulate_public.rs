@@ -22,10 +22,11 @@ fn test_batch_4way_weight() {
 #[test]
 fn test_batch_4way_bias() {
     let targets = vec![2.0, -1.5, 0.8, 3.0];
-    let pres = vec![1.0, -0.5, 0.2, 2.5];
+    let pre_activations = vec![1.0, -0.5, 0.2, 2.5];
     let biases = vec![0.5, -0.3, 1.2, 0.0];
 
-    let result = accumulate_bias_batch_4way(&targets, &pres, &biases, 1e-7, 1.0, 1.0, 10000.0);
+    let result =
+        accumulate_bias_batch_4way(&targets, &pre_activations, &biases, 1e-7, 1.0, 1.0, 10000.0);
 
     assert_eq!(result.len(), 12);
     // First neuron: delta=1.0, target_bias=1.5

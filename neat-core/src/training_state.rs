@@ -391,11 +391,20 @@ mod tests {
     fn test_bias_accumulation_persistent() {
         init_training_state(0, 4);
 
-        let target_pres = vec![2.0, -1.5, 0.8, 3.0];
-        let pres = vec![1.0, -0.5, 0.2, 2.5];
+        let target_pre_activations = vec![2.0, -1.5, 0.8, 3.0];
+        let pre_activations = vec![1.0, -0.5, 0.2, 2.5];
         let biases = vec![0.5, -0.3, 1.2, 0.0];
 
-        accumulate_bias_persistent_4way(0, &target_pres, &pres, &biases, 1e-7, 1.0, 1.0, 10000.0);
+        accumulate_bias_persistent_4way(
+            0,
+            &target_pre_activations,
+            &pre_activations,
+            &biases,
+            1e-7,
+            1.0,
+            1.0,
+            10000.0,
+        );
 
         let n0 = read_neuron_state(0);
         assert_eq!(n0[0], 1.0, "count should be 1");
@@ -448,8 +457,8 @@ mod tests {
 
     #[test]
     fn test_persistent_bias_matches_batch() {
-        let target_pres = vec![2.0, -1.5, 0.8, 3.0];
-        let pres = vec![1.0, -0.5, 0.2, 2.5];
+        let target_pre_activations = vec![2.0, -1.5, 0.8, 3.0];
+        let pre_activations = vec![1.0, -0.5, 0.2, 2.5];
         let biases = vec![0.5, -0.3, 1.2, 0.0];
         let plank = 1e-7;
         let lr = 1.0;
@@ -458,8 +467,8 @@ mod tests {
 
         // Batch approach
         let batch_result = crate::accumulate::accumulate_bias_batch_4way(
-            &target_pres,
-            &pres,
+            &target_pre_activations,
+            &pre_activations,
             &biases,
             plank,
             lr,
@@ -469,7 +478,16 @@ mod tests {
 
         // Persistent approach
         init_training_state(0, 4);
-        accumulate_bias_persistent_4way(0, &target_pres, &pres, &biases, plank, lr, max_adj, limit);
+        accumulate_bias_persistent_4way(
+            0,
+            &target_pre_activations,
+            &pre_activations,
+            &biases,
+            plank,
+            lr,
+            max_adj,
+            limit,
+        );
 
         for i in 0..4 {
             let persistent = read_neuron_state(i);
