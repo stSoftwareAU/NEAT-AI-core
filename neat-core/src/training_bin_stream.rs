@@ -95,30 +95,25 @@ where
         Ok(())
     });
 
-    loop {
-        match fill_rx
-            .recv()
-            .map_err(|_| "reader disconnected".to_string())?
-        {
-            ReaderMsg::Chunk(buf, n) => {
-                let return_buf = if n > 0 {
-                    let r = on_chunk(&buf[..n]);
-                    if let Err(e) = r {
-                        empty_tx
-                            .send(buf)
-                            .map_err(|_| "failed to return buffer after error".to_string())?;
-                        return Err(e);
-                    }
-                    buf
-                } else {
-                    buf
-                };
+    while let ReaderMsg::Chunk(buf, n) = fill_rx
+        .recv()
+        .map_err(|_| "reader disconnected".to_string())?
+    {
+        let return_buf = if n > 0 {
+            let r = on_chunk(&buf[..n]);
+            if let Err(e) = r {
                 empty_tx
-                    .send(return_buf)
-                    .map_err(|_| "failed to return read buffer to pool".to_string())?;
+                    .send(buf)
+                    .map_err(|_| "failed to return buffer after error".to_string())?;
+                return Err(e);
             }
-            ReaderMsg::Done => break,
-        }
+            buf
+        } else {
+            buf
+        };
+        empty_tx
+            .send(return_buf)
+            .map_err(|_| "failed to return read buffer to pool".to_string())?;
     }
 
     drop(empty_tx);
