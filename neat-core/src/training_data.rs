@@ -8,6 +8,9 @@
 //! Provides both a streaming iterator interface (low memory) and a batch reader
 //! for loading all records into memory.
 //!
+//! For large forward-only scans, use `training_bin_stream::for_each_read_chunk` — one API
+//! on all targets (pipelined reads natively, sequential chunked reads on wasm32).
+//!
 //! Issue #1966 – Implement binary training data reader in Rust.
 
 use std::fs;
