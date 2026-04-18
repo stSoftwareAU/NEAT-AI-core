@@ -21,7 +21,11 @@ use std::path::PathBuf;
 /// On native targets, reads are pipelined with a background thread. On `wasm32`, reads
 /// are sequential and as large as `read_buf_len` allows — still chunked so you never
 /// load an entire shard into memory at once.
-pub fn for_each_read_chunk<F>(bin_files: &[PathBuf], read_buf_len: usize, on_chunk: F) -> Result<(), String>
+pub fn for_each_read_chunk<F>(
+    bin_files: &[PathBuf],
+    read_buf_len: usize,
+    on_chunk: F,
+) -> Result<(), String>
 where
     F: FnMut(&[u8]) -> Result<(), String>,
 {
@@ -41,7 +45,11 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn for_each_read_chunk_native<F>(bin_files: &[PathBuf], read_buf_len: usize, mut on_chunk: F) -> Result<(), String>
+fn for_each_read_chunk_native<F>(
+    bin_files: &[PathBuf],
+    read_buf_len: usize,
+    mut on_chunk: F,
+) -> Result<(), String>
 where
     F: FnMut(&[u8]) -> Result<(), String>,
 {
@@ -66,21 +74,14 @@ where
     let paths: Vec<PathBuf> = bin_files.to_vec();
     let reader_handle = thread::spawn(move || -> Result<(), String> {
         for path in &paths {
-            let mut file = File::open(path).map_err(|e| {
-                format!(
-                    "Failed to open training file '{}': {e}",
-                    path.display()
-                )
-            })?;
+            let mut file = File::open(path)
+                .map_err(|e| format!("Failed to open training file '{}': {e}", path.display()))?;
             loop {
                 let mut buf = empty_rx
                     .recv()
                     .map_err(|_| "read buffer pool closed unexpectedly".to_string())?;
                 let n = file.read(&mut buf).map_err(|e| {
-                    format!(
-                        "Failed reading training file '{}': {e}",
-                        path.display()
-                    )
+                    format!("Failed reading training file '{}': {e}", path.display())
                 })?;
                 if fill_tx.send(ReaderMsg::Chunk(buf, n)).is_err() {
                     return Ok(());
@@ -95,7 +96,10 @@ where
     });
 
     loop {
-        match fill_rx.recv().map_err(|_| "reader disconnected".to_string())? {
+        match fill_rx
+            .recv()
+            .map_err(|_| "reader disconnected".to_string())?
+        {
             ReaderMsg::Chunk(buf, n) => {
                 let return_buf = if n > 0 {
                     let r = on_chunk(&buf[..n]);
@@ -126,25 +130,22 @@ where
 }
 
 #[cfg(target_arch = "wasm32")]
-fn for_each_read_chunk_wasm32<F>(bin_files: &[PathBuf], read_buf_len: usize, mut on_chunk: F) -> Result<(), String>
+fn for_each_read_chunk_wasm32<F>(
+    bin_files: &[PathBuf],
+    read_buf_len: usize,
+    mut on_chunk: F,
+) -> Result<(), String>
 where
     F: FnMut(&[u8]) -> Result<(), String>,
 {
     let mut read_buf = vec![0u8; read_buf_len];
     for path in bin_files {
-        let mut file = File::open(path).map_err(|e| {
-            format!(
-                "Failed to open training file '{}': {e}",
-                path.display()
-            )
-        })?;
+        let mut file = File::open(path)
+            .map_err(|e| format!("Failed to open training file '{}': {e}", path.display()))?;
         loop {
-            let n = file.read(&mut read_buf).map_err(|e| {
-                format!(
-                    "Failed reading training file '{}': {e}",
-                    path.display()
-                )
-            })?;
+            let n = file
+                .read(&mut read_buf)
+                .map_err(|e| format!("Failed reading training file '{}': {e}", path.display()))?;
             if n > 0 {
                 on_chunk(&read_buf[..n])?;
             }
