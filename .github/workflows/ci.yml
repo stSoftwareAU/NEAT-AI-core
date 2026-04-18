@@ -1,0 +1,394 @@
+# NEAT-AI-Discovery–style PR pipeline: auto patch version + rustfmt push, then strict checks.
+# Requires repository secret ACTIONS_PUSH (PAT with contents:write on this repo) so bots can
+# push to PR branches; default GITHUB_TOKEN alone is often insufficient.
+name: CI
+
+on:
+  push:
+    branches:
+      - Develop
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - Develop
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: "2"
+
+jobs:
+  version-increment:
+    name: Auto-increment Versions
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.ACTIONS_PUSH }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Pull latest changes
+        run: git pull origin ${{ github.head_ref }}
+
+      - name: Fetch base branch
+        run: |
+          git fetch origin Develop:Develop || git fetch origin develop:develop || true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-outdated and cargo-edit
+        run: |
+          cargo install cargo-outdated
+          cargo install cargo-edit
+
+      - name: Bump crate version (if needed) and upgrade dependencies
+        run: |
+          set -euo pipefail
+          BASE_BRANCH="Develop"
+          if ! git show-ref --verify --quiet refs/remotes/origin/Develop; then
+            BASE_BRANCH="develop"
+          fi
+
+          SKIP_VERSION_BUMP=false
+          if git show-ref --verify --quiet refs/remotes/origin/$BASE_BRANCH; then
+            VERSION_COMMIT_COUNT=$(git log --oneline origin/$BASE_BRANCH..HEAD --grep="chore: auto-increment versions for changed projects" | wc -l | tr -d ' ')
+            if [ "${VERSION_COMMIT_COUNT:-0}" -gt 0 ]; then
+              echo "Version bump commit already on this PR — skipping semver bump only"
+              SKIP_VERSION_BUMP=true
+            fi
+          fi
+
+          if [ "$SKIP_VERSION_BUMP" = false ] && git show-ref --verify --quiet refs/remotes/origin/$BASE_BRANCH; then
+            BASE_VERSION=$(git show origin/$BASE_BRANCH:Cargo.toml 2>/dev/null | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/' || echo "")
+            CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+            if [ -n "$BASE_VERSION" ] && [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" != "$BASE_VERSION" ]; then
+              echo "Version already differs from base — skipping semver bump"
+              SKIP_VERSION_BUMP=true
+            fi
+          fi
+
+          if [ "$SKIP_VERSION_BUMP" = false ]; then
+            CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+            echo "Current crate version: $CURRENT_VERSION"
+            IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
+            major=${major:-0}
+            minor=${minor:-0}
+            patch=${patch:-0}
+            NEW_VERSION="$major.$minor.$((patch + 1))"
+            echo "Bumping crate version to: $NEW_VERSION"
+            ESCAPED_CURRENT=$(printf '%s' "$CURRENT_VERSION" | sed 's/[\/.^$*+?()[\]{}|]/\\&/g')
+            sed -i.bak "s/^version = \"$ESCAPED_CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
+            rm -f Cargo.toml.bak
+          fi
+
+          echo "Running cargo upgrade --incompatible and cargo update (NEAT-AI-Discovery quality.sh parity)..."
+          cargo upgrade --incompatible
+          cargo update
+          cargo outdated -R || true
+
+      - name: Commit version and dependency changes
+        run: |
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes after version bump / dependency upgrade"
+          else
+            git commit -m "chore: auto-increment versions for changed projects"
+            git push origin ${{ github.head_ref }}
+          fi
+
+  auto-format:
+    name: Auto-format Code
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [version-increment]
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.ACTIONS_PUSH }}
+
+      - name: Ensure bash scripts are executable
+        run: |
+          CHANGED=false
+          while IFS= read -r script; do
+            if [ ! -x "$script" ]; then
+              chmod +x "$script"
+              CHANGED=true
+            fi
+          done < <(find . -name "*.sh" -not -path "./target/*" -not -path "./.git/*")
+          if [ "$CHANGED" = true ]; then
+            echo "chmod +x applied to scripts"
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Format code
+        run: cargo fmt --all
+
+      - name: Commit rustfmt if needed
+        id: fmt_commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet; then
+            git add -A
+            git commit -m "chore: apply rustfmt fixes"
+            git push origin ${{ github.head_ref }}
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  quality:
+    name: Quality Checks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [version-increment, auto-format]
+    env:
+      RUSTFLAGS: "-D warnings"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest changes
+        run: git pull origin ${{ github.head_ref }}
+
+      - name: Free up runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/share/swift
+          df -h /
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Disk usage (before cache)
+        run: df -h
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Disk usage (after cache restore)
+        run: df -h
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: cargo deny
+        run: cargo deny check
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run linter
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Check types
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Clean intermediate artefacts before tests
+        run: |
+          df -h /
+          find target -name "incremental" -type d -exec rm -rf {} + 2>/dev/null || true
+          find target -name ".fingerprint" -type d -exec rm -rf {} + 2>/dev/null || true
+          find target -name "build" -type d -exec rm -rf {} + 2>/dev/null || true
+          df -h /
+
+      - name: Run tests
+        run: cargo test --workspace --lib --tests --bins --all-features --verbose -- --test-threads=2
+
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps
+
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [version-increment]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: |
+          failed=0
+          while IFS= read -r script; do
+            shellcheck -s bash "$script" || failed=1
+          done < <(find . -name "*.sh" -not -path "./target/*" -not -path "./.git/*")
+          exit "$failed"
+
+  security:
+    uses: ./.github/workflows/security.yml
+    if: github.event_name == 'pull_request'
+    needs: [version-increment]
+    with:
+      include-dependency-review: true
+
+  validation:
+    name: Project Validation
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [version-increment]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check for required files
+        run: |
+          required_files=(
+            "Cargo.toml"
+            "README.md"
+            "LICENSE"
+            "neat-core/src/lib.rs"
+          )
+          for file in "${required_files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Missing: $file"
+              exit 1
+            fi
+          done
+
+      - name: Validate Cargo workspace manifest
+        run: cargo metadata --no-deps --format-version 1 > /dev/null
+
+      - name: Validate workspace.package in root Cargo.toml
+        run: |
+          for field in version edition license; do
+            if ! grep -vE '^[[:space:]]*#' Cargo.toml | grep -qE "^[[:space:]]*${field}[[:space:]]*="; then
+              echo "Missing workspace.package field '${field}' in root Cargo.toml"
+              exit 1
+            fi
+          done
+          grep -qE '^\[workspace\]' Cargo.toml || { echo "Missing [workspace]"; exit 1; }
+          grep -q 'members' Cargo.toml || { echo "Missing workspace members"; exit 1; }
+
+      - name: Validate neat-core Cargo.toml
+        run: |
+          for field in name version edition license; do
+            if ! grep -vE '^[[:space:]]*#' neat-core/Cargo.toml | grep -qE "^[[:space:]]*${field}"; then
+              echo "Missing '${field}' in neat-core/Cargo.toml"
+              exit 1
+            fi
+          done
+
+      - name: Check README length
+        run: |
+          readme_lines=$(wc -l < README.md)
+          if [ "$readme_lines" -lt 10 ]; then
+            echo "README.md too short ($readme_lines lines)"
+            exit 1
+          fi
+
+      - name: Check neat-core rustdoc presence
+        run: |
+          doc_comments=$(grep -c "///" neat-core/src/lib.rs || echo "0")
+          if [ "$doc_comments" -eq 0 ]; then
+            echo "No /// in neat-core/src/lib.rs"
+            exit 1
+          fi
+
+  shell-checks:
+    name: Shell Script Quality (bash -n)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [version-increment]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Check bash script syntax
+        run: |
+          exit_code=0
+          while IFS= read -r script; do
+            bash -n "$script" || exit_code=1
+          done < <(find . -name "*.sh" -not -path "./target/*" -not -path "./.git/*")
+          exit "$exit_code"
+
+  spell-check:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [version-increment]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Run codespell
+        uses: codespell-project/actions-codespell@v2
+        with:
+          check_filenames: true
+          check_hidden: true
+          skip: "./target,./.git"
+          ignore_words_list: renderD

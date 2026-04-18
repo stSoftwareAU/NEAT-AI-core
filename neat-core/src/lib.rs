@@ -1,0 +1,69 @@
+//! Shared computation library for NEAT-AI neural network operations.
+//!
+//! This crate contains the core neural network logic extracted from the
+//! `wasm_activation` crate. Native targets omit `wasm-bindgen`; on
+//! `wasm32-unknown-unknown`, `accumulate` exports use `wasm-bindgen` behind
+//! `cfg_attr` so the same sources build for CLI tools and WASM.
+//!
+//! Issue #1964 - Extract shared Rust library crate from wasm_activation.
+
+// Core computation modules
+pub mod accumulate;
+pub mod creature;
+pub mod derivative;
+pub mod elastic_distribution;
+pub mod error;
+pub mod fused_error;
+pub mod loss;
+pub mod network;
+pub mod pc_inference;
+pub mod pc_learning;
+pub mod range;
+pub mod safe_zone;
+pub mod score_scan;
+pub mod simd;
+pub mod squash;
+pub mod synapse_type;
+pub mod training_data;
+pub mod training_state;
+pub mod unsquash;
+
+// Re-export key types for convenience
+pub use creature::{
+    CreatureExport, NeuronExport, SynapseExport, compile_creature, parse_creature_json,
+    parse_squash_name, parse_synapse_type,
+};
+pub use network::{CompiledNetwork, NeuronData, SynapseData};
+pub use pc_inference::PredictiveCodingEngine;
+pub use squash::SquashType;
+pub use synapse_type::SynapseType;
+pub use training_data::{
+    SeekingRecordReader, TrainingDataConfig, TrainingDataError, TrainingDataIterator,
+    TrainingRecord, find_bin_files, read_dir as read_training_dir, read_file as read_training_file,
+};
+
+// Re-export core functions
+pub use accumulate::{
+    accumulate_bias_batch_4way, accumulate_bias_batch_8way, accumulate_weight_batch_4way,
+    accumulate_weight_batch_8way, calculate_bias, calculate_weight,
+};
+pub use derivative::{apply_derivative, apply_derivative_simd_4way};
+pub use elastic_distribution::distribute_elastic_error;
+pub use error::{apply_calculate_error, apply_calculate_error_batch_4way};
+pub use fused_error::apply_fused_error_distribution;
+pub use loss::{
+    cross_entropy_sum_batch_packed, hinge_sum_batch_packed, mae_sum_batch_packed,
+    mape_sum_batch_packed, mse_sum_batch_packed, msle_sum_batch_packed,
+};
+pub use range::{apply_get_range, apply_limit_range, apply_validate_range};
+pub use safe_zone::{apply_safe_zone_adjustment, apply_safe_zone_adjustment_batch};
+pub use score_scan::{compute_score_components, scan_max_bias, scan_max_weight};
+pub use squash::apply_squash;
+pub use training_state::{
+    accumulate_bias_persistent_4way, accumulate_bias_persistent_8way,
+    accumulate_weight_persistent_4way, accumulate_weight_persistent_8way, free_training_state,
+    get_training_state_num_neurons, get_training_state_num_synapses, init_training_state,
+    read_all_neuron_state, read_all_synapse_state, read_neuron_state, read_synapse_state,
+    reset_training_state,
+};
+pub use unsquash::apply_unsquash;
