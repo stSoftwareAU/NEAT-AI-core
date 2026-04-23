@@ -24,6 +24,7 @@ pub mod score_scan;
 pub mod simd;
 pub mod squash;
 pub mod synapse_type;
+pub mod topological_backprop;
 pub mod topology_ops;
 pub mod training_bin_stream;
 pub mod training_data;
@@ -61,6 +62,11 @@ pub use range::{apply_get_range, apply_limit_range, apply_validate_range};
 pub use safe_zone::{apply_safe_zone_adjustment, apply_safe_zone_adjustment_batch};
 pub use score_scan::{compute_score_components, scan_max_bias, scan_max_weight};
 pub use squash::apply_squash;
+pub use topological_backprop::{
+    NEURON_TYPE_CONSTANT, NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT, NEURON_TYPE_OUTPUT, NeuronInput,
+    NeuronType, PropagateInput, PropagateOutcome, PropagateOutput, StandardOutcome, SynapseDelta,
+    SynapseInput, propagate_topological_loop,
+};
 pub use topology_ops::{
     BACKWARD_CONNECTION, DUPLICATE_CONNECTION, SELF_CONNECTION, SORT_ERROR_FROM, SORT_ERROR_TO,
     STRUCTURAL_BIAS_NOT_FINITE, STRUCTURAL_CONSTANT_HAS_INWARD, STRUCTURAL_HIDDEN_NO_INWARD,
