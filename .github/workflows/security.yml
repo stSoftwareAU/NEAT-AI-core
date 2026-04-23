@@ -33,7 +33,16 @@ jobs:
         with:
           tool: cargo-audit
 
-      - name: Run RustSec audit
+      # Primary audit: rustsec/audit-check@v2 annotates PRs with RustSec advisories.
+      # It wraps the `cargo audit` CLI (cargo-audit) and reports vulnerabilities inline.
+      - name: Run RustSec audit (rustsec/audit-check)
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fallback: run `cargo audit` directly so the job fails even if the action
+      # cannot post annotations (e.g. permission edge cases on forked PRs).
+      - name: Run cargo audit (fallback)
         run: cargo audit
 
       - name: Dependency review (GitHub Advisory / license diff on PR)
