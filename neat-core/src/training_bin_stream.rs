@@ -3,19 +3,40 @@
 //! [`for_each_read_chunk`] is the **only** scan entry point used for production-sized
 //! forward passes: callers append each chunk to a staging buffer and unpack records.
 //!
-//! - **Native (`not(wasm32)`):** pipelined double-buffer reads (reader thread + ping-pong
-//!   `Vec<u8>`) so the main thread can overlap disk I/O with `f32` unpack + network work.
-//! - **`wasm32-unknown-unknown`:** sequential `File::read` into one buffer (no threads,
-//!   no mmap). Same callback contract as native — one mental model, target-specific
-//!   implementation only.
+//! ## Read modes (native only)
 //!
-//! ## Sequential escape hatch (issue #25)
+//! On native hosts, two read strategies are available via [`TrainingReadMode`]:
 //!
-//! On native hosts, setting the environment variable `NEAT_TRAINING_READ_SEQUENTIAL=1`
-//! (accepted values: `1`, `true`, `yes`, `on`, case-insensitive) selects the same
-//! sequential `File::read` loop used on `wasm32`. This avoids the pipelined reader
-//! entirely — handy for downstream consumers who hit teardown races while the
-//! pipelined path is under investigation.
+//! - [`TrainingReadMode::PipelinedDoubleBuffer`] *(default)* — a background reader
+//!   thread fills ping-pong `Vec<u8>` buffers so the consumer can overlap disk I/O
+//!   with `f32` unpack + network work.
+//! - [`TrainingReadMode::SingleBufferSequential`] — a single-threaded `File::read`
+//!   loop into one buffer. Simpler teardown semantics and the only available mode
+//!   on `wasm32-unknown-unknown`.
+//!
+//! Both modes invoke the same `on_chunk` callback and produce byte-identical output
+//! for a given corpus, so callers can A/B the two without any code changes.
+//!
+//! ## Env-driven tuning
+//!
+//! [`training_read_tuning_from_env`] lets downstream tools (e.g. NEAT-AI-scorer)
+//! pick the read mode and read-buffer size at run time — no rebuild required:
+//!
+//! - `NEAT_SCORER_IO_MODE` — case-insensitive `single` or `double` (default
+//!   `double`). Unknown values fall back to the pipelined default.
+//! - `NEAT_SCORER_READ_BYTES` — decimal `usize`, default 2 MiB, clamped to
+//!   `[record_bytes.max(1), 64 MiB]`.
+//!
+//! [`io_backend_label`] returns a stable telemetry string for the selected mode
+//! (always `"sequential_chunked_file_read"` on `wasm32`).
+//!
+//! ## Legacy sequential escape hatch (issue #25)
+//!
+//! The older `NEAT_TRAINING_READ_SEQUENTIAL` env var (accepted values: `1`,
+//! `true`, `yes`, `on`, case-insensitive) is still honoured by
+//! [`for_each_read_chunk`] for backwards compatibility. New callers should use
+//! [`for_each_read_chunk_with_mode`] and [`training_read_tuning_from_env`] to
+//! select the mode explicitly.
 
 use std::fs::File;
 use std::io::Read;
@@ -25,18 +46,133 @@ use std::path::PathBuf;
 /// single-threaded read path even on native targets.
 pub const SEQUENTIAL_ENV: &str = "NEAT_TRAINING_READ_SEQUENTIAL";
 
-/// Read every byte from `bin_files` in order, invoking `on_chunk` for each read segment.
+/// Env var selecting the native read mode: `single` or `double`
+/// (case-insensitive). Unknown values fall back to the pipelined default.
+pub const IO_MODE_ENV: &str = "NEAT_SCORER_IO_MODE";
+
+/// Env var selecting the read buffer size in bytes (decimal `usize`). Clamped
+/// to `[record_bytes.max(1), 64 MiB]`.
+pub const READ_BYTES_ENV: &str = "NEAT_SCORER_READ_BYTES";
+
+/// Default read buffer length (2 MiB) when [`READ_BYTES_ENV`] is unset.
+pub const DEFAULT_READ_BYTES: usize = 2 * 1024 * 1024;
+
+/// Upper clamp for the read buffer length (64 MiB).
+pub const MAX_READ_BYTES: usize = 64 * 1024 * 1024;
+
+/// Selects the native chunk-read strategy.
 ///
-/// `read_buf_len` should be at least one record (`>= record_bytes`); callers typically
-/// use ~2 MiB rounded down to a whole number of records.
+/// Ignored on `wasm32`, where the sequential `File::read` loop is the only
+/// available strategy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TrainingReadMode {
+    /// Background reader thread + ping-pong `Vec<u8>` buffers. Default.
+    #[default]
+    PipelinedDoubleBuffer,
+    /// Single-threaded `File::read` loop into one buffer.
+    SingleBufferSequential,
+}
+
+/// Reads [`IO_MODE_ENV`] and [`READ_BYTES_ENV`] and returns the selected mode
+/// and read buffer length.
 ///
-/// On native targets, reads are pipelined with a background thread unless the
-/// [`SEQUENTIAL_ENV`] env var forces the sequential path. On `wasm32`, reads
-/// are always sequential and as large as `read_buf_len` allows — still chunked
-/// so you never load an entire shard into memory at once.
+/// - `NEAT_SCORER_IO_MODE` is parsed case-insensitively:
+///   - `single` → [`TrainingReadMode::SingleBufferSequential`]
+///   - `double` or unset or any unknown value →
+///     [`TrainingReadMode::PipelinedDoubleBuffer`]
+/// - `NEAT_SCORER_READ_BYTES` is parsed as decimal `usize` and clamped to
+///   `[record_bytes.max(1), 64 MiB]`. Unset or unparsable values fall back to
+///   the default 2 MiB, also clamped.
+pub fn training_read_tuning_from_env(record_bytes: usize) -> (TrainingReadMode, usize) {
+    let mode = match std::env::var(IO_MODE_ENV) {
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "single" => TrainingReadMode::SingleBufferSequential,
+            _ => TrainingReadMode::PipelinedDoubleBuffer,
+        },
+        Err(_) => TrainingReadMode::PipelinedDoubleBuffer,
+    };
+
+    let requested = std::env::var(READ_BYTES_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_READ_BYTES);
+
+    let lower = record_bytes.max(1);
+    let upper = MAX_READ_BYTES.max(lower);
+    let read_bytes = requested.clamp(lower, upper);
+
+    (mode, read_bytes)
+}
+
+/// Stable telemetry label for the chosen read backend.
+///
+/// On `wasm32` the returned label is always `"sequential_chunked_file_read"`
+/// regardless of the input mode (there is only one backend on that target).
+pub fn io_backend_label(mode: TrainingReadMode) -> &'static str {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = mode;
+        "sequential_chunked_file_read"
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match mode {
+            TrainingReadMode::PipelinedDoubleBuffer => "pipelined_double_buffer",
+            TrainingReadMode::SingleBufferSequential => "single_buffer_sequential",
+        }
+    }
+}
+
+/// Read every byte from `bin_files` in order, invoking `on_chunk` for each read
+/// segment. Thin wrapper that delegates to [`for_each_read_chunk_with_mode`]
+/// using [`TrainingReadMode::PipelinedDoubleBuffer`].
+///
+/// For backwards compatibility, setting the legacy [`SEQUENTIAL_ENV`] env var
+/// to a truthy value forces [`TrainingReadMode::SingleBufferSequential`] even
+/// through this entry point. New callers should prefer
+/// [`for_each_read_chunk_with_mode`] for explicit selection.
 pub fn for_each_read_chunk<F>(
     bin_files: &[PathBuf],
     read_buf_len: usize,
+    on_chunk: F,
+) -> Result<(), String>
+where
+    F: FnMut(&[u8]) -> Result<(), String>,
+{
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mode = if sequential_env_requested() {
+            TrainingReadMode::SingleBufferSequential
+        } else {
+            TrainingReadMode::PipelinedDoubleBuffer
+        };
+        for_each_read_chunk_with_mode(bin_files, read_buf_len, mode, on_chunk)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        for_each_read_chunk_with_mode(
+            bin_files,
+            read_buf_len,
+            TrainingReadMode::PipelinedDoubleBuffer,
+            on_chunk,
+        )
+    }
+}
+
+/// Primary native entry point: reads every byte from `bin_files` in order using
+/// the requested [`TrainingReadMode`].
+///
+/// `read_buf_len` should be at least one record (`>= record_bytes`); callers
+/// typically pass ~2 MiB rounded down to a whole number of records. A value of
+/// `0` is rejected with an error.
+///
+/// On `wasm32` the `mode` argument is ignored — a sequential `File::read` loop
+/// is used regardless.
+pub fn for_each_read_chunk_with_mode<F>(
+    bin_files: &[PathBuf],
+    read_buf_len: usize,
+    mode: TrainingReadMode,
     on_chunk: F,
 ) -> Result<(), String>
 where
@@ -48,19 +184,24 @@ where
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if sequential_env_requested() {
-            return for_each_read_chunk_sequential(bin_files, read_buf_len, on_chunk);
+        match mode {
+            TrainingReadMode::PipelinedDoubleBuffer => {
+                for_each_read_chunk_native_double(bin_files, read_buf_len, on_chunk)
+            }
+            TrainingReadMode::SingleBufferSequential => {
+                for_each_read_chunk_sequential(bin_files, read_buf_len, on_chunk)
+            }
         }
-        for_each_read_chunk_native(bin_files, read_buf_len, on_chunk)
     }
 
     #[cfg(target_arch = "wasm32")]
     {
+        let _ = mode;
         for_each_read_chunk_sequential(bin_files, read_buf_len, on_chunk)
     }
 }
 
-/// Returns true if the sequential escape hatch is selected via env var.
+/// Returns true if the legacy sequential escape hatch is selected via env var.
 #[cfg(not(target_arch = "wasm32"))]
 fn sequential_env_requested() -> bool {
     match std::env::var(SEQUENTIAL_ENV) {
@@ -73,7 +214,7 @@ fn sequential_env_requested() -> bool {
 }
 
 /// Sequential read loop — shared between the wasm32 target and the native
-/// escape hatch. Same observable contract as the pipelined path.
+/// single-buffer mode. Same observable contract as the pipelined path.
 fn for_each_read_chunk_sequential<F>(
     bin_files: &[PathBuf],
     read_buf_len: usize,
@@ -108,7 +249,7 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn for_each_read_chunk_native<F>(
+fn for_each_read_chunk_native_double<F>(
     bin_files: &[PathBuf],
     read_buf_len: usize,
     mut on_chunk: F,
@@ -265,6 +406,18 @@ mod tests {
         files
     }
 
+    /// Run a fixture through `for_each_read_chunk_with_mode` and return the
+    /// concatenated bytes seen by the callback.
+    fn run_files(files: &[PathBuf], read_buf_len: usize, mode: TrainingReadMode) -> Vec<u8> {
+        let mut acc = Vec::new();
+        for_each_read_chunk_with_mode(files, read_buf_len, mode, |c| {
+            acc.extend_from_slice(c);
+            Ok(())
+        })
+        .expect("for_each_read_chunk_with_mode succeeded");
+        acc
+    }
+
     #[test]
     fn for_each_read_chunk_concatenates_files() -> Result<(), String> {
         let dir = TempDir::new().map_err(|e| e.to_string())?;
@@ -276,6 +429,58 @@ mod tests {
         })?;
         assert_eq!(acc, vec![1, 2, 3, 4, 5, 6]);
         Ok(())
+    }
+
+    /// Both read modes must produce identical byte streams for the same
+    /// multi-file corpus that spans a chunk boundary.
+    #[test]
+    fn both_modes_agree_on_multi_file_corpus() -> Result<(), String> {
+        let dir = TempDir::new().map_err(|e| e.to_string())?;
+        // Varying shard sizes so at least one read straddles a chunk boundary
+        // relative to `read_buf_len = 7`.
+        let shards: Vec<Vec<u8>> = (0..5)
+            .map(|i| (0..(13 * (i + 1))).map(|b| b as u8).collect())
+            .collect();
+        let expected_total: usize = shards.iter().map(|s| s.len()).sum();
+        let files = write_bins(dir.path(), &shards);
+
+        let double = run_files(&files, 7, TrainingReadMode::PipelinedDoubleBuffer);
+        let single = run_files(&files, 7, TrainingReadMode::SingleBufferSequential);
+
+        assert_eq!(double.len(), expected_total);
+        assert_eq!(
+            double, single,
+            "double- and single-buffer output must match"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn both_modes_handle_empty_files() -> Result<(), String> {
+        let dir = TempDir::new().map_err(|e| e.to_string())?;
+        let files = write_bins(dir.path(), &[vec![], vec![], vec![]]);
+
+        let double = run_files(&files, 16, TrainingReadMode::PipelinedDoubleBuffer);
+        let single = run_files(&files, 16, TrainingReadMode::SingleBufferSequential);
+
+        assert!(double.is_empty());
+        assert!(single.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn zero_read_buf_len_is_rejected_in_both_modes() {
+        for mode in [
+            TrainingReadMode::PipelinedDoubleBuffer,
+            TrainingReadMode::SingleBufferSequential,
+        ] {
+            let err = for_each_read_chunk_with_mode(&[], 0, mode, |_| Ok(()))
+                .expect_err("expected error");
+            assert!(
+                err.contains("read_buf_len"),
+                "mode {mode:?} must reject read_buf_len=0 with the existing error string, got: {err}"
+            );
+        }
     }
 
     /// Regression for issue #25: a slow `on_chunk` must NOT cause the pipelined
@@ -480,5 +685,139 @@ mod tests {
 
         assert_eq!(pipelined_bytes, sequential_bytes);
         Ok(())
+    }
+
+    // ---- TrainingReadMode / tuning helper / label coverage ----
+
+    #[test]
+    fn training_read_mode_default_is_pipelined_double_buffer() {
+        assert_eq!(
+            TrainingReadMode::default(),
+            TrainingReadMode::PipelinedDoubleBuffer
+        );
+    }
+
+    #[test]
+    fn io_backend_label_native_reflects_mode() {
+        assert_eq!(
+            io_backend_label(TrainingReadMode::PipelinedDoubleBuffer),
+            "pipelined_double_buffer"
+        );
+        assert_eq!(
+            io_backend_label(TrainingReadMode::SingleBufferSequential),
+            "single_buffer_sequential"
+        );
+    }
+
+    #[test]
+    fn training_read_tuning_defaults_without_env() -> Result<(), String> {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::remove_var(IO_MODE_ENV);
+            std::env::remove_var(READ_BYTES_ENV);
+        }
+
+        let (mode, bytes) = training_read_tuning_from_env(32);
+        assert_eq!(mode, TrainingReadMode::PipelinedDoubleBuffer);
+        assert_eq!(bytes, DEFAULT_READ_BYTES);
+        Ok(())
+    }
+
+    #[test]
+    fn training_read_tuning_parses_modes_case_insensitively() {
+        for (val, expected) in [
+            ("single", TrainingReadMode::SingleBufferSequential),
+            ("SINGLE", TrainingReadMode::SingleBufferSequential),
+            ("Single", TrainingReadMode::SingleBufferSequential),
+            ("double", TrainingReadMode::PipelinedDoubleBuffer),
+            ("DOUBLE", TrainingReadMode::PipelinedDoubleBuffer),
+            ("nonsense", TrainingReadMode::PipelinedDoubleBuffer),
+        ] {
+            let _guard = ENV_LOCK.lock().unwrap();
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe {
+                std::env::set_var(IO_MODE_ENV, val);
+                std::env::remove_var(READ_BYTES_ENV);
+            }
+            let (mode, _) = training_read_tuning_from_env(1);
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe { std::env::remove_var(IO_MODE_ENV) };
+            assert_eq!(mode, expected, "value {val:?} should map to {expected:?}");
+        }
+    }
+
+    #[test]
+    fn training_read_tuning_clamps_read_bytes() {
+        // Below lower bound → clamped up to record_bytes.
+        {
+            let _guard = ENV_LOCK.lock().unwrap();
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe {
+                std::env::set_var(READ_BYTES_ENV, "1");
+                std::env::remove_var(IO_MODE_ENV);
+            }
+            let (_, bytes) = training_read_tuning_from_env(128);
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe { std::env::remove_var(READ_BYTES_ENV) };
+            assert_eq!(bytes, 128);
+        }
+
+        // Above upper bound → clamped down to MAX_READ_BYTES.
+        {
+            let _guard = ENV_LOCK.lock().unwrap();
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe {
+                std::env::set_var(READ_BYTES_ENV, "9999999999");
+                std::env::remove_var(IO_MODE_ENV);
+            }
+            let (_, bytes) = training_read_tuning_from_env(32);
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe { std::env::remove_var(READ_BYTES_ENV) };
+            assert_eq!(bytes, MAX_READ_BYTES);
+        }
+
+        // Within bounds → passed through verbatim.
+        {
+            let _guard = ENV_LOCK.lock().unwrap();
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe {
+                std::env::set_var(READ_BYTES_ENV, "131072");
+                std::env::remove_var(IO_MODE_ENV);
+            }
+            let (_, bytes) = training_read_tuning_from_env(64);
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe { std::env::remove_var(READ_BYTES_ENV) };
+            assert_eq!(bytes, 131_072);
+        }
+
+        // Unparsable → falls back to DEFAULT_READ_BYTES (and clamp).
+        {
+            let _guard = ENV_LOCK.lock().unwrap();
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe {
+                std::env::set_var(READ_BYTES_ENV, "not-a-number");
+                std::env::remove_var(IO_MODE_ENV);
+            }
+            let (_, bytes) = training_read_tuning_from_env(64);
+            // SAFETY: serialised via ENV_LOCK.
+            unsafe { std::env::remove_var(READ_BYTES_ENV) };
+            assert_eq!(bytes, DEFAULT_READ_BYTES);
+        }
+    }
+
+    #[test]
+    fn training_read_tuning_handles_zero_record_bytes() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe {
+            std::env::set_var(READ_BYTES_ENV, "1");
+            std::env::remove_var(IO_MODE_ENV);
+        }
+        let (_, bytes) = training_read_tuning_from_env(0);
+        // SAFETY: serialised via ENV_LOCK.
+        unsafe { std::env::remove_var(READ_BYTES_ENV) };
+        // record_bytes=0 is clamped up to 1 so bytes must be at least 1.
+        assert!(bytes >= 1);
     }
 }
