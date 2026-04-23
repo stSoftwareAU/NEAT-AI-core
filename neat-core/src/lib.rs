@@ -25,6 +25,7 @@ pub mod simd;
 pub mod squash;
 pub mod synapse_type;
 pub mod topological_backprop;
+pub mod topology_export;
 pub mod topology_ops;
 pub mod training_bin_stream;
 pub mod training_data;
@@ -67,6 +68,7 @@ pub use topological_backprop::{
     NeuronType, PropagateInput, PropagateOutcome, PropagateOutput, StandardOutcome, SynapseDelta,
     SynapseInput, propagate_topological_loop,
 };
+pub use topology_export::{NodeKind, squash_name, synapse_type_name, to_dot, to_topology_json};
 pub use topology_ops::{
     BACKWARD_CONNECTION, DUPLICATE_CONNECTION, SELF_CONNECTION, SORT_ERROR_FROM, SORT_ERROR_TO,
     STRUCTURAL_BIAS_NOT_FINITE, STRUCTURAL_CONSTANT_HAS_INWARD, STRUCTURAL_HIDDEN_NO_INWARD,
