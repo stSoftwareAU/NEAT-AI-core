@@ -2077,3 +2077,174 @@ pub fn hinge_sum_batch_packed(
 
     sum_error
 }
+
+/// Non-fused recurrent-path MSE for `forwardOnly: false` networks.
+///
+/// Activates the network **once per record**, resetting hidden activations
+/// between records to preserve stateless semantics (`feedbackLoop = false`),
+/// and returns the **mean per-record MSE** — matching the TypeScript
+/// `MSE.calculate()` semantics used in NEAT-AI.
+///
+/// Per record:
+/// - Squared error is computed for each output: `(target - output)^2`.
+/// - The per-record MSE is `mean(diff^2)` across the record's outputs.
+///
+/// Across records the per-record MSEs are averaged, giving:
+///
+/// `(1 / num_records) * Σ_records (1 / num_outputs) * Σ_outputs (t - o)^2`
+///
+/// This is algebraically `mse_sum_batch_packed(..) / num_records` on any
+/// forward-only fixture where the two paths see the same activations.
+///
+/// # Edge cases
+/// Returns `0.0` when either `records` is empty or `input_size + num_outputs`
+/// is zero. An empty input set has no error to report, matching the
+/// convention used by the existing `*_sum_batch_packed` helpers.
+///
+/// Issue stSoftwareAU/NEAT-AI-core#15 — unblocks `rust_scorer` compile.
+pub fn mse_mean_record(
+    network: &mut CompiledNetwork,
+    records: &[f32],
+    input_size: usize,
+    num_outputs: usize,
+) -> f64 {
+    let values_per_record = input_size + num_outputs;
+    if values_per_record == 0 {
+        return 0.0;
+    }
+    let num_records = records.len() / values_per_record;
+    if num_records == 0 {
+        return 0.0;
+    }
+
+    let inv_outputs: f64 = if num_outputs > 0 {
+        1.0 / (num_outputs as f64)
+    } else {
+        0.0
+    };
+
+    // Reuse a small output buffer to avoid per-record allocation.
+    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
+    let mut sum_error: f64 = 0.0;
+
+    for record_idx in 0..num_records {
+        // Non-fused recurrent path: clear hidden state between records so the
+        // previous record's activations cannot leak into this activation.
+        network.reset_state();
+
+        let base = record_idx * values_per_record;
+        let input_start = base;
+        let input_end = base + input_size;
+        let target_start = input_end;
+        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
+
+        // Per-record MSE = mean over outputs of (target - output)^2.
+        let mut sq_sum: f64 = 0.0;
+        for j in 0..num_outputs {
+            let diff = (records[target_start + j] - outputs[j]) as f64;
+            sq_sum += diff * diff;
+        }
+        sum_error += sq_sum * inv_outputs;
+    }
+
+    sum_error / (num_records as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::creature::{compile_creature, parse_creature_json};
+
+    /// Simple 2-input, 1-output identity creature:
+    ///   output = 0.5 * in0 + (-0.3) * in1 + 0.1
+    /// Forward-only — the `forward_only=true` batch path is numerically
+    /// identical to the recurrent reset-per-record path.
+    fn linear_creature_json() -> &'static str {
+        r#"{
+            "input": 2,
+            "output": 1,
+            "neurons": [
+                {"type": "output", "uuid": "output-0", "bias": 0.1, "squash": "IDENTITY"}
+            ],
+            "synapses": [
+                {"fromUUID": "input-0", "toUUID": "output-0", "weight": 0.5},
+                {"fromUUID": "input-1", "toUUID": "output-0", "weight": -0.3}
+            ],
+            "forwardOnly": true
+        }"#
+    }
+
+    #[test]
+    fn mse_mean_record_matches_hand_rolled_reference() {
+        let creature = parse_creature_json(linear_creature_json()).expect("parse");
+        let mut network = compile_creature(&creature).expect("compile");
+
+        // Three records: [in0, in1, target]
+        let records: Vec<f32> = vec![
+            1.0, 0.5, 0.4, // output = 0.45, diff = -0.05
+            0.0, 0.0, 0.0, // output = 0.1,  diff = -0.1
+            -1.0, 2.0, -1.0, // output = 0.5*(-1) + (-0.3)*2 + 0.1 = -1.0, diff = 0.0
+        ];
+
+        let actual = mse_mean_record(&mut network, &records, 2, 1);
+
+        // num_outputs = 1 so per-record MSE == diff^2.
+        let per_record_mse = [
+            0.05f64 * 0.05,
+            0.1f64 * 0.1,
+            0.0f64, // exact: 0.5*(-1) + (-0.3)*2 + 0.1 = -1.0
+        ];
+        let expected: f64 = per_record_mse.iter().sum::<f64>() / per_record_mse.len() as f64;
+
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "mse_mean_record = {actual}, expected {expected}"
+        );
+    }
+
+    #[test]
+    fn mse_mean_record_agrees_with_sum_divided_by_records_on_forward_only() {
+        let creature = parse_creature_json(linear_creature_json()).expect("parse");
+        let mut net_mean = compile_creature(&creature).expect("compile");
+        let mut net_sum = compile_creature(&creature).expect("compile");
+
+        // Use enough records to exercise both scalar and SIMD paths in
+        // `mse_sum_batch_packed` (>= 8 triggers the 8-way batch).
+        let records: Vec<f32> = vec![
+            1.0, 0.5, 0.4, //
+            0.0, 0.0, 0.0, //
+            -1.0, 2.0, -1.0, //
+            0.25, -0.75, 0.2, //
+            2.0, 1.0, 0.8, //
+            -0.5, -0.5, 0.0, //
+            1.5, 0.5, 0.5, //
+            0.1, 0.2, 0.15, //
+            0.9, -0.1, 0.6, //
+        ];
+        let input_size = 2;
+        let num_outputs = 1;
+        let num_records = records.len() / (input_size + num_outputs);
+
+        let mean = mse_mean_record(&mut net_mean, &records, input_size, num_outputs);
+        let sum = mse_sum_batch_packed(&mut net_sum, &records, input_size, num_outputs, true);
+        let expected = sum / num_records as f64;
+
+        assert!(
+            (mean - expected).abs() < 1e-6,
+            "mse_mean_record = {mean}, mse_sum_batch_packed / {num_records} = {expected}"
+        );
+    }
+
+    #[test]
+    fn mse_mean_record_empty_input_returns_zero() {
+        let creature = parse_creature_json(linear_creature_json()).expect("parse");
+        let mut network = compile_creature(&creature).expect("compile");
+
+        // Zero records — no error to report.
+        let records: Vec<f32> = Vec::new();
+        assert_eq!(mse_mean_record(&mut network, &records, 2, 1), 0.0);
+
+        // Zero input_size + zero num_outputs — degenerate, also 0.0.
+        assert_eq!(mse_mean_record(&mut network, &records, 0, 0), 0.0);
+    }
+}
