@@ -11,6 +11,8 @@
 //!   perform multiply and add in a single instruction with better precision.
 //! - **Multi-record batching**: Processes the same neuron across 4 or 8 input records
 //!   in parallel, amortising weight loads across records.
+//! - **Native (`not(wasm32)`)**: `simd_native.rs` uses **AVX2** (8-wide) and **FMA+SSE** (4-wide)
+//!   on `x86_64`, **NEON** on `aarch64`; otherwise scalar (same numerics as the old fallback).
 //! - **SIMD aggregate helpers**: `weighted_sum_of_squares_simd` for Hypotenuse
 //!   and `weighted_sum_for_mean_simd` for Mean activation functions.
 
@@ -449,75 +451,14 @@ pub fn weighted_sum_simd_8records(
     )
 }
 
-/// Scalar fallback for non-WASM targets (for testing)
+// Native (non-wasm32) multi-record helpers now live in `simd_native.rs` and use
+// AVX2/FMA on x86_64, NEON on aarch64, falling back to scalar elsewhere.
 #[cfg(not(target_arch = "wasm32"))]
-#[inline]
-#[allow(clippy::too_many_arguments)]
-pub fn weighted_sum_simd_8records(
-    synapses: &[SynapseData],
-    act0: &[f32],
-    act1: &[f32],
-    act2: &[f32],
-    act3: &[f32],
-    act4: &[f32],
-    act5: &[f32],
-    act6: &[f32],
-    act7: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    let mut sum0 = bias;
-    let mut sum1 = bias;
-    let mut sum2 = bias;
-    let mut sum3 = bias;
-    let mut sum4 = bias;
-    let mut sum5 = bias;
-    let mut sum6 = bias;
-    let mut sum7 = bias;
-    for synapse in synapses.iter().take(end).skip(start) {
-        let from = synapse.from_index as usize;
-        let w = synapse.weight;
-        sum0 += act0[from] * w;
-        sum1 += act1[from] * w;
-        sum2 += act2[from] * w;
-        sum3 += act3[from] * w;
-        sum4 += act4[from] * w;
-        sum5 += act5[from] * w;
-        sum6 += act6[from] * w;
-        sum7 += act7[from] * w;
-    }
-    (sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7)
-}
+#[path = "simd_native.rs"]
+mod simd_native;
 
-/// Scalar fallback for non-WASM targets (for testing)
 #[cfg(not(target_arch = "wasm32"))]
-#[inline]
-#[allow(clippy::too_many_arguments)]
-pub fn weighted_sum_simd_4records(
-    synapses: &[SynapseData],
-    act0: &[f32],
-    act1: &[f32],
-    act2: &[f32],
-    act3: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> (f32, f32, f32, f32) {
-    let mut sum0 = bias;
-    let mut sum1 = bias;
-    let mut sum2 = bias;
-    let mut sum3 = bias;
-    for synapse in synapses.iter().take(end).skip(start) {
-        let from = synapse.from_index as usize;
-        let w = synapse.weight;
-        sum0 += act0[from] * w;
-        sum1 += act1[from] * w;
-        sum2 += act2[from] * w;
-        sum3 += act3[from] * w;
-    }
-    (sum0, sum1, sum2, sum3)
-}
+pub use simd_native::{weighted_sum_simd_4records, weighted_sum_simd_8records};
 
 /// Scalar fallback for non-WASM targets (for testing)
 #[cfg(not(target_arch = "wasm32"))]
