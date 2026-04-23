@@ -24,6 +24,7 @@ pub mod score_scan;
 pub mod simd;
 pub mod squash;
 pub mod synapse_type;
+pub mod topology_ops;
 pub mod training_bin_stream;
 pub mod training_data;
 pub mod training_state;
@@ -60,6 +61,15 @@ pub use range::{apply_get_range, apply_limit_range, apply_validate_range};
 pub use safe_zone::{apply_safe_zone_adjustment, apply_safe_zone_adjustment_batch};
 pub use score_scan::{compute_score_components, scan_max_bias, scan_max_weight};
 pub use squash::apply_squash;
+pub use topology_ops::{
+    BACKWARD_CONNECTION, DUPLICATE_CONNECTION, SELF_CONNECTION, SORT_ERROR_FROM, SORT_ERROR_TO,
+    STRUCTURAL_BIAS_NOT_FINITE, STRUCTURAL_CONSTANT_HAS_INWARD, STRUCTURAL_HIDDEN_NO_INWARD,
+    STRUCTURAL_HIDDEN_NO_OUTWARD, STRUCTURAL_IF_MISSING_CONDITION, STRUCTURAL_IF_MISSING_NEGATIVE,
+    STRUCTURAL_IF_MISSING_POSITIVE, STRUCTURAL_IF_TOO_FEW_INWARD, STRUCTURAL_SYNAPSE_TARGETS_INPUT,
+    STRUCTURAL_VALID, VALID, compute_reverse_topological_order, detect_cycles,
+    scan_available_connections, validate_structural_integrity, validate_topology,
+    validate_topology_batch,
+};
 pub use training_state::{
     accumulate_bias_persistent_4way, accumulate_bias_persistent_8way,
     accumulate_weight_persistent_4way, accumulate_weight_persistent_8way, free_training_state,
