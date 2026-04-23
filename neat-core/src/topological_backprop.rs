@@ -359,10 +359,10 @@ pub fn propagate_topological_loop(input: &PropagateInput<'_>) -> PropagateOutput
         let mut synapse_idx_cache: Vec<usize> = Vec::with_capacity(list_length);
         let mut is_self_loop_cache = Vec::with_capacity(list_length);
 
-        for indx in 0..list_length {
+        for index in 0..list_length {
             let syn_idx = input
                 .inward_synapse_indices
-                .get(start + indx)
+                .get(start + index)
                 .copied()
                 .unwrap_or(u32::MAX) as usize;
             synapse_idx_cache.push(syn_idx);
@@ -470,11 +470,11 @@ pub fn propagate_topological_loop(input: &PropagateInput<'_>) -> PropagateOutput
         let _ = error; // `error` sum not directly needed below; retained for clarity.
 
         // Distribute error upstream and accumulate per-synapse weight deltas.
-        for indx in 0..list_length {
-            if is_self_loop_cache[indx] {
+        for index in 0..list_length {
+            if is_self_loop_cache[index] {
                 continue;
             }
-            let syn_idx = synapse_idx_cache[indx];
+            let syn_idx = synapse_idx_cache[index];
             if syn_idx >= synapse_count {
                 continue;
             }
@@ -484,11 +484,11 @@ pub fn propagate_topological_loop(input: &PropagateInput<'_>) -> PropagateOutput
             let _ = to; // not used beyond the self-loop guard above.
 
             let from_neuron = &input.neurons[from];
-            let from_activation = from_activation_cache[indx];
-            let from_weight = from_weight_cache[indx];
+            let from_activation = from_activation_cache[index];
+            let from_weight = from_weight_cache[index];
 
-            let from_value = from_value_cache[indx];
-            let this_link_error = per_link_error.get(indx).copied().unwrap_or(0.0);
+            let from_value = from_value_cache[index];
+            let this_link_error = per_link_error.get(index).copied().unwrap_or(0.0);
             let target_from_value = from_value + this_link_error;
 
             let upstream_is_terminal =
@@ -513,7 +513,7 @@ pub fn propagate_topological_loop(input: &PropagateInput<'_>) -> PropagateOutput
                     plank * sign
                 };
                 let target_from_activation = target_from_value / effective_weight;
-                let safe_zone_factor = safe_zone_factors.get(indx).copied().unwrap_or(1.0);
+                let safe_zone_factor = safe_zone_factors.get(index).copied().unwrap_or(1.0);
                 if safe_zone_factor.is_finite() && safe_zone_factor > 0.0 {
                     // Issue #1873: clamp out-of-range upstream targets rather
                     // than dropping them.
