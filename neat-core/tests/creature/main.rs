@@ -4,3 +4,4 @@
 mod common;
 
 mod compile_smoke;
+mod roundtrip;

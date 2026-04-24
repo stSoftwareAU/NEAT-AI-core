@@ -1,12 +1,30 @@
-//! Creature JSON deserialisation for NEAT-AI neural networks.
+//! Creature JSON (de)serialisation for NEAT-AI neural networks.
 //!
 //! This module provides Rust structs matching the TypeScript `CreatureExport`,
 //! `NeuronExport`, and `SynapseExport` interfaces, along with conversion to
 //! `CompiledNetwork` for efficient activation.
 //!
-//! Issue #1965 - Implement creature JSON deserialisation in Rust.
+//! The structs derive both [`serde::Deserialize`] and [`serde::Serialize`], so
+//! a parsed creature can be written back out to the same JSON shape. Round
+//! tripping — `parse -> serialise -> parse` — preserves every field, and two
+//! serialisations of the same `CreatureExport` produce byte-identical JSON
+//! (serde emits fields in declaration order).
+//!
+//! The `#[serde(rename = "...")]` attributes (`semanticVersion`, `forwardOnly`,
+//! `fromUUID`, `toUUID`, `type`) apply symmetrically on both input and output,
+//! so the canonical TypeScript camelCase shape is preserved.
+//!
+//! Optional string fields are skipped when `None` to match the TypeScript
+//! "optional field" convention (absent key rather than explicit `null`).
+//!
+//! The inverse helpers [`squash_name_from`] and [`synapse_type_name_from`]
+//! provide a 1:1 inverse of [`parse_squash_name`] and [`parse_synapse_type`]
+//! respectively, for callers constructing `NeuronExport` / `SynapseExport`
+//! values in Rust from enum variants.
+//!
+//! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation).
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::network::{CompiledNetwork, NeuronData, SynapseData};
@@ -14,7 +32,7 @@ use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
 /// Top-level creature export format matching the TypeScript `CreatureExport` interface.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CreatureExport {
     /// Number of input neurons.
     pub input: usize,
@@ -25,7 +43,7 @@ pub struct CreatureExport {
     /// List of synapses connecting neurons.
     pub synapses: Vec<SynapseExport>,
     /// Optional semantic version string.
-    #[serde(rename = "semanticVersion")]
+    #[serde(rename = "semanticVersion", skip_serializing_if = "Option::is_none")]
     pub semantic_version: Option<String>,
     /// When true, training rows are independent (no recurrent / feedback state).
     #[serde(rename = "forwardOnly", default)]
@@ -33,7 +51,7 @@ pub struct CreatureExport {
 }
 
 /// Neuron export format matching the TypeScript `NeuronExport` interface.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NeuronExport {
     /// Neuron type: "hidden", "output", or "constant".
     #[serde(rename = "type")]
@@ -43,11 +61,12 @@ pub struct NeuronExport {
     /// Bias value for the neuron.
     pub bias: f64,
     /// Activation function name (e.g. "TANH", "ReLU"). Defaults to IDENTITY.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub squash: Option<String>,
 }
 
 /// Synapse export format matching the TypeScript `SynapseExport` interface.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct SynapseExport {
     /// UUID of the source neuron (e.g. "input-0" for input neurons).
     #[serde(rename = "fromUUID")]
@@ -58,7 +77,7 @@ pub struct SynapseExport {
     /// Connection weight.
     pub weight: f64,
     /// Optional synapse type: "positive", "negative", or "condition".
-    #[serde(rename = "type")]
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub synapse_type: Option<String>,
 }
 
@@ -123,9 +142,93 @@ pub fn parse_synapse_type(type_str: Option<&str>) -> SynapseType {
     }
 }
 
+/// Canonical activation name for a [`SquashType`].
+///
+/// This is the 1:1 inverse of [`parse_squash_name`]: for every variant `v`,
+/// `parse_squash_name(squash_name_from(v)) == Ok(v)` holds. Where
+/// [`parse_squash_name`] accepts aliases (e.g. `"ReLU"` and `"RELU"` both map
+/// to [`SquashType::Relu`]), this function returns the canonical variant used
+/// by the TypeScript emitter.
+///
+/// Use this when populating [`NeuronExport::squash`] from a Rust
+/// [`SquashType`] before serialising back to JSON.
+pub fn squash_name_from(ty: SquashType) -> &'static str {
+    match ty {
+        SquashType::Identity => "IDENTITY",
+        SquashType::Relu => "RELU",
+        SquashType::Relu6 => "ReLU6",
+        SquashType::LeakyRelu => "LeakyReLU",
+        SquashType::Selu => "SELU",
+        SquashType::Elu => "ELU",
+        SquashType::Logistic => "LOGISTIC",
+        SquashType::Tanh => "TANH",
+        SquashType::HardTanh => "HARD_TANH",
+        SquashType::Softsign => "SOFTSIGN",
+        SquashType::Softplus => "Softplus",
+        SquashType::Swish => "Swish",
+        SquashType::Mish => "Mish",
+        SquashType::Gelu => "GELU",
+        SquashType::Sine => "SINE",
+        SquashType::Cosine => "Cosine",
+        SquashType::Tan => "TAN",
+        SquashType::ArcTan => "ArcTan",
+        SquashType::Gaussian => "GAUSSIAN",
+        SquashType::BentIdentity => "BENT_IDENTITY",
+        SquashType::BipolarSigmoid => "BIPOLAR_SIGMOID",
+        SquashType::Bipolar => "BIPOLAR",
+        SquashType::Step => "STEP",
+        SquashType::Complement => "COMPLEMENT",
+        SquashType::Absolute => "ABSOLUTE",
+        SquashType::Square => "SQUARE",
+        SquashType::Cube => "Cube",
+        SquashType::Sqrt => "SQRT",
+        SquashType::StdInverse => "StdInverse",
+        SquashType::Exponential => "Exponential",
+        SquashType::LogSigmoid => "LogSigmoid",
+        SquashType::Isru => "ISRU",
+        SquashType::Minimum => "MINIMUM",
+        SquashType::Maximum => "MAXIMUM",
+        SquashType::If => "IF",
+        SquashType::Hypotenuse => "HYPOT",
+        SquashType::HypotenuseV2 => "HYPOTv2",
+        SquashType::Mean => "MEAN",
+    }
+}
+
+/// Canonical JSON type string for a [`SynapseType`].
+///
+/// Inverse of [`parse_synapse_type`]: returns `None` for
+/// [`SynapseType::Standard`] (omitted in the JSON export by convention) and
+/// the canonical lowercase TypeScript names for the other variants.
+/// For every variant `v`, `parse_synapse_type(synapse_type_name_from(v)) == v`
+/// holds.
+pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
+    match ty {
+        SynapseType::Standard => None,
+        SynapseType::Condition => Some("condition"),
+        SynapseType::Negative => Some("negative"),
+        SynapseType::Positive => Some("positive"),
+    }
+}
+
 /// Parse a creature JSON string into a `CreatureExport` struct.
 pub fn parse_creature_json(json: &str) -> Result<CreatureExport, String> {
     serde_json::from_str(json).map_err(|e| format!("Failed to parse creature JSON: {e}"))
+}
+
+/// Serialise a [`CreatureExport`] to canonical JSON text.
+///
+/// Output is deterministic: fields are emitted in struct declaration order,
+/// so two calls with the same input produce byte-identical output. This is
+/// the symmetric counterpart to [`parse_creature_json`].
+pub fn creature_to_json(creature: &CreatureExport) -> Result<String, String> {
+    serde_json::to_string(creature).map_err(|e| format!("Failed to serialise creature JSON: {e}"))
+}
+
+/// Pretty-printed variant of [`creature_to_json`].
+pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, String> {
+    serde_json::to_string_pretty(creature)
+        .map_err(|e| format!("Failed to serialise creature JSON: {e}"))
 }
 
 /// Convert a `CreatureExport` into a `CompiledNetwork` for activation.
