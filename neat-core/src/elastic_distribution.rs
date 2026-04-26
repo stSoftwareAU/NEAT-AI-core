@@ -9,6 +9,9 @@
 /// Planck constant for floating-point comparisons (matches TypeScript default).
 const PLANK_CONSTANT: f32 = 1e-12;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
 /// SIMD-accelerated scoring pass: computes activation² × clamped safeZoneFactor.
 ///
 /// Uses WASM SIMD128 to process 4 elements at a time for the squaring and
@@ -245,6 +248,7 @@ pub fn apply_distribute_elastic_error(
 ///
 /// # Returns
 /// `Vec<f32>` of error shares, one per link. Sum equals `error`.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn distribute_elastic_error(
     error: f32,
     activations: &[f32],

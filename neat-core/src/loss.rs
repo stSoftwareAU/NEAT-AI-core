@@ -12,6 +12,9 @@ use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
 use crate::squash::{SquashType, apply_squash};
 use crate::synapse_type::SynapseType;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
 /// Issue #1209 - Shared 8-way activation helper macro to reduce code duplication.
 ///
 /// This macro generates the neuron activation loop for 8 records in parallel,
@@ -554,6 +557,7 @@ macro_rules! batch_8way_activation {
 ///
 /// Issue #118x - Fuse activate + MSE for scoring performance.
 /// Issue #1202 - Use 4-record SIMD batching for forward-only networks.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn mse_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1719,6 +1723,7 @@ fn hinge_sum_batch_8way(
 ///
 /// # Returns
 /// Sum of per-record MAE errors (divide by record count for mean)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn mae_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1794,6 +1799,7 @@ pub fn mae_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record Cross Entropy errors (divide by record count for mean)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn cross_entropy_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1872,6 +1878,7 @@ pub fn cross_entropy_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record MAPE errors (divide by record count for mean)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn mape_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1949,6 +1956,7 @@ pub fn mape_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record MSLE errors (divide by record count for mean)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn msle_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -2021,6 +2029,7 @@ pub fn msle_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record Hinge errors (divide by record count for mean)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn hinge_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],

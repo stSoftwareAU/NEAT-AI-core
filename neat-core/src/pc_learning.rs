@@ -17,6 +17,9 @@
 use crate::derivative::apply_derivative;
 use crate::pc_inference::PredictiveCodingEngine;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
 /// Gradient result containing weight and bias deltas.
 #[derive(Clone, Debug)]
 pub struct PcGradientResult {
@@ -80,6 +83,7 @@ impl PredictiveCodingEngine {
 // Packed gradient computation
 // ---------------------------------------------------------------------------
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl PredictiveCodingEngine {
     /// Computes weight and bias gradients from settled inference state.
     ///

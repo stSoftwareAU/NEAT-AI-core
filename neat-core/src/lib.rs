@@ -32,6 +32,12 @@ pub mod training_data;
 pub mod training_state;
 pub mod unsquash;
 
+// Issue #36 — WASM-only `#[wasm_bindgen]` shims that wrap apply_* helpers,
+// tuple returns, and the byte-packed `propagate_topological` ABI. Native
+// targets do not see this module.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_exports;
+
 // Re-export key types for convenience
 pub use creature::{
     CreatureExport, NeuronExport, SynapseExport, compile_creature, creature_to_json,

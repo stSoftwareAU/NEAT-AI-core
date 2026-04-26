@@ -8,8 +8,10 @@ description = "Shared computation library for NEAT-AI neural network operations.
 [lints]
 workspace = true
 
+# Issue #36 - cdylib added for wasm-pack; rlib retained so native consumers
+# (rust_scorer, CLI tools, native tests) continue to link as before.
 [lib]
-crate-type = ["lib"]
+crate-type = ["cdylib", "rlib"]
 
 # Native builds omit wasm-bindgen; WASM targets link it for `accumulate` exports.
 [dependencies]
