@@ -81,6 +81,32 @@ fn activate_view_matches_activate() {
 }
 
 #[test]
+fn to_dot_method_callable_on_compiled_network() {
+    // Issue #43 — `to_dot` must remain accessible as a `CompiledNetwork`
+    // method on native (and via `#[wasm_bindgen]` on wasm32). This guards
+    // that the bindgen impl block does not regress the native surface.
+    let bytes = minimal_network_bytes();
+    let net = CompiledNetwork::new(&bytes).expect("parse");
+    let dot = net.to_dot(1);
+    assert!(dot.starts_with("digraph "));
+    assert!(dot.trim_end().ends_with('}'));
+}
+
+#[test]
+fn to_topology_json_method_callable_on_compiled_network() {
+    // Issue #43 — `to_topology_json` must remain accessible as a
+    // `CompiledNetwork` method on native (and via `#[wasm_bindgen]` on wasm32).
+    let bytes = minimal_network_bytes();
+    let net = CompiledNetwork::new(&bytes).expect("parse");
+    let json = net.to_topology_json(1);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json).expect("to_topology_json output must be valid JSON");
+    assert_eq!(parsed["num_inputs"], 1);
+    assert_eq!(parsed["num_outputs"], 1);
+    assert_eq!(parsed["num_neurons"], 2);
+}
+
+#[test]
 fn reset_state_clears_non_input_activations() {
     let bytes = minimal_network_bytes();
     let mut net = CompiledNetwork::new(&bytes).expect("parse");
