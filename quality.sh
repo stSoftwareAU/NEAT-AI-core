@@ -36,6 +36,17 @@ if [[ "$SHELLCHECK_FAILED" -ne 0 ]]; then
 fi
 echo "shellcheck: all scripts passed"
 
+# Bash helper tests (bats) — covers bump-deps.sh and any future shell helpers.
+echo "🧰 Running bash helper tests (bats)..."
+if command -v bats &>/dev/null; then
+    if [ -d "tests/scripts" ]; then
+        bats tests/scripts
+    fi
+else
+    echo "⚠️  bats not installed — skipping shell helper tests"
+    echo "   Install with: brew install bats-core  (or your package manager)"
+fi
+
 # Optional: codespell (CI runs this; install: pip install codespell)
 if command -v codespell &>/dev/null; then
     echo "📖 Running codespell..."

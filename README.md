@@ -17,7 +17,9 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 | `neat-core/` | Shared computation library; **233+** unit tests in `src/**/*.rs`. |
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
-| `quality.sh` | Local gate (fmt, clippy, tests, doc, deny). |
+| `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
+| `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build (Vibe Coder hook). |
+| `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`). |
 | `LICENSE`, `.gitleaks.toml` | Inherited from NEAT-AI `Develop`. |
 
 ## Build
