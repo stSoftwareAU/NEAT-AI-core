@@ -1,0 +1,46 @@
+# Issue #37 — Build the wasm_activation bundle on every push to Develop and
+# publish a per-commit GitHub Release so NEAT-AI can pin neatCore.rev to any
+# historical Develop SHA. One Release per commit keeps artefacts immutable
+# and addressable by SHA.
+
+name: Publish wasm_activation bundle
+
+on:
+  push:
+    branches: [Develop]
+
+permissions:
+  contents: write   # required by `gh release create`
+
+jobs:
+  publish:
+    name: Build and publish wasm_activation bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (with wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build wasm_activation bundle
+        run: |
+          chmod +x scripts/build-wasm-bundle.sh
+          ./scripts/build-wasm-bundle.sh \
+            --rev "${GITHUB_SHA}" \
+            --out wasm_activation-pkg.tar.gz
+
+      - name: Publish per-commit Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="wasm-bundle-${GITHUB_SHA}"
+          gh release create "$tag" wasm_activation-pkg.tar.gz \
+            --target "$GITHUB_SHA" \
+            --title "wasm_activation bundle for ${GITHUB_SHA::7}" \
+            --notes "Auto-built wasm_activation/pkg for commit ${GITHUB_SHA}."
