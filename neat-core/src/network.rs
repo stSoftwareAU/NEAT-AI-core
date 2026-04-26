@@ -2,6 +2,11 @@
 //!
 //! This module provides the CompiledNetwork struct which represents a neural network
 //! compiled for efficient activation in WASM. Issue #1116, #1121, #1125, #1173, #1175, #1177.
+//!
+//! Issue #36 — `CompiledNetwork` is annotated with `#[wasm_bindgen]` on
+//! `wasm32` targets so `wasm-pack build` reproduces the JS class surface that
+//! NEAT-AI consumes. Public fields are skipped from the bindgen surface (they
+//! remain accessible to native Rust callers); the JS API is the public methods.
 
 use crate::range::apply_limit_range;
 use crate::simd::{
@@ -10,6 +15,9 @@ use crate::simd::{
 };
 use crate::squash::{SquashType, apply_squash};
 use crate::synapse_type::SynapseType;
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 /// Neuron data structure for cache-efficient access
 /// Issue #1175 - Use typed structs instead of tuples for neuron/synapse data
@@ -62,26 +70,35 @@ pub struct SynapseData {
 ///
 /// This compact format minimises memory access and enables efficient iteration.
 /// Issue #1175 - Uses typed structs for better cache locality and compiler optimisation.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 #[derive(Clone)]
 pub struct CompiledNetwork {
     /// Total number of neurons (including input)
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub num_neurons: usize,
     /// Number of input neurons
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub num_inputs: usize,
     /// Neuron metadata using typed struct for cache efficiency
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub neurons: Vec<NeuronData>,
     /// Synapse data using typed struct for cache efficiency
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub synapses: Vec<SynapseData>,
     /// Activation buffer - reused across calls
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub activations: Vec<f32>,
     /// Pre-allocated buffer for hint values in activate_and_trace
     /// Issue #1173 - Pre-allocate `Vec<f32>` buffers in CompiledNetwork struct
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub hint_values_buffer: Vec<f32>,
     /// Pre-allocated buffer for trace data in activate_and_trace
     /// Issue #1173 - Eliminates heap allocation per call
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub trace_data_buffer: Vec<f32>,
 }
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl CompiledNetwork {
     /// Reset non-input activations to 0.0.
     ///
@@ -110,6 +127,7 @@ impl CompiledNetwork {
     ///     - u8: synapse_type
     ///     - u8: padding
     ///     - f64: weight
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     pub fn new(data: &[u8]) -> Result<CompiledNetwork, String> {
         if data.len() < 8 {
             return Err("Data too short for header".to_string());
@@ -521,18 +539,31 @@ impl CompiledNetwork {
     }
 
     /// Get the number of neurons in the network
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
     pub fn num_neurons(&self) -> usize {
         self.num_neurons
     }
 
     /// Get the number of input neurons
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
     pub fn num_inputs(&self) -> usize {
         self.num_inputs
     }
 
     /// Get the number of synapses in the network
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
     pub fn num_synapses(&self) -> usize {
         self.synapses.len()
+    }
+
+    /// Activate the network and return a freshly allocated `Vec<f32>` of outputs.
+    ///
+    /// On WASM this surfaces as `activate_view`. The original wrapper crate
+    /// returned a zero-copy view over the activations buffer; this safe variant
+    /// returns a copy to keep the surface safe (no `unsafe` blocks). The JS
+    /// signature is preserved so existing TS wrappers continue to compile.
+    pub fn activate_view(&mut self, input: &[f32], num_outputs: usize) -> Vec<f32> {
+        self.activate(input, num_outputs)
     }
 
     /// Activate the network with tracing for backpropagation support

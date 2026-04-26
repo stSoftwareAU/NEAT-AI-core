@@ -20,6 +20,9 @@
 use crate::derivative::apply_derivative;
 use crate::squash::{SquashType, apply_squash};
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
 /// Neuron definition for the predictive coding engine.
 /// Represents the topology of a single non-input neuron.
 #[derive(Clone, Debug)]
@@ -78,16 +81,25 @@ pub struct PcInferenceResult {
 /// Holds the network topology and configuration for running the iterative
 /// inference (settling) loop. The engine is constructed once from a creature's
 /// topology and can be reused for multiple inference calls.
+///
+/// Issue #36 — annotated with `#[wasm_bindgen]` on `wasm32` so the JS class
+/// surface used by NEAT-AI is reproduced by `wasm-pack` against this crate.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub struct PredictiveCodingEngine {
     /// Total number of neurons (including inputs).
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub num_neurons: usize,
     /// Number of input neurons.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub num_inputs: usize,
     /// Number of output neurons.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub num_outputs: usize,
     /// Non-input neuron metadata.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub neurons: Vec<PcNeuron>,
     /// Inward connections (synapses) for all non-input neurons, packed.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub connections: Vec<PcConnection>,
     /// Outward connections from each neuron (indexed by full neuron index).
     /// Each entry is a list of (target_neuron_index, weight).
@@ -338,6 +350,7 @@ impl PredictiveCodingEngine {
     }
 }
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl PredictiveCodingEngine {
     /// Creates a new PredictiveCodingEngine from serialised topology data.
     ///
@@ -356,6 +369,7 @@ impl PredictiveCodingEngine {
     ///   - For each connection:
     ///     - u16: from_index
     ///     - f32: weight (as 4 bytes, little-endian)
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
     pub fn new(data: &[u8]) -> Result<PredictiveCodingEngine, String> {
         if data.len() < 24 {
             return Err("Data too short for PC engine header".to_string());
@@ -553,16 +567,19 @@ impl PredictiveCodingEngine {
     }
 
     /// Get the number of neurons in the engine.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
     pub fn num_neurons(&self) -> usize {
         self.num_neurons
     }
 
     /// Get the number of input neurons.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
     pub fn num_inputs(&self) -> usize {
         self.num_inputs
     }
 
     /// Get the number of output neurons.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
     pub fn num_outputs(&self) -> usize {
         self.num_outputs
     }

@@ -175,7 +175,7 @@ bump_external() {
     return 1
   fi
   local dry_log
-  dry_log="$(cd "$REPO_DIR" && cargo update --dry-run 2>&1 || true)"
+  dry_log="$({ cd "$REPO_DIR" && cargo update --dry-run 2>&1; } || true)"
   local applied=0 deferred=0 failed=0
   while IFS= read -r line; do
     # Match lines like:
