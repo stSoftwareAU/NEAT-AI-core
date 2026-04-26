@@ -40,6 +40,9 @@ use std::fmt::Write;
 
 use serde::Serialize;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
 use crate::network::CompiledNetwork;
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -306,7 +309,14 @@ pub fn to_dot(network: &CompiledNetwork, num_outputs: usize) -> String {
 // ---------------------------------------------------------------------------
 // Methods on CompiledNetwork
 // ---------------------------------------------------------------------------
+//
+// Issue #43 — annotate the impl block with `#[wasm_bindgen]` on `wasm32`
+// targets so `to_dot` and `to_topology_json` appear as methods on the
+// `CompiledNetwork` JS class in `wasm_activation/pkg/wasm_activation.{js,d.ts}`,
+// mirroring the pattern used for `activate` / `activate_view` / `reset_state`
+// in `network.rs`. NEAT-AI's TypeScript wrapper depends on these exports.
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl CompiledNetwork {
     /// Export this network as a DOT (Graphviz) string.
     ///
