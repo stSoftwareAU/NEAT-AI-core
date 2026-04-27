@@ -44,3 +44,22 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "wasm_activation bundle for ${GITHUB_SHA::7}" \
             --notes "Auto-built wasm_activation/pkg for commit ${GITHUB_SHA}."
+
+      # Issue #48 — re-download the asset we just published and prove it
+      # extracts cleanly with all four files NEAT-AI's build.sh checks for
+      # and a wasm blob above the 128 KiB stub-detection threshold. Catches
+      # silent `gh release create` upload regressions in NEAT-AI-core CI
+      # rather than leaving downstream NEAT-AI bump-deps PRs to fail.
+      - name: Verify published bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="wasm-bundle-${GITHUB_SHA}"
+          verify_dir="$(mktemp -d)"
+          gh release download "$tag" \
+            --pattern 'wasm_activation-pkg.tar.gz' \
+            --dir "$verify_dir"
+          chmod +x scripts/verify-wasm-bundle.sh
+          ./scripts/verify-wasm-bundle.sh \
+            --archive "$verify_dir/wasm_activation-pkg.tar.gz" \
+            --rev "${GITHUB_SHA}"
