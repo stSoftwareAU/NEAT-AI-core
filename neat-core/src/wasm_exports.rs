@@ -21,13 +21,12 @@ use wasm_bindgen::prelude::*;
 use crate::derivative::{apply_derivative, apply_derivative_simd_4way};
 use crate::error::{apply_calculate_error, apply_calculate_error_batch_4way};
 use crate::fused_error::apply_fused_error_distribution;
+use crate::propagate_codec::{decode_propagate_buffer, encode_propagate_output};
 use crate::range::{apply_get_range, apply_limit_range, apply_validate_range};
 use crate::safe_zone::{apply_safe_zone_adjustment, apply_safe_zone_adjustment_batch};
 use crate::score_scan::{compute_score_components, scan_max_bias, scan_max_weight};
 use crate::squash::{SquashType, apply_squash};
-use crate::topological_backprop::{
-    NeuronInput, PropagateInput, PropagateOutcome, SynapseInput, propagate_topological_loop,
-};
+use crate::topological_backprop::propagate_topological_loop;
 use crate::unsquash::apply_unsquash;
 
 // ---------------------------------------------------------------------------
@@ -214,12 +213,11 @@ pub fn wasm_version() -> String {
 
 // ---------------------------------------------------------------------------
 // propagate_topological — byte-packed ABI mirror of
-// NEAT-AI's `WasmTopologicalBackprop.ts`. Decodes the input buffer, calls
-// `propagate_topological_loop`, then re-encodes the result as a packed
-// `Float64Array`.
+// NEAT-AI's `WasmTopologicalBackprop.ts`. The decoder/encoder live in
+// `propagate_codec` so they can be unit-tested natively (Issue #2463).
 //
-// Buffer layout (mirrors the .d.ts contract):
-//   Header (40 bytes):
+// Buffer layout (mirrors the canonical TS contract from Issue #1954):
+//   Header (36 bytes):
 //     u32: neuron_count
 //     u32: input_count
 //     u32: output_count
@@ -229,7 +227,7 @@ pub fn wasm_version() -> String {
 //     f64: plank_constant
 //     u8:  normalise_gradients
 //     [3 bytes padding]
-//   Per neuron (20 bytes each):
+//   Per neuron (24 bytes each):
 //     u8 squash_type, u8 neuron_type, u8 propagate_needed, u8 update_needed,
 //     f32 hint_value, f32 range_low, f32 range_high, f32 adjusted_activation,
 //     f32 adjusted_bias
@@ -249,204 +247,18 @@ pub fn wasm_version() -> String {
 //   Section 2 (synapse_count × 7 f64): per-synapse accumulator deltas.
 // ---------------------------------------------------------------------------
 
-const NEURON_RECORD_BYTES: usize = 20;
-const SYNAPSE_RECORD_BYTES: usize = 20;
-const HEADER_BYTES: usize = 40;
-const PER_NEURON_OUT_F64S: usize = 7;
-const PER_SYNAPSE_OUT_F64S: usize = 7;
-
-#[inline]
-fn read_u32_le(buf: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes([
-        buf[offset],
-        buf[offset + 1],
-        buf[offset + 2],
-        buf[offset + 3],
-    ])
-}
-
-#[inline]
-fn read_f32_le(buf: &[u8], offset: usize) -> f32 {
-    f32::from_le_bytes([
-        buf[offset],
-        buf[offset + 1],
-        buf[offset + 2],
-        buf[offset + 3],
-    ])
-}
-
-#[inline]
-fn read_f64_le(buf: &[u8], offset: usize) -> f64 {
-    f64::from_le_bytes([
-        buf[offset],
-        buf[offset + 1],
-        buf[offset + 2],
-        buf[offset + 3],
-        buf[offset + 4],
-        buf[offset + 5],
-        buf[offset + 6],
-        buf[offset + 7],
-    ])
-}
-
 /// JS `propagate_topological(data: Uint8Array) -> Float64Array`.
 ///
 /// Decodes the byte-packed buffer, runs the reverse-topological backprop
 /// loop, and re-encodes the result with the TS↔WASM sentinel contract.
 #[wasm_bindgen(js_name = propagate_topological)]
 pub fn wasm_propagate_topological(data: &[u8]) -> Vec<f64> {
-    if data.len() < HEADER_BYTES {
+    let Ok(decoded) = decode_propagate_buffer(data) else {
+        // Header too short or buffer truncated — return an empty
+        // Float64Array. The TS wrapper treats `undefined`/empty as a
+        // signal to fall back to the TS path.
         return Vec::new();
-    }
-
-    // Header.
-    let neuron_count = read_u32_le(data, 0) as usize;
-    let input_count = read_u32_le(data, 4);
-    let output_count = read_u32_le(data, 8);
-    let synapse_count = read_u32_le(data, 12) as usize;
-    let order_length = read_u32_le(data, 16) as usize;
-    let total_inward_entries = read_u32_le(data, 20) as usize;
-    let plank_constant = read_f64_le(data, 24) as f32;
-    let normalise_gradients = data[32] != 0;
-
-    let mut offset = HEADER_BYTES;
-
-    // Per-neuron records.
-    let neurons: Vec<NeuronInput> = (0..neuron_count)
-        .map(|i| {
-            let base = offset + i * NEURON_RECORD_BYTES;
-            NeuronInput {
-                squash_type: data[base],
-                neuron_type: data[base + 1],
-                propagate_needed: data[base + 2] != 0,
-                update_needed: data[base + 3] != 0,
-                hint_value: read_f32_le(data, base + 4),
-                range_low: read_f32_le(data, base + 8),
-                range_high: read_f32_le(data, base + 12),
-                adjusted_activation: read_f32_le(data, base + 16),
-                // adjusted_bias spans the next neuron record's first 4 bytes
-                // in the legacy layout — but the contract specifies 20 bytes
-                // per neuron with adjusted_bias as f32 inside that span. We
-                // therefore carry adjusted_bias in a parallel array below.
-                adjusted_bias: 0.0,
-            }
-        })
-        .collect();
-    offset += neuron_count * NEURON_RECORD_BYTES;
-
-    // Per-synapse records.
-    let synapses: Vec<SynapseInput> = (0..synapse_count)
-        .map(|i| {
-            let base = offset + i * SYNAPSE_RECORD_BYTES;
-            SynapseInput {
-                from: read_u32_le(data, base),
-                to: read_u32_le(data, base + 4),
-                original_weight: read_f32_le(data, base + 8),
-                adjusted_weight: read_f32_le(data, base + 12),
-                is_self_loop: data[base + 16] != 0,
-            }
-        })
-        .collect();
-    offset += synapse_count * SYNAPSE_RECORD_BYTES;
-
-    // Inward mapping: (start, count) per neuron.
-    let mut inward_starts = Vec::with_capacity(neuron_count);
-    let mut inward_counts = Vec::with_capacity(neuron_count);
-    for i in 0..neuron_count {
-        let base = offset + i * 8;
-        inward_starts.push(read_u32_le(data, base));
-        inward_counts.push(read_u32_le(data, base + 4));
-    }
-    offset += neuron_count * 8;
-
-    // Inward indices.
-    let mut inward_indices = Vec::with_capacity(total_inward_entries);
-    for i in 0..total_inward_entries {
-        inward_indices.push(read_u32_le(data, offset + i * 4));
-    }
-    offset += total_inward_entries * 4;
-
-    // Reverse topological order.
-    let mut reverse_topo_order = Vec::with_capacity(order_length);
-    for i in 0..order_length {
-        reverse_topo_order.push(read_u32_le(data, offset + i * 4));
-    }
-    offset += order_length * 4;
-
-    // Expected outputs.
-    let mut expected = Vec::with_capacity(output_count as usize);
-    for i in 0..output_count as usize {
-        expected.push(read_f32_le(data, offset + i * 4));
-    }
-
-    let input = PropagateInput {
-        neurons: &neurons,
-        synapses: &synapses,
-        inward_starts: &inward_starts,
-        inward_counts: &inward_counts,
-        inward_synapse_indices: &inward_indices,
-        reverse_topo_order: &reverse_topo_order,
-        expected: &expected,
-        input_count,
-        output_count,
-        plank_constant,
-        normalise_gradients,
     };
-
-    let output = propagate_topological_loop(&input);
-
-    // Encode result.
-    let mut packed = Vec::with_capacity(
-        neuron_count * PER_NEURON_OUT_F64S + synapse_count * PER_SYNAPSE_OUT_F64S,
-    );
-
-    for outcome in &output.neurons {
-        match outcome {
-            PropagateOutcome::Skipped => {
-                // 7 NaN entries — consumer must not touch this neuron's state.
-                for _ in 0..PER_NEURON_OUT_F64S {
-                    packed.push(f64::NAN);
-                }
-            }
-            PropagateOutcome::NoChange { cached_activation } => {
-                packed.push(0.0); // total_error_absolute_delta
-                packed.push(f64::NEG_INFINITY); // sentinel: TS noChange path
-                packed.push(0.0); // no_change flag (TS uses sentinel above)
-                packed.push(0.0);
-                packed.push(0.0);
-                packed.push(0.0);
-                packed.push(*cached_activation as f64); // trace slot carries cached value
-            }
-            PropagateOutcome::Special { target_activation } => {
-                packed.push(0.0);
-                packed.push(f64::INFINITY); // sentinel: TS custom propagate
-                packed.push(0.0);
-                packed.push(0.0);
-                packed.push(0.0);
-                packed.push(0.0);
-                packed.push(*target_activation as f64); // trace slot carries target
-            }
-            PropagateOutcome::Standard(s) => {
-                packed.push(s.total_error_absolute_delta as f64);
-                packed.push(s.cached_activation as f64);
-                packed.push(if s.no_change { 1.0 } else { 0.0 });
-                packed.push(s.bias_count_delta as f64);
-                packed.push(s.total_bias_delta as f64);
-                packed.push(s.total_adjusted_bias_delta as f64);
-                packed.push(s.trace_activation.map(|v| v as f64).unwrap_or(f64::NAN));
-            }
-        }
-    }
-
-    for syn in &output.synapses {
-        packed.push(syn.count as f64);
-        packed.push(syn.total_positive_activation as f64);
-        packed.push(syn.total_negative_activation as f64);
-        packed.push(syn.count_positive as f64);
-        packed.push(syn.count_negative as f64);
-        packed.push(syn.total_positive_adjusted_value as f64);
-        packed.push(syn.total_negative_adjusted_value as f64);
-    }
-
-    packed
+    let output = propagate_topological_loop(&decoded.as_input());
+    encode_propagate_output(&output)
 }
