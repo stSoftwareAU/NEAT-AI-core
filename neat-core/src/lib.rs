@@ -18,6 +18,7 @@ pub mod loss;
 pub mod network;
 pub mod pc_inference;
 pub mod pc_learning;
+pub mod propagate_codec;
 pub mod range;
 pub mod safe_zone;
 pub mod score_scan;
