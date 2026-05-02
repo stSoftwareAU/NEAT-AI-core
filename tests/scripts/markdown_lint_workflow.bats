@@ -23,6 +23,24 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "markdown-lint workflow triggers on PRs and on pushes to Develop" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+# YAML parses bare 'on:' as boolean True in some loaders; tolerate both.
+triggers = data.get("on") or data.get(True)
+assert triggers is not None, data
+assert "pull_request" in triggers, triggers
+push = triggers.get("push") or {}
+branches = push.get("branches") or []
+assert "Develop" in branches, branches
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "markdown-lint workflow exposes a markdownlint job that runs markdownlint-cli2" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
