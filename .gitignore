@@ -3,6 +3,7 @@
 !.github
 !.gitignore
 !.codespellrc
+!.markdownlint-cli2.jsonc
 
 /target/
 **/*.rs.bk
