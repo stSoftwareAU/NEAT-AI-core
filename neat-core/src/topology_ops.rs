@@ -38,6 +38,12 @@ pub const SORT_ERROR_FROM: i32 = 3;
 pub const SORT_ERROR_TO: i32 = 4;
 /// Duplicate `(from, to)` connection.
 pub const DUPLICATE_CONNECTION: i32 = 5;
+/// Input buffers are malformed — length mismatch, index out of range
+/// relative to `num_neurons`, or `num_neurons` itself implausibly large.
+/// Issue NEAT-AI #2659 — root-cause defence in depth so consumers receive
+/// a defined error code rather than a WASM `memory access out of bounds`
+/// trap when an evolved creature emits a pathological edge list.
+pub const MALFORMED_BUFFER: i32 = 6;
 
 // ===========================================================================
 // Structural integrity error codes.
@@ -63,6 +69,12 @@ pub const STRUCTURAL_IF_MISSING_CONDITION: i32 = 7;
 pub const STRUCTURAL_IF_MISSING_POSITIVE: i32 = 8;
 /// An IF neuron is missing a negative synapse.
 pub const STRUCTURAL_IF_MISSING_NEGATIVE: i32 = 9;
+/// Structural input buffers are malformed — length mismatch between
+/// `from_indices`/`to_indices`, `num_inputs`/`num_outputs` larger than
+/// `biases.len()`, or `num_inputs + num_outputs > num_neurons`. Issue
+/// NEAT-AI #2659 — defined error code in place of an `unreachable` or
+/// `memory access out of bounds` trap on malformed input.
+pub const STRUCTURAL_MALFORMED_BUFFER: i32 = 10;
 
 /// Squash-type code for IF neurons — resolved from [`SquashType::If`].
 const IF_SQUASH: u8 = SquashType::If as u8;
@@ -88,7 +100,11 @@ const SYN_POSITIVE: u8 = SynapseType::Positive as u8;
 pub fn validate_topology(from_indices: &[u32], to_indices: &[u32]) -> Vec<i32> {
     let len = from_indices.len();
     if len != to_indices.len() {
-        return vec![SORT_ERROR_FROM, 0];
+        // Issue NEAT-AI #2659 — length mismatch now reports a dedicated
+        // malformed-buffer code instead of the legacy SORT_ERROR_FROM
+        // shadow code. Forward-only ordering errors are still reported as
+        // SORT_ERROR_FROM below.
+        return vec![MALFORMED_BUFFER, 0];
     }
 
     let mut last_from: i64 = -1;
@@ -146,7 +162,19 @@ pub fn scan_available_connections(
     let n = num_neurons as usize;
     let input_count = num_inputs as usize;
 
-    let mut conn_set = vec![false; n * n];
+    // Issue NEAT-AI #2659 — defensive bail-out before the O(n^2)
+    // allocation. A length mismatch or pathologically large
+    // `num_neurons` previously caused a multiplication panic (and so a
+    // WASM trap) instead of a defined empty result.
+    if from_indices.len() != to_indices.len() {
+        return Vec::new();
+    }
+    let conn_set_len = match n.checked_mul(n) {
+        Some(v) if v <= isize::MAX as usize => v,
+        _ => return Vec::new(),
+    };
+
+    let mut conn_set = vec![false; conn_set_len];
     for i in 0..from_indices.len() {
         let from = from_indices[i] as usize;
         let to = to_indices[i] as usize;
@@ -193,6 +221,17 @@ pub fn compute_reverse_topological_order(
     let n = num_neurons as usize;
     let input_count = num_inputs as usize;
 
+    // Issue NEAT-AI #2659 — bail out on malformed inputs rather than
+    // letting the indexing operations below trap. Callers receive an
+    // empty result and can recover (e.g. drop the offending creature)
+    // without the WASM run aborting.
+    if from_indices.len() != to_indices.len() {
+        return Vec::new();
+    }
+    if input_count > n {
+        return Vec::new();
+    }
+
     let mut out_degree = vec![0i32; n];
     let mut inward: Vec<Vec<u32>> = vec![Vec::new(); n];
 
@@ -201,6 +240,14 @@ pub fn compute_reverse_topological_order(
         let to = to_indices[i] as usize;
 
         if from == to {
+            continue;
+        }
+
+        // Defensive: skip synapses whose endpoints fall outside the
+        // declared neuron count rather than panicking. Production has
+        // observed pathological evolved creatures emitting stale indices
+        // after a neuron rename; #2659.
+        if from >= n || to >= n {
             continue;
         }
 
@@ -327,6 +374,20 @@ pub fn validate_structural_integrity(
     let input_count = num_inputs as usize;
     let output_count = num_outputs as usize;
 
+    // Issue NEAT-AI #2659 — refuse pathological inputs with a defined
+    // error code so callers do not see a WASM trap (`memory access out
+    // of bounds` from `output_start = num_neurons - output_count`
+    // underflow, or out-of-range writes into `inward_count`).
+    if to_indices.len() != num_synapses {
+        return vec![STRUCTURAL_MALFORMED_BUFFER, 0];
+    }
+    if input_count > num_neurons || output_count > num_neurons {
+        return vec![STRUCTURAL_MALFORMED_BUFFER, 0];
+    }
+    if input_count.saturating_add(output_count) > num_neurons {
+        return vec![STRUCTURAL_MALFORMED_BUFFER, 0];
+    }
+
     for i in 0..num_synapses {
         if (to_indices[i] as usize) < input_count {
             return vec![STRUCTURAL_SYNAPSE_TARGETS_INPUT, to_indices[i] as i32];
@@ -434,6 +495,17 @@ pub fn detect_cycles(
 ) -> u32 {
     let n = num_neurons as usize;
     let input_count = num_inputs as usize;
+
+    // Issue NEAT-AI #2659 — refuse malformed buffers with a safe
+    // "no cycle" result. Length mismatch or `input_count > n` previously
+    // panicked while iterating; an empty/safe answer lets the caller
+    // recover instead of aborting the WASM run.
+    if from_indices.len() != to_indices.len() {
+        return 0;
+    }
+    if input_count > n {
+        return 0;
+    }
 
     for i in 0..from_indices.len() {
         if from_indices[i] == to_indices[i] && (from_indices[i] as usize) >= input_count {
@@ -574,11 +646,150 @@ mod tests {
     }
 
     #[test]
-    fn validate_mismatched_lengths_reports_error() {
+    fn validate_mismatched_lengths_reports_malformed_buffer() {
+        // Issue NEAT-AI #2659 — length mismatch reports the dedicated
+        // MALFORMED_BUFFER code (was SORT_ERROR_FROM before #2659).
         let from = [0u32, 1];
         let to = [2u32];
         let result = validate_topology(&from, &to);
-        assert_eq!(result[0], SORT_ERROR_FROM);
+        assert_eq!(result[0], MALFORMED_BUFFER);
+    }
+
+    // -----------------------------------------------------------------------
+    // Malformed-buffer hardening — Issue NEAT-AI #2659.
+    //
+    // Each test feeds an intentionally pathological edge list and asserts
+    // that the function returns a defined value rather than panicking
+    // (which would surface as a WASM `memory access out of bounds` trap).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reverse_topological_order_oob_from_does_not_panic() {
+        // `from = 99` is beyond `num_neurons = 4`. Before #2659 this
+        // panicked while incrementing `out_degree[99]`; after #2659 the
+        // synapse is skipped and the function returns a defined result.
+        let from = [0u32, 1, 99];
+        let to = [2u32, 2, 3];
+        let result = compute_reverse_topological_order(&from, &to, 4, 2);
+        // The valid synapses (0->2, 1->2) still yield a topological order
+        // covering the two non-input neurons.
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn reverse_topological_order_oob_to_does_not_panic() {
+        // `to = 99` is beyond `num_neurons = 4`. Before #2659 the
+        // `inward[99].push(...)` call panicked; after #2659 the synapse
+        // is silently dropped.
+        let from = [0u32, 1];
+        let to = [2u32, 99];
+        let result = compute_reverse_topological_order(&from, &to, 4, 2);
+        // Returns successfully without trap; the surviving 0->2 edge
+        // leaves neuron 2 (and the orphan 3) covered by the Kahn pass.
+        assert!(result.len() <= 2);
+    }
+
+    #[test]
+    fn reverse_topological_order_mismatched_lengths_returns_empty() {
+        let from = [0u32, 1, 2];
+        let to = [2u32, 2];
+        let result = compute_reverse_topological_order(&from, &to, 4, 2);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn reverse_topological_order_input_count_exceeds_neurons() {
+        let from = [0u32];
+        let to = [1u32];
+        // num_inputs > num_neurons would underflow the start of the
+        // ready queue range. Defended.
+        let result = compute_reverse_topological_order(&from, &to, 2, 99);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn scan_available_connections_mismatched_lengths_returns_empty() {
+        let from = [0u32, 1];
+        let to = [2u32];
+        let is_const = [0u8, 0, 0, 0];
+        let result = scan_available_connections(&from, &to, &is_const, 4, 2);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn scan_available_connections_huge_neuron_count_returns_empty() {
+        // u32::MAX neurons would request `n * n` allocation, which
+        // overflows usize on 32-bit WASM and panics. Defended via
+        // `checked_mul`.
+        let from: [u32; 0] = [];
+        let to: [u32; 0] = [];
+        let is_const: [u8; 0] = [];
+        let result = scan_available_connections(&from, &to, &is_const, u32::MAX, 0);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn structural_mismatched_lengths_reports_malformed_buffer() {
+        let from = [0u32, 1];
+        let to = [2u32];
+        let is_const = [0u8, 0, 0, 0];
+        let squash = [0u8, 0, 1, 7];
+        let biases = [0.0f64, 0.0, 0.5, -0.3];
+        let syn_types = [0u8, 0];
+
+        let result = validate_structural_integrity(
+            &from, &to, &is_const, &squash, &biases, 2, 1, &syn_types,
+        );
+        assert_eq!(result[0], STRUCTURAL_MALFORMED_BUFFER);
+    }
+
+    #[test]
+    fn structural_output_count_exceeds_neurons_reports_malformed_buffer() {
+        // Before #2659, `output_start = num_neurons - output_count`
+        // underflowed and the next loop trapped.
+        let from = [0u32, 1];
+        let to = [2u32, 3];
+        let is_const = [0u8, 0, 0, 0];
+        let squash = [0u8, 0, 1, 7];
+        let biases = [0.0f64, 0.0, 0.5, -0.3];
+        let syn_types = [0u8, 0];
+
+        let result = validate_structural_integrity(
+            &from, &to, &is_const, &squash, &biases, 2, 99, &syn_types,
+        );
+        assert_eq!(result[0], STRUCTURAL_MALFORMED_BUFFER);
+    }
+
+    #[test]
+    fn structural_input_plus_output_exceeds_neurons_reports_malformed_buffer() {
+        let from = [0u32, 1];
+        let to = [2u32, 3];
+        let is_const = [0u8, 0, 0, 0];
+        let squash = [0u8, 0, 1, 7];
+        let biases = [0.0f64, 0.0, 0.5, -0.3];
+        let syn_types = [0u8, 0];
+
+        // 3 inputs + 2 outputs = 5 > 4 neurons.
+        let result = validate_structural_integrity(
+            &from, &to, &is_const, &squash, &biases, 3, 2, &syn_types,
+        );
+        assert_eq!(result[0], STRUCTURAL_MALFORMED_BUFFER);
+    }
+
+    #[test]
+    fn detect_cycles_mismatched_lengths_returns_no_cycle() {
+        let from = [0u32, 1];
+        let to = [2u32];
+        // Defended — no panic, returns "no cycle" so caller can keep
+        // running.
+        assert_eq!(detect_cycles(&from, &to, 4, 2), 0);
+    }
+
+    #[test]
+    fn detect_cycles_input_count_exceeds_neurons_returns_no_cycle() {
+        let from = [0u32];
+        let to = [1u32];
+        assert_eq!(detect_cycles(&from, &to, 2, 99), 0);
     }
 
     // -----------------------------------------------------------------------
