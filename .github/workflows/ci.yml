@@ -43,7 +43,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Pull latest changes
-        run: git pull origin ${{ github.head_ref }}
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: git pull origin "$HEAD_REF"
 
       - name: Fetch base branch
         run: |
@@ -105,13 +107,15 @@ jobs:
           cargo outdated -R || true
 
       - name: Commit version and dependency changes
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git add -A
           if git diff --cached --quiet; then
             echo "No changes after version bump / dependency upgrade"
           else
             git commit -m "chore: auto-increment versions for changed projects"
-            git push origin ${{ github.head_ref }}
+            git push origin "$HEAD_REF"
           fi
 
   auto-format:
@@ -156,13 +160,15 @@ jobs:
 
       - name: Commit rustfmt if needed
         id: fmt_commit
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
             git add -A
             git commit -m "chore: apply rustfmt fixes"
-            git push origin ${{ github.head_ref }}
+            git push origin "$HEAD_REF"
             echo "pushed=true" >> "$GITHUB_OUTPUT"
           else
             echo "pushed=false" >> "$GITHUB_OUTPUT"
@@ -186,7 +192,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull latest changes
-        run: git pull origin ${{ github.head_ref }}
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: git pull origin "$HEAD_REF"
 
       - name: Free up runner disk space
         run: |

@@ -24,7 +24,9 @@ jobs:
           fetch-depth: 0
 
       - name: Pull latest (after version/dependency bot commits)
-        run: git pull --ff-only origin "${{ github.head_ref }}" || true
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: git pull --ff-only origin "$HEAD_REF" || true
 
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain@stable
