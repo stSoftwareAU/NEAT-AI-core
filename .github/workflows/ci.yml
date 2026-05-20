@@ -30,7 +30,8 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.0
+        # actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
@@ -49,10 +50,12 @@ jobs:
           git fetch origin Develop:Develop || git fetch origin develop:develop || true
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Install cargo-edit and cargo-outdated
-        uses: taiki-e/install-action@v2
+        # taiki-e/install-action@v2.79.2
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d
         with:
           tool: cargo-edit,cargo-outdated
 
@@ -122,7 +125,8 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.0
+        # actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
@@ -142,7 +146,8 @@ jobs:
           fi
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: rustfmt, clippy
 
@@ -173,7 +178,8 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.0
+        # actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
@@ -193,17 +199,20 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: rustfmt, clippy
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v2
+        # Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
         with:
           workspaces: ". -> target"
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        # taiki-e/install-action@v2.79.2
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d
         with:
           tool: cargo-deny
 
@@ -233,7 +242,8 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.0
+        # actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
@@ -264,7 +274,8 @@ jobs:
           exit "$exit_code"
 
       - name: Run codespell
-        uses: codespell-project/actions-codespell@v2
+        # codespell-project/actions-codespell@v2.2
+        uses: codespell-project/actions-codespell@8f01853be192eb0f849a5c7d721450e7a467c579
         with:
           check_filenames: true
           check_hidden: true
@@ -286,13 +297,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.2.0
+        # actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Check for required files
         run: |
