@@ -59,7 +59,7 @@ New tests in `neat-core/src/loss.rs` (covers acceptance criteria one-to-one):
 
 Run locally:
 
-```
+```bash
 cargo test -p neat-core --lib loss::tests::categorical
 RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps
 ```
