@@ -8,3 +8,7 @@
 /target/
 **/*.rs.bk
 .DS_Store
+
+# CI-only artefacts written by upgrade-dependencies.yml / cargo upgrade --dry-run.
+upgrade.log
+upgrade-dry-run.txt
