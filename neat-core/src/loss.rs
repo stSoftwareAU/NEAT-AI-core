@@ -2087,6 +2087,98 @@ pub fn hinge_sum_batch_packed(
     sum_error
 }
 
+/// Fused activate + Categorical Error (argmax misclassification) for batch scoring.
+///
+/// Reference TypeScript: `NEAT-AI/src/costs/CategoricalError.ts`. For each
+/// record, this compares the index of the largest target value (the true
+/// class) with the index of the largest output value (the predicted class).
+/// Each record contributes `0` for a correct prediction or `1` for an
+/// incorrect one. The returned sum is therefore the **count of
+/// misclassified records**; divide by `record_count` to obtain the mean
+/// error rate (`1 - accuracy`).
+///
+/// Ties resolve to the first index (standard argmax convention) on both the
+/// target and output sides, matching the TS reference.
+///
+/// This metric is intentionally **non-differentiable** — it is intended as a
+/// scoring / early-stop signal, not a gradient source.
+///
+/// # Arguments
+/// * `network` - The compiled network to activate
+/// * `records` - Packed array of `[inputs..., targets...]` records
+/// * `input_size` - Number of inputs per record
+/// * `num_outputs` - Number of outputs per record
+/// * `forward_only` - If true, skip reset_state() (for forward-only networks)
+///
+/// # Returns
+/// Count of misclassified records (divide by record count for mean error
+/// rate). Returns `0.0` when the record set is empty or `input_size +
+/// num_outputs == 0`.
+///
+/// Issue stSoftwareAU/NEAT-AI-core#88 — extend native scorer with the last
+/// remaining built-in NEAT-AI cost function.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn categorical_error_sum_batch_packed(
+    network: &mut CompiledNetwork,
+    records: &[f32],
+    input_size: usize,
+    num_outputs: usize,
+    forward_only: bool,
+) -> f64 {
+    let values_per_record = input_size + num_outputs;
+    if values_per_record == 0 {
+        return 0.0;
+    }
+    let num_records = records.len() / values_per_record;
+    if num_records == 0 || num_outputs == 0 {
+        return 0.0;
+    }
+
+    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
+    let mut misclassified: f64 = 0.0;
+
+    for record_idx in 0..num_records {
+        if !forward_only {
+            network.reset_state();
+        }
+
+        let base = record_idx * values_per_record;
+        let input_start = base;
+        let input_end = base + input_size;
+        let target_start = input_end;
+
+        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
+
+        // Argmax with first-index tie-breaking — matches the TS reference
+        // (`a > b` so equal values keep the earlier index).
+        let mut target_argmax: usize = 0;
+        let mut target_best: f32 = records[target_start];
+        for j in 1..num_outputs {
+            let v = records[target_start + j];
+            if v > target_best {
+                target_best = v;
+                target_argmax = j;
+            }
+        }
+
+        let mut output_argmax: usize = 0;
+        let mut output_best: f32 = outputs[0];
+        for j in 1..num_outputs {
+            let v = outputs[j];
+            if v > output_best {
+                output_best = v;
+                output_argmax = j;
+            }
+        }
+
+        if target_argmax != output_argmax {
+            misclassified += 1.0;
+        }
+    }
+
+    misclassified
+}
+
 /// Non-fused recurrent-path MSE for `forwardOnly: false` networks.
 ///
 /// Activates the network **once per record**, resetting hidden activations
@@ -2255,5 +2347,152 @@ mod tests {
 
         // Zero input_size + zero num_outputs — degenerate, also 0.0.
         assert_eq!(mse_mean_record(&mut network, &records, 0, 0), 0.0);
+    }
+
+    // ----- categorical_error_sum_batch_packed (issue #88) -----
+    //
+    // 2-input / 3-output linear creature used to test argmax classification.
+    // All outputs use IDENTITY so we can hand-roll exact activations:
+    //   output-0 = 1.0 * in0 + 0.0 * in1
+    //   output-1 = 0.0 * in0 + 1.0 * in1
+    //   output-2 = 0.5 * in0 + 0.5 * in1
+    //
+    // Sample activations:
+    //   (1, 0) -> [1.0, 0.0, 0.5]   argmax = 0
+    //   (0, 1) -> [0.0, 1.0, 0.5]   argmax = 1
+    //   (2, 1) -> [2.0, 1.0, 1.5]   argmax = 0
+    //   (1, 1) -> [1.0, 1.0, 1.0]   argmax = 0 (3-way tie, first wins)
+    fn three_class_creature_json() -> &'static str {
+        r#"{
+            "input": 2,
+            "output": 3,
+            "neurons": [
+                {"type": "output", "uuid": "output-0", "bias": 0.0, "squash": "IDENTITY"},
+                {"type": "output", "uuid": "output-1", "bias": 0.0, "squash": "IDENTITY"},
+                {"type": "output", "uuid": "output-2", "bias": 0.0, "squash": "IDENTITY"}
+            ],
+            "synapses": [
+                {"fromUUID": "input-0", "toUUID": "output-0", "weight": 1.0},
+                {"fromUUID": "input-1", "toUUID": "output-0", "weight": 0.0},
+                {"fromUUID": "input-0", "toUUID": "output-1", "weight": 0.0},
+                {"fromUUID": "input-1", "toUUID": "output-1", "weight": 1.0},
+                {"fromUUID": "input-0", "toUUID": "output-2", "weight": 0.5},
+                {"fromUUID": "input-1", "toUUID": "output-2", "weight": 0.5}
+            ],
+            "forwardOnly": true
+        }"#
+    }
+
+    #[test]
+    fn categorical_error_perfect_prediction_returns_zero() {
+        let creature = parse_creature_json(three_class_creature_json()).expect("parse");
+        let mut network = compile_creature(&creature).expect("compile");
+
+        // Each record's target argmax matches the output argmax above.
+        #[rustfmt::skip]
+        let records: Vec<f32> = vec![
+            1.0, 0.0, /* target */ 1.0, 0.0, 0.0, // out argmax 0, tgt argmax 0
+            0.0, 1.0, /* target */ 0.0, 1.0, 0.0, // out argmax 1, tgt argmax 1
+            2.0, 1.0, /* target */ 1.0, 0.0, 0.0, // out argmax 0, tgt argmax 0
+        ];
+
+        let err = categorical_error_sum_batch_packed(&mut network, &records, 2, 3, true);
+        assert_eq!(err, 0.0);
+    }
+
+    #[test]
+    fn categorical_error_all_wrong_returns_record_count() {
+        let creature = parse_creature_json(three_class_creature_json()).expect("parse");
+        let mut network = compile_creature(&creature).expect("compile");
+
+        // Every record's target argmax disagrees with the output argmax.
+        #[rustfmt::skip]
+        let records: Vec<f32> = vec![
+            1.0, 0.0, /* target */ 0.0, 1.0, 0.0, // out argmax 0, tgt argmax 1
+            0.0, 1.0, /* target */ 1.0, 0.0, 0.0, // out argmax 1, tgt argmax 0
+            2.0, 1.0, /* target */ 0.0, 0.0, 1.0, // out argmax 0, tgt argmax 2
+        ];
+
+        let err = categorical_error_sum_batch_packed(&mut network, &records, 2, 3, true);
+        assert_eq!(err, 3.0);
+    }
+
+    #[test]
+    fn categorical_error_empty_input_returns_zero() {
+        let creature = parse_creature_json(three_class_creature_json()).expect("parse");
+        let mut network = compile_creature(&creature).expect("compile");
+
+        // Empty record set.
+        let empty: Vec<f32> = Vec::new();
+        assert_eq!(
+            categorical_error_sum_batch_packed(&mut network, &empty, 2, 3, true),
+            0.0
+        );
+
+        // Degenerate input_size + num_outputs == 0.
+        assert_eq!(
+            categorical_error_sum_batch_packed(&mut network, &empty, 0, 0, true),
+            0.0
+        );
+
+        // Degenerate num_outputs == 0 with non-empty input_size.
+        assert_eq!(
+            categorical_error_sum_batch_packed(&mut network, &empty, 2, 0, true),
+            0.0
+        );
+    }
+
+    #[test]
+    fn categorical_error_ties_resolve_to_first_index() {
+        let creature = parse_creature_json(three_class_creature_json()).expect("parse");
+        let mut network = compile_creature(&creature).expect("compile");
+
+        // Input (1, 1) -> outputs [1.0, 1.0, 1.0]: 3-way tie, argmax = 0.
+        // Record 1: target [0.5, 0.5, 0.4] -> tgt argmax = 0 (first wins) -> correct.
+        // Record 2: target [0.4, 0.5, 0.5] -> tgt argmax = 1 (first of tied
+        //           1 and 2) -> mismatch with output argmax 0 -> 1 error.
+        // Record 3: target [0.5, 0.4, 0.5] -> tgt argmax = 0 (first of tied
+        //           0 and 2) -> correct.
+        #[rustfmt::skip]
+        let records: Vec<f32> = vec![
+            1.0, 1.0, /* target */ 0.5, 0.5, 0.4,
+            1.0, 1.0, /* target */ 0.4, 0.5, 0.5,
+            1.0, 1.0, /* target */ 0.5, 0.4, 0.5,
+        ];
+
+        let err = categorical_error_sum_batch_packed(&mut network, &records, 2, 3, true);
+        assert_eq!(err, 1.0);
+    }
+
+    #[test]
+    fn categorical_error_mixed_batch_matches_reference() {
+        let creature = parse_creature_json(three_class_creature_json()).expect("parse");
+        let mut network = compile_creature(&creature).expect("compile");
+
+        // Hand-crafted mixed batch — annotate each row with the expected
+        // output argmax (from the linear creature above) and target argmax,
+        // then the per-record contribution (0 correct, 1 wrong).
+        #[rustfmt::skip]
+        let records: Vec<f32> = vec![
+            // in0, in1, t0, t1, t2 | out argmax | tgt argmax | err
+            1.0, 0.0,  1.0, 0.0, 0.0, //     0          0         0
+            0.0, 1.0,  1.0, 0.0, 0.0, //     1          0         1
+            2.0, 1.0,  0.0, 0.0, 1.0, //     0          2         1
+            0.0, 2.0,  0.0, 1.0, 0.0, //     1          1         0
+            1.0, 1.0,  0.5, 0.4, 0.4, //     0 (tie)    0 (tie)   0
+            1.0, 0.0,  0.0, 1.0, 0.0, //     0          1         1
+        ];
+        // Total errors expected = 3.
+
+        let err = categorical_error_sum_batch_packed(&mut network, &records, 2, 3, true);
+        assert_eq!(err, 3.0);
+
+        // The forward_only=false path takes the same record loop with an
+        // additional reset_state() — for this stateless feed-forward
+        // creature it must produce the same count.
+        let mut net_recurrent = compile_creature(&creature).expect("compile");
+        let err_recurrent =
+            categorical_error_sum_batch_packed(&mut net_recurrent, &records, 2, 3, false);
+        assert_eq!(err_recurrent, 3.0);
     }
 }

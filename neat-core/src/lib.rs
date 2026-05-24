@@ -64,8 +64,9 @@ pub use elastic_distribution::distribute_elastic_error;
 pub use error::{apply_calculate_error, apply_calculate_error_batch_4way};
 pub use fused_error::apply_fused_error_distribution;
 pub use loss::{
-    cross_entropy_sum_batch_packed, hinge_sum_batch_packed, mae_sum_batch_packed,
-    mape_sum_batch_packed, mse_mean_record, mse_sum_batch_packed, msle_sum_batch_packed,
+    categorical_error_sum_batch_packed, cross_entropy_sum_batch_packed, hinge_sum_batch_packed,
+    mae_sum_batch_packed, mape_sum_batch_packed, mse_mean_record, mse_sum_batch_packed,
+    msle_sum_batch_packed,
 };
 pub use range::{apply_get_range, apply_limit_range, apply_validate_range};
 pub use safe_zone::{apply_safe_zone_adjustment, apply_safe_zone_adjustment_batch};
