@@ -13,8 +13,11 @@
     ".git/**",
     // Historical PR summary docs — committed as point-in-time snapshots
     // and not retroactively reformatted. New PR summaries should still
-    // satisfy the rules below.
-    "docs/pr-summary-*.md"
+    // satisfy the rules below. Issue #2173 moved the canonical home
+    // from `docs/` root to `docs/archive/pr-summaries/`; both globs
+    // remain for backward compatibility with any leftover files.
+    "docs/pr-summary-*.md",
+    "docs/archive/pr-summaries/pr-summary-*.md"
   ],
   "config": {
     "default": true,

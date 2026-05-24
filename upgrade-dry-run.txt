@@ -1,8 +1,0 @@
-    Checking virtual workspace's dependencies
-    Checking neat-core's dependencies
-name         old req compatible latest  new req
-====         ======= ========== ======  =======
-wasm-bindgen 0.2.120 0.2.121    0.2.121 0.2.121
-note: Re-run with `--verbose` to show more dependencies
-  latest: serde, serde_json, tempfile
-warning: aborting upgrade due to dry run

@@ -14,7 +14,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 
 | Path | Role |
 |------|------|
-| `neat-core/` | Shared computation library; **233+** unit tests in `src/**/*.rs`. |
+| `neat-core/` | Shared computation library; **140+** unit tests in `src/**/*.rs` plus integration tests in `neat-core/tests/` (>350 total). |
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
