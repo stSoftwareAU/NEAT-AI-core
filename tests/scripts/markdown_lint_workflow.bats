@@ -74,6 +74,37 @@ PY
   [ "$status" -eq 0 ]
 }
 
+@test "markdown-lint workflow does not pin actions/setup-node to a deprecated Node 20 SHA" {
+  # Regression test for Issue #98 — actions/setup-node@v4
+  # (SHA 49933ea5288caeca8642d1e84afbd3f7d6820020) ships the Node 20
+  # runtime that GitHub-hosted runners are deprecating. Catch any
+  # accidental rollback to that SHA.
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+DEPRECATED_NODE20_SHAS = {
+    # actions/setup-node@v4 — Node 20 runtime.
+    "49933ea5288caeca8642d1e84afbd3f7d6820020",
+    # actions/setup-node@v3 — Node 16 runtime (also deprecated).
+    "1a4442cacd436585916779262731d5b162bc6ec7",
+}
+setup_node_steps = [
+    s for s in data["jobs"]["markdownlint"]["steps"]
+    if isinstance(s.get("uses"), str) and s["uses"].startswith("actions/setup-node@")
+]
+assert setup_node_steps, "actions/setup-node step missing"
+for step in setup_node_steps:
+    ref = step["uses"].split("@", 1)[1]
+    assert ref not in DEPRECATED_NODE20_SHAS, (
+        f"actions/setup-node pinned to deprecated Node 20/16 SHA: {ref}"
+    )
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "markdown-lint workflow gates Mermaid validation on a Deno worker module" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
