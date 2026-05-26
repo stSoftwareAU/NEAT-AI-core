@@ -133,6 +133,9 @@ DEPRECATED = {
     # Issue #99 replaced this with a direct CLI install in gitleaks.yml so
     # the workflow has no Node runtime at all.
     "ff98106e4c7b2bc287b24eaf42907196329070c7": "gitleaks/gitleaks-action@v2.3.9 (node20, EOL 2026-09-16)",
+    # actions/dependency-review-action@v4.9.0 — runs on Node 20 (action.yml
+    # declares using node20). Bumped to v5.0.0 (Node 24) for Issue #100.
+    "2031cfc080254a8a887f58cffee85186f0e49e48": "actions/dependency-review-action@v4.9.0 (node20, EOL 2026-09-16)",
 }
 uses_re = re.compile(r"uses:\s*([^\s#]+)")
 
