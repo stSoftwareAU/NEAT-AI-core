@@ -1,0 +1,58 @@
+name: Actionlint
+
+# Issue #96 — CI lint gate for GitHub Actions workflows.
+#
+# Runs the upstream actionlint binary (rhysd/actionlint) on every push to
+# Develop and every pull request so workflow regressions fail the build.
+#
+# Install pattern mirrors gitleaks.yml (Issue #99) and the wasm-pack pinned
+# install (Issue #78): download a version-pinned release tarball and verify
+# its SHA-256 before executing the binary. Avoids the supply-chain risk of
+# floating Marketplace actions and keeps third-party `uses:` entries pinned
+# to commit SHAs (Issue #77).
+
+on:
+  push:
+    branches: [Develop]
+  pull_request:
+    branches: ["*"]
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      # Install actionlint CLI from a version-pinned release tarball with
+      # SHA-256 verification. Bump ACTIONLINT_VERSION + ACTIONLINT_SHA256
+      # together — the SHA-256 is the sha256sum of the linux_amd64 .tar.gz
+      # asset on the corresponding GitHub release page.
+      - name: Install actionlint CLI
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          # sha256 of actionlint_1.7.12_linux_amd64.tar.gz from
+          # https://github.com/rhysd/actionlint/releases/tag/v1.7.12
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          asset="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${asset}"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$asset" "$url"
+          echo "${ACTIONLINT_SHA256}  ${asset}" | sha256sum -c -
+          tar -xzf "$asset" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f "$asset" actionlint
+          actionlint -version
+
+      - name: Run actionlint
+        # `-ignore 'SC2016'` suppresses a false positive from actionlint's
+        # bundled shellcheck integration on intentional single-quoted echo
+        # strings inside heredocs (e.g. upgrade-dependencies.yml). All other
+        # shellcheck diagnostics still fail the build.
+        run: |
+          set -euo pipefail
+          actionlint -no-color -ignore 'SC2016'
