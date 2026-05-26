@@ -136,6 +136,10 @@ DEPRECATED = {
     # actions/dependency-review-action@v4.9.0 — runs on Node 20 (action.yml
     # declares using node20). Bumped to v5.0.0 (Node 24) for Issue #100.
     "2031cfc080254a8a887f58cffee85186f0e49e48": "actions/dependency-review-action@v4.9.0 (node20, EOL 2026-09-16)",
+    # rustsec/audit-check@v2.0.0 — runs on Node 20 (action.yml declares
+    # using node20). Bumped to upstream master @858dc40 (Node 24) for
+    # Issue #101.
+    "69366f33c96575abad1ee0dba8212993eecbe998": "rustsec/audit-check@v2.0.0 (node20, EOL 2026-09-16)",
 }
 uses_re = re.compile(r"uses:\s*([^\s#]+)")
 
