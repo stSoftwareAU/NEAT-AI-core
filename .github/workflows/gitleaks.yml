@@ -1,5 +1,14 @@
 name: Gitleaks
 
+# Issue #99 — migrated off the Node-based `gitleaks/gitleaks-action@v2.3.9`,
+# which declares `using: node20` and triggered the GitHub-hosted runner
+# Node 20 deprecation warning (Node 20 auto-upgrades to Node 24 on
+# 2026-06-02; full removal 2026-09-16). Upstream has not shipped a Node
+# 22/24 release of the action, so we install the gitleaks CLI binary
+# directly with SHA-256 verification (mirrors the wasm-pack pinned-install
+# pattern from Issue #78). The CLI is MIT-licensed and free, so dropping
+# the action also drops the GITLEAKS_LICENSE requirement.
+
 on:
   pull_request:
     branches: ["*"]
@@ -15,8 +24,38 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
-      # gitleaks/gitleaks-action@v2.3.9
-      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
+
+      # Install the gitleaks CLI from a version-pinned release tarball with
+      # SHA-256 verification. Bump GITLEAKS_VERSION + GITLEAKS_SHA256
+      # together — the SHA-256 is the sha256sum of the .tar.gz asset on
+      # the corresponding GitHub release page.
+      - name: Install gitleaks CLI
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_VERSION: "8.30.1"
+          # sha256 of gitleaks_8.30.1_linux_x64.tar.gz from
+          # https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${asset}"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$asset" "$url"
+          echo "${GITLEAKS_SHA256}  ${asset}" | sha256sum -c -
+          tar -xzf "$asset" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f "$asset" gitleaks
+          gitleaks version
+
+      - name: Run gitleaks
+        run: |
+          set -euo pipefail
+          # --redact: never print matched secrets in CI logs.
+          # --verbose: show one line per finding.
+          # --no-banner: cleaner log output.
+          # Exit code is non-zero when leaks are found, failing the job.
+          gitleaks detect \
+            --source . \
+            --config .gitleaks.toml \
+            --redact \
+            --verbose \
+            --no-banner

@@ -114,11 +114,11 @@ PY
   [ "$status" -eq 0 ]
 }
 
-# Issue #97 regression: actions/checkout pins must not point at SHAs whose
+# Issue #97 / #99 regression: action pins must not point at SHAs whose
 # runtime is the deprecated Node.js 20 (EOL 2026-09-16). Maintain a denylist
 # of known-deprecated commits and assert no workflow uses them. New entries
 # go here whenever a Node-runtime EOL is announced.
-@test "no workflow uses actions/checkout pinned to a deprecated Node runtime" {
+@test "no workflow uses an action pinned to a deprecated Node runtime" {
   run python3 - <<PY
 import glob, os, re, sys
 
@@ -128,6 +128,11 @@ DEPRECATED = {
     # actions/checkout@v4.3.1 — runs on Node 20 (EOL on GitHub-hosted
     # runners 2026-09-16). Bumped to v6.0.2 (Node 24) for Issue #97.
     "34e114876b0b11c390a56381ad16ebd13914f8d5": "actions/checkout@v4.3.1 (node20, EOL 2026-09-16)",
+    # gitleaks/gitleaks-action@v2.3.9 — runs on Node 20 (action.yml declares
+    # using node20) and upstream has not shipped a Node 22/24 release.
+    # Issue #99 replaced this with a direct CLI install in gitleaks.yml so
+    # the workflow has no Node runtime at all.
+    "ff98106e4c7b2bc287b24eaf42907196329070c7": "gitleaks/gitleaks-action@v2.3.9 (node20, EOL 2026-09-16)",
 }
 uses_re = re.compile(r"uses:\s*([^\s#]+)")
 
