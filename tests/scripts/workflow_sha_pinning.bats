@@ -114,6 +114,46 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# Issue #97 regression: actions/checkout pins must not point at SHAs whose
+# runtime is the deprecated Node.js 20 (EOL 2026-09-16). Maintain a denylist
+# of known-deprecated commits and assert no workflow uses them. New entries
+# go here whenever a Node-runtime EOL is announced.
+@test "no workflow uses actions/checkout pinned to a deprecated Node runtime" {
+  run python3 - <<PY
+import glob, os, re, sys
+
+workflows_dir = "$WORKFLOWS_DIR"
+# SHA -> reason. Add deprecated runtime SHAs here as Node versions reach EOL.
+DEPRECATED = {
+    # actions/checkout@v4.3.1 — runs on Node 20 (EOL on GitHub-hosted
+    # runners 2026-09-16). Bumped to v6.0.2 (Node 24) for Issue #97.
+    "34e114876b0b11c390a56381ad16ebd13914f8d5": "actions/checkout@v4.3.1 (node20, EOL 2026-09-16)",
+}
+uses_re = re.compile(r"uses:\s*([^\s#]+)")
+
+failures = []
+for path in sorted(glob.glob(os.path.join(workflows_dir, "*.yml"))):
+    with open(path) as fh:
+        for lineno, line in enumerate(fh, 1):
+            m = uses_re.search(line)
+            if not m:
+                continue
+            ref = m.group(1)
+            if "@" not in ref:
+                continue
+            sha = ref.rsplit("@", 1)[1]
+            if sha in DEPRECATED:
+                failures.append(
+                    f"{os.path.basename(path)}:{lineno}: {ref} -> {DEPRECATED[sha]}"
+                )
+
+if failures:
+    sys.stderr.write("Deprecated-runtime action SHAs in use:\n  " + "\n  ".join(failures) + "\n")
+    sys.exit(1)
+PY
+  [ "$status" -eq 0 ]
+}
+
 # Behavioural sanity check: the regex actually rejects a known-bad ref. If
 # someone weakens the regex this test catches it.
 @test "SHA-pin regex rejects floating tags and branch refs" {
@@ -131,7 +171,7 @@ for ref in bad:
     assert not sha_re.match(ref), f"regex incorrectly accepted {ref}"
 
 good = [
-    "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5",
+    "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd",
     "denoland/setup-deno@667a34cdef165d8d2b2e98dde39547c9daac7282",
 ]
 for ref in good:
