@@ -41,8 +41,8 @@ jobs:
       # Primary audit: rustsec/audit-check@v2 annotates PRs with RustSec advisories.
       # It wraps the `cargo audit` CLI (cargo-audit) and reports vulnerabilities inline.
       - name: Run RustSec audit (rustsec/audit-check)
-        # rustsec/audit-check@v2.0.0
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998
+        # rustsec/audit-check@master (post-v2.0.0, node24)
+        uses: rustsec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
