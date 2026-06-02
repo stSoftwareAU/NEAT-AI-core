@@ -7,6 +7,7 @@ resolver = "2"
 version = "0.1.30"
 edition = "2024"
 license = "Apache-2.0"
+repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
 
 [profile.release]
 opt-level = 3

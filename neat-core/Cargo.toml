@@ -3,6 +3,7 @@ name = "neat-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Shared computation library for NEAT-AI neural network operations. Optional wasm-bindgen on wasm32 only."
 
 [lints]
