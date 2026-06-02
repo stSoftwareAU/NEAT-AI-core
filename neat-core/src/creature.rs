@@ -81,11 +81,67 @@ pub struct SynapseExport {
     pub synapse_type: Option<String>,
 }
 
+/// Errors that can occur when parsing, serialising, or compiling a creature.
+///
+/// Replaces the previous `Result<_, String>` returns on the public creature
+/// API (Issue #115). Mirrors the existing [`crate::training_data::TrainingDataError`]
+/// idiom: implements [`std::error::Error`], can be matched on by variant, and
+/// preserves the underlying [`serde_json::Error`] as the error `source()` so
+/// callers can `?`-propagate into their own error type and programmatically
+/// distinguish a JSON failure from a structural compile failure.
+#[derive(Debug)]
+pub enum CreatureError {
+    /// JSON (de)serialisation failed. Exposes the underlying
+    /// [`serde_json::Error`] via [`std::error::Error::source`].
+    Json(serde_json::Error),
+    /// An activation/squash function name was not recognised.
+    UnknownSquash(String),
+    /// A synapse referenced a source neuron UUID that does not exist.
+    UnknownSourceUuid(String),
+    /// The declared output count did not match the number of output neurons found.
+    OutputCountMismatch {
+        /// Output count declared by `CreatureExport::output`.
+        expected: usize,
+        /// Number of neurons of type `"output"` actually present.
+        found: usize,
+    },
+}
+
+impl std::fmt::Display for CreatureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CreatureError::Json(e) => write!(f, "Creature JSON error: {e}"),
+            CreatureError::UnknownSquash(name) => write!(f, "Unknown squash function: {name}"),
+            CreatureError::UnknownSourceUuid(uuid) => {
+                write!(f, "Unknown source neuron UUID: {uuid}")
+            }
+            CreatureError::OutputCountMismatch { expected, found } => {
+                write!(f, "Expected {expected} output neurons, found {found}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CreatureError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            CreatureError::Json(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<serde_json::Error> for CreatureError {
+    fn from(e: serde_json::Error) -> Self {
+        CreatureError::Json(e)
+    }
+}
+
 /// Parse a squash function name string into a `SquashType` enum value.
 ///
 /// Handles all activation function names from the TypeScript codebase,
 /// including aliases (CLIPPED, RELU, INVERSE, SINUSOID).
-pub fn parse_squash_name(name: &str) -> Result<SquashType, String> {
+pub fn parse_squash_name(name: &str) -> Result<SquashType, CreatureError> {
     match name {
         "IDENTITY" => Ok(SquashType::Identity),
         "ReLU" | "RELU" => Ok(SquashType::Relu),
@@ -125,7 +181,7 @@ pub fn parse_squash_name(name: &str) -> Result<SquashType, String> {
         "HYPOT" => Ok(SquashType::Hypotenuse),
         "HYPOTv2" => Ok(SquashType::HypotenuseV2),
         "MEAN" => Ok(SquashType::Mean),
-        _ => Err(format!("Unknown squash function: {name}")),
+        _ => Err(CreatureError::UnknownSquash(name.to_string())),
     }
 }
 
@@ -212,8 +268,8 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
 }
 
 /// Parse a creature JSON string into a `CreatureExport` struct.
-pub fn parse_creature_json(json: &str) -> Result<CreatureExport, String> {
-    serde_json::from_str(json).map_err(|e| format!("Failed to parse creature JSON: {e}"))
+pub fn parse_creature_json(json: &str) -> Result<CreatureExport, CreatureError> {
+    Ok(serde_json::from_str(json)?)
 }
 
 /// Serialise a [`CreatureExport`] to canonical JSON text.
@@ -221,14 +277,13 @@ pub fn parse_creature_json(json: &str) -> Result<CreatureExport, String> {
 /// Output is deterministic: fields are emitted in struct declaration order,
 /// so two calls with the same input produce byte-identical output. This is
 /// the symmetric counterpart to [`parse_creature_json`].
-pub fn creature_to_json(creature: &CreatureExport) -> Result<String, String> {
-    serde_json::to_string(creature).map_err(|e| format!("Failed to serialise creature JSON: {e}"))
+pub fn creature_to_json(creature: &CreatureExport) -> Result<String, CreatureError> {
+    Ok(serde_json::to_string(creature)?)
 }
 
 /// Pretty-printed variant of [`creature_to_json`].
-pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, String> {
-    serde_json::to_string_pretty(creature)
-        .map_err(|e| format!("Failed to serialise creature JSON: {e}"))
+pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, CreatureError> {
+    Ok(serde_json::to_string_pretty(creature)?)
 }
 
 /// Convert a `CreatureExport` into a `CompiledNetwork` for activation.
@@ -238,7 +293,7 @@ pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, Stri
 /// 2. Maps neuron UUIDs to their indices
 /// 3. Resolves synapse UUID references to index-based connections
 /// 4. Maps squash function names and synapse type strings to enum values
-pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, String> {
+pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, CreatureError> {
     let num_inputs = creature.input;
     let num_outputs = creature.output;
 
@@ -258,9 +313,10 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, St
         }
     }
     if output_count != num_outputs {
-        return Err(format!(
-            "Expected {num_outputs} output neurons, found {output_count}"
-        ));
+        return Err(CreatureError::OutputCountMismatch {
+            expected: num_outputs,
+            found: output_count,
+        });
     }
 
     // Assign indices to non-input neurons (they follow input neurons)
@@ -297,7 +353,7 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, St
             for syn in neuron_syn {
                 let from_index = *uuid_to_index
                     .get(syn.from_uuid.as_str())
-                    .ok_or_else(|| format!("Unknown source neuron UUID: {}", syn.from_uuid))?;
+                    .ok_or_else(|| CreatureError::UnknownSourceUuid(syn.from_uuid.clone()))?;
                 let synapse_type = parse_synapse_type(syn.synapse_type.as_deref());
 
                 synapses.push(SynapseData {

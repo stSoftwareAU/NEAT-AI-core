@@ -19,6 +19,41 @@ use crate::synapse_type::SynapseType;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+/// Errors that can occur when constructing a [`CompiledNetwork`] from serialised bytes.
+///
+/// Replaces the previous `Result<_, String>` return on [`CompiledNetwork::new`]
+/// (Issue #115). Implements [`std::error::Error`] so callers can `?`-propagate
+/// and match on the failure by variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkError {
+    /// The serialised buffer was truncated before a required section could be read.
+    TruncatedData {
+        /// The section that could not be read in full ("header", "neuron", or "synapse").
+        section: &'static str,
+    },
+}
+
+impl std::fmt::Display for NetworkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkError::TruncatedData { section } => {
+                write!(f, "Data too short for {section}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NetworkError {}
+
+// On `wasm32`, `CompiledNetwork::new` is a `#[wasm_bindgen(constructor)]`, which
+// requires the error type to convert into a `JsValue`.
+#[cfg(target_arch = "wasm32")]
+impl From<NetworkError> for wasm_bindgen::JsValue {
+    fn from(err: NetworkError) -> Self {
+        wasm_bindgen::JsValue::from_str(&err.to_string())
+    }
+}
+
 /// Neuron data structure for cache-efficient access
 /// Issue #1175 - Use typed structs instead of tuples for neuron/synapse data
 #[derive(Clone, Copy)]
@@ -128,9 +163,9 @@ impl CompiledNetwork {
     ///     - u8: padding
     ///     - f64: weight
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
-    pub fn new(data: &[u8]) -> Result<CompiledNetwork, String> {
+    pub fn new(data: &[u8]) -> Result<CompiledNetwork, NetworkError> {
         if data.len() < 8 {
-            return Err("Data too short for header".to_string());
+            return Err(NetworkError::TruncatedData { section: "header" });
         }
 
         let num_neurons = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
@@ -144,7 +179,7 @@ impl CompiledNetwork {
         for _ in num_inputs..num_neurons {
             // Neuron header is 12 bytes with f64 bias.
             if offset + 12 > data.len() {
-                return Err("Data too short for neuron".to_string());
+                return Err(NetworkError::TruncatedData { section: "neuron" });
             }
 
             let bias = f64::from_le_bytes([
@@ -167,7 +202,7 @@ impl CompiledNetwork {
             for _ in 0..num_synapse {
                 // Synapse record is 12 bytes with f64 weight.
                 if offset + 12 > data.len() {
-                    return Err("Data too short for synapse".to_string());
+                    return Err(NetworkError::TruncatedData { section: "synapse" });
                 }
 
                 let from_index = u16::from_le_bytes([data[offset], data[offset + 1]]) as u32;
