@@ -5,23 +5,24 @@
 
 use crate::squash::{SELU_ALPHA, SELU_LAMBDA, SOFTSIGN_LIMIT, SquashType};
 
-// Special range constants based on TypeScript implementations
-// GELU minimum occurs around x approx -0.509 with value approx -0.17
+// Special range constants based on TypeScript implementations.
+
+/// GELU minimum output (around `x ≈ -0.509`, value `≈ -0.17`).
 pub const GELU_MIN: f32 = -0.17;
 
-// Swish minimum occurs around x approx -1.278 with value approx -0.278
+/// Swish minimum output (around `x ≈ -1.278`, value `≈ -0.278`).
 pub const SWISH_MIN: f32 = -0.278;
 
-// Mish minimum occurs around x approx -1.19 with value approx -0.309
+/// Mish minimum output (around `x ≈ -1.19`, value `≈ -0.309`).
 pub const MISH_MIN: f32 = -0.309;
 
-// Softplus practical lower bound (small positive)
+/// Softplus practical lower bound (small positive).
 pub const SOFTPLUS_MIN: f32 = 1e-15;
 
-// Softplus practical upper bound (prevents overflow)
+/// Softplus practical upper bound (prevents overflow).
 pub const SOFTPLUS_MAX: f32 = 100.0;
 
-// Use f32::MAX as a practical "unbounded" value since we're in WASM/f32 space
+/// Practical "unbounded" magnitude (`f32::MAX`) for WASM/f32 ranges.
 pub const F32_LARGE: f32 = 3.4028235e38;
 
 /// Get the range (low, high) for an activation function
@@ -130,6 +131,11 @@ pub fn apply_limit_range(squash_type: SquashType, value: f32) -> f32 {
     value.max(low).min(high)
 }
 
+/// Clamp an `f64` value to the valid output range of `squash_type`.
+///
+/// `NaN` maps to `0.0`. Infinities are clamped to the activation's finite
+/// bounds, themselves capped at `±F32_LARGE` so the result never overflows
+/// back to infinity. The `f32` counterpart is [`apply_limit_range`].
 #[allow(dead_code)]
 #[inline(always)]
 pub fn apply_limit_range_f64(squash_type: SquashType, value: f64) -> f64 {

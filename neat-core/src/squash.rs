@@ -3,28 +3,33 @@
 //! This module provides the squash function types and their implementations,
 //! matching the TypeScript activation functions in the NEAT-AI project.
 
-// SELU constants
+/// SELU scale parameter `alpha` (Klambauer et al., 2017).
 pub const SELU_ALPHA: f32 = 1.673_263_2;
+/// SELU scale parameter `lambda` (Klambauer et al., 2017).
 pub const SELU_LAMBDA: f32 = 1.050_701;
 
-// GELU constant
+/// GELU tanh-approximation cubic coefficient.
 pub const GELU_COEFF: f32 = 0.044715;
-pub const SQRT_2_OVER_PI: f32 = 0.797_884_6; // sqrt(2/pi)
+/// GELU tanh-approximation scale factor `sqrt(2/pi)`.
+pub const SQRT_2_OVER_PI: f32 = 0.797_884_6;
 
-// LeakyReLU alpha
+/// LeakyReLU negative-slope coefficient `alpha`.
 pub const LEAKY_RELU_ALPHA: f32 = 0.01;
 
-// Match the JS implementation's practical clamp for very large one-sided outputs.
-// JS uses Number.MAX_SAFE_INTEGER (~9.007e15) as an upper bound for several
-// activations (e.g. Exponential).
+/// Practical upper bound for very large one-sided outputs (e.g. Exponential).
+///
+/// Matches the JS implementation, which uses `Number.MAX_SAFE_INTEGER`
+/// (~9.007e15) as the upper bound for several unbounded activations.
 pub const JS_MAX_SAFE_INTEGER: f32 = 9_007_199_254_740_992.0;
 
-// Softsign approaches but never reaches +/-1
+/// Softsign output limit — the function approaches but never reaches `±1`.
 pub const SOFTSIGN_LIMIT: f32 = 0.99;
 
-// Output clamps for unbounded activations (#2151)
+/// Output clamp for the unbounded Tan activation near its asymptotes (#2151).
 pub const TAN_OUTPUT_CLAMP: f64 = 1000.0;
+/// Output clamp for the unbounded Square activation (#2151).
 pub const SQUARE_OUTPUT_CLAMP: f64 = 1e6;
+/// Output clamp for the unbounded Cube activation (#2151).
 pub const CUBE_OUTPUT_CLAMP: f64 = 1e6;
 
 /// Squash function identifiers - must match TypeScript enum
