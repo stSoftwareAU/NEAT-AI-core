@@ -266,6 +266,9 @@ pub fn weighted_sum_simd_8records(
     #[cfg(target_arch = "x86_64")]
     {
         if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: the `is_x86_feature_detected!("avx2")` guard above proves
+            // AVX2 is available, satisfying the `#[target_feature(enable = "avx2")]`
+            // precondition documented on `weighted_sum_simd_8records_avx2`.
             return unsafe {
                 x86::weighted_sum_simd_8records_avx2(
                     synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
@@ -277,6 +280,9 @@ pub fn weighted_sum_simd_8records(
     #[cfg(target_arch = "aarch64")]
     {
         if std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: the `is_aarch64_feature_detected!("neon")` guard above proves
+            // NEON is available, satisfying the `#[target_feature(enable = "neon")]`
+            // precondition documented on `weighted_sum_simd_8records_neon`.
             return unsafe {
                 aarch64::weighted_sum_simd_8records_neon(
                     synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
@@ -311,6 +317,9 @@ pub fn weighted_sum_simd_4records(
     #[cfg(target_arch = "x86_64")]
     {
         if std::arch::is_x86_feature_detected!("fma") {
+            // SAFETY: the `is_x86_feature_detected!("fma")` guard above proves
+            // FMA is available, satisfying the `#[target_feature(enable = "fma")]`
+            // precondition documented on `weighted_sum_simd_4records_fma`.
             return unsafe {
                 x86::weighted_sum_simd_4records_fma(
                     synapses, act0, act1, act2, act3, start, end, bias,
@@ -322,6 +331,9 @@ pub fn weighted_sum_simd_4records(
     #[cfg(target_arch = "aarch64")]
     {
         if std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: the `is_aarch64_feature_detected!("neon")` guard above proves
+            // NEON is available, satisfying the `#[target_feature(enable = "neon")]`
+            // precondition documented on `weighted_sum_simd_4records_neon`.
             return unsafe {
                 aarch64::weighted_sum_simd_4records_neon(
                     synapses, act0, act1, act2, act3, start, end, bias,
