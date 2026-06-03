@@ -405,8 +405,10 @@ fn test_compile_creature_output_count_mismatch() {
         }"#;
 
     let creature = parse_creature_json(json).unwrap();
+    // Issue #115: compile_creature now returns a typed CreatureError; assert on
+    // the Display message (preserved) rather than a bare String.
     let err = compile_creature(&creature).err().expect("should fail");
-    assert!(err.contains("Expected 2 output neurons"));
+    assert!(err.to_string().contains("Expected 2 output neurons"));
 }
 
 #[test]
@@ -423,8 +425,9 @@ fn test_compile_creature_unknown_source_uuid() {
         }"#;
 
     let creature = parse_creature_json(json).unwrap();
+    // Issue #115: typed CreatureError; assert on the preserved Display message.
     let err = compile_creature(&creature).err().expect("should fail");
-    assert!(err.contains("Unknown source neuron UUID"));
+    assert!(err.to_string().contains("Unknown source neuron UUID"));
 }
 
 #[test]

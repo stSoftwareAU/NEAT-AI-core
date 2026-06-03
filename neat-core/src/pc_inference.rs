@@ -23,6 +23,42 @@ use crate::squash::{SquashType, apply_squash};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+/// Errors that can occur when constructing a [`PredictiveCodingEngine`] from
+/// serialised bytes.
+///
+/// Replaces the previous `Result<_, String>` return on
+/// [`PredictiveCodingEngine::new`] (Issue #115). Implements
+/// [`std::error::Error`] so callers can `?`-propagate and match on the failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PcEngineError {
+    /// The serialised buffer was truncated before a required section could be read.
+    TruncatedData {
+        /// The section that could not be read in full ("header", "neuron", or "connection").
+        section: &'static str,
+    },
+}
+
+impl std::fmt::Display for PcEngineError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PcEngineError::TruncatedData { section } => {
+                write!(f, "Data too short for PC {section}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PcEngineError {}
+
+// On `wasm32`, `PredictiveCodingEngine::new` is a `#[wasm_bindgen(constructor)]`,
+// which requires the error type to convert into a `JsValue`.
+#[cfg(target_arch = "wasm32")]
+impl From<PcEngineError> for wasm_bindgen::JsValue {
+    fn from(err: PcEngineError) -> Self {
+        wasm_bindgen::JsValue::from_str(&err.to_string())
+    }
+}
+
 /// Neuron definition for the predictive coding engine.
 /// Represents the topology of a single non-input neuron.
 #[derive(Clone, Debug)]
@@ -370,9 +406,9 @@ impl PredictiveCodingEngine {
     ///     - u16: from_index
     ///     - f32: weight (as 4 bytes, little-endian)
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
-    pub fn new(data: &[u8]) -> Result<PredictiveCodingEngine, String> {
+    pub fn new(data: &[u8]) -> Result<PredictiveCodingEngine, PcEngineError> {
         if data.len() < 24 {
-            return Err("Data too short for PC engine header".to_string());
+            return Err(PcEngineError::TruncatedData { section: "header" });
         }
 
         let num_inputs = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
@@ -389,7 +425,7 @@ impl PredictiveCodingEngine {
 
         for _ in 0..num_non_inputs {
             if offset + 8 > data.len() {
-                return Err("Data too short for PC neuron".to_string());
+                return Err(PcEngineError::TruncatedData { section: "neuron" });
             }
 
             let bias = f32::from_le_bytes([
@@ -407,7 +443,9 @@ impl PredictiveCodingEngine {
 
             for _ in 0..num_conn {
                 if offset + 6 > data.len() {
-                    return Err("Data too short for PC connection".to_string());
+                    return Err(PcEngineError::TruncatedData {
+                        section: "connection",
+                    });
                 }
 
                 let from = u16::from_le_bytes([data[offset], data[offset + 1]]) as usize;

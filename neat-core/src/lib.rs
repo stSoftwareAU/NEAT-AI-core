@@ -41,12 +41,12 @@ pub mod wasm_exports;
 
 // Re-export key types for convenience
 pub use creature::{
-    CreatureExport, NeuronExport, SynapseExport, compile_creature, creature_to_json,
+    CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature, creature_to_json,
     creature_to_json_pretty, parse_creature_json, parse_squash_name, parse_synapse_type,
     squash_name_from, synapse_type_name_from,
 };
-pub use network::{CompiledNetwork, NeuronData, SynapseData};
-pub use pc_inference::PredictiveCodingEngine;
+pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData};
+pub use pc_inference::{PcEngineError, PredictiveCodingEngine};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{
