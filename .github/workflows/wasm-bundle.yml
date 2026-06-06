@@ -10,7 +10,9 @@ on:
     branches: [Develop]
 
 permissions:
-  contents: write   # required by `gh release create`
+  contents: write       # required by `gh release create`
+  id-token: write       # Issue #122 — OIDC token for keyless Sigstore signing
+  attestations: write   # Issue #122 — record the build-provenance attestation
 
 jobs:
   publish:
@@ -79,6 +81,25 @@ jobs:
           # cargo-cyclonedx writes <package>.cdx.json into each crate directory;
           # publish it under a deterministic, bundle-matching asset name.
           cp neat-core/neat-core.cdx.json wasm_activation-pkg.cdx.json
+
+      # Issue #122 — attest build provenance for the published artefacts.
+      # Pinning by SHA + post-publish content re-verification proves the
+      # bundle's *shape* but not its *origin*: anyone with contents:write
+      # could swap the Release asset for a malicious tarball of the right
+      # shape and downstream checks would still pass. A Sigstore-backed
+      # keyless provenance attestation lets a consumer assert "this artefact
+      # was built by NEAT-AI-core's wasm-bundle workflow at commit X" before
+      # trusting it, closing the published-artefact-substitution attack class.
+      # Attesting before publish signs the exact bytes we then upload, so the
+      # recorded subject digest matches what consumers download and verify
+      # with `gh attestation verify`. SHA-pinned per Issue #77.
+      - name: Attest wasm_activation bundle provenance
+        # actions/attest-build-provenance@v4.1.0
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
+        with:
+          subject-path: |
+            wasm_activation-pkg.tar.gz
+            wasm_activation-pkg.cdx.json
 
       - name: Publish per-commit Release
         env:

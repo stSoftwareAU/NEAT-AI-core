@@ -81,6 +81,19 @@ Vibe Coder hook (`bump-deps.sh` runs before `quality.sh` on every PR).
   bundle and updates `deno.json`'s `neatCore.rev` field in lock-step.
 - A fresh PR in NEAT-AI is therefore sufficient to pick up the latest
   `Develop` of NEAT-AI-core.
+- The published bundle (and its CycloneDX SBOM) carries a Sigstore-backed
+  build-provenance attestation, so a consumer can cryptographically confirm
+  the tarball was produced by this workflow from the pinned commit before
+  trusting it. Verify in the bump flow with:
+
+  ```bash
+  gh attestation verify wasm_activation-pkg.tar.gz \
+    --repo stSoftwareAU/NEAT-AI-core
+  ```
+
+  Pinning by SHA and the post-publish content re-verification prove the
+  bundle's *shape*; the attestation proves its *origin*, closing the
+  published-artefact-substitution attack class.
 
 ### NEAT-AI-scorer (Rust + path dependency)
 
@@ -104,9 +117,11 @@ sequenceDiagram
 
     Dev->>Core: merge enhancement
     Core->>CI: push to Develop
+    CI->>CI: attest build provenance (Sigstore, keyless)
     CI->>Rel: build & publish wasm_activation-pkg.tar.gz
     Dev->>Main: open PR
     Main->>Rel: bump-deps.sh -> build.sh download
+    Main->>Rel: gh attestation verify (origin proof)
     Note over Main: deno.json neatCore.rev advances
     Dev->>Scorer: open PR
     Scorer->>Core: actions/checkout @Develop
