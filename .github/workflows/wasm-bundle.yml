@@ -60,15 +60,37 @@ jobs:
             --rev "${GITHUB_SHA}" \
             --out wasm_activation-pkg.tar.gz
 
+      # Issue #125 — emit a CycloneDX SBOM from the locked dependency graph and
+      # publish it next to the bundle. Because downstream consumers pin
+      # wasm_activation by SHA they otherwise receive an opaque blob; an SBOM
+      # on the Release lets responders answer "is the vulnerable crate inside a
+      # bundle we shipped?" in seconds when the next advisory drops. The SBOM is
+      # resolved against the wasm32 target (the artefact's actual triple) so it
+      # captures wasm-bindgen and friends, and is exact rather than approximate
+      # because it derives from Cargo.lock. cargo-cyclonedx is version-pinned
+      # and --locked for supply-chain hygiene (mirrors wasm-pack, Issue #78).
+      - name: Generate CycloneDX SBOM
+        env:
+          CARGO_CYCLONEDX_VERSION: "0.5.7"
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked
+          cargo cyclonedx --format json --target wasm32-unknown-unknown
+          # cargo-cyclonedx writes <package>.cdx.json into each crate directory;
+          # publish it under a deterministic, bundle-matching asset name.
+          cp neat-core/neat-core.cdx.json wasm_activation-pkg.cdx.json
+
       - name: Publish per-commit Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="wasm-bundle-${GITHUB_SHA}"
-          gh release create "$tag" wasm_activation-pkg.tar.gz \
+          gh release create "$tag" \
+            wasm_activation-pkg.tar.gz \
+            wasm_activation-pkg.cdx.json \
             --target "$GITHUB_SHA" \
             --title "wasm_activation bundle for ${GITHUB_SHA::7}" \
-            --notes "Auto-built wasm_activation/pkg for commit ${GITHUB_SHA}."
+            --notes "Auto-built wasm_activation/pkg for commit ${GITHUB_SHA}. CycloneDX SBOM attached as wasm_activation-pkg.cdx.json."
 
       # Issue #48 — re-download the asset we just published and prove it
       # extracts cleanly with all four files NEAT-AI's build.sh checks for

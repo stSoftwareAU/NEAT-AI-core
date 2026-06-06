@@ -12,3 +12,7 @@
 # CI-only artefacts written by upgrade-dependencies.yml / cargo upgrade --dry-run.
 upgrade.log
 upgrade-dry-run.txt
+
+# CycloneDX SBOMs are generated in CI (wasm-bundle.yml, Issue #125) and by the
+# SBOM bats test; they are Release assets, never committed to the tree.
+*.cdx.json
