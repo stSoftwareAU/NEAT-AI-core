@@ -5,6 +5,14 @@ on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
+    inputs:
+      emergency_bypass:
+        description: >-
+          Bypass the release-age quarantine for an actively-exploited advisory
+          whose fix is newer than the window (sets VIBE_BUMP_QUARANTINE_HOURS=0).
+          See SECURITY.md — confirm cargo audit is clean before merge.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -38,8 +46,10 @@ jobs:
       - name: Refresh dependencies via bump-deps.sh (quarantine-aware)
         env:
           # Crates.io versions younger than this many hours are deferred —
-          # the quarantine window closed in Issue #76.
-          VIBE_BUMP_QUARANTINE_HOURS: ${{ vars.VIBE_BUMP_QUARANTINE_HOURS || '24' }}
+          # the quarantine window closed in Issue #76. The emergency_bypass
+          # workflow_dispatch input collapses the window to 0 for an
+          # actively-exploited advisory (Issue #124 — see SECURITY.md).
+          VIBE_BUMP_QUARANTINE_HOURS: ${{ inputs.emergency_bypass == true && '0' || vars.VIBE_BUMP_QUARANTINE_HOURS || '24' }}
         run: |
           # bump-deps.sh applies the release-age quarantine, then runs
           # cargo audit + dual native/wasm builds. A non-zero exit means the

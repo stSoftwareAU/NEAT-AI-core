@@ -163,6 +163,13 @@ Advisory *detection* still lives in [`security.yml`](.github/workflows/security.
 and the `ci.yml` `security` job (`cargo audit` / `rustsec/audit-check`); the
 new channel is what *raises* the remediation PR rather than waiting for Monday.
 
+When an actively-exploited advisory's fix is newer than the
+`VIBE_BUMP_QUARANTINE_HOURS` window, an approver can take the documented
+**emergency quarantine override** — dispatch *Upgrade Cargo Dependencies* with
+`emergency_bypass: true` (or run `./bump-deps.sh --quarantine-hours 0`) and
+confirm `cargo audit` is clean before merge. See
+[`SECURITY.md`](SECURITY.md#emergency-quarantine-override).
+
 ```mermaid
 flowchart TD
     Adv[RustSec/OSV advisory disclosed] --> Detect[cargo audit detects<br/>security.yml / ci.yml]
