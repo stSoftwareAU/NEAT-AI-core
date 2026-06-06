@@ -1,0 +1,22 @@
+# Advisory-triggered security-update channel (Issue #121).
+#
+# The weekly `upgrade-dependencies.yml` cron is the routine, general bump path.
+# This file gives Dependabot a *security-update* fast lane: when a RustSec/OSV
+# advisory lands against a crate already in the tree, Dependabot opens a fix PR
+# immediately — independent of the Monday-morning weekly window and the 24h
+# VIBE_BUMP_QUARANTINE_HOURS release-age deferral. Detection still lives in
+# `security.yml` / `ci.yml` (cargo audit); this channel is what *raises* the
+# remediation PR.
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      # Routine version bumps stay weekly to mirror upgrade-dependencies.yml;
+      # security advisories raise PRs immediately, outside this window.
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"

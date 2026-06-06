@@ -19,6 +19,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build (Vibe Coder hook). |
+| `.github/dependabot.yml` | Advisory-triggered security-update fast lane — raises a fix PR the moment a RustSec/OSV advisory lands, independent of the weekly bump. |
 | `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`). |
 | `LICENSE`, `.gitleaks.toml` | Inherited from NEAT-AI `Develop`. |
 
@@ -128,6 +129,36 @@ window may transiently fail the bundle download in `build.sh` because the
 release tag for the latest `Develop` SHA does not yet exist. Re-run the
 PR's checks once the bundle workflow has completed, or wait a minute
 before opening the PR.
+
+## Dependency updates: two channels
+
+Dependency refresh runs on two complementary channels so the urgent
+"patch this advisory now" path is decoupled from the routine weekly bump:
+
+- **Routine bump** — [`.github/workflows/upgrade-dependencies.yml`](.github/workflows/upgrade-dependencies.yml)
+  runs `bump-deps.sh` every Monday (`cron "0 6 * * 1"`), applying the
+  `VIBE_BUMP_QUARANTINE_HOURS` release-age quarantine, `cargo audit`, and
+  dual native/WASM builds before raising a general upgrade PR.
+- **Security fast lane** — [`.github/dependabot.yml`](.github/dependabot.yml)
+  enables Dependabot's Cargo **security-updates** channel. When a
+  RustSec/OSV advisory lands against a crate already in `Cargo.lock`,
+  Dependabot raises a fix PR immediately — independent of the weekly window.
+
+Advisory *detection* still lives in [`security.yml`](.github/workflows/security.yml)
+and the `ci.yml` `security` job (`cargo audit` / `rustsec/audit-check`); the
+new channel is what *raises* the remediation PR rather than waiting for Monday.
+
+```mermaid
+flowchart TD
+    Adv[RustSec/OSV advisory disclosed] --> Detect[cargo audit detects<br/>security.yml / ci.yml]
+    Detect -->|fails PR / scheduled job| Alert[Maintainer alerted]
+    Adv --> Dependabot[dependabot.yml<br/>security-updates channel]
+    Dependabot -->|immediate| FixPR[Advisory fix PR]
+    Cron[Weekly cron Mon 06:00] --> Bump[upgrade-dependencies.yml<br/>bump-deps.sh]
+    Bump -->|general refresh| GenPR[Weekly upgrade PR]
+    FixPR --> Develop[Develop]
+    GenPR --> Develop
+```
 
 ## License
 
