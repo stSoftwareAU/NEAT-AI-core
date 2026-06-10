@@ -18,6 +18,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
+| `.github/workflows/ci.yml` | CI gate. The `rust-gates` job runs the lint (`cargo clippy -D warnings`) and compile/syntax (`cargo check --all-targets`) gates on **every push to `Develop` and every pull request**; the `quality` job is the full PR pipeline. |
 | `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build (Vibe Coder hook). |
 | `.github/dependabot.yml` | Advisory-triggered security-update fast lane — raises a fix PR the moment a RustSec/OSV advisory lands, independent of the weekly bump. |
 | `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`). |
