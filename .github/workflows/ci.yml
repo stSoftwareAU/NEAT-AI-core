@@ -242,6 +242,45 @@ jobs:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --workspace --no-deps
 
+  rust-gates:
+    name: Lint & Compile Gates
+    runs-on: ubuntu-latest
+    # Issue #143 — explicit Rust lint + compile/syntax gates that run on every
+    # push to Develop AND every pull request. Deliberately independent of the
+    # PR-only auto-bump / auto-format jobs above, so direct pushes to Develop
+    # (which skip those jobs) are still gated against lint regressions and
+    # syntax errors. The full `quality` job remains the comprehensive PR gate.
+    env:
+      RUSTFLAGS: "-D warnings"
+
+    steps:
+      - name: Checkout code
+        # actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          components: clippy
+
+      - name: Rust cache
+        # Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          workspaces: ". -> target"
+
+      # Compile/syntax gate — fail the build on syntax or type errors across
+      # every target before the slower lint pass runs.
+      - name: Compile gate (cargo check)
+        run: cargo check --workspace --all-targets --all-features
+
+      # Lint gate — clippy with -D warnings so lint regressions fail the build.
+      - name: Lint gate (cargo clippy)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
   scripts-and-spelling:
     name: Scripts & spelling
     runs-on: ubuntu-latest
