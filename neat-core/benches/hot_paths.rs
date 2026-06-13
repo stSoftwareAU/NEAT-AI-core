@@ -14,6 +14,7 @@
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
+use neat_core::loss::mse_sum_batch_packed;
 use neat_core::network::{CompiledNetwork, NeuronData, SynapseData};
 use neat_core::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_simd,
@@ -24,7 +25,6 @@ use neat_core::topological_backprop::{
     NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT, NEURON_TYPE_OUTPUT, NeuronInput, PropagateInput,
     SynapseInput, propagate_topological_loop,
 };
-use neat_core::loss::mse_sum_batch_packed;
 use neat_core::unsquash::apply_unsquash;
 
 /// Tiny deterministic PRNG (SplitMix64-style) so the harness produces fixed
@@ -231,7 +231,11 @@ fn build_backprop_data(
         } else {
             NEURON_TYPE_HIDDEN
         };
-        neurons.push(make_neuron(SquashType::Tanh, neuron_type, rng.next_signed()));
+        neurons.push(make_neuron(
+            SquashType::Tanh,
+            neuron_type,
+            rng.next_signed(),
+        ));
 
         let this_fan = fan_in.min(global_idx);
         inward_starts[global_idx] = inward_indices.len() as u32;
@@ -285,8 +289,7 @@ fn make_neuron(squash: SquashType, neuron_type: u8, adjusted_activation: f32) ->
 fn bench_backprop(c: &mut Criterion) {
     let mut group = c.benchmark_group("backprop");
     for (label, num_neurons, num_inputs, num_outputs, fan_in) in NETWORKS {
-        let data =
-            build_backprop_data(num_neurons, num_inputs, num_outputs, fan_in, 0x1357_9BDF);
+        let data = build_backprop_data(num_neurons, num_inputs, num_outputs, fan_in, 0x1357_9BDF);
         group.throughput(Throughput::Elements(num_neurons as u64));
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter(|| {
@@ -435,7 +438,11 @@ fn bench_activation_primitives(c: &mut Criterion) {
             &squash_type,
             |b, &st| {
                 b.iter(|| {
-                    black_box(apply_unsquash(black_box(st), black_box(0.42), black_box(0.0)))
+                    black_box(apply_unsquash(
+                        black_box(st),
+                        black_box(0.42),
+                        black_box(0.0),
+                    ))
                 });
             },
         );
