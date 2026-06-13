@@ -131,6 +131,22 @@ pub struct CompiledNetwork {
     /// Issue #1173 - Eliminates heap allocation per call
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub trace_data_buffer: Vec<f32>,
+    /// Pre-allocated per-record activation buffers for the 4-way batch path.
+    /// Issue #155 - Extends the #1173 buffer-reuse precedent to
+    /// `activate_and_trace_batch_4way` so the 4 activation buffers are reused
+    /// across calls instead of re-allocated each invocation.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    pub batch_activations: [Vec<f32>; 4],
+    /// Pre-allocated per-record hint-value buffers for the 4-way batch path.
+    /// Issue #155 - Reused across calls (zeroed per call), mirroring
+    /// `hint_values_buffer`.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    pub batch_hints: [Vec<f32>; 4],
+    /// Pre-allocated per-record trace-data buffers for the 4-way batch path.
+    /// Issue #155 - Reused across calls (cleared per call), mirroring
+    /// `trace_data_buffer`.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    pub batch_traces: [Vec<f32>; 4],
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -252,6 +268,25 @@ impl CompiledNetwork {
             hint_values_buffer: vec![0.0; num_non_inputs],
             // Issue #1173 - Pre-allocate trace data buffer
             trace_data_buffer: Vec::with_capacity(estimated_trace_size),
+            // Issue #155 - Pre-allocate the 4-way batch scratch buffers
+            batch_activations: [
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+            ],
+            batch_hints: [
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+            ],
+            batch_traces: [
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+            ],
         })
     }
 
@@ -863,39 +898,33 @@ impl CompiledNetwork {
     /// Four `Vec<f32>` values, one per record. Each has the same format as `activate_and_trace`:
     /// [outputs..., activations..., hints..., trace_data...]
     pub fn activate_and_trace_batch_4way(
-        &self,
+        &mut self,
         inputs: &[f32],
         input_size: usize,
         num_outputs: usize,
     ) -> Vec<f32> {
-        let num_non_inputs = self.num_neurons - self.num_inputs;
-        let effective_input_len = input_size.min(self.num_inputs);
+        let num_neurons = self.num_neurons;
+        let num_inputs = self.num_inputs;
+        let num_non_inputs = num_neurons - num_inputs;
+        let effective_input_len = input_size.min(num_inputs);
 
-        // Allocate 4 separate activation buffers
-        let mut act0 = vec![0.0f32; self.num_neurons];
-        let mut act1 = vec![0.0f32; self.num_neurons];
-        let mut act2 = vec![0.0f32; self.num_neurons];
-        let mut act3 = vec![0.0f32; self.num_neurons];
+        // Issue #155 - Reuse the preallocated 4-way scratch buffers instead of
+        // allocating 12 fresh vectors per call. Reset each buffer to the same
+        // initial state a fresh allocation would have: activations zeroed then
+        // inputs re-copied, hints zeroed, traces cleared.
+        for r in 0..4 {
+            self.batch_activations[r].fill(0.0);
+            self.batch_hints[r].fill(0.0);
+            self.batch_traces[r].clear();
+            let src = &inputs[r * input_size..r * input_size + effective_input_len];
+            self.batch_activations[r][..effective_input_len].copy_from_slice(src);
+        }
 
-        // Copy inputs for each record
-        act0[..effective_input_len].copy_from_slice(&inputs[..effective_input_len]);
-        act1[..effective_input_len]
-            .copy_from_slice(&inputs[input_size..input_size + effective_input_len]);
-        act2[..effective_input_len]
-            .copy_from_slice(&inputs[2 * input_size..2 * input_size + effective_input_len]);
-        act3[..effective_input_len]
-            .copy_from_slice(&inputs[3 * input_size..3 * input_size + effective_input_len]);
-
-        // Allocate 4 sets of hint values and trace data buffers
-        let mut hints0 = vec![0.0f32; num_non_inputs];
-        let mut hints1 = vec![0.0f32; num_non_inputs];
-        let mut hints2 = vec![0.0f32; num_non_inputs];
-        let mut hints3 = vec![0.0f32; num_non_inputs];
-
-        let mut trace0: Vec<f32> = Vec::new();
-        let mut trace1: Vec<f32> = Vec::new();
-        let mut trace2: Vec<f32> = Vec::new();
-        let mut trace3: Vec<f32> = Vec::new();
+        // Destructure into per-record references for disjoint mutable access
+        // within the processing loop (each field is a distinct borrow of self).
+        let [act0, act1, act2, act3] = &mut self.batch_activations;
+        let [hints0, hints1, hints2, hints3] = &mut self.batch_hints;
+        let [trace0, trace1, trace2, trace3] = &mut self.batch_traces;
 
         // Process each neuron for all 4 records
         for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
@@ -922,147 +951,147 @@ impl CompiledNetwork {
                         // Process each record independently for MINIMUM aggregate
                         Self::process_minimum_4way(
                             &self.synapses,
-                            &mut act0,
-                            &mut act1,
-                            &mut act2,
-                            &mut act3,
+                            act0,
+                            act1,
+                            act2,
+                            act3,
                             actual_idx,
                             neuron_idx,
                             neuron.bias,
                             start_synapse,
                             num_synapse,
-                            &mut hints0,
-                            &mut hints1,
-                            &mut hints2,
-                            &mut hints3,
-                            &mut trace0,
-                            &mut trace1,
-                            &mut trace2,
-                            &mut trace3,
+                            hints0,
+                            hints1,
+                            hints2,
+                            hints3,
+                            trace0,
+                            trace1,
+                            trace2,
+                            trace3,
                         );
                     }
                     SquashType::Maximum => {
                         // Process each record independently for MAXIMUM aggregate
                         Self::process_maximum_4way(
                             &self.synapses,
-                            &mut act0,
-                            &mut act1,
-                            &mut act2,
-                            &mut act3,
+                            act0,
+                            act1,
+                            act2,
+                            act3,
                             actual_idx,
                             neuron_idx,
                             neuron.bias,
                             start_synapse,
                             num_synapse,
-                            &mut hints0,
-                            &mut hints1,
-                            &mut hints2,
-                            &mut hints3,
-                            &mut trace0,
-                            &mut trace1,
-                            &mut trace2,
-                            &mut trace3,
+                            hints0,
+                            hints1,
+                            hints2,
+                            hints3,
+                            trace0,
+                            trace1,
+                            trace2,
+                            trace3,
                         );
                     }
                     SquashType::If => {
                         // Process each record independently for IF aggregate
                         Self::process_if_4way(
                             &self.synapses,
-                            &mut act0,
-                            &mut act1,
-                            &mut act2,
-                            &mut act3,
+                            act0,
+                            act1,
+                            act2,
+                            act3,
                             actual_idx,
                             neuron_idx,
                             neuron.bias,
                             start_synapse,
                             end_synapse,
-                            &mut hints0,
-                            &mut hints1,
-                            &mut hints2,
-                            &mut hints3,
-                            &mut trace0,
-                            &mut trace1,
-                            &mut trace2,
-                            &mut trace3,
+                            hints0,
+                            hints1,
+                            hints2,
+                            hints3,
+                            trace0,
+                            trace1,
+                            trace2,
+                            trace3,
                         );
                     }
                     SquashType::Hypotenuse => {
                         // Hypotenuse needs per-record processing (sum of squares)
                         Self::process_hypotenuse_4way(
                             &self.synapses,
-                            &mut act0,
-                            &mut act1,
-                            &mut act2,
-                            &mut act3,
+                            act0,
+                            act1,
+                            act2,
+                            act3,
                             actual_idx,
                             neuron_idx,
                             neuron.bias,
                             start_synapse,
                             end_synapse,
-                            &mut hints0,
-                            &mut hints1,
-                            &mut hints2,
-                            &mut hints3,
-                            &mut trace0,
-                            &mut trace1,
-                            &mut trace2,
-                            &mut trace3,
+                            hints0,
+                            hints1,
+                            hints2,
+                            hints3,
+                            trace0,
+                            trace1,
+                            trace2,
+                            trace3,
                         );
                     }
                     SquashType::HypotenuseV2 => {
                         Self::process_hypotenuse_v2_4way(
                             &self.synapses,
-                            &mut act0,
-                            &mut act1,
-                            &mut act2,
-                            &mut act3,
+                            act0,
+                            act1,
+                            act2,
+                            act3,
                             actual_idx,
                             neuron_idx,
                             neuron.bias,
                             start_synapse,
                             end_synapse,
-                            &mut hints0,
-                            &mut hints1,
-                            &mut hints2,
-                            &mut hints3,
-                            &mut trace0,
-                            &mut trace1,
-                            &mut trace2,
-                            &mut trace3,
+                            hints0,
+                            hints1,
+                            hints2,
+                            hints3,
+                            trace0,
+                            trace1,
+                            trace2,
+                            trace3,
                         );
                     }
                     SquashType::Mean => {
                         Self::process_mean_4way(
                             &self.synapses,
-                            &mut act0,
-                            &mut act1,
-                            &mut act2,
-                            &mut act3,
+                            act0,
+                            act1,
+                            act2,
+                            act3,
                             actual_idx,
                             neuron_idx,
                             neuron.bias,
                             start_synapse,
                             end_synapse,
                             num_synapse,
-                            &mut hints0,
-                            &mut hints1,
-                            &mut hints2,
-                            &mut hints3,
-                            &mut trace0,
-                            &mut trace1,
-                            &mut trace2,
-                            &mut trace3,
+                            hints0,
+                            hints1,
+                            hints2,
+                            hints3,
+                            trace0,
+                            trace1,
+                            trace2,
+                            trace3,
                         );
                     }
                     _ => {
                         // Standard squash: use SIMD 4-record weighted sum
                         let (s0, s1, s2, s3) = weighted_sum_simd_4records(
                             &self.synapses,
-                            &act0,
-                            &act1,
-                            &act2,
-                            &act3,
+                            act0,
+                            act1,
+                            act2,
+                            act3,
                             start_synapse,
                             end_synapse,
                             neuron.bias,
@@ -1122,25 +1151,25 @@ impl CompiledNetwork {
         result.extend_from_slice(&act0[output_start..output_start + num_outputs]);
         result.extend_from_slice(&act0[self.num_inputs..]);
         result.extend_from_slice(&hints0[..num_non_inputs]);
-        result.extend_from_slice(&trace0);
+        result.extend_from_slice(trace0);
 
         // Record 1
         result.extend_from_slice(&act1[output_start..output_start + num_outputs]);
         result.extend_from_slice(&act1[self.num_inputs..]);
         result.extend_from_slice(&hints1[..num_non_inputs]);
-        result.extend_from_slice(&trace1);
+        result.extend_from_slice(trace1);
 
         // Record 2
         result.extend_from_slice(&act2[output_start..output_start + num_outputs]);
         result.extend_from_slice(&act2[self.num_inputs..]);
         result.extend_from_slice(&hints2[..num_non_inputs]);
-        result.extend_from_slice(&trace2);
+        result.extend_from_slice(trace2);
 
         // Record 3
         result.extend_from_slice(&act3[output_start..output_start + num_outputs]);
         result.extend_from_slice(&act3[self.num_inputs..]);
         result.extend_from_slice(&hints3[..num_non_inputs]);
-        result.extend_from_slice(&trace3);
+        result.extend_from_slice(trace3);
 
         result
     }
@@ -1672,6 +1701,24 @@ mod tests {
             activations: vec![0.0; num_neurons],
             hint_values_buffer: vec![0.0; num_non_inputs],
             trace_data_buffer: Vec::with_capacity(estimated_trace_size),
+            batch_activations: [
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+            ],
+            batch_hints: [
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+            ],
+            batch_traces: [
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+            ],
         }
     }
 
@@ -1766,7 +1813,7 @@ mod tests {
         }
 
         // Run batch 4-way
-        let net = make_network(2, neurons.clone(), synapses.clone());
+        let mut net = make_network(2, neurons.clone(), synapses.clone());
         let packed_input: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
         let batch_result = net.activate_and_trace_batch_4way(&packed_input, 2, 1);
 
@@ -1808,7 +1855,7 @@ mod tests {
             single_results.push(result);
         }
 
-        let net = make_network(2, neurons.clone(), synapses.clone());
+        let mut net = make_network(2, neurons.clone(), synapses.clone());
         let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
         let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -1843,7 +1890,7 @@ mod tests {
             single_results.push(result);
         }
 
-        let net = make_network(2, neurons.clone(), synapses.clone());
+        let mut net = make_network(2, neurons.clone(), synapses.clone());
         let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
         let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -1872,7 +1919,7 @@ mod tests {
             single_results.push(result);
         }
 
-        let net = make_network(2, neurons.clone(), synapses.clone());
+        let mut net = make_network(2, neurons.clone(), synapses.clone());
         let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
         let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -1912,7 +1959,7 @@ mod tests {
             single_results.push(result);
         }
 
-        let net = make_network(3, neurons.clone(), synapses.clone());
+        let mut net = make_network(3, neurons.clone(), synapses.clone());
         let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
         let batch_result = net.activate_and_trace_batch_4way(&packed, 3, 1);
 
@@ -1952,7 +1999,7 @@ mod tests {
             single_results.push(result);
         }
 
-        let net = make_network(2, neurons.clone(), synapses.clone());
+        let mut net = make_network(2, neurons.clone(), synapses.clone());
         let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
         let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -2008,7 +2055,7 @@ mod tests {
             single_results.push(result);
         }
 
-        let net = make_network(2, neurons.clone(), synapses.clone());
+        let mut net = make_network(2, neurons.clone(), synapses.clone());
         let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
         let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 

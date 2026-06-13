@@ -19,6 +19,25 @@ fn make_network(
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::with_capacity(estimated_trace_size),
+        // Issue #155 - 4-way batch scratch buffers
+        batch_activations: [
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+        ],
+        batch_hints: [
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+        ],
+        batch_traces: [
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+        ],
     }
 }
 
@@ -77,7 +96,7 @@ fn test_batch_4way_matches_single_relu() {
     }
 
     // Run batch 4-way
-    let net = make_network(2, neurons.clone(), synapses.clone());
+    let mut net = make_network(2, neurons.clone(), synapses.clone());
     let packed_input: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
     let batch_result = net.activate_and_trace_batch_4way(&packed_input, 2, 1);
 
@@ -151,7 +170,7 @@ fn test_batch_4way_matches_single_tanh_logistic() {
         single_results.push(result);
     }
 
-    let net = make_network(2, neurons.clone(), synapses.clone());
+    let mut net = make_network(2, neurons.clone(), synapses.clone());
     let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
     let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -209,7 +228,7 @@ fn test_batch_4way_minimum_aggregate() {
         single_results.push(result);
     }
 
-    let net = make_network(2, neurons.clone(), synapses.clone());
+    let mut net = make_network(2, neurons.clone(), synapses.clone());
     let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
     let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -261,7 +280,7 @@ fn test_batch_4way_maximum_aggregate() {
         single_results.push(result);
     }
 
-    let net = make_network(2, neurons.clone(), synapses.clone());
+    let mut net = make_network(2, neurons.clone(), synapses.clone());
     let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
     let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -324,7 +343,7 @@ fn test_batch_4way_if_aggregate() {
         single_results.push(result);
     }
 
-    let net = make_network(3, neurons.clone(), synapses.clone());
+    let mut net = make_network(3, neurons.clone(), synapses.clone());
     let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
     let batch_result = net.activate_and_trace_batch_4way(&packed, 3, 1);
 
@@ -387,7 +406,7 @@ fn test_batch_4way_constant_neuron() {
         single_results.push(result);
     }
 
-    let net = make_network(2, neurons.clone(), synapses.clone());
+    let mut net = make_network(2, neurons.clone(), synapses.clone());
     let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
     let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -460,7 +479,7 @@ fn test_batch_4way_multi_layer() {
         single_results.push(result);
     }
 
-    let net = make_network(2, neurons.clone(), synapses.clone());
+    let mut net = make_network(2, neurons.clone(), synapses.clone());
     let packed: Vec<f32> = inputs.iter().flat_map(|i| i.iter().copied()).collect();
     let batch_result = net.activate_and_trace_batch_4way(&packed, 2, 1);
 
@@ -482,4 +501,71 @@ fn test_batch_4way_multi_layer() {
             );
         }
     }
+}
+
+/// Issue #155 - Regression test for buffer reuse in `activate_and_trace_batch_4way`.
+///
+/// The method now reuses preallocated scratch buffers across calls instead of
+/// allocating 12 fresh vectors each time. This verifies the reused buffers are
+/// correctly reset between calls: invoking the method twice on the same network
+/// (with different inputs interleaved) must produce byte-identical output to a
+/// fresh network for each call, proving no state leaks between invocations.
+#[test]
+fn test_batch_4way_buffer_reuse_no_state_leak() {
+    // Network exercising standard, aggregate and trace-producing squashes so the
+    // hint and trace buffers are non-trivially populated each call.
+    let synapses = vec![
+        make_synapse(0, 0.7),          // hidden(MAX) <- input0
+        make_synapse(1, -0.4),         // hidden(MAX) <- input1
+        make_synapse_typed(2, 1.0, 0), // output(TANH) <- hidden
+    ];
+    let neurons = vec![
+        NeuronData {
+            bias: 0.05,
+            start_synapse: 0,
+            num_synapses: 2,
+            squash_type: 33, // MAXIMUM (aggregate -> writes trace data)
+            is_constant: false,
+        },
+        NeuronData {
+            bias: -0.1,
+            start_synapse: 2,
+            num_synapses: 1,
+            squash_type: 7, // TANH
+            is_constant: false,
+        },
+    ];
+
+    let batch_a: [&[f32]; 4] = [&[1.0, 2.0], &[0.5, -1.0], &[-2.0, 3.0], &[0.4, 0.1]];
+    let batch_b: [&[f32]; 4] = [&[-1.5, 0.2], &[3.0, 1.0], &[0.0, -0.5], &[2.0, -2.0]];
+
+    let packed_a: Vec<f32> = batch_a.iter().flat_map(|i| i.iter().copied()).collect();
+    let packed_b: Vec<f32> = batch_b.iter().flat_map(|i| i.iter().copied()).collect();
+
+    // Reference outputs from fresh networks (no buffer reuse possible).
+    let mut ref_net_a = make_network(2, neurons.clone(), synapses.clone());
+    let expected_a = ref_net_a.activate_and_trace_batch_4way(&packed_a, 2, 1);
+    let mut ref_net_b = make_network(2, neurons.clone(), synapses.clone());
+    let expected_b = ref_net_b.activate_and_trace_batch_4way(&packed_b, 2, 1);
+
+    // Reused network: two consecutive calls on the SAME instance.
+    let mut net = make_network(2, neurons.clone(), synapses.clone());
+    let got_a = net.activate_and_trace_batch_4way(&packed_a, 2, 1);
+    let got_b = net.activate_and_trace_batch_4way(&packed_b, 2, 1);
+
+    assert_eq!(
+        got_a, expected_a,
+        "First reused call must match fresh-network output"
+    );
+    assert_eq!(
+        got_b, expected_b,
+        "Second reused call must match fresh-network output (no state leak)"
+    );
+
+    // A third call repeating the first inputs must again equal the first output.
+    let got_a_again = net.activate_and_trace_batch_4way(&packed_a, 2, 1);
+    assert_eq!(
+        got_a_again, expected_a,
+        "Repeating inputs after other calls must reproduce output"
+    );
 }
