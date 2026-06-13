@@ -388,5 +388,24 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::with_capacity(estimated_trace_size),
+        // Issue #155 - 4-way batch scratch buffers
+        batch_activations: [
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+        ],
+        batch_hints: [
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+        ],
+        batch_traces: [
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+        ],
     })
 }

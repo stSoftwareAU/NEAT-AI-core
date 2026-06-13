@@ -106,6 +106,25 @@ fn build_network(
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::with_capacity(estimated_trace_size),
+        // Issue #155 - 4-way batch scratch buffers
+        batch_activations: [
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+            vec![0.0; num_neurons],
+        ],
+        batch_hints: [
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+            vec![0.0; num_non_inputs],
+        ],
+        batch_traces: [
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+            Vec::with_capacity(estimated_trace_size),
+        ],
     }
 }
 
@@ -144,7 +163,8 @@ fn bench_batched_scoring(c: &mut Criterion) {
     let mut group = c.benchmark_group("batched_scoring");
 
     for (label, num_neurons, num_inputs, num_outputs, fan_in) in NETWORKS {
-        let net = build_network(num_neurons, num_inputs, fan_in, 0x5152_5354);
+        // `mut` so the 4-way traced batch path can reuse its scratch buffers (Issue #155).
+        let mut net = build_network(num_neurons, num_inputs, fan_in, 0x5152_5354);
 
         // 4 records packed back-to-back for the traced batch path.
         let batch4 = build_inputs(num_inputs * 4, 0x0BAD_F00D);
