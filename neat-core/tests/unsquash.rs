@@ -115,6 +115,39 @@ fn test_unsquash_roundtrip() {
 }
 
 #[test]
+fn test_unsquash_mish_roundtrip() {
+    // Mish is non-invertible (it dips below zero around x = -1.19), so we assert
+    // the achievable invariant: squash(unsquash(y)) approx y, with the raw x as
+    // the hint to steer Newton-Raphson onto the correct branch. Issue #157.
+    let xs = [-3.0_f32, -1.5, -0.5, 0.0, 0.25, 0.42, 1.0, 2.5, 5.0, 8.0];
+    for &x in &xs {
+        let activation = apply_squash(SquashType::Mish, x);
+        let recovered = apply_unsquash(SquashType::Mish, activation, x);
+        let reactivation = apply_squash(SquashType::Mish, recovered);
+        assert!(
+            (reactivation - activation).abs() < 1e-3,
+            "Mish roundtrip failed for x={x}: activation={activation}, recovered={recovered}, reactivation={reactivation}"
+        );
+    }
+}
+
+#[test]
+fn test_unsquash_gelu_roundtrip() {
+    // Gelu is non-invertible near its negative dip, so assert squash(unsquash(y))
+    // approx y using the raw x as the Newton-Raphson hint. Issue #157.
+    let xs = [-3.0_f32, -1.0, -0.5, 0.25, 0.42, 1.0, 2.5, 5.0];
+    for &x in &xs {
+        let activation = apply_squash(SquashType::Gelu, x);
+        let recovered = apply_unsquash(SquashType::Gelu, activation, x);
+        let reactivation = apply_squash(SquashType::Gelu, recovered);
+        assert!(
+            (reactivation - activation).abs() < 1e-3,
+            "Gelu roundtrip failed for x={x}: activation={activation}, recovered={recovered}, reactivation={reactivation}"
+        );
+    }
+}
+
+#[test]
 fn test_unsquash_aggregate_functions() {
     // Aggregate functions return hint if provided
     assert_eq!(apply_unsquash(SquashType::Minimum, 1.0, 42.0), 42.0);
