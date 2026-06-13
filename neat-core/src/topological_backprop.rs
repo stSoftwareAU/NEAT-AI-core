@@ -290,6 +290,21 @@ pub fn propagate_topological_loop(input: &PropagateInput<'_>) -> PropagateOutput
     let plank = input.plank_constant;
     let plank_f64 = plank as f64;
 
+    // Issue #154 — reusable per-neuron scratch buffers, hoisted outside the
+    // reverse-topo loop. Cleared and refilled per neuron so capacity is
+    // retained across neurons instead of allocating nine fresh Vecs each time.
+    // Fused error-distribution arguments over the neuron's inward list.
+    let mut fused_squash_types: Vec<u8> = Vec::new();
+    let mut fused_hint_values: Vec<f32> = Vec::new();
+    let mut fused_activations: Vec<f32> = Vec::new();
+    let mut fused_weights: Vec<f32> = Vec::new();
+    // Per-link caches — indexed by position within the inward list.
+    let mut from_activation_cache: Vec<f32> = Vec::new();
+    let mut from_weight_cache: Vec<f32> = Vec::new();
+    let mut from_value_cache: Vec<f32> = Vec::new();
+    let mut synapse_idx_cache: Vec<usize> = Vec::new();
+    let mut is_self_loop_cache: Vec<bool> = Vec::new();
+
     // Process each neuron exactly once in reverse topological order.
     for &neuron_index_u32 in input.reverse_topo_order {
         let neuron_index = neuron_index_u32 as usize;
@@ -347,17 +362,18 @@ pub fn propagate_topological_loop(input: &PropagateInput<'_>) -> PropagateOutput
         let start = input.inward_starts[neuron_index] as usize;
         let list_length = input.inward_counts[neuron_index] as usize;
 
-        // Build fused error-distribution arguments over this neuron's inward list.
-        let mut fused_squash_types = Vec::with_capacity(list_length);
-        let mut fused_hint_values = Vec::with_capacity(list_length);
-        let mut fused_activations = Vec::with_capacity(list_length);
-        let mut fused_weights = Vec::with_capacity(list_length);
-        // Per-link caches — indexed by position within this neuron's inward list.
-        let mut from_activation_cache = Vec::with_capacity(list_length);
-        let mut from_weight_cache = Vec::with_capacity(list_length);
-        let mut from_value_cache = Vec::with_capacity(list_length);
-        let mut synapse_idx_cache: Vec<usize> = Vec::with_capacity(list_length);
-        let mut is_self_loop_cache = Vec::with_capacity(list_length);
+        // Reuse the hoisted scratch buffers: clear retains capacity, so the
+        // push-based fill below reallocates only when this neuron's inward
+        // list is longer than any seen so far.
+        fused_squash_types.clear();
+        fused_hint_values.clear();
+        fused_activations.clear();
+        fused_weights.clear();
+        from_activation_cache.clear();
+        from_weight_cache.clear();
+        from_value_cache.clear();
+        synapse_idx_cache.clear();
+        is_self_loop_cache.clear();
 
         for index in 0..list_length {
             let syn_idx = input
@@ -1069,5 +1085,143 @@ mod tests {
         // the full sqrt-scaling behaviour is exercised by multi-path
         // integration tests in downstream consumers.
         assert!(normalised <= unnormalised + 1e-6);
+    }
+
+    #[test]
+    fn scratch_buffer_reuse_does_not_leak_across_neurons() {
+        // Regression for #154: the per-neuron error-distribution scratch
+        // buffers are reused (cleared + refilled) across neurons within one
+        // backward pass. A larger neuron processed earlier must not leak
+        // stale entries into a smaller neuron processed later. We compute a
+        // small 2-inward output neuron in two contexts and assert its outcome
+        // and synapse deltas are bit-for-bit identical:
+        //   (a) alone, and
+        //   (b) immediately after a 3-inward neuron in the same pass.
+
+        // Context (a): the small neuron on its own.
+        let small_neurons = vec![
+            make_neuron(SquashType::Identity, NEURON_TYPE_INPUT, 0.6, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_INPUT, 0.3, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_OUTPUT, 0.4, 0.0),
+        ];
+        let small_synapses = vec![
+            SynapseInput {
+                from: 0,
+                to: 2,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+            SynapseInput {
+                from: 1,
+                to: 2,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+        ];
+        let small_starts = vec![0u32, 0, 0];
+        let small_counts = vec![0u32, 0, 2];
+        let small_indices = vec![0u32, 1];
+        let small_order = vec![2u32];
+        let small_expected = vec![1.0f32];
+        let small_input = PropagateInput {
+            neurons: &small_neurons,
+            synapses: &small_synapses,
+            inward_starts: &small_starts,
+            inward_counts: &small_counts,
+            inward_synapse_indices: &small_indices,
+            reverse_topo_order: &small_order,
+            expected: &small_expected,
+            input_count: 2,
+            output_count: 1,
+            plank_constant: 1e-7,
+            normalise_gradients: false,
+        };
+        let small_out = propagate_topological_loop(&small_input);
+
+        // Context (b): a 3-inward neuron (index 3) processed BEFORE the
+        // identical 2-inward small neuron (index 4) in the same pass.
+        let big_neurons = vec![
+            make_neuron(SquashType::Identity, NEURON_TYPE_INPUT, 0.6, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_INPUT, 0.3, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_INPUT, 0.7, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_OUTPUT, 0.2, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_OUTPUT, 0.4, 0.0),
+        ];
+        let big_synapses = vec![
+            // Big neuron 3 inward: synapses 0,1,2.
+            SynapseInput {
+                from: 0,
+                to: 3,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+            SynapseInput {
+                from: 1,
+                to: 3,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+            SynapseInput {
+                from: 2,
+                to: 3,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+            // Small neuron 4 inward: synapses 3,4 — identical wiring to (a).
+            SynapseInput {
+                from: 0,
+                to: 4,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+            SynapseInput {
+                from: 1,
+                to: 4,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+        ];
+        let big_starts = vec![0u32, 0, 0, 0, 3];
+        let big_counts = vec![0u32, 0, 0, 3, 2];
+        let big_indices = vec![0u32, 1, 2, 3, 4];
+        // Process the big neuron first, then the small one.
+        let big_order = vec![3u32, 4u32];
+        let big_expected = vec![0.9f32, 1.0f32];
+        let big_input = PropagateInput {
+            neurons: &big_neurons,
+            synapses: &big_synapses,
+            inward_starts: &big_starts,
+            inward_counts: &big_counts,
+            inward_synapse_indices: &big_indices,
+            reverse_topo_order: &big_order,
+            expected: &big_expected,
+            input_count: 3,
+            output_count: 2,
+            plank_constant: 1e-7,
+            normalise_gradients: false,
+        };
+        let big_out = propagate_topological_loop(&big_input);
+
+        // The small neuron's outcome must be identical in both contexts.
+        assert_eq!(
+            big_out.neurons[4], small_out.neurons[2],
+            "small neuron outcome changed when preceded by a larger neuron — scratch buffer leaked"
+        );
+        // And its two synapse deltas must be bit-for-bit identical.
+        assert_eq!(
+            big_out.synapses[3], small_out.synapses[0],
+            "small neuron synapse[0] delta leaked from preceding neuron"
+        );
+        assert_eq!(
+            big_out.synapses[4], small_out.synapses[1],
+            "small neuron synapse[1] delta leaked from preceding neuron"
+        );
     }
 }
