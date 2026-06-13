@@ -24,3 +24,11 @@ wasm-bindgen = "0.2.125"
 
 [dev-dependencies]
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Issue #152 - opt-in Criterion harness for core hot paths. `harness = false`
+# keeps these out of `cargo test`/CI so `quality.sh` runtime is unaffected;
+# run explicitly with `cargo bench -p neat-core`.
+[[bench]]
+name = "hot_paths"
+harness = false

@@ -17,6 +17,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 | `neat-core/` | Shared computation library; **140+** unit tests in `src/**/*.rs` plus integration tests in `neat-core/tests/` (>350 total). |
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
+| `neat-core/benches/` | Opt-in Criterion harness for core hot paths (`cargo bench -p neat-core --bench hot_paths`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. The `rust-gates` job runs the lint (`cargo clippy -D warnings`) and compile/syntax (`cargo check --all-targets`) gates on **every push to `Develop` and every pull request**; the `quality` job is the full PR pipeline. |
 | `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build (Vibe Coder hook). |
@@ -31,6 +32,8 @@ export RUSTFLAGS="-D warnings"
 cargo test --workspace
 # or full gate:
 ./quality.sh
+# opt-in performance benchmarks (not part of the test gate):
+cargo bench -p neat-core --bench hot_paths
 ```
 
 ## Related Repositories
