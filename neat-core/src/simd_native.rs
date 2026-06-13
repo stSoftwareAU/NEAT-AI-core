@@ -1,7 +1,15 @@
-//! Native SIMD fast paths for multi-record weighted sums (Issue #1202 / #1209 on native hosts).
+//! Native SIMD fast paths for weighted sums (Issue #1202 / #1209 multi-record;
+//! Issue #153 single-record, on native hosts).
 //!
 //! `wasm32` uses `simd128` in `simd.rs`. Here **`x86_64`** uses **AVX2** (`__m256` + FMA) for
 //! 8-wide and **FMA + SSE** for 4-wide; **`aarch64`** uses **NEON** (`float32x4` pairs for 8-wide).
+//!
+//! The **single-record** primitives (`weighted_sum_simd`, `weighted_sum_no_bias_simd`,
+//! `weighted_sum_of_squares_simd`, `weighted_sum_of_squares_v2_simd`) run on the primary
+//! `activate()` forward-pass hot path. They vectorise along the synapse dimension —
+//! gathering 4 indexed activations per step, FMA-accumulating, then horizontally
+//! reducing — with FMA+SSE on `x86_64`, NEON on `aarch64`, and scalar elsewhere and
+//! for the 0..3 synapse tail.
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
@@ -151,6 +159,136 @@ mod x86 {
         _mm_storeu_ps(out.as_mut_ptr(), acc);
         (out[0], out[1], out[2], out[3])
     }
+
+    // ---- Single-record primitives (Issue #153) ----------------------------------
+    // Vectorise along the synapse dimension: gather 4 indexed activations, multiply
+    // by 4 weights, FMA-accumulate, then horizontally reduce. The 0..3 tail is
+    // handled scalar-side. `_mm_set_ps`/`_mm_mul_ps`/`_mm_add_ps`/`_mm_storeu_ps`
+    // are SSE (baseline on x86_64); the FMA target feature enables `_mm_fmadd_ps`.
+
+    /// # Safety
+    /// Caller must ensure FMA is enabled (`is_x86_feature_detected!("fma")`).
+    #[target_feature(enable = "fma")]
+    #[inline]
+    pub unsafe fn weighted_sum_fma(
+        synapses: &[SynapseData],
+        activations: &[f32],
+        start: usize,
+        end: usize,
+        bias: f32,
+    ) -> f32 {
+        let mut acc = _mm_setzero_ps();
+        let chunk_end = start + ((end - start) / 4) * 4;
+        let mut i = start;
+        while i < chunk_end {
+            let s0 = synapses.get_unchecked(i);
+            let s1 = synapses.get_unchecked(i + 1);
+            let s2 = synapses.get_unchecked(i + 2);
+            let s3 = synapses.get_unchecked(i + 3);
+            let weights = _mm_set_ps(s3.weight, s2.weight, s1.weight, s0.weight);
+            let acts = _mm_set_ps(
+                *activations.get_unchecked(s3.from_index as usize),
+                *activations.get_unchecked(s2.from_index as usize),
+                *activations.get_unchecked(s1.from_index as usize),
+                *activations.get_unchecked(s0.from_index as usize),
+            );
+            acc = _mm_fmadd_ps(weights, acts, acc);
+            i += 4;
+        }
+        let mut out = [0.0_f32; 4];
+        _mm_storeu_ps(out.as_mut_ptr(), acc);
+        let mut sum = bias + out[0] + out[1] + out[2] + out[3];
+        while i < end {
+            let s = synapses.get_unchecked(i);
+            sum += *activations.get_unchecked(s.from_index as usize) * s.weight;
+            i += 1;
+        }
+        sum
+    }
+
+    /// # Safety
+    /// Caller must ensure FMA is enabled (`is_x86_feature_detected!("fma")`).
+    #[target_feature(enable = "fma")]
+    #[inline]
+    pub unsafe fn weighted_sum_of_squares_fma(
+        synapses: &[SynapseData],
+        activations: &[f32],
+        start: usize,
+        end: usize,
+    ) -> f32 {
+        let mut acc = _mm_setzero_ps();
+        let chunk_end = start + ((end - start) / 4) * 4;
+        let mut i = start;
+        while i < chunk_end {
+            let s0 = synapses.get_unchecked(i);
+            let s1 = synapses.get_unchecked(i + 1);
+            let s2 = synapses.get_unchecked(i + 2);
+            let s3 = synapses.get_unchecked(i + 3);
+            let weights = _mm_set_ps(s3.weight, s2.weight, s1.weight, s0.weight);
+            let acts = _mm_set_ps(
+                *activations.get_unchecked(s3.from_index as usize),
+                *activations.get_unchecked(s2.from_index as usize),
+                *activations.get_unchecked(s1.from_index as usize),
+                *activations.get_unchecked(s0.from_index as usize),
+            );
+            let products = _mm_mul_ps(weights, acts);
+            acc = _mm_fmadd_ps(products, products, acc);
+            i += 4;
+        }
+        let mut out = [0.0_f32; 4];
+        _mm_storeu_ps(out.as_mut_ptr(), acc);
+        let mut sum = out[0] + out[1] + out[2] + out[3];
+        while i < end {
+            let s = synapses.get_unchecked(i);
+            let val = *activations.get_unchecked(s.from_index as usize) * s.weight;
+            sum += val * val;
+            i += 1;
+        }
+        sum
+    }
+
+    /// # Safety
+    /// Caller must ensure FMA is enabled (`is_x86_feature_detected!("fma")`).
+    #[target_feature(enable = "fma")]
+    #[inline]
+    pub unsafe fn weighted_sum_of_squares_v2_fma(
+        synapses: &[SynapseData],
+        activations: &[f32],
+        start: usize,
+        end: usize,
+        bias: f32,
+    ) -> f32 {
+        let bias_vec = _mm_set1_ps(bias);
+        let mut acc = _mm_setzero_ps();
+        let chunk_end = start + ((end - start) / 4) * 4;
+        let mut i = start;
+        while i < chunk_end {
+            let s0 = synapses.get_unchecked(i);
+            let s1 = synapses.get_unchecked(i + 1);
+            let s2 = synapses.get_unchecked(i + 2);
+            let s3 = synapses.get_unchecked(i + 3);
+            let weights = _mm_set_ps(s3.weight, s2.weight, s1.weight, s0.weight);
+            let acts = _mm_set_ps(
+                *activations.get_unchecked(s3.from_index as usize),
+                *activations.get_unchecked(s2.from_index as usize),
+                *activations.get_unchecked(s1.from_index as usize),
+                *activations.get_unchecked(s0.from_index as usize),
+            );
+            let vals = _mm_add_ps(bias_vec, _mm_mul_ps(weights, acts));
+            acc = _mm_fmadd_ps(vals, vals, acc);
+            i += 4;
+        }
+        let mut out = [0.0_f32; 4];
+        _mm_storeu_ps(out.as_mut_ptr(), acc);
+        let mut sum = out[0] + out[1] + out[2] + out[3];
+        while i < end {
+            let s = synapses.get_unchecked(i);
+            let val = bias + *activations.get_unchecked(s.from_index as usize) * s.weight;
+            sum += val * val;
+            i += 1;
+        }
+        sum
+    }
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -238,6 +376,144 @@ mod aarch64 {
         let mut out = [0.0_f32; 4];
         vst1q_f32(out.as_mut_ptr(), acc);
         (out[0], out[1], out[2], out[3])
+    }
+
+    // ---- Single-record primitives (Issue #153) ----------------------------------
+    // Vectorise along the synapse dimension: gather 4 indexed activations into a
+    // lane buffer, multiply by 4 weights, FMA-accumulate, then horizontally reduce
+    // (`vaddvq_f32`). The 0..3 tail is handled scalar-side.
+
+    /// # Safety
+    /// Caller must ensure NEON is available.
+    #[target_feature(enable = "neon")]
+    #[inline]
+    pub unsafe fn weighted_sum_neon(
+        synapses: &[SynapseData],
+        activations: &[f32],
+        start: usize,
+        end: usize,
+        bias: f32,
+    ) -> f32 {
+        let mut acc = vdupq_n_f32(0.0);
+        let mut wl = [0.0_f32; 4];
+        let mut al = [0.0_f32; 4];
+        let chunk_end = start + ((end - start) / 4) * 4;
+        let mut i = start;
+        while i < chunk_end {
+            let s0 = synapses.get_unchecked(i);
+            let s1 = synapses.get_unchecked(i + 1);
+            let s2 = synapses.get_unchecked(i + 2);
+            let s3 = synapses.get_unchecked(i + 3);
+            wl[0] = s0.weight;
+            wl[1] = s1.weight;
+            wl[2] = s2.weight;
+            wl[3] = s3.weight;
+            al[0] = *activations.get_unchecked(s0.from_index as usize);
+            al[1] = *activations.get_unchecked(s1.from_index as usize);
+            al[2] = *activations.get_unchecked(s2.from_index as usize);
+            al[3] = *activations.get_unchecked(s3.from_index as usize);
+            let weights = vld1q_f32(wl.as_ptr());
+            let acts = vld1q_f32(al.as_ptr());
+            acc = vfmaq_f32(acc, weights, acts);
+            i += 4;
+        }
+        let mut sum = bias + vaddvq_f32(acc);
+        while i < end {
+            let s = synapses.get_unchecked(i);
+            sum += *activations.get_unchecked(s.from_index as usize) * s.weight;
+            i += 1;
+        }
+        sum
+    }
+
+    /// # Safety
+    /// Caller must ensure NEON is available.
+    #[target_feature(enable = "neon")]
+    #[inline]
+    pub unsafe fn weighted_sum_of_squares_neon(
+        synapses: &[SynapseData],
+        activations: &[f32],
+        start: usize,
+        end: usize,
+    ) -> f32 {
+        let mut acc = vdupq_n_f32(0.0);
+        let mut wl = [0.0_f32; 4];
+        let mut al = [0.0_f32; 4];
+        let chunk_end = start + ((end - start) / 4) * 4;
+        let mut i = start;
+        while i < chunk_end {
+            let s0 = synapses.get_unchecked(i);
+            let s1 = synapses.get_unchecked(i + 1);
+            let s2 = synapses.get_unchecked(i + 2);
+            let s3 = synapses.get_unchecked(i + 3);
+            wl[0] = s0.weight;
+            wl[1] = s1.weight;
+            wl[2] = s2.weight;
+            wl[3] = s3.weight;
+            al[0] = *activations.get_unchecked(s0.from_index as usize);
+            al[1] = *activations.get_unchecked(s1.from_index as usize);
+            al[2] = *activations.get_unchecked(s2.from_index as usize);
+            al[3] = *activations.get_unchecked(s3.from_index as usize);
+            let weights = vld1q_f32(wl.as_ptr());
+            let acts = vld1q_f32(al.as_ptr());
+            let products = vmulq_f32(weights, acts);
+            acc = vfmaq_f32(acc, products, products);
+            i += 4;
+        }
+        let mut sum = vaddvq_f32(acc);
+        while i < end {
+            let s = synapses.get_unchecked(i);
+            let val = *activations.get_unchecked(s.from_index as usize) * s.weight;
+            sum += val * val;
+            i += 1;
+        }
+        sum
+    }
+
+    /// # Safety
+    /// Caller must ensure NEON is available.
+    #[target_feature(enable = "neon")]
+    #[inline]
+    pub unsafe fn weighted_sum_of_squares_v2_neon(
+        synapses: &[SynapseData],
+        activations: &[f32],
+        start: usize,
+        end: usize,
+        bias: f32,
+    ) -> f32 {
+        let bias_vec = vdupq_n_f32(bias);
+        let mut acc = vdupq_n_f32(0.0);
+        let mut wl = [0.0_f32; 4];
+        let mut al = [0.0_f32; 4];
+        let chunk_end = start + ((end - start) / 4) * 4;
+        let mut i = start;
+        while i < chunk_end {
+            let s0 = synapses.get_unchecked(i);
+            let s1 = synapses.get_unchecked(i + 1);
+            let s2 = synapses.get_unchecked(i + 2);
+            let s3 = synapses.get_unchecked(i + 3);
+            wl[0] = s0.weight;
+            wl[1] = s1.weight;
+            wl[2] = s2.weight;
+            wl[3] = s3.weight;
+            al[0] = *activations.get_unchecked(s0.from_index as usize);
+            al[1] = *activations.get_unchecked(s1.from_index as usize);
+            al[2] = *activations.get_unchecked(s2.from_index as usize);
+            al[3] = *activations.get_unchecked(s3.from_index as usize);
+            let weights = vld1q_f32(wl.as_ptr());
+            let acts = vld1q_f32(al.as_ptr());
+            let vals = vaddq_f32(bias_vec, vmulq_f32(weights, acts));
+            acc = vfmaq_f32(acc, vals, vals);
+            i += 4;
+        }
+        let mut sum = vaddvq_f32(acc);
+        while i < end {
+            let s = synapses.get_unchecked(i);
+            let val = bias + *activations.get_unchecked(s.from_index as usize) * s.weight;
+            sum += val * val;
+            i += 1;
+        }
+        sum
     }
 }
 
@@ -343,6 +619,234 @@ pub fn weighted_sum_simd_4records(
     }
 
     weighted_sum_simd_4records_scalar(synapses, act0, act1, act2, act3, start, end, bias)
+}
+
+// ============================================================================
+// Single-record primitives (Issue #153)
+//
+// These run on the primary single-record `activate()` forward-pass hot path
+// (`CompiledNetwork::activate`, `activate_into`, `activate_and_trace`), called
+// once per neuron. They dispatch to AVX2/FMA on x86_64, NEON on aarch64, and
+// fall back to the scalar loop elsewhere and for the 0..3 synapse tail.
+// ============================================================================
+
+/// Scalar fallback: bias + sum(activation[from] * weight).
+#[inline]
+fn weighted_sum_scalar(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> f32 {
+    let mut sum = bias;
+    for synapse in synapses.iter().take(end).skip(start) {
+        sum += activations[synapse.from_index as usize] * synapse.weight;
+    }
+    sum
+}
+
+/// Scalar fallback: sum((activation[from] * weight)^2).
+#[inline]
+fn weighted_sum_of_squares_scalar(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for synapse in synapses.iter().take(end).skip(start) {
+        let val = activations[synapse.from_index as usize] * synapse.weight;
+        sum_sq += val * val;
+    }
+    sum_sq
+}
+
+/// Scalar fallback: sum(activation[from] * weight), no bias.
+#[inline]
+fn weighted_sum_no_bias_scalar(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+) -> f32 {
+    let mut sum = 0.0f32;
+    for synapse in synapses.iter().take(end).skip(start) {
+        sum += activations[synapse.from_index as usize] * synapse.weight;
+    }
+    sum
+}
+
+/// Scalar fallback: sum((bias + activation[from] * weight)^2).
+#[inline]
+fn weighted_sum_of_squares_v2_scalar(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> f32 {
+    let mut sum_sq = 0.0f32;
+    for synapse in synapses.iter().take(end).skip(start) {
+        let val = bias + activations[synapse.from_index as usize] * synapse.weight;
+        sum_sq += val * val;
+    }
+    sum_sq
+}
+
+// SIMD setup (lane gather, horizontal reduce) only pays off once there is at
+// least one full 4-wide chunk; below that the scalar loop wins.
+const SINGLE_RECORD_SIMD_MIN: usize = 4;
+
+/// Single-record weighted sum: `bias + sum(activation[from] * weight)`.
+///
+/// Production forward-pass hot path. AVX2/FMA on x86_64, NEON on aarch64, scalar
+/// elsewhere and for counts below one SIMD lane.
+#[inline]
+pub fn weighted_sum_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> f32 {
+    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("fma") {
+                // SAFETY: the `is_x86_feature_detected!("fma")` guard proves FMA is
+                // available, satisfying the `#[target_feature(enable = "fma")]`
+                // precondition documented on `weighted_sum_fma`.
+                return unsafe { x86::weighted_sum_fma(synapses, activations, start, end, bias) };
+            }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                // SAFETY: the `is_aarch64_feature_detected!("neon")` guard proves NEON
+                // is available, satisfying the `#[target_feature(enable = "neon")]`
+                // precondition documented on `weighted_sum_neon`.
+                return unsafe {
+                    aarch64::weighted_sum_neon(synapses, activations, start, end, bias)
+                };
+            }
+        }
+    }
+    weighted_sum_scalar(synapses, activations, start, end, bias)
+}
+
+/// Single-record sum of squared weighted activations (Hypotenuse): `sum((a*w)^2)`.
+///
+/// Production forward-pass hot path. AVX2/FMA on x86_64, NEON on aarch64, scalar
+/// elsewhere and for counts below one SIMD lane.
+#[inline]
+pub fn weighted_sum_of_squares_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+) -> f32 {
+    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("fma") {
+                // SAFETY: the FMA guard proves the `#[target_feature(enable = "fma")]`
+                // precondition on `weighted_sum_of_squares_fma` holds.
+                return unsafe {
+                    x86::weighted_sum_of_squares_fma(synapses, activations, start, end)
+                };
+            }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                // SAFETY: the NEON guard proves the `#[target_feature(enable = "neon")]`
+                // precondition on `weighted_sum_of_squares_neon` holds.
+                return unsafe {
+                    aarch64::weighted_sum_of_squares_neon(synapses, activations, start, end)
+                };
+            }
+        }
+    }
+    weighted_sum_of_squares_scalar(synapses, activations, start, end)
+}
+
+/// Single-record weighted sum without bias (Mean): `sum(activation[from] * weight)`.
+///
+/// Production forward-pass hot path. Reuses the bias-carrying kernel with `bias = 0`
+/// so the SIMD path is shared. AVX2/FMA on x86_64, NEON on aarch64, scalar elsewhere.
+#[inline]
+pub fn weighted_sum_no_bias_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+) -> f32 {
+    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("fma") {
+                // SAFETY: the FMA guard proves the `#[target_feature(enable = "fma")]`
+                // precondition on `weighted_sum_fma` holds.
+                return unsafe { x86::weighted_sum_fma(synapses, activations, start, end, 0.0) };
+            }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                // SAFETY: the NEON guard proves the `#[target_feature(enable = "neon")]`
+                // precondition on `weighted_sum_neon` holds.
+                return unsafe {
+                    aarch64::weighted_sum_neon(synapses, activations, start, end, 0.0)
+                };
+            }
+        }
+    }
+    weighted_sum_no_bias_scalar(synapses, activations, start, end)
+}
+
+/// Single-record sum of squared (bias + weighted activation) (HypotenuseV2):
+/// `sum((bias + a*w)^2)`.
+///
+/// Production forward-pass hot path. AVX2/FMA on x86_64, NEON on aarch64, scalar
+/// elsewhere and for counts below one SIMD lane.
+#[inline]
+pub fn weighted_sum_of_squares_v2_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> f32 {
+    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::arch::is_x86_feature_detected!("fma") {
+                // SAFETY: the FMA guard proves the `#[target_feature(enable = "fma")]`
+                // precondition on `weighted_sum_of_squares_v2_fma` holds.
+                return unsafe {
+                    x86::weighted_sum_of_squares_v2_fma(synapses, activations, start, end, bias)
+                };
+            }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                // SAFETY: the NEON guard proves the `#[target_feature(enable = "neon")]`
+                // precondition on `weighted_sum_of_squares_v2_neon` holds.
+                return unsafe {
+                    aarch64::weighted_sum_of_squares_v2_neon(
+                        synapses,
+                        activations,
+                        start,
+                        end,
+                        bias,
+                    )
+                };
+            }
+        }
+    }
+    weighted_sum_of_squares_v2_scalar(synapses, activations, start, end, bias)
 }
 
 #[cfg(test)]
