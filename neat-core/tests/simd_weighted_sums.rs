@@ -264,6 +264,130 @@ fn test_weighted_sum_of_squares_v2_simd_path() {
     );
 }
 
+// Issue #153 - The single-record primitives now dispatch to native SIMD
+// (AVX2/FMA on x86_64, NEON on aarch64) with a scalar tail. These cases sweep a
+// range of synapse counts — including counts that exercise the SIMD body, the
+// 0..3 remainder, and offset ranges — and assert the public (SIMD) result agrees
+// with an independent scalar reference within f32 tolerance.
+
+/// Independent scalar references (mirrors the production scalar fallbacks).
+fn ref_sum_of_squares(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+) -> f32 {
+    let mut s = 0.0f32;
+    for syn in synapses.iter().take(end).skip(start) {
+        let v = activations[syn.from_index as usize] * syn.weight;
+        s += v * v;
+    }
+    s
+}
+
+fn ref_no_bias(synapses: &[SynapseData], activations: &[f32], start: usize, end: usize) -> f32 {
+    let mut s = 0.0f32;
+    for syn in synapses.iter().take(end).skip(start) {
+        s += activations[syn.from_index as usize] * syn.weight;
+    }
+    s
+}
+
+fn ref_sum_of_squares_v2(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> f32 {
+    let mut s = 0.0f32;
+    for syn in synapses.iter().take(end).skip(start) {
+        let v = bias + activations[syn.from_index as usize] * syn.weight;
+        s += v * v;
+    }
+    s
+}
+
+#[test]
+fn simd_and_scalar_agree_across_counts() {
+    // Sweep counts 0..=40: covers sub-SIMD (<4), exact multiples of 4, and every
+    // tail remainder (1, 2, 3). Activation buffer kept small so `from_index`
+    // wraps and gathers repeat indices, matching real fan-in patterns.
+    let num_inputs = 11usize;
+    let activations: Vec<f32> = (0..num_inputs).map(|i| ((i as f32) * 0.37).sin()).collect();
+    let bias = 0.3f32;
+
+    for count in 0..=40usize {
+        let synapses: Vec<SynapseData> = (0..count)
+            .map(|i| make_synapse((i % num_inputs) as u32, ((i as f32) * 0.13).cos()))
+            .collect();
+        let end = synapses.len();
+
+        let got = weighted_sum_simd(&synapses, &activations, 0, end, bias);
+        let want = naive_weighted_sum(&synapses, &activations, 0, end, bias);
+        let tol = 1e-4 * (1.0 + want.abs());
+        assert!(
+            (got - want).abs() <= tol,
+            "weighted_sum_simd count={count}: got {got}, want {want}"
+        );
+
+        let got = weighted_sum_no_bias_simd(&synapses, &activations, 0, end);
+        let want = ref_no_bias(&synapses, &activations, 0, end);
+        let tol = 1e-4 * (1.0 + want.abs());
+        assert!(
+            (got - want).abs() <= tol,
+            "weighted_sum_no_bias_simd count={count}: got {got}, want {want}"
+        );
+
+        let got = weighted_sum_of_squares_simd(&synapses, &activations, 0, end);
+        let want = ref_sum_of_squares(&synapses, &activations, 0, end);
+        let tol = 1e-4 * (1.0 + want.abs());
+        assert!(
+            (got - want).abs() <= tol,
+            "weighted_sum_of_squares_simd count={count}: got {got}, want {want}"
+        );
+
+        let got = weighted_sum_of_squares_v2_simd(&synapses, &activations, 0, end, bias);
+        let want = ref_sum_of_squares_v2(&synapses, &activations, 0, end, bias);
+        let tol = 1e-4 * (1.0 + want.abs());
+        assert!(
+            (got - want).abs() <= tol,
+            "weighted_sum_of_squares_v2_simd count={count}: got {got}, want {want}"
+        );
+    }
+}
+
+#[test]
+fn simd_and_scalar_agree_with_offset() {
+    // Offset start so the SIMD body begins mid-slice (start not a multiple of 4)
+    // and a tail remains at the end.
+    let activations: Vec<f32> = (0..7).map(|i| (i as f32) * 0.5 - 1.0).collect();
+    let synapses: Vec<SynapseData> = (0..30)
+        .map(|i| make_synapse((i % 7) as u32, ((i as f32) * 0.21).sin()))
+        .collect();
+    let bias = -0.7f32;
+
+    for start in 0..6usize {
+        for end in [start, start + 4, start + 7, 30] {
+            let want = naive_weighted_sum(&synapses, &activations, start, end, bias);
+            let got = weighted_sum_simd(&synapses, &activations, start, end, bias);
+            let tol = 1e-4 * (1.0 + want.abs());
+            assert!(
+                (got - want).abs() <= tol,
+                "offset weighted_sum_simd start={start} end={end}: got {got}, want {want}"
+            );
+
+            let want = ref_sum_of_squares_v2(&synapses, &activations, start, end, bias);
+            let got = weighted_sum_of_squares_v2_simd(&synapses, &activations, start, end, bias);
+            let tol = 1e-4 * (1.0 + want.abs());
+            assert!(
+                (got - want).abs() <= tol,
+                "offset v2 start={start} end={end}: got {got}, want {want}"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_4records_basic() {
     let synapses = vec![make_synapse(0, 1.0), make_synapse(1, 2.0)];

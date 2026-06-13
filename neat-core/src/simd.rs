@@ -16,6 +16,9 @@
 //! - **SIMD aggregate helpers**: `weighted_sum_of_squares_simd` for Hypotenuse
 //!   and `weighted_sum_for_mean_simd` for Mean activation functions.
 
+// Native single-record/multi-record kernels live in `simd_native.rs`; only the
+// wasm32 implementations below reference `SynapseData` directly.
+#[cfg(target_arch = "wasm32")]
 use crate::network::SynapseData;
 
 // Issue #1178 - WASM SIMD support
@@ -457,76 +460,12 @@ pub fn weighted_sum_simd_8records(
 #[path = "simd_native.rs"]
 mod simd_native;
 
+// Issue #153 - The single-record primitives are also native-SIMD accelerated
+// (AVX2/FMA on x86_64, NEON on aarch64, scalar fallback elsewhere and for the
+// 0..3 synapse tail). They live in `simd_native.rs` alongside the multi-record
+// kernels and run on the primary `activate()` forward-pass hot path.
 #[cfg(not(target_arch = "wasm32"))]
-pub use simd_native::{weighted_sum_simd_4records, weighted_sum_simd_8records};
-
-/// Scalar fallback for non-WASM targets (for testing)
-#[cfg(not(target_arch = "wasm32"))]
-#[inline]
-pub fn weighted_sum_simd(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> f32 {
-    let mut sum = bias;
-    for synapse in synapses.iter().take(end).skip(start) {
-        sum += activations[synapse.from_index as usize] * synapse.weight;
-    }
-    sum
-}
-
-/// Scalar fallback for non-WASM targets (for testing)
-/// Issue #1178 - Sum of squares for Hypotenuse
-#[cfg(not(target_arch = "wasm32"))]
-#[inline]
-pub fn weighted_sum_of_squares_simd(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-) -> f32 {
-    let mut sum_sq = 0.0f32;
-    for synapse in synapses.iter().take(end).skip(start) {
-        let val = activations[synapse.from_index as usize] * synapse.weight;
-        sum_sq += val * val;
-    }
-    sum_sq
-}
-
-/// Scalar fallback for non-WASM targets (for testing)
-/// Issue #1178 - Weighted sum without bias for Mean
-#[cfg(not(target_arch = "wasm32"))]
-#[inline]
-pub fn weighted_sum_no_bias_simd(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-) -> f32 {
-    let mut sum = 0.0f32;
-    for synapse in synapses.iter().take(end).skip(start) {
-        sum += activations[synapse.from_index as usize] * synapse.weight;
-    }
-    sum
-}
-
-/// Scalar fallback for non-WASM targets (for testing)
-/// Issue #1178 - Sum of squares V2 for HypotenuseV2
-#[cfg(not(target_arch = "wasm32"))]
-#[inline]
-pub fn weighted_sum_of_squares_v2_simd(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> f32 {
-    let mut sum_sq = 0.0f32;
-    for synapse in synapses.iter().take(end).skip(start) {
-        let val = bias + activations[synapse.from_index as usize] * synapse.weight;
-        sum_sq += val * val;
-    }
-    sum_sq
-}
+pub use simd_native::{
+    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
+    weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
+};
