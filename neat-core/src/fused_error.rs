@@ -64,8 +64,10 @@ pub fn apply_fused_error_distribution(
 
     let provisional_error_per_link = error / (count as f32);
 
-    // Step 2: Safe zone adjustment per synapse
-    let mut safe_zone_factors = Vec::with_capacity(count);
+    // Step 2: Safe zone adjustment per synapse.
+    // Push each factor straight into `result` (no separate `safe_zone_factors`
+    // Vec or copy loop — Issue #156). The factors live at `result[1 .. 1 + count]`
+    // and are read back in Step 3.
     for i in 0..count {
         let squash = SquashType::from(upstream_squash_types[i]);
         let raw_input = upstream_hint_values[i];
@@ -76,11 +78,6 @@ pub fn apply_fused_error_distribution(
         };
         let factor =
             apply_safe_zone_adjustment(squash, raw_input, provisional_error_per_link, weight);
-        safe_zone_factors.push(factor);
-    }
-
-    // Push safe zone factors into result
-    for &factor in &safe_zone_factors {
         result.push(factor);
     }
 
@@ -90,7 +87,8 @@ pub fn apply_fused_error_distribution(
     let mut denom: f32 = 0.0;
     for i in 0..count {
         let activation = upstream_activations[i];
-        let safe = safe_zone_factors[i];
+        // Safe-zone factor written above at result[1 + i].
+        let safe = result[1 + i];
 
         if !activation.is_finite() || !safe.is_finite() {
             scores.push(0.0);
