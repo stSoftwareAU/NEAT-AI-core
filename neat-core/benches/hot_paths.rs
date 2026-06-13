@@ -12,7 +12,8 @@
 //! fixed topologies — so before/after comparisons across a code change are
 //! meaningful. See `neat-core/benches/README.md` for the comparison workflow.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
 
 use neat_core::loss::mse_sum_batch_packed;
 use neat_core::network::{CompiledNetwork, NeuronData, SynapseData};
