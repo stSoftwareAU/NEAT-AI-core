@@ -4,8 +4,9 @@
 //! converting activation-space values back to value-space.
 //! Issue #1139 - WASM Migration Phase 7.
 
-use crate::derivative::apply_derivative;
-use crate::squash::{LEAKY_RELU_ALPHA, SELU_ALPHA, SELU_LAMBDA, SquashType, apply_squash};
+use crate::squash::{
+    GELU_COEFF, LEAKY_RELU_ALPHA, SELU_ALPHA, SELU_LAMBDA, SQRT_2_OVER_PI, SquashType, apply_squash,
+};
 
 /// Apply an inverse squash (unsquash) function to a value
 /// Issue #1139 - WASM Migration Phase 7: Implement unSquash() in Rust/WASM
@@ -222,14 +223,22 @@ pub fn apply_unsquash(squash_type: SquashType, activation: f32, hint: f32) -> f3
             guess = guess.clamp(-SAFE_LIMIT, SAFE_LIMIT);
 
             for _ in 0..MAX_ITERATIONS {
-                let fx = apply_squash(SquashType::Mish, guess);
+                // Share transcendentals between f(x) and f'(x): one exp, one
+                // softplus, one tanh per iteration (Issue #157, mirroring Swish).
+                // f(x)  = x * tanh(softplus(x)),  softplus(x) = ln(1 + e^x)
+                // f'(x) = t + x * (1 - t^2) * sigmoid(x),  t = tanh(softplus(x))
+                let exp_x = guess.exp();
+                let softplus = (1.0 + exp_x).ln();
+                let t = softplus.tanh();
+                let fx = guess * t;
                 let error = fx - activation;
 
                 if error.abs() < TOLERANCE {
                     break;
                 }
 
-                let derivative = apply_derivative(SquashType::Mish, guess);
+                let sigmoid = exp_x / (1.0 + exp_x);
+                let derivative = t + guess * (1.0 - t * t) * sigmoid;
                 let safe_derivative = if derivative.abs() > 1e-6 {
                     derivative
                 } else {
@@ -266,13 +275,29 @@ pub fn apply_unsquash(squash_type: SquashType, activation: f32, hint: f32) -> f3
             };
 
             for _ in 0..MAX_ITERATIONS {
-                let fx = apply_squash(SquashType::Gelu, x) - activation;
+                // Share `inner`/`tanh(inner)` between f(x) and f'(x) instead of
+                // evaluating apply_squash + apply_derivative separately, each of
+                // which recomputes the same tanh (Issue #157).
+                // f(x)  = 0.5 * x * (1 + tanh(inner))
+                // f'(x) = cdf + pdf
+                //   inner = sqrt(2/pi) * (x + GELU_COEFF * x^3)
+                //   cdf   = 0.5 * (1 + tanh(inner))
+                //   pdf   = 0.5 * x * (1 - tanh^2(inner)) * sqrt(2/pi)
+                //           * (1 + 3 * GELU_COEFF * x^2)
+                let x2 = x * x;
+                let inner = SQRT_2_OVER_PI * (x + GELU_COEFF * x2 * x);
+                let tanh_inner = inner.tanh();
+                let cdf = 0.5 * (1.0 + tanh_inner);
+                let fx = x * cdf - activation;
 
                 if fx.abs() < TOLERANCE {
                     break;
                 }
 
-                let derivative = apply_derivative(SquashType::Gelu, x);
+                let pdf = (0.5 * x * (1.0 - tanh_inner * tanh_inner))
+                    * SQRT_2_OVER_PI
+                    * (1.0 + 3.0 * GELU_COEFF * x2);
+                let derivative = cdf + pdf;
                 if derivative.abs() < 1e-10 {
                     if fx.abs() < 0.1 {
                         return x;
