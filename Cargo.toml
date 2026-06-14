@@ -4,7 +4,7 @@ members = ["neat-core"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.43"
+version = "0.1.44"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
@@ -16,6 +16,13 @@ codegen-units = 1
 
 [profile.release.package."*"]
 opt-level = 3
+
+# Issue #165 - enforce a deny floor at the crate root so CI fails fast when a
+# contributor introduces a bare `unsafe` op inside an `unsafe fn`. `neat-core`
+# carries raw-SIMD intrinsics (AVX2/FMA/NEON) with `get_unchecked` indexing, so
+# every unsafe operation must sit in an explicit `unsafe { … }` block.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 collapsible_if = "deny"

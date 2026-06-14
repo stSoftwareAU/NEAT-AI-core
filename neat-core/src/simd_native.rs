@@ -11,8 +11,6 @@
 //! reducing — with FMA+SSE on `x86_64`, NEON on `aarch64`, and scalar elsewhere and
 //! for the 0..3 synapse tail.
 
-#![allow(unsafe_op_in_unsafe_fn)]
-
 use crate::network::SynapseData;
 
 #[inline]
@@ -104,24 +102,27 @@ mod x86 {
     ) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
         let mut acc = _mm256_set1_ps(bias);
         for i in start..end {
-            let synapse = synapses.get_unchecked(i);
+            let synapse = unsafe { synapses.get_unchecked(i) };
             let from = synapse.from_index as usize;
             let w = synapse.weight;
-            let acts = _mm256_set_ps(
-                *act7.get_unchecked(from),
-                *act6.get_unchecked(from),
-                *act5.get_unchecked(from),
-                *act4.get_unchecked(from),
-                *act3.get_unchecked(from),
-                *act2.get_unchecked(from),
-                *act1.get_unchecked(from),
-                *act0.get_unchecked(from),
-            );
+            let acts = unsafe {
+                _mm256_set_ps(
+                    *act7.get_unchecked(from),
+                    *act6.get_unchecked(from),
+                    *act5.get_unchecked(from),
+                    *act4.get_unchecked(from),
+                    *act3.get_unchecked(from),
+                    *act2.get_unchecked(from),
+                    *act1.get_unchecked(from),
+                    *act0.get_unchecked(from),
+                )
+            };
             let ws = _mm256_set1_ps(w);
-            acc = _mm256_fmadd_ps(ws, acts, acc);
+            // `_mm256_fmadd_ps` needs `fma`, which this `avx2` fn does not enable.
+            acc = unsafe { _mm256_fmadd_ps(ws, acts, acc) };
         }
         let mut out = [0.0_f32; 8];
-        _mm256_storeu_ps(out.as_mut_ptr(), acc);
+        unsafe { _mm256_storeu_ps(out.as_mut_ptr(), acc) };
         (
             out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
         )
@@ -143,20 +144,22 @@ mod x86 {
     ) -> (f32, f32, f32, f32) {
         let mut acc = _mm_set1_ps(bias);
         for i in start..end {
-            let synapse = synapses.get_unchecked(i);
+            let synapse = unsafe { synapses.get_unchecked(i) };
             let from = synapse.from_index as usize;
             let w = synapse.weight;
-            let acts = _mm_set_ps(
-                *act3.get_unchecked(from),
-                *act2.get_unchecked(from),
-                *act1.get_unchecked(from),
-                *act0.get_unchecked(from),
-            );
+            let acts = unsafe {
+                _mm_set_ps(
+                    *act3.get_unchecked(from),
+                    *act2.get_unchecked(from),
+                    *act1.get_unchecked(from),
+                    *act0.get_unchecked(from),
+                )
+            };
             let ws = _mm_set1_ps(w);
             acc = _mm_fmadd_ps(ws, acts, acc);
         }
         let mut out = [0.0_f32; 4];
-        _mm_storeu_ps(out.as_mut_ptr(), acc);
+        unsafe { _mm_storeu_ps(out.as_mut_ptr(), acc) };
         (out[0], out[1], out[2], out[3])
     }
 
@@ -181,26 +184,28 @@ mod x86 {
         let chunk_end = start + ((end - start) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
-            let s0 = synapses.get_unchecked(i);
-            let s1 = synapses.get_unchecked(i + 1);
-            let s2 = synapses.get_unchecked(i + 2);
-            let s3 = synapses.get_unchecked(i + 3);
+            let s0 = unsafe { synapses.get_unchecked(i) };
+            let s1 = unsafe { synapses.get_unchecked(i + 1) };
+            let s2 = unsafe { synapses.get_unchecked(i + 2) };
+            let s3 = unsafe { synapses.get_unchecked(i + 3) };
             let weights = _mm_set_ps(s3.weight, s2.weight, s1.weight, s0.weight);
-            let acts = _mm_set_ps(
-                *activations.get_unchecked(s3.from_index as usize),
-                *activations.get_unchecked(s2.from_index as usize),
-                *activations.get_unchecked(s1.from_index as usize),
-                *activations.get_unchecked(s0.from_index as usize),
-            );
+            let acts = unsafe {
+                _mm_set_ps(
+                    *activations.get_unchecked(s3.from_index as usize),
+                    *activations.get_unchecked(s2.from_index as usize),
+                    *activations.get_unchecked(s1.from_index as usize),
+                    *activations.get_unchecked(s0.from_index as usize),
+                )
+            };
             acc = _mm_fmadd_ps(weights, acts, acc);
             i += 4;
         }
         let mut out = [0.0_f32; 4];
-        _mm_storeu_ps(out.as_mut_ptr(), acc);
+        unsafe { _mm_storeu_ps(out.as_mut_ptr(), acc) };
         let mut sum = bias + out[0] + out[1] + out[2] + out[3];
         while i < end {
-            let s = synapses.get_unchecked(i);
-            sum += *activations.get_unchecked(s.from_index as usize) * s.weight;
+            let s = unsafe { synapses.get_unchecked(i) };
+            sum += unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
             i += 1;
         }
         sum
@@ -220,27 +225,29 @@ mod x86 {
         let chunk_end = start + ((end - start) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
-            let s0 = synapses.get_unchecked(i);
-            let s1 = synapses.get_unchecked(i + 1);
-            let s2 = synapses.get_unchecked(i + 2);
-            let s3 = synapses.get_unchecked(i + 3);
+            let s0 = unsafe { synapses.get_unchecked(i) };
+            let s1 = unsafe { synapses.get_unchecked(i + 1) };
+            let s2 = unsafe { synapses.get_unchecked(i + 2) };
+            let s3 = unsafe { synapses.get_unchecked(i + 3) };
             let weights = _mm_set_ps(s3.weight, s2.weight, s1.weight, s0.weight);
-            let acts = _mm_set_ps(
-                *activations.get_unchecked(s3.from_index as usize),
-                *activations.get_unchecked(s2.from_index as usize),
-                *activations.get_unchecked(s1.from_index as usize),
-                *activations.get_unchecked(s0.from_index as usize),
-            );
+            let acts = unsafe {
+                _mm_set_ps(
+                    *activations.get_unchecked(s3.from_index as usize),
+                    *activations.get_unchecked(s2.from_index as usize),
+                    *activations.get_unchecked(s1.from_index as usize),
+                    *activations.get_unchecked(s0.from_index as usize),
+                )
+            };
             let products = _mm_mul_ps(weights, acts);
             acc = _mm_fmadd_ps(products, products, acc);
             i += 4;
         }
         let mut out = [0.0_f32; 4];
-        _mm_storeu_ps(out.as_mut_ptr(), acc);
+        unsafe { _mm_storeu_ps(out.as_mut_ptr(), acc) };
         let mut sum = out[0] + out[1] + out[2] + out[3];
         while i < end {
-            let s = synapses.get_unchecked(i);
-            let val = *activations.get_unchecked(s.from_index as usize) * s.weight;
+            let s = unsafe { synapses.get_unchecked(i) };
+            let val = unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
             sum += val * val;
             i += 1;
         }
@@ -263,27 +270,30 @@ mod x86 {
         let chunk_end = start + ((end - start) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
-            let s0 = synapses.get_unchecked(i);
-            let s1 = synapses.get_unchecked(i + 1);
-            let s2 = synapses.get_unchecked(i + 2);
-            let s3 = synapses.get_unchecked(i + 3);
+            let s0 = unsafe { synapses.get_unchecked(i) };
+            let s1 = unsafe { synapses.get_unchecked(i + 1) };
+            let s2 = unsafe { synapses.get_unchecked(i + 2) };
+            let s3 = unsafe { synapses.get_unchecked(i + 3) };
             let weights = _mm_set_ps(s3.weight, s2.weight, s1.weight, s0.weight);
-            let acts = _mm_set_ps(
-                *activations.get_unchecked(s3.from_index as usize),
-                *activations.get_unchecked(s2.from_index as usize),
-                *activations.get_unchecked(s1.from_index as usize),
-                *activations.get_unchecked(s0.from_index as usize),
-            );
+            let acts = unsafe {
+                _mm_set_ps(
+                    *activations.get_unchecked(s3.from_index as usize),
+                    *activations.get_unchecked(s2.from_index as usize),
+                    *activations.get_unchecked(s1.from_index as usize),
+                    *activations.get_unchecked(s0.from_index as usize),
+                )
+            };
             let vals = _mm_add_ps(bias_vec, _mm_mul_ps(weights, acts));
             acc = _mm_fmadd_ps(vals, vals, acc);
             i += 4;
         }
         let mut out = [0.0_f32; 4];
-        _mm_storeu_ps(out.as_mut_ptr(), acc);
+        unsafe { _mm_storeu_ps(out.as_mut_ptr(), acc) };
         let mut sum = out[0] + out[1] + out[2] + out[3];
         while i < end {
-            let s = synapses.get_unchecked(i);
-            let val = bias + *activations.get_unchecked(s.from_index as usize) * s.weight;
+            let s = unsafe { synapses.get_unchecked(i) };
+            let val =
+                bias + unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
             sum += val * val;
             i += 1;
         }
@@ -319,27 +329,29 @@ mod aarch64 {
         let mut lane03 = [0.0_f32; 4];
         let mut lane47 = [0.0_f32; 4];
         for i in start..end {
-            let synapse = synapses.get_unchecked(i);
+            let synapse = unsafe { synapses.get_unchecked(i) };
             let from = synapse.from_index as usize;
             let w = synapse.weight;
-            lane03[0] = *act0.get_unchecked(from);
-            lane03[1] = *act1.get_unchecked(from);
-            lane03[2] = *act2.get_unchecked(from);
-            lane03[3] = *act3.get_unchecked(from);
-            lane47[0] = *act4.get_unchecked(from);
-            lane47[1] = *act5.get_unchecked(from);
-            lane47[2] = *act6.get_unchecked(from);
-            lane47[3] = *act7.get_unchecked(from);
-            let acts03 = vld1q_f32(lane03.as_ptr());
-            let acts47 = vld1q_f32(lane47.as_ptr());
+            unsafe {
+                lane03[0] = *act0.get_unchecked(from);
+                lane03[1] = *act1.get_unchecked(from);
+                lane03[2] = *act2.get_unchecked(from);
+                lane03[3] = *act3.get_unchecked(from);
+                lane47[0] = *act4.get_unchecked(from);
+                lane47[1] = *act5.get_unchecked(from);
+                lane47[2] = *act6.get_unchecked(from);
+                lane47[3] = *act7.get_unchecked(from);
+            }
+            let acts03 = unsafe { vld1q_f32(lane03.as_ptr()) };
+            let acts47 = unsafe { vld1q_f32(lane47.as_ptr()) };
             let vw = vdupq_n_f32(w);
             acc03 = vfmaq_f32(acc03, vw, acts03);
             acc47 = vfmaq_f32(acc47, vw, acts47);
         }
         let mut o03 = [0.0_f32; 4];
         let mut o47 = [0.0_f32; 4];
-        vst1q_f32(o03.as_mut_ptr(), acc03);
-        vst1q_f32(o47.as_mut_ptr(), acc47);
+        unsafe { vst1q_f32(o03.as_mut_ptr(), acc03) };
+        unsafe { vst1q_f32(o47.as_mut_ptr(), acc47) };
         (
             o03[0], o03[1], o03[2], o03[3], o47[0], o47[1], o47[2], o47[3],
         )
@@ -362,19 +374,21 @@ mod aarch64 {
         let mut acc = vdupq_n_f32(bias);
         let mut lane = [0.0_f32; 4];
         for i in start..end {
-            let synapse = synapses.get_unchecked(i);
+            let synapse = unsafe { synapses.get_unchecked(i) };
             let from = synapse.from_index as usize;
             let w = synapse.weight;
-            lane[0] = *act0.get_unchecked(from);
-            lane[1] = *act1.get_unchecked(from);
-            lane[2] = *act2.get_unchecked(from);
-            lane[3] = *act3.get_unchecked(from);
-            let acts = vld1q_f32(lane.as_ptr());
+            unsafe {
+                lane[0] = *act0.get_unchecked(from);
+                lane[1] = *act1.get_unchecked(from);
+                lane[2] = *act2.get_unchecked(from);
+                lane[3] = *act3.get_unchecked(from);
+            }
+            let acts = unsafe { vld1q_f32(lane.as_ptr()) };
             let vw = vdupq_n_f32(w);
             acc = vfmaq_f32(acc, vw, acts);
         }
         let mut out = [0.0_f32; 4];
-        vst1q_f32(out.as_mut_ptr(), acc);
+        unsafe { vst1q_f32(out.as_mut_ptr(), acc) };
         (out[0], out[1], out[2], out[3])
     }
 
@@ -400,27 +414,29 @@ mod aarch64 {
         let chunk_end = start + ((end - start) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
-            let s0 = synapses.get_unchecked(i);
-            let s1 = synapses.get_unchecked(i + 1);
-            let s2 = synapses.get_unchecked(i + 2);
-            let s3 = synapses.get_unchecked(i + 3);
+            let s0 = unsafe { synapses.get_unchecked(i) };
+            let s1 = unsafe { synapses.get_unchecked(i + 1) };
+            let s2 = unsafe { synapses.get_unchecked(i + 2) };
+            let s3 = unsafe { synapses.get_unchecked(i + 3) };
             wl[0] = s0.weight;
             wl[1] = s1.weight;
             wl[2] = s2.weight;
             wl[3] = s3.weight;
-            al[0] = *activations.get_unchecked(s0.from_index as usize);
-            al[1] = *activations.get_unchecked(s1.from_index as usize);
-            al[2] = *activations.get_unchecked(s2.from_index as usize);
-            al[3] = *activations.get_unchecked(s3.from_index as usize);
-            let weights = vld1q_f32(wl.as_ptr());
-            let acts = vld1q_f32(al.as_ptr());
+            unsafe {
+                al[0] = *activations.get_unchecked(s0.from_index as usize);
+                al[1] = *activations.get_unchecked(s1.from_index as usize);
+                al[2] = *activations.get_unchecked(s2.from_index as usize);
+                al[3] = *activations.get_unchecked(s3.from_index as usize);
+            }
+            let weights = unsafe { vld1q_f32(wl.as_ptr()) };
+            let acts = unsafe { vld1q_f32(al.as_ptr()) };
             acc = vfmaq_f32(acc, weights, acts);
             i += 4;
         }
         let mut sum = bias + vaddvq_f32(acc);
         while i < end {
-            let s = synapses.get_unchecked(i);
-            sum += *activations.get_unchecked(s.from_index as usize) * s.weight;
+            let s = unsafe { synapses.get_unchecked(i) };
+            sum += unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
             i += 1;
         }
         sum
@@ -442,28 +458,30 @@ mod aarch64 {
         let chunk_end = start + ((end - start) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
-            let s0 = synapses.get_unchecked(i);
-            let s1 = synapses.get_unchecked(i + 1);
-            let s2 = synapses.get_unchecked(i + 2);
-            let s3 = synapses.get_unchecked(i + 3);
+            let s0 = unsafe { synapses.get_unchecked(i) };
+            let s1 = unsafe { synapses.get_unchecked(i + 1) };
+            let s2 = unsafe { synapses.get_unchecked(i + 2) };
+            let s3 = unsafe { synapses.get_unchecked(i + 3) };
             wl[0] = s0.weight;
             wl[1] = s1.weight;
             wl[2] = s2.weight;
             wl[3] = s3.weight;
-            al[0] = *activations.get_unchecked(s0.from_index as usize);
-            al[1] = *activations.get_unchecked(s1.from_index as usize);
-            al[2] = *activations.get_unchecked(s2.from_index as usize);
-            al[3] = *activations.get_unchecked(s3.from_index as usize);
-            let weights = vld1q_f32(wl.as_ptr());
-            let acts = vld1q_f32(al.as_ptr());
+            unsafe {
+                al[0] = *activations.get_unchecked(s0.from_index as usize);
+                al[1] = *activations.get_unchecked(s1.from_index as usize);
+                al[2] = *activations.get_unchecked(s2.from_index as usize);
+                al[3] = *activations.get_unchecked(s3.from_index as usize);
+            }
+            let weights = unsafe { vld1q_f32(wl.as_ptr()) };
+            let acts = unsafe { vld1q_f32(al.as_ptr()) };
             let products = vmulq_f32(weights, acts);
             acc = vfmaq_f32(acc, products, products);
             i += 4;
         }
         let mut sum = vaddvq_f32(acc);
         while i < end {
-            let s = synapses.get_unchecked(i);
-            let val = *activations.get_unchecked(s.from_index as usize) * s.weight;
+            let s = unsafe { synapses.get_unchecked(i) };
+            let val = unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
             sum += val * val;
             i += 1;
         }
@@ -488,28 +506,31 @@ mod aarch64 {
         let chunk_end = start + ((end - start) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
-            let s0 = synapses.get_unchecked(i);
-            let s1 = synapses.get_unchecked(i + 1);
-            let s2 = synapses.get_unchecked(i + 2);
-            let s3 = synapses.get_unchecked(i + 3);
+            let s0 = unsafe { synapses.get_unchecked(i) };
+            let s1 = unsafe { synapses.get_unchecked(i + 1) };
+            let s2 = unsafe { synapses.get_unchecked(i + 2) };
+            let s3 = unsafe { synapses.get_unchecked(i + 3) };
             wl[0] = s0.weight;
             wl[1] = s1.weight;
             wl[2] = s2.weight;
             wl[3] = s3.weight;
-            al[0] = *activations.get_unchecked(s0.from_index as usize);
-            al[1] = *activations.get_unchecked(s1.from_index as usize);
-            al[2] = *activations.get_unchecked(s2.from_index as usize);
-            al[3] = *activations.get_unchecked(s3.from_index as usize);
-            let weights = vld1q_f32(wl.as_ptr());
-            let acts = vld1q_f32(al.as_ptr());
+            unsafe {
+                al[0] = *activations.get_unchecked(s0.from_index as usize);
+                al[1] = *activations.get_unchecked(s1.from_index as usize);
+                al[2] = *activations.get_unchecked(s2.from_index as usize);
+                al[3] = *activations.get_unchecked(s3.from_index as usize);
+            }
+            let weights = unsafe { vld1q_f32(wl.as_ptr()) };
+            let acts = unsafe { vld1q_f32(al.as_ptr()) };
             let vals = vaddq_f32(bias_vec, vmulq_f32(weights, acts));
             acc = vfmaq_f32(acc, vals, vals);
             i += 4;
         }
         let mut sum = vaddvq_f32(acc);
         while i < end {
-            let s = synapses.get_unchecked(i);
-            let val = bias + *activations.get_unchecked(s.from_index as usize) * s.weight;
+            let s = unsafe { synapses.get_unchecked(i) };
+            let val =
+                bias + unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
             sum += val * val;
             i += 1;
         }
@@ -903,5 +924,59 @@ mod tests {
         assert_eq!(n.1, s.1);
         assert_eq!(n.2, s.2);
         assert_eq!(n.3, s.3);
+    }
+
+    // FMA/NEON reorder rounding can differ slightly from the scalar reference, so
+    // single-record results are compared within a small relative tolerance.
+    fn close(a: f32, b: f32) {
+        let tol = 1e-4_f32 * (1.0 + a.abs().max(b.abs()));
+        assert!((a - b).abs() <= tol, "expected {a} ≈ {b}");
+    }
+
+    // Six synapses exercise one full 4-wide SIMD chunk plus a 2-element scalar tail,
+    // so the wrapped `unsafe { … }` ops in the SIMD primitives are actually run.
+    fn six_synapses() -> ([SynapseData; 6], Vec<f32>) {
+        let syn = [
+            synapse(0, 0.5),
+            synapse(2, -1.5),
+            synapse(1, 2.0),
+            synapse(3, 0.25),
+            synapse(4, -0.75),
+            synapse(2, 1.25),
+        ];
+        let acts = vec![1.0_f32, 2.0, -3.0, 0.5, 4.0];
+        (syn, acts)
+    }
+
+    #[test]
+    fn weighted_sum_simd_matches_scalar() {
+        let (syn, acts) = six_synapses();
+        let s = weighted_sum_scalar(&syn, &acts, 0, 6, 0.25);
+        let n = weighted_sum_simd(&syn, &acts, 0, 6, 0.25);
+        close(n, s);
+    }
+
+    #[test]
+    fn weighted_sum_no_bias_simd_matches_scalar() {
+        let (syn, acts) = six_synapses();
+        let s = weighted_sum_no_bias_scalar(&syn, &acts, 0, 6);
+        let n = weighted_sum_no_bias_simd(&syn, &acts, 0, 6);
+        close(n, s);
+    }
+
+    #[test]
+    fn weighted_sum_of_squares_simd_matches_scalar() {
+        let (syn, acts) = six_synapses();
+        let s = weighted_sum_of_squares_scalar(&syn, &acts, 0, 6);
+        let n = weighted_sum_of_squares_simd(&syn, &acts, 0, 6);
+        close(n, s);
+    }
+
+    #[test]
+    fn weighted_sum_of_squares_v2_simd_matches_scalar() {
+        let (syn, acts) = six_synapses();
+        let s = weighted_sum_of_squares_v2_scalar(&syn, &acts, 0, 6, -0.5);
+        let n = weighted_sum_of_squares_v2_simd(&syn, &acts, 0, 6, -0.5);
+        close(n, s);
     }
 }
