@@ -94,7 +94,11 @@ jobs:
         # peter-evans/create-pull-request@v7.0.11
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Authenticate with the org-level PAT so the created PR fires its
+          # downstream workflows (CI, labels, reviewer automation). A bare
+          # GITHUB_TOKEN makes GitHub suppress those triggers (Issue #1636).
+          # Fall back to GITHUB_TOKEN only when ACTIONS_PUSH is unset.
+          token: ${{ secrets.ACTIONS_PUSH || secrets.GITHUB_TOKEN }}
           branch: chore/upgrade-dependencies
           base: Develop
           title: "chore: upgrade Cargo dependencies to latest compatible versions"
