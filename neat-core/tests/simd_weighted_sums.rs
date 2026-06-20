@@ -7,12 +7,11 @@ use neat_core::simd::{
 };
 
 /// Helper to create test synapse data
-fn make_synapse(from_index: u32, weight: f32) -> SynapseData {
+fn make_synapse(from_index: u16, weight: f32) -> SynapseData {
     SynapseData {
         weight,
         from_index,
         synapse_type: 0,
-        _padding: [0; 3],
     }
 }
 
@@ -319,7 +318,7 @@ fn simd_and_scalar_agree_across_counts() {
 
     for count in 0..=40usize {
         let synapses: Vec<SynapseData> = (0..count)
-            .map(|i| make_synapse((i % num_inputs) as u32, ((i as f32) * 0.13).cos()))
+            .map(|i| make_synapse((i % num_inputs) as u16, ((i as f32) * 0.13).cos()))
             .collect();
         let end = synapses.len();
 
@@ -363,7 +362,7 @@ fn simd_and_scalar_agree_with_offset() {
     // and a tail remains at the end.
     let activations: Vec<f32> = (0..7).map(|i| (i as f32) * 0.5 - 1.0).collect();
     let synapses: Vec<SynapseData> = (0..30)
-        .map(|i| make_synapse((i % 7) as u32, ((i as f32) * 0.21).sin()))
+        .map(|i| make_synapse((i % 7) as u16, ((i as f32) * 0.21).sin()))
         .collect();
     let bias = -0.7f32;
 
