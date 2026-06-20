@@ -14,6 +14,7 @@ use crate::simd::{
     weighted_sum_simd, weighted_sum_simd_4records,
 };
 use crate::squash::{SquashType, apply_squash};
+use crate::squash_simd::squash_x4;
 use crate::synapse_type::SynapseType;
 
 #[cfg(target_arch = "wasm32")]
@@ -1133,11 +1134,20 @@ impl CompiledNetwork {
                             neuron.bias,
                         );
 
-                        // Apply squash to all 4 records
-                        let sq0 = Self::apply_inline_squash(neuron.squash_type, squash, s0);
-                        let sq1 = Self::apply_inline_squash(neuron.squash_type, squash, s1);
-                        let sq2 = Self::apply_inline_squash(neuron.squash_type, squash, s2);
-                        let sq3 = Self::apply_inline_squash(neuron.squash_type, squash, s3);
+                        // Apply squash to all 4 records. The hot transcendental
+                        // squashes (Tanh/Logistic/Gelu/Mish) evaluate every batch
+                        // lane at once via the vectorised approximation (Issue
+                        // #180); all other types keep the scalar inline squash so
+                        // their numerics are unchanged.
+                        let [sq0, sq1, sq2, sq3] = match squash_x4(squash, [s0, s1, s2, s3]) {
+                            Some(vec) => vec,
+                            None => [
+                                Self::apply_inline_squash(neuron.squash_type, squash, s0),
+                                Self::apply_inline_squash(neuron.squash_type, squash, s1),
+                                Self::apply_inline_squash(neuron.squash_type, squash, s2),
+                                Self::apply_inline_squash(neuron.squash_type, squash, s3),
+                            ],
+                        };
 
                         let a0 = apply_limit_range(squash, sq0);
                         let a1 = apply_limit_range(squash, sq1);
