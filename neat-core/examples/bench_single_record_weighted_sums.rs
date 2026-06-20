@@ -19,12 +19,11 @@ use neat_core::simd::{
 };
 use std::time::Instant;
 
-fn make_synapse(from_index: u32, weight: f32) -> SynapseData {
+fn make_synapse(from_index: u16, weight: f32) -> SynapseData {
     SynapseData {
         weight,
         from_index,
         synapse_type: 0,
-        _padding: [0; 3],
     }
 }
 
@@ -40,7 +39,7 @@ fn main() {
         .map(|i| ((i as f32) * 0.137).sin())
         .collect();
     let synapses: Vec<SynapseData> = (0..num_synapses)
-        .map(|i| make_synapse((i % num_inputs) as u32, ((i as f32) * 0.0731).cos()))
+        .map(|i| make_synapse((i % num_inputs) as u16, ((i as f32) * 0.0731).cos()))
         .collect();
 
     // `black_box` the slices and bias on every call so the optimiser cannot hoist

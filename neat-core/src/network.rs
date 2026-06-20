@@ -31,6 +31,16 @@ pub enum NetworkError {
         /// The section that could not be read in full ("header", "neuron", or "synapse").
         section: &'static str,
     },
+    /// The network declares more nodes than the `u16` source-index field can address.
+    ///
+    /// Issue #177 - `SynapseData::from_index` is a `u16`, so every node index must
+    /// fit in `0..=u16::MAX`. A network may therefore contain at most
+    /// [`MAX_NODE_COUNT`] nodes; loading a larger one is rejected here rather than
+    /// silently truncating source indices.
+    TooManyNodes {
+        /// The declared node count that exceeded [`MAX_NODE_COUNT`].
+        count: usize,
+    },
 }
 
 impl std::fmt::Display for NetworkError {
@@ -38,6 +48,13 @@ impl std::fmt::Display for NetworkError {
         match self {
             NetworkError::TruncatedData { section } => {
                 write!(f, "Data too short for {section}")
+            }
+            NetworkError::TooManyNodes { count } => {
+                write!(
+                    f,
+                    "Network has {count} nodes, exceeding the maximum of {MAX_NODE_COUNT} \
+                     addressable by a u16 source index"
+                )
             }
         }
     }
@@ -71,19 +88,32 @@ pub struct NeuronData {
     pub is_constant: bool,
 }
 
+/// Maximum number of nodes a [`CompiledNetwork`] may contain.
+///
+/// Issue #177 - [`SynapseData::from_index`] is a `u16`, so the largest source-node
+/// index is `u16::MAX` (65535) and a network may hold at most `u16::MAX + 1`
+/// (65536) nodes. Networks exceeding this are rejected at load time with
+/// [`NetworkError::TooManyNodes`] rather than silently truncating indices.
+pub const MAX_NODE_COUNT: usize = u16::MAX as usize + 1;
+
 /// Synapse data structure for cache-efficient access
 /// Issue #1175 - Use typed structs instead of tuples for neuron/synapse data
+///
+/// Issue #177 - Narrowed `from_index` from `u32` to `u16` and dropped the explicit
+/// padding so the struct is **8 bytes** instead of 12 (33% less memory streamed
+/// per forward pass). `repr(C)` lays this out as `weight` (4) + `from_index` (2) +
+/// `synapse_type` (1) + 1 trailing pad byte = 8, keeping 4-byte alignment for the
+/// SIMD weight loads. The on-wire format already stores `from_index` as a `u16`,
+/// so no precision is lost; see [`MAX_NODE_COUNT`] for the enforced node ceiling.
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SynapseData {
     /// Weight of the synapse
     pub weight: f32,
-    /// Index of the source neuron
-    pub from_index: u32,
+    /// Index of the source neuron (≤ `u16::MAX`; see [`MAX_NODE_COUNT`])
+    pub from_index: u16,
     /// Synapse type (for IF activation)
     pub synapse_type: u8,
-    /// Padding for alignment
-    pub _padding: [u8; 3],
 }
 
 /// Compiled network data structure
@@ -186,6 +216,13 @@ impl CompiledNetwork {
 
         let num_neurons = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
         let num_inputs = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+
+        // Issue #177 - source indices are u16, so reject networks whose node count
+        // would overflow the index space before reading any synapses.
+        if num_neurons > MAX_NODE_COUNT {
+            return Err(NetworkError::TooManyNodes { count: num_neurons });
+        }
+
         let num_non_inputs = num_neurons - num_inputs;
 
         let mut neurons = Vec::with_capacity(num_non_inputs);
@@ -221,7 +258,7 @@ impl CompiledNetwork {
                     return Err(NetworkError::TruncatedData { section: "synapse" });
                 }
 
-                let from_index = u16::from_le_bytes([data[offset], data[offset + 1]]) as u32;
+                let from_index = u16::from_le_bytes([data[offset], data[offset + 1]]);
                 let synapse_type = data[offset + 2];
                 // offset + 3 is padding
                 let weight = f64::from_le_bytes([
@@ -240,7 +277,6 @@ impl CompiledNetwork {
                     weight: weight as f32,
                     from_index,
                     synapse_type,
-                    _padding: [0; 3],
                 });
             }
 
@@ -1722,21 +1758,19 @@ mod tests {
         }
     }
 
-    fn make_synapse(from_index: u32, weight: f32) -> SynapseData {
+    fn make_synapse(from_index: u16, weight: f32) -> SynapseData {
         SynapseData {
             weight,
             from_index,
             synapse_type: 0,
-            _padding: [0; 3],
         }
     }
 
-    fn make_synapse_typed(from_index: u32, weight: f32, synapse_type: u8) -> SynapseData {
+    fn make_synapse_typed(from_index: u16, weight: f32, synapse_type: u8) -> SynapseData {
         SynapseData {
             weight,
             from_index,
             synapse_type,
-            _padding: [0; 3],
         }
     }
 
@@ -2061,5 +2095,77 @@ mod tests {
 
         let batch_records = split_batch_records(&batch_result);
         assert_records_match(&single_results, &batch_records);
+    }
+
+    // ---- Issue #177: SynapseData footprint + node-count invariant ----
+
+    /// Serialise a minimal one-non-input-neuron, one-synapse network into the
+    /// on-wire format understood by [`CompiledNetwork::new`]. `from_index` is
+    /// written as the `u16` the format already uses, so the round-trip exercises
+    /// the loader directly.
+    fn serialise_single_synapse_network(
+        num_neurons: u32,
+        num_inputs: u32,
+        from_index: u16,
+    ) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&num_neurons.to_le_bytes());
+        bytes.extend_from_slice(&num_inputs.to_le_bytes());
+        // Exactly one non-input neuron (callers pass num_neurons - num_inputs == 1).
+        bytes.extend_from_slice(&0.0f64.to_le_bytes()); // bias
+        bytes.push(SquashType::Identity as u8); // squash_type
+        bytes.push(0); // is_constant
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // num_synapses
+        // One synapse referencing `from_index`.
+        bytes.extend_from_slice(&from_index.to_le_bytes()); // from_index (u16)
+        bytes.push(0); // synapse_type
+        bytes.push(0); // padding byte
+        bytes.extend_from_slice(&1.0f64.to_le_bytes()); // weight
+        bytes
+    }
+
+    #[test]
+    fn synapse_data_is_eight_bytes() {
+        // Issue #177 - narrowing from_index to u16 + dropping padding must land the
+        // struct at 8 bytes so the forward pass streams 33% less per synapse.
+        assert_eq!(std::mem::size_of::<SynapseData>(), 8);
+        // Alignment stays 4 so SIMD weight loads remain aligned.
+        assert_eq!(std::mem::align_of::<SynapseData>(), 4);
+    }
+
+    #[test]
+    fn new_rejects_networks_exceeding_max_node_count() {
+        // A header declaring more than MAX_NODE_COUNT nodes must fail fast with a
+        // clear TooManyNodes error rather than silently truncating source indices.
+        let too_many = (MAX_NODE_COUNT + 1) as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&too_many.to_le_bytes()); // num_neurons
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // num_inputs
+
+        match CompiledNetwork::new(&bytes) {
+            Err(NetworkError::TooManyNodes { count }) => assert_eq!(count, MAX_NODE_COUNT + 1),
+            Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+            Ok(_) => panic!("expected TooManyNodes error, network loaded"),
+        }
+    }
+
+    #[test]
+    fn new_accepts_max_node_count_boundary() {
+        // Exactly MAX_NODE_COUNT nodes is the largest network the u16 index allows.
+        let bytes =
+            serialise_single_synapse_network(MAX_NODE_COUNT as u32, (MAX_NODE_COUNT - 1) as u32, 0);
+        let net = CompiledNetwork::new(&bytes).expect("boundary node count must load");
+        assert_eq!(net.num_neurons, MAX_NODE_COUNT);
+    }
+
+    #[test]
+    fn new_preserves_high_source_index() {
+        // A high source index (close to u16::MAX) must round-trip without truncation,
+        // proving the narrowed u16 field still addresses the full node range.
+        let high = 64_000u16;
+        let bytes = serialise_single_synapse_network(65_000, 64_999, high);
+        let net = CompiledNetwork::new(&bytes).expect("network must load");
+        assert_eq!(net.synapses.len(), 1);
+        assert_eq!(net.synapses[0].from_index, high);
     }
 }
