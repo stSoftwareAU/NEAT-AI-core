@@ -875,12 +875,11 @@ mod tests {
     use super::*;
     use crate::network::SynapseData;
 
-    fn synapse(from: u32, weight: f32) -> SynapseData {
+    fn synapse(from: u16, weight: f32) -> SynapseData {
         SynapseData {
             weight,
             from_index: from,
             synapse_type: 0,
-            _padding: [0; 3],
         }
     }
 

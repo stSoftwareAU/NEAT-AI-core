@@ -10,6 +10,7 @@ use crate::network::CompiledNetwork;
 use crate::range::apply_limit_range;
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
 use crate::squash::{SquashType, apply_squash};
+use crate::squash_simd::{squash_x4, squash_x8};
 use crate::synapse_type::SynapseType;
 
 #[cfg(target_arch = "wasm32")]
@@ -206,24 +207,35 @@ macro_rules! batch_8way_activation {
                                     neuron.bias,
                                 );
 
-                            let apply_squash_inline = |sum: f32| -> f32 {
-                                match neuron.squash_type {
-                                    0 => sum,
-                                    1 => sum.max(0.0),
-                                    6 => 1.0 / (1.0 + (-sum).exp()),
-                                    7 => sum.tanh(),
-                                    _ => apply_squash(squash, sum),
+                            // Hot transcendental squashes evaluate all 8 batch
+                            // lanes at once via the vectorised approximation
+                            // (Issue #180); other types keep the scalar inline
+                            // squash so their numerics are unchanged.
+                            let sums = [sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7];
+                            let squashed = match squash_x8(squash, sums) {
+                                Some(vec) => vec,
+                                None => {
+                                    let apply_squash_inline = |sum: f32| -> f32 {
+                                        match neuron.squash_type {
+                                            0 => sum,
+                                            1 => sum.max(0.0),
+                                            6 => 1.0 / (1.0 + (-sum).exp()),
+                                            7 => sum.tanh(),
+                                            _ => apply_squash(squash, sum),
+                                        }
+                                    };
+                                    sums.map(apply_squash_inline)
                                 }
                             };
 
-                            act0[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum0));
-                            act1[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum1));
-                            act2[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum2));
-                            act3[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum3));
-                            act4[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum4));
-                            act5[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum5));
-                            act6[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum6));
-                            act7[actual_idx] = apply_limit_range(squash, apply_squash_inline(sum7));
+                            act0[actual_idx] = apply_limit_range(squash, squashed[0]);
+                            act1[actual_idx] = apply_limit_range(squash, squashed[1]);
+                            act2[actual_idx] = apply_limit_range(squash, squashed[2]);
+                            act3[actual_idx] = apply_limit_range(squash, squashed[3]);
+                            act4[actual_idx] = apply_limit_range(squash, squashed[4]);
+                            act5[actual_idx] = apply_limit_range(squash, squashed[5]);
+                            act6[actual_idx] = apply_limit_range(squash, squashed[6]);
+                            act7[actual_idx] = apply_limit_range(squash, squashed[7]);
                         }
                     }
                 }
@@ -403,24 +415,29 @@ macro_rules! batch_8way_activation {
                                     neuron.bias,
                                 );
 
-                                let apply_squash_inline = |sum: f32| -> f32 {
-                                    match neuron.squash_type {
-                                        0 => sum,
-                                        1 => sum.max(0.0),
-                                        6 => 1.0 / (1.0 + (-sum).exp()),
-                                        7 => sum.tanh(),
-                                        _ => apply_squash(squash, sum),
+                                // Vectorised squash for the hot transcendental
+                                // types (Issue #180); scalar fallback otherwise.
+                                let sums = [sum0, sum1, sum2, sum3];
+                                let squashed = match squash_x4(squash, sums) {
+                                    Some(vec) => vec,
+                                    None => {
+                                        let apply_squash_inline = |sum: f32| -> f32 {
+                                            match neuron.squash_type {
+                                                0 => sum,
+                                                1 => sum.max(0.0),
+                                                6 => 1.0 / (1.0 + (-sum).exp()),
+                                                7 => sum.tanh(),
+                                                _ => apply_squash(squash, sum),
+                                            }
+                                        };
+                                        sums.map(apply_squash_inline)
                                     }
                                 };
 
-                                act0[actual_idx] =
-                                    apply_limit_range(squash, apply_squash_inline(sum0));
-                                act1[actual_idx] =
-                                    apply_limit_range(squash, apply_squash_inline(sum1));
-                                act2[actual_idx] =
-                                    apply_limit_range(squash, apply_squash_inline(sum2));
-                                act3[actual_idx] =
-                                    apply_limit_range(squash, apply_squash_inline(sum3));
+                                act0[actual_idx] = apply_limit_range(squash, squashed[0]);
+                                act1[actual_idx] = apply_limit_range(squash, squashed[1]);
+                                act2[actual_idx] = apply_limit_range(squash, squashed[2]);
+                                act3[actual_idx] = apply_limit_range(squash, squashed[3]);
                             }
                         }
                     }

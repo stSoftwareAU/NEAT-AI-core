@@ -41,21 +41,19 @@ fn make_network(
     }
 }
 
-fn make_synapse(from_index: u32, weight: f32) -> SynapseData {
+fn make_synapse(from_index: u16, weight: f32) -> SynapseData {
     SynapseData {
         weight,
         from_index,
         synapse_type: 0,
-        _padding: [0; 3],
     }
 }
 
-fn make_synapse_typed(from_index: u32, weight: f32, synapse_type: u8) -> SynapseData {
+fn make_synapse_typed(from_index: u16, weight: f32, synapse_type: u8) -> SynapseData {
     SynapseData {
         weight,
         from_index,
         synapse_type,
-        _padding: [0; 3],
     }
 }
 

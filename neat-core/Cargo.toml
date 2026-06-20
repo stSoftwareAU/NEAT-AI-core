@@ -19,6 +19,16 @@ crate-type = ["cdylib", "rlib"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Issue #179 - opt-in data-parallel record scoring. `rayon` is native-only
+# (it is not wasm-friendly), so it is declared under a `cfg(not(wasm32))`
+# target table. The `parallel` feature is off by default, so default and
+# `wasm32` builds pull in no rayon symbols and keep their single-thread path.
+[features]
+parallel = ["dep:rayon"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { version = "1.12", optional = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.125"
 
@@ -31,4 +41,10 @@ criterion = { version = "0.8", features = ["html_reports"] }
 # run explicitly with `cargo bench -p neat-core`.
 [[bench]]
 name = "hot_paths"
+harness = false
+
+# Issue #179 - data-parallel scoring throughput (records/sec at 1 vs all cores).
+# Requires `--features parallel`; without it the bench's `main` is a no-op shim.
+[[bench]]
+name = "parallel_scoring"
 harness = false

@@ -216,7 +216,8 @@ pub fn to_topology_json(network: &CompiledNetwork, num_outputs: usize) -> String
         for synapse in &network.synapses[start..end] {
             let synapse_type = SynapseType::from(synapse.synapse_type);
             synapses.push(SynapseRecord {
-                from: synapse.from_index,
+                // Issue #177 - from_index narrowed to u16; widen for the export record.
+                from: synapse.from_index as u32,
                 to: to_index,
                 weight: synapse.weight,
                 synapse_type: synapse_type_name(synapse_type),

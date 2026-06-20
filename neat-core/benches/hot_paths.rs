@@ -16,144 +16,40 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use std::hint::black_box;
 
 use neat_core::loss::mse_sum_batch_packed;
-use neat_core::network::{CompiledNetwork, NeuronData, SynapseData};
+use neat_core::network::SynapseData;
 use neat_core::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_simd,
     weighted_sum_simd_4records, weighted_sum_simd_8records,
 };
 use neat_core::squash::{SquashType, apply_squash};
-use neat_core::topological_backprop::{
-    NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT, NEURON_TYPE_OUTPUT, NeuronInput, PropagateInput,
-    SynapseInput, propagate_topological_loop,
-};
+use neat_core::squash_simd::squash_x4;
+use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
 use neat_core::unsquash::apply_unsquash;
 
-/// Tiny deterministic PRNG (SplitMix64-style) so the harness produces fixed
-/// topologies and weights without pulling in an `rand` dependency.
-struct Lcg {
-    state: u64,
-}
-
-impl Lcg {
-    fn new(seed: u64) -> Self {
-        Self { state: seed }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// Uniform float in `[-1.0, 1.0)`.
-    fn next_signed(&mut self) -> f32 {
-        let unit = (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32;
-        unit * 2.0 - 1.0
-    }
-
-    /// Uniform integer in `[0, bound)`.
-    fn next_below(&mut self, bound: usize) -> usize {
-        (self.next_u64() % bound as u64) as usize
-    }
-}
-
-/// Build a deterministic feedforward [`CompiledNetwork`].
-///
-/// Non-input neurons are emitted in topological order; each draws up to
-/// `fan_in` incoming connections from strictly earlier neurons, giving a
-/// realistic synapse density without recurrent edges.
-fn build_network(
-    num_neurons: usize,
-    num_inputs: usize,
-    fan_in: usize,
-    seed: u64,
-) -> CompiledNetwork {
-    let mut rng = Lcg::new(seed);
-    let num_non_inputs = num_neurons - num_inputs;
-    let mut neurons = Vec::with_capacity(num_non_inputs);
-    let mut synapses = Vec::new();
-
-    for n in 0..num_non_inputs {
-        let global_idx = num_inputs + n;
-        let this_fan = fan_in.min(global_idx);
-        let start_synapse = synapses.len() as u32;
-        for _ in 0..this_fan {
-            let from = rng.next_below(global_idx);
-            synapses.push(SynapseData {
-                weight: rng.next_signed() * 0.5,
-                from_index: from as u32,
-                synapse_type: 0,
-                _padding: [0; 3],
-            });
-        }
-        neurons.push(NeuronData {
-            bias: rng.next_signed() * 0.1,
-            start_synapse,
-            num_synapses: this_fan as u16,
-            squash_type: SquashType::Tanh as u8,
-            is_constant: false,
-        });
-    }
-
-    let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
-    CompiledNetwork {
-        num_neurons,
-        num_inputs,
-        neurons,
-        synapses,
-        activations: vec![0.0; num_neurons],
-        hint_values_buffer: vec![0.0; num_non_inputs],
-        trace_data_buffer: Vec::with_capacity(estimated_trace_size),
-        // Issue #155 - 4-way batch scratch buffers
-        batch_activations: [
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-        ],
-        batch_hints: [
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-        ],
-        batch_traces: [
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-        ],
-    }
-}
-
-/// Deterministic input vector of length `n`.
-fn build_inputs(n: usize, seed: u64) -> Vec<f32> {
-    let mut rng = Lcg::new(seed);
-    (0..n).map(|_| rng.next_signed()).collect()
-}
-
-/// Representative network sizes: (label, total neurons, inputs, outputs, fan-in).
-const NETWORKS: [(&str, usize, usize, usize, usize); 3] = [
-    ("small_50", 50, 8, 4, 12),
-    ("medium_500", 500, 16, 8, 16),
-    ("large_5000", 5000, 32, 16, 24),
-];
+/// Deterministic network/backprop fixtures, shared with the `bench_fixtures`
+/// integration test (Issue #176) so the production-scale builders are exercised
+/// by a real `cargo test` run as well as the harness.
+mod common;
+use common::{Lcg, NETWORKS, build_backprop_data, build_inputs, build_network};
 
 /// Forward pass — `CompiledNetwork::activate` across representative sizes.
 fn bench_forward_pass(c: &mut Criterion) {
     let mut group = c.benchmark_group("forward_pass");
-    for (label, num_neurons, num_inputs, num_outputs, fan_in) in NETWORKS {
-        let mut net = build_network(num_neurons, num_inputs, fan_in, 0x5152_5354);
-        let inputs = build_inputs(num_inputs, 0xA1B2_C3D4);
-        group.throughput(Throughput::Elements(num_neurons as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(label), &inputs, |b, inputs| {
-            b.iter(|| {
-                let out = net.activate(black_box(inputs), black_box(num_outputs));
-                black_box(out);
-            });
-        });
+    for spec in &NETWORKS {
+        let mut net = build_network(spec, 0x5152_5354);
+        let inputs = build_inputs(spec.num_inputs, 0xA1B2_C3D4);
+        let num_outputs = spec.num_outputs;
+        group.throughput(Throughput::Elements(spec.num_neurons as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(spec.label),
+            &inputs,
+            |b, inputs| {
+                b.iter(|| {
+                    let out = net.activate(black_box(inputs), black_box(num_outputs));
+                    black_box(out);
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -162,14 +58,16 @@ fn bench_forward_pass(c: &mut Criterion) {
 fn bench_batched_scoring(c: &mut Criterion) {
     let mut group = c.benchmark_group("batched_scoring");
 
-    for (label, num_neurons, num_inputs, num_outputs, fan_in) in NETWORKS {
+    for spec in &NETWORKS {
+        let num_inputs = spec.num_inputs;
+        let num_outputs = spec.num_outputs;
         // `mut` so the 4-way traced batch path can reuse its scratch buffers (Issue #155).
-        let mut net = build_network(num_neurons, num_inputs, fan_in, 0x5152_5354);
+        let mut net = build_network(spec, 0x5152_5354);
 
         // 4 records packed back-to-back for the traced batch path.
         let batch4 = build_inputs(num_inputs * 4, 0x0BAD_F00D);
         group.bench_with_input(
-            BenchmarkId::new("trace_batch_4way", label),
+            BenchmarkId::new("trace_batch_4way", spec.label),
             &batch4,
             |b, batch| {
                 b.iter(|| {
@@ -187,7 +85,7 @@ fn bench_batched_scoring(c: &mut Criterion) {
         let mut loss_net = net.clone();
         let records = build_inputs((num_inputs + num_outputs) * 8, 0xFEED_BEEF);
         group.bench_with_input(
-            BenchmarkId::new("mse_sum_8records", label),
+            BenchmarkId::new("mse_sum_8records", spec.label),
             &records,
             |b, records| {
                 b.iter(|| {
@@ -206,113 +104,13 @@ fn bench_batched_scoring(c: &mut Criterion) {
     group.finish();
 }
 
-/// Owned backing storage for a [`PropagateInput`]; built once outside the loop.
-struct BackpropData {
-    neurons: Vec<NeuronInput>,
-    synapses: Vec<SynapseInput>,
-    inward_starts: Vec<u32>,
-    inward_counts: Vec<u32>,
-    inward_indices: Vec<u32>,
-    reverse_topo_order: Vec<u32>,
-    expected: Vec<f32>,
-    input_count: u32,
-    output_count: u32,
-}
-
-/// Build a deterministic feedforward backprop input of `num_neurons` neurons.
-fn build_backprop_data(
-    num_neurons: usize,
-    num_inputs: usize,
-    num_outputs: usize,
-    fan_in: usize,
-    seed: u64,
-) -> BackpropData {
-    let mut rng = Lcg::new(seed);
-    let mut neurons = Vec::with_capacity(num_neurons);
-
-    // Input neurons first.
-    for _ in 0..num_inputs {
-        neurons.push(make_neuron(
-            SquashType::Identity,
-            NEURON_TYPE_INPUT,
-            rng.next_signed(),
-        ));
-    }
-
-    // Synapses grouped by target neuron so the inward adjacency is contiguous.
-    let mut synapses: Vec<SynapseInput> = Vec::new();
-    let mut inward_starts = vec![0u32; num_neurons];
-    let mut inward_counts = vec![0u32; num_neurons];
-    let mut inward_indices: Vec<u32> = Vec::new();
-
-    for global_idx in num_inputs..num_neurons {
-        let is_output = global_idx >= num_neurons - num_outputs;
-        let neuron_type = if is_output {
-            NEURON_TYPE_OUTPUT
-        } else {
-            NEURON_TYPE_HIDDEN
-        };
-        neurons.push(make_neuron(
-            SquashType::Tanh,
-            neuron_type,
-            rng.next_signed(),
-        ));
-
-        let this_fan = fan_in.min(global_idx);
-        inward_starts[global_idx] = inward_indices.len() as u32;
-        inward_counts[global_idx] = this_fan as u32;
-        for _ in 0..this_fan {
-            let from = rng.next_below(global_idx);
-            let weight = rng.next_signed() * 0.5;
-            inward_indices.push(synapses.len() as u32);
-            synapses.push(SynapseInput {
-                from: from as u32,
-                to: global_idx as u32,
-                original_weight: weight,
-                adjusted_weight: weight,
-                is_self_loop: false,
-            });
-        }
-    }
-
-    // Reverse topological order: non-input neurons from last back to first.
-    let reverse_topo_order: Vec<u32> = (num_inputs..num_neurons).rev().map(|i| i as u32).collect();
-    let expected = (0..num_outputs).map(|_| rng.next_signed()).collect();
-
-    BackpropData {
-        neurons,
-        synapses,
-        inward_starts,
-        inward_counts,
-        inward_indices,
-        reverse_topo_order,
-        expected,
-        input_count: num_inputs as u32,
-        output_count: num_outputs as u32,
-    }
-}
-
-fn make_neuron(squash: SquashType, neuron_type: u8, adjusted_activation: f32) -> NeuronInput {
-    NeuronInput {
-        squash_type: squash as u8,
-        neuron_type,
-        propagate_needed: true,
-        update_needed: true,
-        hint_value: 0.0,
-        range_low: -1.0e6,
-        range_high: 1.0e6,
-        adjusted_activation,
-        adjusted_bias: 0.0,
-    }
-}
-
 /// Backprop — one `propagate_topological_loop` step on representative sizes.
 fn bench_backprop(c: &mut Criterion) {
     let mut group = c.benchmark_group("backprop");
-    for (label, num_neurons, num_inputs, num_outputs, fan_in) in NETWORKS {
-        let data = build_backprop_data(num_neurons, num_inputs, num_outputs, fan_in, 0x1357_9BDF);
-        group.throughput(Throughput::Elements(num_neurons as u64));
-        group.bench_function(BenchmarkId::from_parameter(label), |b| {
+    for spec in &NETWORKS {
+        let data = build_backprop_data(spec, 0x1357_9BDF);
+        group.throughput(Throughput::Elements(spec.num_neurons as u64));
+        group.bench_function(BenchmarkId::from_parameter(spec.label), |b| {
             b.iter(|| {
                 let input = PropagateInput {
                     neurons: &data.neurons,
@@ -358,9 +156,8 @@ fn bench_activation_primitives(c: &mut Criterion) {
     let synapses: Vec<SynapseData> = (0..synapse_count)
         .map(|i| SynapseData {
             weight: rng.next_signed(),
-            from_index: i as u32,
+            from_index: i as u16,
             synapse_type: 0,
-            _padding: [0; 3],
         })
         .collect();
     let activations: Vec<f32> = (0..synapse_count).map(|_| rng.next_signed()).collect();
@@ -469,6 +266,42 @@ fn bench_activation_primitives(c: &mut Criterion) {
         );
     }
     squash_group.finish();
+
+    // Lane-parallel squash (Issue #180): vectorised 4-lane approximation versus
+    // four scalar `apply_squash` calls, for the hot transcendental squashes.
+    let mut squash4_group = c.benchmark_group("squash_x4");
+    let lanes = [0.42_f32, -1.3, 2.7, -0.05];
+    for squash_type in [
+        SquashType::Tanh,
+        SquashType::Logistic,
+        SquashType::Gelu,
+        SquashType::Mish,
+    ] {
+        let label = format!("{squash_type:?}");
+        squash4_group.bench_with_input(
+            BenchmarkId::new("scalar_x4", label.clone()),
+            &squash_type,
+            |b, &st| {
+                b.iter(|| {
+                    let x = black_box(lanes);
+                    black_box([
+                        apply_squash(st, x[0]),
+                        apply_squash(st, x[1]),
+                        apply_squash(st, x[2]),
+                        apply_squash(st, x[3]),
+                    ])
+                });
+            },
+        );
+        squash4_group.bench_with_input(
+            BenchmarkId::new("simd_x4", label),
+            &squash_type,
+            |b, &st| {
+                b.iter(|| black_box(squash_x4(black_box(st), black_box(lanes))));
+            },
+        );
+    }
+    squash4_group.finish();
 }
 
 criterion_group!(

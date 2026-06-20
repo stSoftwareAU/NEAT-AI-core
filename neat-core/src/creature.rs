@@ -27,7 +27,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::network::{CompiledNetwork, NeuronData, SynapseData};
+use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -105,6 +105,14 @@ pub enum CreatureError {
         /// Number of neurons of type `"output"` actually present.
         found: usize,
     },
+    /// The creature declares more nodes than the `u16` source-index field can address.
+    ///
+    /// Issue #177 - mirrors [`crate::network::NetworkError::TooManyNodes`]; a creature
+    /// may contain at most [`crate::network::MAX_NODE_COUNT`] nodes.
+    TooManyNodes {
+        /// The node count that exceeded [`crate::network::MAX_NODE_COUNT`].
+        count: usize,
+    },
 }
 
 impl std::fmt::Display for CreatureError {
@@ -117,6 +125,14 @@ impl std::fmt::Display for CreatureError {
             }
             CreatureError::OutputCountMismatch { expected, found } => {
                 write!(f, "Expected {expected} output neurons, found {found}")
+            }
+            CreatureError::TooManyNodes { count } => {
+                write!(
+                    f,
+                    "Creature has {count} nodes, exceeding the maximum of {} \
+                     addressable by a u16 source index",
+                    crate::network::MAX_NODE_COUNT
+                )
             }
         }
     }
@@ -327,6 +343,13 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
 
     let num_neurons = num_inputs + creature.neurons.len();
 
+    // Issue #177 - source indices are stored as u16 in SynapseData, so reject
+    // creatures whose node count would overflow the index space rather than
+    // silently truncating `from_index` during compilation.
+    if num_neurons > MAX_NODE_COUNT {
+        return Err(CreatureError::TooManyNodes { count: num_neurons });
+    }
+
     // Group synapses by destination neuron UUID for ordered construction
     let mut synapses_by_target: HashMap<&str, Vec<&SynapseExport>> = HashMap::new();
     for synapse in &creature.synapses {
@@ -358,9 +381,10 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
 
                 synapses.push(SynapseData {
                     weight: syn.weight as f32,
-                    from_index: from_index as u32,
+                    // Issue #177 - source indices are u16; the node-count guard above
+                    // guarantees every index fits, so this cast cannot truncate.
+                    from_index: from_index as u16,
                     synapse_type: synapse_type as u8,
-                    _padding: [0; 3],
                 });
                 num_synapses += 1;
             }

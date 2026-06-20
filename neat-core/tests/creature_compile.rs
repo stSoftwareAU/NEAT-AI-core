@@ -676,3 +676,37 @@ fn test_compile_creature_deprecated_squash() {
         );
     }
 }
+
+/// Issue #177 - `SynapseData::from_index` is a u16, so a creature whose node count
+/// exceeds `MAX_NODE_COUNT` must be rejected at compile time rather than silently
+/// truncating source indices.
+#[test]
+fn compile_creature_rejects_too_many_nodes() {
+    use neat_core::network::MAX_NODE_COUNT;
+    use neat_core::{CreatureError, CreatureExport, NeuronExport};
+
+    // One node over the limit, all hidden so the output count stays 0.
+    let neurons = (0..=MAX_NODE_COUNT)
+        .map(|i| NeuronExport {
+            neuron_type: "hidden".to_string(),
+            uuid: format!("n{i}"),
+            bias: 0.0,
+            squash: None,
+        })
+        .collect();
+
+    let creature = CreatureExport {
+        input: 0,
+        output: 0,
+        neurons,
+        synapses: Vec::new(),
+        semantic_version: None,
+        forward_only: false,
+    };
+
+    match compile_creature(&creature) {
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, MAX_NODE_COUNT + 1),
+        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+        Ok(_) => panic!("expected TooManyNodes error, creature compiled"),
+    }
+}
