@@ -17,7 +17,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 | `neat-core/` | Shared computation library; **140+** unit tests in `src/**/*.rs` plus integration tests in `neat-core/tests/` (>350 total). |
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
-| `neat-core/benches/` | Opt-in Criterion harness for core hot paths (`cargo bench -p neat-core --bench hot_paths`); see `neat-core/benches/README.md`. |
+| `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. The `rust-gates` job runs the lint (`cargo clippy -D warnings`) and compile/syntax (`cargo check --all-targets`) gates on **every push to `Develop` and every pull request**; the `quality` job is the full PR pipeline. |
 | `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build (Vibe Coder hook). |
@@ -34,6 +34,46 @@ cargo test --workspace
 ./quality.sh
 # opt-in performance benchmarks (not part of the test gate):
 cargo bench -p neat-core --bench hot_paths
+```
+
+## Cargo features
+
+| Feature | Default | Effect |
+|---------|---------|--------|
+| `parallel` | off | Native-only data-parallel record scoring via `rayon` (Issue #179). Adds `CompiledNetwork::score_records_parallel`, which chunks records across the rayon pool. Off by default, so the default build and the `wasm32` build pull in **no** `rayon` symbols and keep their single-thread path. |
+
+Scoring a production-size dataset pushes many records through one creature — an
+embarrassingly parallel workload *across records*. With the `parallel` feature
+the throughput scales with core count, while results stay **identical** to the
+sequential path (each record is scored by the same `activate`, with no
+cross-record state — each rayon worker owns a cloned scratch context):
+
+```rust
+// Off-feature / wasm: transparently runs sequentially.
+let outputs = net.score_records(&records, num_outputs);
+
+// With `--features parallel` on native: scored across the rayon pool,
+// same results, in input order.
+let outputs = net.score_records_parallel(&records, num_outputs);
+```
+
+```mermaid
+flowchart LR
+    R[records] --> S{parallel feature?}
+    S -- off / wasm32 --> Q[score_records<br/>one scratch clone, sequential]
+    S -- on, native --> P[score_records_parallel]
+    P --> W1[worker 1<br/>cloned scratch]
+    P --> W2[worker 2<br/>cloned scratch]
+    P --> Wn[worker N<br/>cloned scratch]
+    W1 --> O[outputs in input order]
+    W2 --> O
+    Wn --> O
+    Q --> O
+```
+
+```bash
+# Run the data-parallel scoring throughput bench (1 vs all cores).
+cargo bench -p neat-core --features parallel --bench parallel_scoring
 ```
 
 ## Related Repositories

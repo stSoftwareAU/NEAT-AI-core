@@ -157,9 +157,8 @@ pub fn build_network(spec: &NetSpec, seed: u64) -> CompiledNetwork {
             let from = rng.next_below(global_idx);
             synapses.push(SynapseData {
                 weight: rng.next_signed() * 0.5,
-                from_index: from as u32,
+                from_index: from as u16,
                 synapse_type: 0,
-                _padding: [0; 3],
             });
         }
         neurons.push(NeuronData {

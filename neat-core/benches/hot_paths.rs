@@ -155,9 +155,8 @@ fn bench_activation_primitives(c: &mut Criterion) {
     let synapses: Vec<SynapseData> = (0..synapse_count)
         .map(|i| SynapseData {
             weight: rng.next_signed(),
-            from_index: i as u32,
+            from_index: i as u16,
             synapse_type: 0,
-            _padding: [0; 3],
         })
         .collect();
     let activations: Vec<f32> = (0..synapse_count).map(|_| rng.next_signed()).collect();

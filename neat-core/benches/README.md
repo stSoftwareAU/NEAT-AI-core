@@ -5,6 +5,13 @@ Criterion harness for the core hot paths (Issue #152). These benchmarks are
 `neat-core/Cargo.toml` keeps them out of `cargo test` and the `quality.sh`
 gate, so the CI runtime is unaffected.
 
+There are two bench targets:
+
+- `hot_paths` — the per-record hot paths (always available).
+- `parallel_scoring` — data-parallel record scoring throughput (Issue #179),
+  **requires `--features parallel`**. Without the feature its `main` is a no-op
+  shim, so the target still builds on every configuration.
+
 ## What is measured
 
 `hot_paths.rs` covers the four hottest paths in the crate:
@@ -64,6 +71,19 @@ cargo bench -p neat-core --bench hot_paths -- production
 
 > Use `--bench hot_paths` so Criterion's CLI flags are not handed to the
 > default libtest harness on the library target.
+
+### Data-parallel scoring (Issue #179)
+
+`parallel_scoring.rs` reports records/sec for scoring a batch through one
+creature on **a single core versus all available cores**, using the
+`production`/`production_2x` shapes. It scores inside a rayon pool of a fixed
+size, so the 1-core and all-core measurements share one code path and differ
+only in pool size.
+
+```bash
+# Requires the `parallel` feature (rayon, native targets only).
+cargo bench -p neat-core --features parallel --bench parallel_scoring
+```
 
 The `production` filter is a regex over benchmark ids, so it matches both the
 `production` and `production_2x` shapes in `forward_pass`, `batched_scoring` and
