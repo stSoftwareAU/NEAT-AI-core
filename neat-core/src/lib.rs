@@ -16,6 +16,7 @@ pub mod error;
 pub mod fused_error;
 pub mod loss;
 pub mod network;
+pub mod parallel_scoring;
 pub mod pc_inference;
 pub mod pc_learning;
 pub mod propagate_codec;
