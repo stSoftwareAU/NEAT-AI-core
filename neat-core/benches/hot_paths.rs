@@ -22,6 +22,7 @@ use neat_core::simd::{
     weighted_sum_simd_4records, weighted_sum_simd_8records,
 };
 use neat_core::squash::{SquashType, apply_squash};
+use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
 use neat_core::unsquash::apply_unsquash;
 
@@ -265,6 +266,42 @@ fn bench_activation_primitives(c: &mut Criterion) {
         );
     }
     squash_group.finish();
+
+    // Lane-parallel squash (Issue #180): vectorised 4-lane approximation versus
+    // four scalar `apply_squash` calls, for the hot transcendental squashes.
+    let mut squash4_group = c.benchmark_group("squash_x4");
+    let lanes = [0.42_f32, -1.3, 2.7, -0.05];
+    for squash_type in [
+        SquashType::Tanh,
+        SquashType::Logistic,
+        SquashType::Gelu,
+        SquashType::Mish,
+    ] {
+        let label = format!("{squash_type:?}");
+        squash4_group.bench_with_input(
+            BenchmarkId::new("scalar_x4", label.clone()),
+            &squash_type,
+            |b, &st| {
+                b.iter(|| {
+                    let x = black_box(lanes);
+                    black_box([
+                        apply_squash(st, x[0]),
+                        apply_squash(st, x[1]),
+                        apply_squash(st, x[2]),
+                        apply_squash(st, x[3]),
+                    ])
+                });
+            },
+        );
+        squash4_group.bench_with_input(
+            BenchmarkId::new("simd_x4", label),
+            &squash_type,
+            |b, &st| {
+                b.iter(|| black_box(squash_x4(black_box(st), black_box(lanes))));
+            },
+        );
+    }
+    squash4_group.finish();
 }
 
 criterion_group!(

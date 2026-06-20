@@ -25,6 +25,7 @@ pub mod safe_zone;
 pub mod score_scan;
 pub mod simd;
 pub mod squash;
+pub mod squash_simd;
 pub mod synapse_type;
 pub mod topological_backprop;
 pub mod topology_export;
