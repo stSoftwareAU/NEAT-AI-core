@@ -16,6 +16,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 |------|------|
 | `neat-core/` | Shared computation library; **140+** unit tests in `src/**/*.rs` plus integration tests in `neat-core/tests/` (>350 total). |
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
+| `RELEASING.md` | Versioning/release policy (Issue #251): breaking ⇒ major-equivalent (minor pre-1.0) bump, non-breaking ⇒ patch; `v<version>` tags + releases on `Develop`. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |

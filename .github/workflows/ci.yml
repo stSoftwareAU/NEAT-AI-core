@@ -62,6 +62,10 @@ jobs:
           tool: cargo-edit,cargo-outdated
 
       - name: Bump crate version (if needed) and upgrade dependencies
+        # PR_BREAKING_LABEL is the boolean result of a controlled GitHub
+        # expression (not user text), so it is safe to read from the env.
+        env:
+          PR_BREAKING_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
         run: |
           set -euo pipefail
           BASE_BRANCH="Develop"
@@ -90,11 +94,27 @@ jobs:
           if [ "$SKIP_VERSION_BUMP" = false ]; then
             CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
             echo "Current crate version: $CURRENT_VERSION"
-            IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
-            major=${major:-0}
-            minor=${minor:-0}
-            patch=${patch:-0}
-            NEW_VERSION="$major.$minor.$((patch + 1))"
+
+            # Issue #251: a breaking change is a major-equivalent bump (pre-1.0:
+            # minor), a non-breaking change a patch bump. Detect the breaking
+            # signal from the `breaking-change` PR label or Conventional Commit
+            # markers (`type!:` subject, or a `BREAKING CHANGE:` footer).
+            BREAKING=false
+            if [ "${PR_BREAKING_LABEL:-false}" = "true" ]; then
+              BREAKING=true
+            fi
+            if git show-ref --verify --quiet refs/remotes/origin/$BASE_BRANCH; then
+              RANGE="origin/$BASE_BRANCH..HEAD"
+            else
+              RANGE="HEAD"
+            fi
+            chmod +x scripts/detect-breaking.sh scripts/next-version.sh
+            if [ "$(scripts/detect-breaking.sh "$RANGE")" = "true" ]; then
+              BREAKING=true
+            fi
+            echo "Breaking change signalled: $BREAKING"
+
+            NEW_VERSION=$(scripts/next-version.sh "$CURRENT_VERSION" "$BREAKING")
             echo "Bumping crate version to: $NEW_VERSION"
             ESCAPED_CURRENT=$(printf '%s' "$CURRENT_VERSION" | sed 's/[\/.^$*+?()[\]{}|]/\\&/g')
             sed -i.bak "s/^version = \"$ESCAPED_CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
@@ -117,6 +137,55 @@ jobs:
             git commit -m "chore: auto-increment versions for changed projects"
             git push origin "$HEAD_REF"
           fi
+
+  # Issue #251 — fail a PR whose breaking change ships on a patch-only bump.
+  # Runs after version-increment so it validates the final (post auto-bump)
+  # version. Keys off the same breaking signal: the `breaking-change` label or
+  # a Conventional Commit marker in the PR's commits.
+  version-gate:
+    name: Breaking-change version gate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [version-increment]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        # actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Enforce breaking ⇒ major-equivalent bump
+        env:
+          PR_BREAKING_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
+        run: |
+          set -euo pipefail
+          BASE_BRANCH="Develop"
+          if ! git show-ref --verify --quiet refs/remotes/origin/Develop; then
+            BASE_BRANCH="develop"
+          fi
+          git fetch origin "$BASE_BRANCH:$BASE_BRANCH" 2>/dev/null || true
+
+          BASE_VERSION=$(git show "origin/$BASE_BRANCH:Cargo.toml" 2>/dev/null | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/' || echo "")
+          HEAD_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          if [ -z "$BASE_VERSION" ]; then
+            echo "Could not read base version — skipping gate."
+            exit 0
+          fi
+
+          BREAKING=false
+          if [ "${PR_BREAKING_LABEL:-false}" = "true" ]; then
+            BREAKING=true
+          fi
+          chmod +x scripts/detect-breaking.sh scripts/check-version-bump.sh
+          if [ "$(scripts/detect-breaking.sh "origin/$BASE_BRANCH..HEAD")" = "true" ]; then
+            BREAKING=true
+          fi
+          echo "base=$BASE_VERSION head=$HEAD_VERSION breaking=$BREAKING"
+          scripts/check-version-bump.sh "$BASE_VERSION" "$HEAD_VERSION" "$BREAKING"
 
   auto-format:
     name: Auto-format Code
