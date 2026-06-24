@@ -23,4 +23,5 @@ Name tests after the behaviour or outcome (e.g. `relu_maps_negative_to_zero`), n
 ## CI / secrets
 
 - PR pipeline: version bump + **`cargo upgrade --incompatible`**, **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (PAT with **contents:write**).
+- **Versioning/release policy:** see **`RELEASING.md`** (Issue #251). A **breaking** change is a **major-equivalent** bump (pre-1.0: **minor**, `0.1.x → 0.2.0`); non-breaking is **patch**. Signal a break with the **`breaking-change`** PR label or a Conventional Commit `type!:` / `BREAKING CHANGE:` marker. The `version-increment` job bumps minor on a break; the `version-gate` job **fails** a break shipped on a patch-only bump; `release.yml` cuts a **`v<version>`** tag + GitHub release on `Develop`, decoupled from `wasm-bundle-<sha>`.
 - **`clippy::uninlined_format_args`** is not denied in CI until the test corpus is cleaned up; workspace lints still deny **`filter_next`** / **`collapsible_if`**.

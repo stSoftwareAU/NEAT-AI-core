@@ -1,0 +1,56 @@
+# Issue #251 — cut a semver git tag + GitHub release whenever the workspace
+# version changes on Develop, so downstream consumers (e.g. NEAT-AI-scorer) can
+# discover breaking changes through semantic versioning. This is independent of
+# the per-commit `wasm-bundle-<sha>` artifacts published by wasm-bundle.yml:
+# those address commits by SHA, these address releases by `v<major.minor.patch>`.
+
+name: Release (semver tag)
+
+on:
+  push:
+    branches: [Develop]
+    paths:
+      - "Cargo.toml"
+
+permissions:
+  contents: write # required to push the tag and create the release
+
+jobs:
+  release:
+    name: Tag and release on version bump
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        # actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Cut tag + release if the version is new
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "Could not read workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          TAG="v${VERSION}"
+          echo "Workspace version: $VERSION (tag $TAG)"
+
+          # git tags are immutable identifiers; if this version was already
+          # released, there is nothing to do. Idempotent across re-runs.
+          if git ls-remote --tags --exit-code origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists — nothing to release."
+            exit 0
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists — nothing to do."
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "Automated semver release for workspace version ${VERSION}. See RELEASING.md for the versioning policy (breaking ⇒ major-equivalent, i.e. minor pre-1.0). Decoupled from the wasm-bundle-<sha> artifacts."
