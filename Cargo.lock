@@ -310,7 +310,7 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "neat-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "criterion",
  "rayon",

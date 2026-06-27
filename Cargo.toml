@@ -7,7 +7,7 @@ resolver = "2"
 # Issue #251: retro-bumped 0.1.46 -> 0.2.0 to signal the #177 breaking change
 # (SynapseData::from_index u32 -> u16). Pre-1.0, a breaking change is a
 # major-equivalent (minor) bump. See RELEASING.md.
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
