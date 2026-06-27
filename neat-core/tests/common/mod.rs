@@ -3,14 +3,6 @@
 //! Layout matches [NEAT-AI-Discovery](https://github.com/stSoftwareAU/NEAT-AI-Discovery):
 //! `tests/common/mod.rs` plus `#[path = "../common/mod.rs"] mod common;` in subdirectory harnesses.
 
-use std::path::PathBuf;
-
-/// `neat-core` manifest directory (fixtures live under `tests/data/` when added).
-#[allow(dead_code)]
-pub fn manifest_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
 /// Minimal valid creature JSON for compile / activation smoke tests.
 pub fn minimal_creature_json() -> &'static str {
     r#"{
