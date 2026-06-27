@@ -26,7 +26,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cut tag + release if the version is new
+      - name: Decide whether this version needs a release
+        id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -38,19 +39,61 @@ jobs:
           fi
           TAG="v${VERSION}"
           echo "Workspace version: $VERSION (tag $TAG)"
+          {
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+          } >> "$GITHUB_OUTPUT"
 
           # git tags are immutable identifiers; if this version was already
           # released, there is nothing to do. Idempotent across re-runs.
           if git ls-remote --tags --exit-code origin "refs/tags/${TAG}" >/dev/null 2>&1; then
             echo "Tag ${TAG} already exists — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists — nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
 
+      - name: Install Rust toolchain
+        if: steps.gate.outputs.release == 'true'
+        # dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      # Issue #197 — emit a CycloneDX SBOM from the locked dependency graph and
+      # publish it next to the semver release. The release addresses a published
+      # source revision by `v<version>`; an SBOM on the Release lets responders
+      # answer "is the vulnerable crate inside a version we shipped?" in seconds
+      # when the next advisory drops, without re-resolving Cargo.lock from
+      # source. It is exact because it derives from Cargo.lock. cargo-cyclonedx
+      # is version-pinned and --locked for supply-chain hygiene (mirrors
+      # wasm-pack, Issue #78, and the wasm-bundle SBOM, Issue #125).
+      - name: Generate CycloneDX SBOM
+        if: steps.gate.outputs.release == 'true'
+        env:
+          CARGO_CYCLONEDX_VERSION: "0.5.7"
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --version "${CARGO_CYCLONEDX_VERSION}" --locked
+          cargo cyclonedx --format json --all
+          # cargo-cyclonedx writes <package>.cdx.json into each crate directory;
+          # publish it under a deterministic, version-matching asset name.
+          cp neat-core/neat-core.cdx.json "neat-ai-core-${VERSION}.cdx.json"
+
+      - name: Cut tag + release with SBOM
+        if: steps.gate.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.gate.outputs.tag }}
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          set -euo pipefail
           gh release create "$TAG" \
+            "neat-ai-core-${VERSION}.cdx.json" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --notes "Automated semver release for workspace version ${VERSION}. See RELEASING.md for the versioning policy (breaking ⇒ major-equivalent, i.e. minor pre-1.0). Decoupled from the wasm-bundle-<sha> artifacts."
+            --notes "Automated semver release for workspace version ${VERSION}. CycloneDX SBOM attached as neat-ai-core-${VERSION}.cdx.json. See RELEASING.md for the versioning policy (breaking ⇒ major-equivalent, i.e. minor pre-1.0). Decoupled from the wasm-bundle-<sha> artifacts."
