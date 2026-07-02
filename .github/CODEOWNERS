@@ -8,8 +8,10 @@
 # A change to any of these runs with those secrets / the OIDC token. Requiring
 # a designated owner to review edits to the CI configuration closes the path
 # where a single self-approved pull request quietly exfiltrates a secret or
-# mints a signed artefact. These rules only take effect once the default
-# branch (Develop) enables "Require review from Code Owners" — see
+# mints a signed artefact. These rules take effect once the default branch
+# (Develop) enables "Require review from Code Owners" — codified as
+# settings-as-code in .github/rulesets/develop.json
+# (require_code_owner_review: true), which a repo admin applies. See
 # docs/archive/pr-summaries/pr-summary-208.md for the branch-protection steps.
 #
 # Owners are named as concrete org members (repo admins) rather than a team:
@@ -21,6 +23,9 @@
 # Privileged CI: workflows and any composite/local actions.
 /.github/workflows/   @Green-Beret @nleck
 /.github/actions/     @Green-Beret @nleck
+
+# The settings-as-code branch-protection ruleset (the controls themselves).
+/.github/rulesets/    @Green-Beret @nleck
 
 # Protect this ownership map itself from unreviewed edits.
 /.github/CODEOWNERS    @Green-Beret @nleck

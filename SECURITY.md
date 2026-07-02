@@ -92,3 +92,49 @@ waiting for the weekly bump:
 
 For the routine (non-urgent) refresh channels, see
 [`README.md`](README.md#dependency-updates-two-channels).
+
+## Review governance (CODEOWNERS + branch protection)
+
+The workflows in [`.github/workflows/`](.github/workflows/) are privileged:
+`wasm-bundle.yml` runs with `id-token: write` (OIDC keyless Sigstore signing),
+`ci.yml` and `upgrade-dependencies.yml` use the `ACTIONS_PUSH` PAT, and
+`semgrep.yml` uses `SEMGREP_APP_TOKEN`. An unreviewed edit to any of them is a
+secret-exfiltration / artefact-signing attack path, so changes there require a
+designated owner's review. Two controls enforce that:
+
+- **[`.github/CODEOWNERS`](.github/CODEOWNERS)** assigns the repo admins
+  `@Green-Beret` and `@nleck` as owners of the privileged CI paths
+  (`.github/workflows/`, `.github/actions/`, `.github/rulesets/`, and the
+  CODEOWNERS file itself). Concrete accounts are used rather than a team
+  because no team holds write access to this repository, so a team owner would
+  be silently ignored by GitHub. GitHub auto-requests an owner review on any
+  matching change.
+- **[`.github/rulesets/develop.json`](.github/rulesets/develop.json)** is a
+  settings-as-code mirror of the live branch-protection ruleset on the default
+  branch (`Develop`). It sets `require_code_owner_review: true` (so the
+  CODEOWNERS rules are enforced at merge), keeps the existing ≥1-approval
+  requirement and required status checks, blocks force-pushes
+  (`non_fast_forward`), and requires linear history.
+
+Required **signed commits** are deliberately *not* enabled: the *Auto-format
+Code* and *Auto-increment Versions* CI jobs push unsigned commits with the
+`ACTIONS_PUSH` PAT, and a signed-commit rule would reject them.
+
+```mermaid
+flowchart LR
+    A[PR edits .github/workflows/] --> B{CODEOWNERS match}
+    B -->|"@Green-Beret / @nleck"| C[Owner review requested]
+    C --> D{Ruleset on Develop}
+    D -->|require_code_owner_review| E[Owner approval required]
+    D -->|non_fast_forward| F[Force-push blocked]
+    D -->|required_linear_history| G[Linear history]
+    E --> H[Merge allowed]
+    F --> H
+    G --> H
+```
+
+**Applying the ruleset is an admin action.** Editing `develop.json` does not
+change the live ruleset. A repository admin must `PUT` the payload to
+`/repos/stSoftwareAU/NEAT-AI-core/rulesets/15236989` (GET the current ruleset
+first to confirm the id) — or apply the equivalent settings via
+*Settings → Rules → Rulesets* in the GitHub UI.

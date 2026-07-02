@@ -1,0 +1,56 @@
+{
+  "_comment": "Issue #208 — settings-as-code mirror of the live GitHub ruleset that protects the default branch (Develop). Two hardening changes over the previously-live config: `require_code_owner_review` is now true so the .github/CODEOWNERS rules on privileged paths (.github/workflows/, .github/actions/, .github/rulesets/) are enforced at merge, and a `non_fast_forward` rule blocks force-pushes to the protected branch. The required 1-approval review and required status checks were already live and are retained. Keep this file in sync with the live ruleset; edits here are NOT auto-applied — a repo admin must PUT this payload to /repos/stSoftwareAU/NEAT-AI-core/rulesets/15236989 (GET the current ruleset first to confirm the id). Required signed commits is deliberately NOT enabled — the `Auto-format Code` / `Auto-increment Versions` CI jobs push unsigned commits with the ACTIONS_PUSH PAT and a signed-commit rule would reject them.",
+  "name": "Develop",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": ["~DEFAULT_BRANCH"]
+    }
+  },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "required_linear_history" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": false,
+        "required_reviewers": [],
+        "require_code_owner_review": true,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "allowed_merge_methods": ["squash"]
+      }
+    },
+    {
+      "type": "copilot_code_review",
+      "parameters": {
+        "review_on_push": true,
+        "review_draft_pull_requests": false
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          { "context": "Auto-format Code", "integration_id": 15368 },
+          { "context": "Auto-increment Versions", "integration_id": 15368 },
+          { "context": "Project Validation", "integration_id": 15368 },
+          { "context": "Quality Checks", "integration_id": 15368 },
+          { "context": "gitleaks", "integration_id": 15368 },
+          { "context": "markdownlint", "integration_id": 15368 },
+          { "context": "Scripts & spelling", "integration_id": 15368 },
+          { "context": "security / security", "integration_id": 15368 },
+          { "context": "semgrep", "integration_id": 15368 },
+          { "context": "actionlint", "integration_id": 15368 }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": []
+}
