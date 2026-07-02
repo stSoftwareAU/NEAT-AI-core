@@ -42,6 +42,20 @@ pub enum NetworkError {
         /// The declared node count that exceeded [`MAX_NODE_COUNT`].
         count: usize,
     },
+    /// A synapse references a source neuron index that is not a valid index into
+    /// the activation buffer (`from_index >= num_neurons`).
+    ///
+    /// Issue #207 - the forward pass reads activations with unchecked indexing
+    /// (`get_unchecked`) keyed on the deserialised `from_index`. Validating every
+    /// index at load time upholds the kernels' safety precondition, so a malformed
+    /// or corrupted buffer is rejected here rather than triggering an out-of-bounds
+    /// read (undefined behaviour) during activation.
+    InvalidSynapseIndex {
+        /// The out-of-range source index read from the buffer.
+        from_index: u16,
+        /// The network's node count; valid indices are `0..num_neurons`.
+        num_neurons: usize,
+    },
 }
 
 impl std::fmt::Display for NetworkError {
@@ -55,6 +69,16 @@ impl std::fmt::Display for NetworkError {
                     f,
                     "Network has {count} nodes, exceeding the maximum of {MAX_NODE_COUNT} \
                      addressable by a u16 source index"
+                )
+            }
+            NetworkError::InvalidSynapseIndex {
+                from_index,
+                num_neurons,
+            } => {
+                write!(
+                    f,
+                    "Synapse source index {from_index} is out of bounds for a network \
+                     with {num_neurons} nodes (valid indices are 0..{num_neurons})"
                 )
             }
         }
@@ -287,6 +311,21 @@ impl CompiledNetwork {
                 num_synapses: num_synapse,
                 squash_type,
                 is_constant,
+            });
+        }
+
+        // Issue #207 - validate every source index against the node count before the
+        // network can be activated. The forward pass reads the activation buffer (sized
+        // to num_neurons) with unchecked indexing keyed on from_index; an out-of-range
+        // index would be an out-of-bounds read (undefined behaviour). Rejecting here
+        // upholds that precondition once, keeping the hot path unchanged.
+        if let Some(bad) = synapses
+            .iter()
+            .find(|s| s.from_index as usize >= num_neurons)
+        {
+            return Err(NetworkError::InvalidSynapseIndex {
+                from_index: bad.from_index,
+                num_neurons,
             });
         }
 
@@ -2177,5 +2216,62 @@ mod tests {
         let net = CompiledNetwork::new(&bytes).expect("network must load");
         assert_eq!(net.synapses.len(), 1);
         assert_eq!(net.synapses[0].from_index, high);
+    }
+
+    // ---- Issue #207: synapse from_index bounds validated at load ----
+
+    #[test]
+    fn new_rejects_out_of_range_from_index() {
+        // Issue #207 - a synapse whose from_index is >= num_neurons would drive an
+        // out-of-bounds read in the unchecked SIMD forward pass. The loader must
+        // reject it up front rather than deserialise an unsound network.
+        let num_neurons = 4u32;
+        let num_inputs = 3u32;
+        // Only indices 0..=3 are valid; 4 is one past the end of the buffer.
+        let bytes = serialise_single_synapse_network(num_neurons, num_inputs, num_neurons as u16);
+
+        match CompiledNetwork::new(&bytes) {
+            Err(NetworkError::InvalidSynapseIndex {
+                from_index,
+                num_neurons: n,
+            }) => {
+                assert_eq!(from_index, num_neurons as u16);
+                assert_eq!(n, num_neurons as usize);
+            }
+            Err(other) => panic!("expected InvalidSynapseIndex, got {other:?}"),
+            Ok(_) => panic!("expected InvalidSynapseIndex error, network loaded"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_far_out_of_range_from_index() {
+        // Issue #207 - the maximum u16 index must also be rejected when it exceeds
+        // the node count, covering the top of the attacker-controllable range.
+        let bytes = serialise_single_synapse_network(4, 3, u16::MAX);
+        assert!(matches!(
+            CompiledNetwork::new(&bytes),
+            Err(NetworkError::InvalidSynapseIndex { .. })
+        ));
+    }
+
+    #[test]
+    fn new_accepts_max_valid_from_index() {
+        // Issue #207 - the largest in-range index (num_neurons - 1) must still load,
+        // proving the guard rejects only genuinely out-of-bounds indices.
+        let bytes = serialise_single_synapse_network(4, 3, 3);
+        let net = CompiledNetwork::new(&bytes).expect("in-range index must load");
+        assert_eq!(net.synapses[0].from_index, 3);
+    }
+
+    #[test]
+    fn activate_is_bounded_for_loaded_network() {
+        // Issue #207 - a network that loads successfully must never index past its
+        // activation buffer during a forward pass. Every valid from_index is < the
+        // buffer length (num_neurons), so activate() cannot read out of bounds.
+        let bytes = serialise_single_synapse_network(4, 3, 2);
+        let mut net = CompiledNetwork::new(&bytes).expect("network must load");
+        let out = net.activate(&[1.0, 2.0, 3.0], 1);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].is_finite());
     }
 }
