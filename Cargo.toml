@@ -7,7 +7,7 @@ resolver = "2"
 # Issue #251: retro-bumped 0.1.46 -> 0.2.0 to signal the #177 breaking change
 # (SynapseData::from_index u32 -> u16). Pre-1.0, a breaking change is a
 # major-equivalent (minor) bump. See RELEASING.md.
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
@@ -26,6 +26,9 @@ opt-level = 3
 # every unsafe operation must sit in an explicit `unsafe { … }` block.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+# Issue #209 - require a `///` summary on every exported item so the public
+# API surface stays documented on docs.rs. Promote to "deny" once stable.
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 collapsible_if = "deny"
