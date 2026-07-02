@@ -84,6 +84,10 @@ mod x86 {
 
     /// # Safety
     /// Caller must ensure AVX2 is enabled (`is_x86_feature_detected!("avx2")`).
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into each activation buffer; the kernel reads
+    /// activations with `get_unchecked`. `CompiledNetwork::new` validates this at
+    /// load time.
     #[target_feature(enable = "avx2")]
     #[inline]
     pub unsafe fn weighted_sum_simd_8records_avx2(
@@ -130,6 +134,10 @@ mod x86 {
 
     /// # Safety
     /// Caller must ensure FMA is enabled (`is_x86_feature_detected!("fma")`).
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "fma")]
     #[inline]
     pub unsafe fn weighted_sum_simd_4records_fma(
@@ -171,6 +179,10 @@ mod x86 {
 
     /// # Safety
     /// Caller must ensure FMA is enabled (`is_x86_feature_detected!("fma")`).
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "fma")]
     #[inline]
     pub unsafe fn weighted_sum_fma(
@@ -213,6 +225,10 @@ mod x86 {
 
     /// # Safety
     /// Caller must ensure FMA is enabled (`is_x86_feature_detected!("fma")`).
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "fma")]
     #[inline]
     pub unsafe fn weighted_sum_of_squares_fma(
@@ -256,6 +272,10 @@ mod x86 {
 
     /// # Safety
     /// Caller must ensure FMA is enabled (`is_x86_feature_detected!("fma")`).
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "fma")]
     #[inline]
     pub unsafe fn weighted_sum_of_squares_v2_fma(
@@ -308,6 +328,10 @@ mod aarch64 {
 
     /// # Safety
     /// Caller must ensure NEON is available (typical on aarch64-apple-darwin / linux-aarch64).
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into each activation buffer; the kernel reads
+    /// activations with `get_unchecked`. `CompiledNetwork::new` validates this at
+    /// load time.
     #[target_feature(enable = "neon")]
     #[inline]
     pub unsafe fn weighted_sum_simd_8records_neon(
@@ -359,6 +383,10 @@ mod aarch64 {
 
     /// # Safety
     /// Caller must ensure NEON is available.
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "neon")]
     #[inline]
     pub unsafe fn weighted_sum_simd_4records_neon(
@@ -399,6 +427,10 @@ mod aarch64 {
 
     /// # Safety
     /// Caller must ensure NEON is available.
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "neon")]
     #[inline]
     pub unsafe fn weighted_sum_neon(
@@ -444,6 +476,10 @@ mod aarch64 {
 
     /// # Safety
     /// Caller must ensure NEON is available.
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "neon")]
     #[inline]
     pub unsafe fn weighted_sum_of_squares_neon(
@@ -490,6 +526,10 @@ mod aarch64 {
 
     /// # Safety
     /// Caller must ensure NEON is available.
+    /// Issue #207 - caller must also ensure every `synapse.from_index` in
+    /// `start..end` is a valid index into `activations` (`< activations.len()`);
+    /// the kernel reads activations with `get_unchecked`. `CompiledNetwork::new`
+    /// validates this at load time.
     #[target_feature(enable = "neon")]
     #[inline]
     pub unsafe fn weighted_sum_of_squares_v2_neon(
@@ -723,6 +763,12 @@ const SINGLE_RECORD_SIMD_MIN: usize = 4;
 ///
 /// Production forward-pass hot path. AVX2/FMA on x86_64, NEON on aarch64, scalar
 /// elsewhere and for counts below one SIMD lane.
+///
+/// Issue #207 - on the SIMD paths this delegates to `get_unchecked` kernels, so
+/// every `synapse.from_index` in `start..end` must be a valid index into
+/// `activations`. `CompiledNetwork::new` enforces this at load time
+/// (`NetworkError::InvalidSynapseIndex`), so callers holding a loaded network
+/// already satisfy the precondition.
 #[inline]
 pub fn weighted_sum_simd(
     synapses: &[SynapseData],
