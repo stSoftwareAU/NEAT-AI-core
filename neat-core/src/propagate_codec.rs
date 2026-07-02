@@ -50,16 +50,27 @@ pub const PER_SYNAPSE_OUT_F64S: usize = 7;
 /// fields to construct a [`PropagateInput`] for `propagate_topological_loop`.
 #[derive(Debug, Clone)]
 pub struct DecodedPropagate {
+    /// Decoded per-neuron inputs (bias, squash type, ...).
     pub neurons: Vec<NeuronInput>,
+    /// Decoded per-synapse inputs (source index, weight).
     pub synapses: Vec<SynapseInput>,
+    /// Start offset into `inward_indices` for each neuron.
     pub inward_starts: Vec<u32>,
+    /// Number of inward synapses for each neuron.
     pub inward_counts: Vec<u32>,
+    /// Flattened inward synapse indices for all neurons.
     pub inward_indices: Vec<u32>,
+    /// Neuron indices in reverse topological order.
     pub reverse_topo_order: Vec<u32>,
+    /// Expected output values used to compute the loss.
     pub expected: Vec<f32>,
+    /// Number of input neurons.
     pub input_count: u32,
+    /// Number of output neurons.
     pub output_count: u32,
+    /// Planck constant used to regularise gradients.
     pub plank_constant: f32,
+    /// Whether gradients are normalised during back-propagation.
     pub normalise_gradients: bool,
 }
 

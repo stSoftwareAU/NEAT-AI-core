@@ -36,46 +36,84 @@ pub const CUBE_OUTPUT_CLAMP: f64 = 1e6;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SquashType {
+    /// Identity — passes the input through unchanged.
     Identity = 0,
+    /// Rectified Linear Unit — `max(0, x)`.
     Relu = 1,
+    /// ReLU clamped to a maximum of 6 — `min(max(0, x), 6)`.
     Relu6 = 2,
+    /// Leaky ReLU — small negative slope for `x < 0`.
     LeakyRelu = 3,
+    /// Scaled Exponential Linear Unit (self-normalising).
     Selu = 4,
+    /// Exponential Linear Unit.
     Elu = 5,
+    /// Logistic sigmoid — output in `(0, 1)`.
     Logistic = 6,
+    /// Hyperbolic tangent — output in `(-1, 1)`.
     Tanh = 7,
+    /// Hard tanh — tanh clamped linearly to `[-1, 1]`.
     HardTanh = 8,
+    /// Softsign — `x / (1 + |x|)`.
     Softsign = 9,
+    /// Softplus — smooth approximation of ReLU, `ln(1 + e^x)`.
     Softplus = 10,
+    /// Swish — `x * sigmoid(x)`.
     Swish = 11,
+    /// Mish — `x * tanh(softplus(x))`.
     Mish = 12,
+    /// Gaussian Error Linear Unit (tanh approximation).
     Gelu = 13,
+    /// Sine of the input.
     Sine = 14,
+    /// Cosine of the input.
     Cosine = 15,
+    /// Tangent of the input (clamped near its asymptotes).
     Tan = 16,
+    /// Inverse tangent (arctangent) of the input.
     ArcTan = 17,
+    /// Gaussian bell curve — `e^(-x^2)`.
     Gaussian = 18,
+    /// Bent identity — `(sqrt(x^2 + 1) - 1) / 2 + x`.
     BentIdentity = 19,
+    /// Bipolar sigmoid — logistic scaled to `(-1, 1)`.
     BipolarSigmoid = 20,
+    /// Bipolar sign — `-1` for `x <= 0`, `+1` otherwise.
     Bipolar = 21,
+    /// Step — `0` for `x < 0`, `1` otherwise.
     Step = 22,
+    /// Complement — `1 - x`.
     Complement = 23,
+    /// Absolute value — `|x|`.
     Absolute = 24,
+    /// Square — `x^2` (clamped for stability).
     Square = 25,
+    /// Cube — `x^3` (clamped for stability).
     Cube = 26,
+    /// Square root of the input.
     Sqrt = 27,
+    /// Standard inverse — `1 / x` guarded against division by zero.
     StdInverse = 28,
+    /// Exponential — `e^x` (clamped for stability).
     Exponential = 29,
+    /// Log-sigmoid — `ln(sigmoid(x))`.
     LogSigmoid = 30,
+    /// Inverse Square Root Unit.
     Isru = 31,
     // Aggregate functions (Issue #1125)
+    /// Aggregate minimum of the weighted inputs.
     Minimum = 32,
+    /// Aggregate maximum of the weighted inputs.
     Maximum = 33,
+    /// Conditional aggregate — gate-style selection over inputs.
     If = 34,
     // Deprecated aggregate functions (implemented for WASM parity, remove when possible)
-    Hypotenuse = 35,   // HYPOT: hypot(weighted_inputs) + bias
+    /// Deprecated: hypotenuse of the weighted inputs, then add bias.
+    Hypotenuse = 35, // HYPOT: hypot(weighted_inputs) + bias
+    /// Deprecated: hypotenuse of `bias + weighted_inputs`.
     HypotenuseV2 = 36, // HYPOTv2: hypot(bias + weighted_inputs)
-    Mean = 37,         // MEAN: (sum of weighted_inputs) / n + bias
+    /// Deprecated: mean of the weighted inputs, then add bias.
+    Mean = 37, // MEAN: (sum of weighted_inputs) / n + bias
 }
 
 impl From<u8> for SquashType {
@@ -125,7 +163,19 @@ impl From<u8> for SquashType {
     }
 }
 
-/// Apply a squash function to a value
+/// Apply a squash (activation) function to a value.
+///
+/// # Examples
+///
+/// ```
+/// use neat_core::squash::{apply_squash, SquashType};
+///
+/// // ReLU maps negatives to zero and passes positives through.
+/// assert_eq!(apply_squash(SquashType::Relu, -2.0), 0.0);
+/// assert_eq!(apply_squash(SquashType::Relu, 3.0), 3.0);
+/// // Identity returns the input unchanged.
+/// assert_eq!(apply_squash(SquashType::Identity, 1.5), 1.5);
+/// ```
 #[inline(always)]
 pub fn apply_squash(squash_type: SquashType, x: f32) -> f32 {
     match squash_type {
