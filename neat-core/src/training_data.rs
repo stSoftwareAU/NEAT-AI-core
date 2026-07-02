@@ -62,12 +62,18 @@ pub enum TrainingDataError {
     Io(io::Error),
     /// A file's size is not an exact multiple of the record size.
     InvalidFileSize {
+        /// Path of the offending file.
         path: PathBuf,
+        /// Actual size of the file in bytes.
         file_size: u64,
+        /// Expected size of a single record in bytes.
         record_size: usize,
     },
     /// The configuration specifies zero inputs or zero outputs.
-    InvalidConfig { message: String },
+    InvalidConfig {
+        /// Human-readable description of the invalid configuration.
+        message: String,
+    },
 }
 
 impl std::fmt::Display for TrainingDataError {

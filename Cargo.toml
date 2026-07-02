@@ -26,6 +26,9 @@ opt-level = 3
 # every unsafe operation must sit in an explicit `unsafe { … }` block.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
+# Issue #209 - require a `///` summary on every exported item so the public
+# API surface stays documented on docs.rs. Promote to "deny" once stable.
+missing_docs = "warn"
 
 [workspace.lints.clippy]
 collapsible_if = "deny"
