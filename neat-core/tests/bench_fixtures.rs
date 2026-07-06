@@ -192,11 +192,12 @@ fn score_records_on_production_batch_yields_finite_ordered_outputs() {
     // exercising the exact fixture path the scoring benches time.
     let records = build_records(net.num_inputs(), 96);
 
+    // `score_records` returns a flat `[record * num_outputs]` buffer (Issue #229),
+    // so assert on the flat length and finiteness rather than per-record rows.
     let out = net.score_records(&records, prod.num_outputs);
-    assert_eq!(out.len(), records.len());
-    assert!(out.iter().all(|row| row.len() == prod.num_outputs));
+    assert_eq!(out.len(), records.len() * prod.num_outputs);
     assert!(
-        out.iter().flatten().all(|v| v.is_finite()),
+        out.iter().all(|v| v.is_finite()),
         "production scoring must produce finite outputs"
     );
 }
