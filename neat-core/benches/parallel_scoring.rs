@@ -49,7 +49,7 @@ mod bench {
         records: &[Vec<f32>],
         num_outputs: usize,
         threads: usize,
-    ) -> Vec<Vec<f32>> {
+    ) -> Vec<f32> {
         let pool = ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()

@@ -29,13 +29,15 @@ fn build_records(net: &CompiledNetwork, count: usize) -> Vec<Vec<f32>> {
 }
 
 /// Independent sequential reference: a fresh scratch clone scored one record at
-/// a time. Deliberately does not call `score_records`, so the parity assertion
-/// does not assume the two share an implementation.
-fn reference(net: &CompiledNetwork, records: &[Vec<f32>], num_outputs: usize) -> Vec<Vec<f32>> {
+/// a time via per-record `activate` (which still allocates its own output
+/// `Vec`), flattened to the flat `[record * num_outputs]` layout the scoring
+/// path now returns. Deliberately does not call `score_records`, so the parity
+/// assertion does not assume the two share an implementation.
+fn reference(net: &CompiledNetwork, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
     let mut scratch = net.clone();
     records
         .iter()
-        .map(|r| scratch.activate(r, num_outputs))
+        .flat_map(|r| scratch.activate(r, num_outputs))
         .collect()
 }
 
@@ -48,7 +50,7 @@ fn parallel_scoring_matches_sequential_on_production_fixture() {
     let expected = reference(&net, &records, s.num_outputs);
     let actual = net.score_records_parallel(&records, s.num_outputs);
 
-    assert_eq!(actual.len(), records.len());
+    assert_eq!(actual.len(), records.len() * s.num_outputs);
     assert_eq!(actual, expected, "parallel results must equal sequential");
 }
 
@@ -86,7 +88,11 @@ fn output_order_is_preserved() {
     // index-aligned reference.
     let expected = reference(&net, &records, s.num_outputs);
     let actual = net.score_records_parallel(&records, s.num_outputs);
-    for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+    for (i, (a, e)) in actual
+        .chunks_exact(s.num_outputs)
+        .zip(expected.chunks_exact(s.num_outputs))
+        .enumerate()
+    {
         assert_eq!(a, e, "record {i} out of order or incorrect");
     }
 }
@@ -98,10 +104,10 @@ fn each_output_has_num_outputs_elements() {
     let records = build_records(&net, 16);
 
     let out = net.score_records_parallel(&records, s.num_outputs);
-    assert_eq!(out.len(), 16);
-    for row in &out {
-        assert_eq!(row.len(), s.num_outputs);
-    }
+    // Flat buffer: 16 records each contributing exactly num_outputs elements.
+    assert_eq!(out.len(), 16 * s.num_outputs);
+    assert_eq!(out.chunks_exact(s.num_outputs).count(), 16);
+    assert!(out.chunks_exact(s.num_outputs).remainder().is_empty());
 }
 
 #[test]
@@ -124,5 +130,6 @@ fn single_record_matches_direct_activate() {
     let direct = scratch.activate(&record, s.num_outputs);
     let via_parallel = net.score_records_parallel(std::slice::from_ref(&record), s.num_outputs);
 
-    assert_eq!(via_parallel, vec![direct]);
+    // Single record: the flat buffer is exactly that record's outputs.
+    assert_eq!(via_parallel, direct);
 }
