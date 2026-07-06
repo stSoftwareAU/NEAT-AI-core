@@ -7,7 +7,10 @@
 #[allow(dead_code)]
 mod common;
 
-use common::{FanIn, NETWORKS, NetSpec, build_backprop_data, build_inputs, build_network};
+use common::{
+    FanIn, NETWORKS, NetSpec, PRODUCTION_SCORING_RECORDS, build_backprop_data, build_inputs,
+    build_network, build_records,
+};
 
 fn spec(label: &str) -> &'static NetSpec {
     NETWORKS
@@ -131,4 +134,69 @@ fn backprop_data_has_consistent_inward_adjacency_at_production_scale() {
     let summed: usize = data.inward_counts.iter().map(|&c| c as usize).sum();
     assert_eq!(summed, data.synapses.len());
     assert_eq!(summed, data.inward_indices.len());
+}
+
+#[test]
+fn build_records_produces_deterministic_distinct_batch_sized_to_inputs() {
+    let prod = spec("production");
+    let a = build_records(prod.num_inputs, 64);
+    let b = build_records(prod.num_inputs, 64);
+
+    // One record per requested count, each a full input vector.
+    assert_eq!(a.len(), 64);
+    assert!(
+        a.iter().all(|r| r.len() == prod.num_inputs),
+        "each record must be a full production-width input vector"
+    );
+
+    // Fixed-seed synthesis must reproduce byte-for-byte (non-determinism guard).
+    assert_eq!(a, b, "seeded record synthesis must be reproducible");
+
+    // Per-record seed ⇒ distinct rows, so throughput is not measured on a
+    // degenerate all-identical batch.
+    assert_ne!(a[0], a[1], "records should differ across the batch");
+}
+
+#[test]
+fn production_scoring_record_count_is_production_representative() {
+    // Build the actual batch the scoring benches time — calibrated to one
+    // production training shard (~corpus/520 ≈ 4.3k records).
+    let widest = spec("production_2x");
+    let batch = build_records(widest.num_inputs, PRODUCTION_SCORING_RECORDS);
+
+    // Well above the prior 2048 token batch, so records/sec reflects
+    // steady-state scoring rather than warm-up.
+    assert_eq!(batch.len(), PRODUCTION_SCORING_RECORDS);
+    assert!(
+        batch.len() > 2048,
+        "scoring batch must be production-sized, not a token batch"
+    );
+
+    // Memory-feasible on the Apple Silicon host class: even the widest shape's
+    // batch stays well under 1 GiB so the harness can materialise it.
+    let bytes: usize = batch
+        .iter()
+        .map(|r| r.len() * std::mem::size_of::<f32>())
+        .sum();
+    assert!(
+        bytes < (1usize << 30),
+        "production batch ({bytes} bytes) must fit comfortably in RAM"
+    );
+}
+
+#[test]
+fn score_records_on_production_batch_yields_finite_ordered_outputs() {
+    let prod = spec("production");
+    let net = build_network(prod, 0x5EED);
+    // A small production-shaped batch keeps the debug test fast while still
+    // exercising the exact fixture path the scoring benches time.
+    let records = build_records(net.num_inputs(), 96);
+
+    let out = net.score_records(&records, prod.num_outputs);
+    assert_eq!(out.len(), records.len());
+    assert!(out.iter().all(|row| row.len() == prod.num_outputs));
+    assert!(
+        out.iter().flatten().all(|v| v.is_finite()),
+        "production scoring must produce finite outputs"
+    );
 }

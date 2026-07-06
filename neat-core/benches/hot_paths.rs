@@ -30,7 +30,10 @@ use neat_core::unsquash::apply_unsquash;
 /// integration test (Issue #176) so the production-scale builders are exercised
 /// by a real `cargo test` run as well as the harness.
 mod common;
-use common::{Lcg, NETWORKS, build_backprop_data, build_inputs, build_network};
+use common::{
+    Lcg, NETWORKS, PRODUCTION_SCORING_RECORDS, build_backprop_data, build_inputs, build_network,
+    build_records,
+};
 
 /// Forward pass — `CompiledNetwork::activate` across representative sizes.
 fn bench_forward_pass(c: &mut Criterion) {
@@ -129,6 +132,37 @@ fn bench_backprop(c: &mut Criterion) {
                 black_box(out);
             });
         });
+    }
+    group.finish();
+}
+
+/// Scoring throughput — a full production-shaped record batch pushed through
+/// one creature via `score_records` (Issue #228). Sized to
+/// [`PRODUCTION_SCORING_RECORDS`] so the single-core scoring figure in
+/// `hot_paths` is measured at production record volume, matching the
+/// `parallel_scoring` harness. Only the production shapes are gather-bound in
+/// the way real scoring is, so this group covers just `production` /
+/// `production_2x` and is reachable via `--bench hot_paths -- production`.
+fn bench_scoring(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scoring");
+    for spec in NETWORKS
+        .iter()
+        .filter(|s| s.label.starts_with("production"))
+    {
+        let net = build_network(spec, 0x5EED);
+        let records = build_records(net.num_inputs(), PRODUCTION_SCORING_RECORDS);
+        let num_outputs = spec.num_outputs;
+        group.throughput(Throughput::Elements(PRODUCTION_SCORING_RECORDS as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(spec.label),
+            &records,
+            |b, records| {
+                b.iter(|| {
+                    let out = net.score_records(black_box(records), black_box(num_outputs));
+                    black_box(out);
+                });
+            },
+        );
     }
     group.finish();
 }
@@ -309,6 +343,7 @@ criterion_group!(
     bench_forward_pass,
     bench_batched_scoring,
     bench_backprop,
+    bench_scoring,
     bench_activation_primitives,
 );
 criterion_main!(benches);

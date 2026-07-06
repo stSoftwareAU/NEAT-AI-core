@@ -207,6 +207,41 @@ pub fn build_inputs(n: usize, seed: u64) -> Vec<f32> {
     (0..n).map(|_| rng.next_signed()).collect()
 }
 
+/// Production-representative record count for the scoring throughput benches
+/// (Issue #228), calibrated to the committed GRQ-cluster telemetry rather than
+/// an arbitrary token batch.
+///
+/// Derivation (from `GRQ-cluster/performance.csv`, the 32-generation production
+/// run whose totals match `result.json`):
+///
+/// - `training_data_size_bytes` = 22,097,375,712 across
+///   `training_data_files` = 520 shards.
+/// - Per-record width = `num_inputs * size_of::<f32>()` = 2461 * 4 = 9844 bytes.
+/// - Whole-corpus records ≈ 22,097,375,712 / 9844 ≈ **2.24 million** — the count
+///   a single creature forward-passes per generation to compute its fitness.
+/// - Per training shard ≈ 2,244,755 / 520 ≈ **4,317 records** — the natural
+///   granularity the streaming scorer holds in flight.
+///
+/// Materialising the whole 2.24 M-record corpus in memory (~21 GiB at
+/// production width) is infeasible for a micro-benchmark, so the harness scores
+/// **one production shard's worth**, rounded down to the nearest power of two
+/// (4096). At ~9.8 KiB/record this batch is ~40 MiB — already far larger than
+/// any CPU cache, so its memory-traffic behaviour is production-representative,
+/// and records/sec extrapolates directly to the full corpus pass (throughput is
+/// size-invariant once the pool/allocation overhead is amortised). This is 2x
+/// the prior token batch of 2048.
+pub const PRODUCTION_SCORING_RECORDS: usize = 4096;
+
+/// Build `count` distinct input records of length `num_inputs`, each drawn from
+/// the fixed-seed PRNG with a per-record seed so the batch is reproducible yet
+/// not a degenerate run of identical rows. Shared by the `parallel_scoring` and
+/// `hot_paths` scoring groups so both measure the same synthesised workload.
+pub fn build_records(num_inputs: usize, count: usize) -> Vec<Vec<f32>> {
+    (0..count)
+        .map(|i| build_inputs(num_inputs, 0x5C0E_0000 + i as u64))
+        .collect()
+}
+
 /// Owned backing storage for a `PropagateInput`; built once outside the loop.
 pub struct BackpropData {
     pub neurons: Vec<NeuronInput>,
