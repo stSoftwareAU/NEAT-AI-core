@@ -9,6 +9,7 @@
 
 // Core computation modules
 pub mod accumulate;
+pub mod batch_scoring;
 pub mod creature;
 pub mod derivative;
 pub mod elastic_distribution;
