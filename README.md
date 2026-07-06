@@ -44,16 +44,25 @@ cargo bench -p neat-core --bench hot_paths
 | `parallel` | off | Native-only data-parallel record scoring via `rayon` (Issue #179). Adds `CompiledNetwork::score_records_parallel`, which chunks records across the rayon pool. Off by default, so the default build and the `wasm32` build pull in **no** `rayon` symbols and keep their single-thread path. |
 
 Scoring a production-size dataset pushes many records through one creature — an
-embarrassingly parallel workload *across records*. With the `parallel` feature
-the throughput scales with core count, while results stay **identical** to the
-sequential path (each record is scored by the same `activate`, with no
-cross-record state — each rayon worker owns a cloned scratch context):
+embarrassingly parallel workload *across records*. Both `score_records` and
+`score_records_parallel` drive the forward pass through the **8-record batched
+SIMD path** (Issue #230): records are grouped into 8s (then a 4-record group,
+then a scalar tail) and forwarded through `weighted_sum_simd_8records` /
+`weighted_sum_simd_4records`, loading each synapse weight once and applying it
+across the lanes. On the gather-bound production topology this cut single-core
+scoring time by **~39%** (see `docs/archive/pr-summaries/pr-summary-230.md`).
+With the `parallel` feature the throughput additionally scales with core count.
+
+Standard-squash neurons now sum **across records** rather than across synapses,
+so their `f32` results match the per-record `activate` reference within a small
+tolerance (SIMD re-association), while the sequential and parallel paths agree
+bit-for-bit. Output order always matches input order.
 
 ```rust
-// Off-feature / wasm: transparently runs sequentially.
+// Off-feature / wasm: transparently runs sequentially (still batched SIMD).
 let outputs = net.score_records(&records, num_outputs);
 
-// With `--features parallel` on native: scored across the rayon pool,
+// With `--features parallel` on native: batches scored across the rayon pool,
 // same results, in input order.
 let outputs = net.score_records_parallel(&records, num_outputs);
 ```
@@ -61,15 +70,18 @@ let outputs = net.score_records_parallel(&records, num_outputs);
 ```mermaid
 flowchart LR
     R[records] --> S{parallel feature?}
-    S -- off / wasm32 --> Q[score_records<br/>one scratch clone, sequential]
-    S -- on, native --> P[score_records_parallel]
-    P --> W1[worker 1<br/>cloned scratch]
-    P --> W2[worker 2<br/>cloned scratch]
-    P --> Wn[worker N<br/>cloned scratch]
-    W1 --> O[outputs in input order]
-    W2 --> O
-    Wn --> O
-    Q --> O
+    S -- off / wasm32 --> Q[score_records<br/>sequential, batched SIMD]
+    S -- on, native --> P[score_records_parallel<br/>rayon chunks]
+    P --> W1[worker 1<br/>own lane scratch]
+    P --> Wn[worker N<br/>own lane scratch]
+    subgraph B[batched forward per chunk]
+        direction TB
+        E8[8-record SIMD] --> E4[4-record SIMD] --> E1[scalar tail]
+    end
+    Q --> B
+    W1 --> B
+    Wn --> B
+    B --> O[outputs in input order]
 ```
 
 ```bash

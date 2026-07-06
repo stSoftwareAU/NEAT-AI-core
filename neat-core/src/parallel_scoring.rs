@@ -44,28 +44,39 @@
 //! through [`CompiledNetwork::activate_into`], so the batch performs a **single**
 //! output allocation instead of one heap allocation per record.
 
+use crate::batch_scoring::BatchScratch;
 use crate::network::CompiledNetwork;
+
+/// Records per rayon task on the parallel path. A multiple of 8 so every task's
+/// interior runs full 8-record SIMD batches (only the final task's tail can be
+/// short), and small enough that a 2048-record batch splits into many chunks for
+/// work-stealing balance across cores.
+#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+const PARALLEL_CHUNK_RECORDS: usize = 64;
 
 impl CompiledNetwork {
     /// Score every record sequentially, returning a single flat output buffer.
     ///
     /// The result is one contiguous `Vec<f32>` of `records.len() * num_outputs`
     /// elements: record `i`'s outputs occupy `[i * num_outputs .. (i + 1) *
-    /// num_outputs]`. Routing through [`CompiledNetwork::activate_into`] and
-    /// writing straight into pre-sized chunks removes the per-record output
-    /// `Vec` allocation that [`CompiledNetwork::activate`]'s `to_vec()` incurred
-    /// (Issue #229) — the whole batch now costs a **single** output allocation.
+    /// num_outputs]`.
     ///
-    /// Shared read-only weights (`&self`) plus a single owned scratch context
-    /// (one clone of the network). This is the fallback used when the `parallel`
-    /// feature is off or when building for `wasm32`, and the reference path the
-    /// parallel results must match exactly.
+    /// The batch is driven through the across-records SIMD path (Issue #230):
+    /// records are grouped into 8s (then a 4-record group, then a scalar tail)
+    /// and forwarded through the batched `weighted_sum_simd_8records` /
+    /// `weighted_sum_simd_4records` kernels, loading each synapse weight once and
+    /// applying it across the lanes. The output layout and the single output
+    /// allocation (Issue #229) are unchanged; standard-squash results match the
+    /// per-record reference within a small `f32` tolerance (see
+    /// [`crate::batch_scoring`]).
+    ///
+    /// This is the fallback used when the `parallel` feature is off or when
+    /// building for `wasm32`, and the reference path the parallel results must
+    /// match exactly.
     pub fn score_records(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
-        let mut scratch = self.clone();
         let mut outputs = vec![0.0f32; records.len() * num_outputs];
-        for (record, chunk) in records.iter().zip(outputs.chunks_exact_mut(num_outputs)) {
-            scratch.activate_into(record, chunk);
-        }
+        let mut scratch = BatchScratch::new(self.num_neurons);
+        self.score_batch_into(&mut scratch, records, num_outputs, &mut outputs);
         outputs
     }
 
@@ -73,13 +84,16 @@ impl CompiledNetwork {
     /// flat output buffer in input order.
     ///
     /// Layout matches [`CompiledNetwork::score_records`]: record `i`'s outputs
-    /// live in `[i * num_outputs .. (i + 1) * num_outputs]`. Each rayon worker
-    /// initialises its own cloned scratch context via `for_each_init`, so no
-    /// `&mut self` is shared across threads: immutable weights are read through
-    /// `&self` while every worker owns its activation buffers and writes only its
-    /// own disjoint output chunk. Because each record is scored by the same
-    /// [`CompiledNetwork::activate_into`] used sequentially and there is no
-    /// cross-record state, the results are identical to the sequential path.
+    /// live in `[i * num_outputs .. (i + 1) * num_outputs]`. Records are split
+    /// into fixed-size chunks (`PARALLEL_CHUNK_RECORDS`) across the rayon pool;
+    /// each worker initialises its own [`BatchScratch`] via `for_each_init` and
+    /// drives its chunk through the same batched forward pass
+    /// ([`CompiledNetwork::score_batch_into`]) the sequential path uses, writing
+    /// only its own disjoint output slice. No `&mut self` is shared: immutable
+    /// weights are read through `&self` while every worker owns its lane
+    /// buffers. Because each chunk boundary is a multiple of the batch size and
+    /// the forward pass carries no cross-record state, results are identical to
+    /// the sequential path regardless of thread count.
     ///
     /// Available with the `parallel` feature on native targets.
     #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
@@ -87,11 +101,13 @@ impl CompiledNetwork {
         use rayon::prelude::*;
         let mut outputs = vec![0.0f32; records.len() * num_outputs];
         outputs
-            .par_chunks_mut(num_outputs)
-            .zip(records.par_iter())
+            .par_chunks_mut(PARALLEL_CHUNK_RECORDS * num_outputs)
+            .zip(records.par_chunks(PARALLEL_CHUNK_RECORDS))
             .for_each_init(
-                || self.clone(),
-                |scratch, (chunk, record)| scratch.activate_into(record, chunk),
+                || BatchScratch::new(self.num_neurons),
+                |scratch, (out_chunk, rec_chunk)| {
+                    self.score_batch_into(scratch, rec_chunk, num_outputs, out_chunk)
+                },
             );
         outputs
     }

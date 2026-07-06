@@ -1,11 +1,12 @@
-//! Allocation-count regression for the record-scoring hot path (Issue #229).
+//! Allocation-count regression for the record-scoring hot path (Issue #229, #230).
 //!
-//! `score_records` now routes every record through
-//! [`CompiledNetwork::activate_into`], writing into one pre-sized flat buffer
-//! instead of allocating a fresh output `Vec` per record via `activate`'s
-//! `to_vec()`. This test proves the batch performs **no per-record output
-//! allocation**: a counting global allocator records how many allocations
-//! happen while scoring, and the count must not scale with the record count.
+//! `score_records` drives every record through the batched SIMD forward pass
+//! ([`CompiledNetwork::score_batch_into`], Issue #230), writing into one
+//! pre-sized flat buffer instead of allocating a fresh output `Vec` per record
+//! via `activate`'s `to_vec()`. This test proves the batch performs **no
+//! per-record output allocation**: a counting global allocator records how many
+//! allocations happen while scoring, and the count must not scale with the
+//! record count.
 //!
 //! A revert to the old `to_vec()`-per-record path would allocate ~one `Vec` per
 //! record, so scoring 10× the records would allocate ~10× more — the delta
@@ -72,7 +73,7 @@ fn allocs_for(net: &CompiledNetwork, records: &[Vec<f32>], num_outputs: usize) -
 #[test]
 fn score_records_has_no_per_record_output_allocation() {
     let s = spec("production");
-    let net = build_network(s, 0x0A11_0C);
+    let net = build_network(s, 0x000A_110C);
 
     let small = build_records(&net, 100);
     let large = build_records(&net, 1000);
@@ -85,7 +86,7 @@ fn score_records_has_no_per_record_output_allocation() {
 
     // Per-record allocation would make scoring 10× the records allocate ~900
     // extra times; the flat-buffer path allocates a constant handful (one output
-    // buffer + one scratch clone) regardless of record count. A generous
+    // buffer + one set of lane scratch buffers) regardless of record count. A generous
     // threshold distinguishes "constant" from "grows with records" without being
     // brittle to allocator/test-harness noise.
     let delta = large_allocs.saturating_sub(small_allocs);
