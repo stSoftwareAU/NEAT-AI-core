@@ -14,15 +14,22 @@ There are two bench targets:
 
 ## What is measured
 
-`hot_paths.rs` covers the four hottest paths in the crate:
+`hot_paths.rs` covers the hottest paths in the crate:
 
 | Group | Function(s) under test | Sizes |
 | --- | --- | --- |
 | `forward_pass` | `CompiledNetwork::activate` | small ~50, medium ~500, large ~5000, `production`, `production_2x` |
 | `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` | same five shapes |
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
+| `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
+
+The `scoring` group (Issue #228) pushes a full production-sized record batch
+through one creature via `score_records`, so `hot_paths` reports single-core
+scoring throughput at production record volume alongside the parallel harness.
+It covers only the gather-bound `production` shapes and is reachable with the
+`production` filter (`--bench hot_paths -- production`).
 
 Networks and inputs are built **once** outside the timed closure from a
 fixed-seed PRNG with fixed topologies, and `criterion::black_box` guards inputs
@@ -80,14 +87,27 @@ creature on **a single core versus all available cores**, using the
 size, so the 1-core and all-core measurements share one code path and differ
 only in pool size.
 
+The batch is `PRODUCTION_SCORING_RECORDS` records (defined in
+`benches/common/mod.rs` and shared with the `hot_paths` `scoring` group). That
+count is **calibrated to production record volume** — one GRQ-cluster training
+shard, ~4.3k records — rather than an arbitrary token batch. The derivation is
+documented in [`BASELINE.md`](BASELINE.md).
+
 ```bash
 # Requires the `parallel` feature (rayon, native targets only).
 cargo bench -p neat-core --features parallel --bench parallel_scoring
 ```
 
 The `production` filter is a regex over benchmark ids, so it matches both the
-`production` and `production_2x` shapes in `forward_pass`, `batched_scoring` and
-`backprop`.
+`production` and `production_2x` shapes in `forward_pass`, `batched_scoring`,
+`backprop` and `scoring`.
+
+## Documented baseline (Issue #228)
+
+[`BASELINE.md`](BASELINE.md) records the committed production/production_2x
+numbers for every hot-path group, with host/CPU/toolchain metadata. Every
+optimisation under the #227 milestone must cite a before/after comparison
+against it for the affected group.
 
 ## Comparing before vs after a change
 

@@ -22,7 +22,9 @@ mod common;
 
 #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
 mod bench {
-    use super::common::{NETWORKS, NetSpec, build_inputs, build_network};
+    use super::common::{
+        NETWORKS, NetSpec, PRODUCTION_SCORING_RECORDS, build_network, build_records,
+    };
     use criterion::{Criterion, Throughput, criterion_group};
     use neat_core::network::CompiledNetwork;
     use rayon::ThreadPoolBuilder;
@@ -33,12 +35,6 @@ mod bench {
             .iter()
             .find(|s| s.label == label)
             .unwrap_or_else(|| panic!("no NetSpec labelled {label}"))
-    }
-
-    fn build_records(net: &CompiledNetwork, count: usize) -> Vec<Vec<f32>> {
-        (0..count)
-            .map(|i| build_inputs(net.num_inputs(), 0x5C0E_0000 + i as u64))
-            .collect()
     }
 
     /// Score `records` inside a rayon pool of exactly `threads` workers, so the
@@ -59,12 +55,13 @@ mod bench {
 
     pub fn bench_parallel_scoring(c: &mut Criterion) {
         let all_cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-        const NUM_RECORDS: usize = 2048;
+        // Production-representative volume (Issue #228); see `PRODUCTION_SCORING_RECORDS`.
+        const NUM_RECORDS: usize = PRODUCTION_SCORING_RECORDS;
 
         for label in ["production", "production_2x"] {
             let s = spec(label);
             let net = build_network(s, 0x5EED);
-            let records = build_records(&net, NUM_RECORDS);
+            let records = build_records(net.num_inputs(), NUM_RECORDS);
             let num_outputs = s.num_outputs;
 
             let mut group = c.benchmark_group(format!("score_records/{label}"));
