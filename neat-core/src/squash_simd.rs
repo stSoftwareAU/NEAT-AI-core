@@ -26,7 +26,10 @@
 //! scalar path, leaving their numerics unchanged. The scalar `apply_squash`
 //! remains the single source of truth for correctness.
 
-use crate::squash::{GELU_COEFF, SQRT_2_OVER_PI, SquashType};
+use crate::squash::{
+    GELU_COEFF, LEAKY_RELU_ALPHA, SELU_ALPHA, SELU_LAMBDA, SOFTSIGN_LIMIT, SQRT_2_OVER_PI,
+    SquashType,
+};
 
 /// Documented maximum absolute error of the vectorised squashes versus the
 /// scalar [`apply_squash`](crate::squash::apply_squash) over the finite input range. Chosen tighter than the
@@ -156,19 +159,304 @@ fn mish_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
     out
 }
 
+/// Branchless single-lane `sin` approximation (Cephes `sinf` octant reduction).
+/// Accurate to ~1e-7 over the finite range where the argument reduction holds
+/// (`|x|` up to a few thousand); the value stays finite for any input. Shared by
+/// [`sine_lanes`] and [`cosine_lanes`].
+#[inline(always)]
+fn sin_approx(x: f32) -> f32 {
+    // 4/pi and the three-part high-precision pi/4 split (Cody–Waite).
+    const FOPI: f32 = 1.273_239_5;
+    const DP1: f32 = 0.785_156_25;
+    const DP2: f32 = 2.418_756_5e-4;
+    const DP3: f32 = 3.774_895e-8;
+
+    let sign_in = if x < 0.0 { -1.0_f32 } else { 1.0_f32 };
+    let mut xa = x.abs();
+    // Guard the integer reduction against overflow for extreme inputs; beyond
+    // this the periodic value is meaningless anyway, and callers only require a
+    // finite result there.
+    xa = xa.min(1.0e9);
+
+    let mut j = (FOPI * xa) as i32;
+    let mut y = j as f32;
+    if j & 1 != 0 {
+        j += 1;
+        y += 1.0;
+    }
+    j &= 7;
+    let mut sign = sign_in;
+    if j > 3 {
+        sign = -sign;
+        j -= 4;
+    }
+
+    let z = ((xa - y * DP1) - y * DP2) - y * DP3;
+    let zz = z * z;
+
+    let result = if j == 1 || j == 2 {
+        // cos polynomial on the reduced range.
+        let mut p = 2.443_315_7e-5;
+        p = p * zz - 1.388_731_6e-3;
+        p = p * zz + 4.166_664_6e-2;
+        1.0 - 0.5 * zz + p * zz * zz
+    } else {
+        // sin polynomial on the reduced range.
+        let mut p = -1.951_529_6e-4;
+        p = p * zz + 8.332_161e-3;
+        p = p * zz - 1.666_665_5e-1;
+        z + p * z * zz
+    };
+
+    sign * result
+}
+
+/// Branchless single-lane `atan` approximation (Cephes `atanf` range folding).
+/// Accurate to a few `1e-7` over the whole finite range; odd-symmetric and
+/// saturating to `±pi/2`.
+#[inline(always)]
+fn atan_approx(x: f32) -> f32 {
+    const TAN_3PI_8: f32 = 2.414_213_6; // tan(3*pi/8)
+    const TAN_PI_8: f32 = 0.414_213_57; // tan(pi/8)
+    const FRAC_PI_2: f32 = core::f32::consts::FRAC_PI_2;
+    const FRAC_PI_4: f32 = core::f32::consts::FRAC_PI_4;
+
+    let sign = if x < 0.0 { -1.0_f32 } else { 1.0_f32 };
+    let xa = x.abs();
+
+    // Fold |x| into [0, tan(pi/8)] and remember the added angle.
+    let (xr, y) = if xa > TAN_3PI_8 {
+        (-1.0 / xa, FRAC_PI_2)
+    } else if xa > TAN_PI_8 {
+        ((xa - 1.0) / (xa + 1.0), FRAC_PI_4)
+    } else {
+        (xa, 0.0)
+    };
+
+    let z = xr * xr;
+    let mut p = 8.053_744_5e-2;
+    p = p * z - 1.387_768_6e-1;
+    p = p * z + 1.997_771_1e-1;
+    p = p * z - 3.333_295e-1;
+    let poly = p * z * xr + xr;
+
+    sign * (y + poly)
+}
+
+/// `Absolute` (`|x|`) over a lane array — exact, branchless.
+#[inline]
+fn absolute_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = x[i].abs();
+    }
+    out
+}
+
+/// `HardTanh` (`clamp(x, -1, 1)`) over a lane array — exact, branchless.
+#[inline]
+fn hard_tanh_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = x[i].clamp(-1.0, 1.0);
+    }
+    out
+}
+
+/// `Relu6` (`clamp(x, 0, 6)`) over a lane array — exact, branchless.
+#[inline]
+fn relu6_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = x[i].clamp(0.0, 6.0);
+    }
+    out
+}
+
+/// `LeakyRelu` over a lane array — exact, branchless select.
+#[inline]
+fn leaky_relu_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let v = x[i];
+        out[i] = if v >= 0.0 { v } else { LEAKY_RELU_ALPHA * v };
+    }
+    out
+}
+
+/// `Bipolar` (`x > 0 → 1, else -1`) over a lane array — exact, branchless.
+#[inline]
+fn bipolar_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = if x[i] > 0.0 { 1.0 } else { -1.0 };
+    }
+    out
+}
+
+/// `Softsign` (`x / (1 + |x|)`, clamped to the JS `±0.99` limit) over a lane
+/// array. Reproduces the scalar clamp bit-for-bit so numerics are unchanged.
+#[inline]
+fn softsign_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    // Same limit as scalar `apply_squash`: the next f32 below 0.99 so clamped
+    // values stay within the JS (f64) bounds.
+    let limit = f32::from_bits(SOFTSIGN_LIMIT.to_bits() - 1);
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let v = x[i];
+        let y = v / (1.0 + v.abs());
+        out[i] = y.max(-limit).min(limit);
+    }
+    out
+}
+
+/// `BentIdentity` (`(sqrt(x^2 + 1) - 1) / 2 + x`) over a lane array — exact
+/// f32, branchless.
+#[inline]
+fn bent_identity_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let v = x[i];
+        out[i] = ((v * v + 1.0).sqrt() - 1.0) / 2.0 + v;
+    }
+    out
+}
+
+/// `Isru` (`x / sqrt(1 + x^2)`) over a lane array — exact f32, branchless.
+#[inline]
+fn isru_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let v = x[i];
+        out[i] = v / (1.0 + v * v).sqrt();
+    }
+    out
+}
+
+/// `Gaussian` (`exp(-x^2)`) over a lane array via [`exp_approx`].
+#[inline]
+fn gaussian_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let v = x[i];
+        out[i] = exp_approx(-v * v);
+    }
+    out
+}
+
+/// `Swish` (`x / (1 + exp(-x))`) over a lane array via [`exp_approx`].
+#[inline]
+fn swish_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let v = x[i];
+        out[i] = v / (1.0 + exp_approx(-v));
+    }
+    out
+}
+
+/// `BipolarSigmoid` (`2 / (1 + exp(-x)) - 1`) over a lane array.
+#[inline]
+fn bipolar_sigmoid_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = 2.0 / (1.0 + exp_approx(-x[i])) - 1.0;
+    }
+    out
+}
+
+/// `Elu` (`x > 0 → x, else exp(x) - 1`) over a lane array — branchless select.
+#[inline]
+fn elu_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let v = x[i];
+        out[i] = if v > 0.0 { v } else { exp_approx(v) - 1.0 };
+    }
+    out
+}
+
+/// `Selu` over a lane array — branchless select matching the scalar structure
+/// (`lambda * (x > 0 ? x : alpha*exp(x) - alpha)`), with the same `x <= 709`
+/// safety clamp the scalar path applies before the exponential.
+#[inline]
+fn selu_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        let sx = x[i].min(709.0);
+        let fx = if sx > 0.0 {
+            sx
+        } else {
+            SELU_ALPHA * exp_approx(sx) - SELU_ALPHA
+        };
+        out[i] = SELU_LAMBDA * fx;
+    }
+    out
+}
+
+/// `Sine` (`sin(x)`) over a lane array via [`sin_approx`].
+#[inline]
+fn sine_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = sin_approx(x[i]);
+    }
+    out
+}
+
+/// `Cosine` (`cos(x) = sin(x + pi/2)`) over a lane array via [`sin_approx`].
+#[inline]
+fn cosine_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    const FRAC_PI_2: f32 = core::f32::consts::FRAC_PI_2;
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = sin_approx(x[i] + FRAC_PI_2);
+    }
+    out
+}
+
+/// `ArcTan` (`atan(x)`) over a lane array via [`atan_approx`].
+#[inline]
+fn arctan_lanes<const N: usize>(x: [f32; N]) -> [f32; N] {
+    let mut out = [0.0_f32; N];
+    for i in 0..N {
+        out[i] = atan_approx(x[i]);
+    }
+    out
+}
+
 /// Vectorised squash dispatch over `N` lanes.
 ///
-/// Returns `Some([..])` for the hot transcendental squashes that have a
-/// lane-parallel approximation within [`SQUASH_SIMD_MAX_ABS_ERR`] of scalar
+/// Returns `Some([..])` for the squashes that have a lane-parallel
+/// approximation within [`SQUASH_SIMD_MAX_ABS_ERR`] of scalar
 /// [`apply_squash`](crate::squash::apply_squash); returns `None` for every other type so the caller keeps the
 /// existing scalar path (unchanged numerics).
 #[inline]
 fn squash_lanes<const N: usize>(squash: SquashType, x: [f32; N]) -> Option<[f32; N]> {
     match squash {
+        // Hot transcendental squashes (Issue #180).
         SquashType::Tanh => Some(tanh_lanes(x)),
         SquashType::Logistic => Some(logistic_lanes(x)),
         SquashType::Gelu => Some(gelu_lanes(x)),
         SquashType::Mish => Some(mish_lanes(x)),
+        // High-frequency production squashes (Issue #243). Cheap / algebraic:
+        SquashType::Absolute => Some(absolute_lanes(x)),
+        SquashType::HardTanh => Some(hard_tanh_lanes(x)),
+        SquashType::Relu6 => Some(relu6_lanes(x)),
+        SquashType::LeakyRelu => Some(leaky_relu_lanes(x)),
+        SquashType::Bipolar => Some(bipolar_lanes(x)),
+        SquashType::Softsign => Some(softsign_lanes(x)),
+        SquashType::BentIdentity => Some(bent_identity_lanes(x)),
+        SquashType::Isru => Some(isru_lanes(x)),
+        // High-frequency production squashes (Issue #243). Transcendental:
+        SquashType::Gaussian => Some(gaussian_lanes(x)),
+        SquashType::Swish => Some(swish_lanes(x)),
+        SquashType::BipolarSigmoid => Some(bipolar_sigmoid_lanes(x)),
+        SquashType::Elu => Some(elu_lanes(x)),
+        SquashType::Selu => Some(selu_lanes(x)),
+        SquashType::Sine => Some(sine_lanes(x)),
+        SquashType::Cosine => Some(cosine_lanes(x)),
+        SquashType::ArcTan => Some(arctan_lanes(x)),
         _ => None,
     }
 }
@@ -192,11 +480,56 @@ mod tests {
 
     /// Squash types with a vectorised implementation, and the others which must
     /// opt out (so the caller falls back to scalar with unchanged numerics).
-    const VECTORISED: [SquashType; 4] = [
+    const VECTORISED: [SquashType; 20] = [
         SquashType::Tanh,
         SquashType::Logistic,
         SquashType::Gelu,
         SquashType::Mish,
+        // Issue #243 additions.
+        SquashType::Absolute,
+        SquashType::HardTanh,
+        SquashType::Relu6,
+        SquashType::LeakyRelu,
+        SquashType::Bipolar,
+        SquashType::Softsign,
+        SquashType::BentIdentity,
+        SquashType::Isru,
+        SquashType::Gaussian,
+        SquashType::Swish,
+        SquashType::BipolarSigmoid,
+        SquashType::Elu,
+        SquashType::Selu,
+        SquashType::Sine,
+        SquashType::Cosine,
+        SquashType::ArcTan,
+    ];
+
+    /// Per-type finite sweep windows for the Issue #243 additions. Each window
+    /// covers the range the activation is realistically used over; the assert is
+    /// the same [`SQUASH_SIMD_MAX_ABS_ERR`] bound as the hot transcendentals.
+    /// Bipolar is a step function (exact away from the `x = 0` discontinuity) so
+    /// it is checked separately rather than swept across the jump.
+    const RANGE_CASES: [(SquashType, f32, f32); 18] = [
+        (SquashType::Absolute, -1.0e6, 1.0e6),
+        (SquashType::HardTanh, -10.0, 10.0),
+        (SquashType::Relu6, -10.0, 10.0),
+        (SquashType::LeakyRelu, -100.0, 100.0),
+        (SquashType::Softsign, -1.0e4, 1.0e4),
+        (SquashType::BentIdentity, -1.0e3, 1.0e3),
+        (SquashType::Isru, -1.0e3, 1.0e3),
+        (SquashType::Gaussian, -20.0, 20.0),
+        (SquashType::Swish, -30.0, 30.0),
+        (SquashType::BipolarSigmoid, -40.0, 40.0),
+        (SquashType::Elu, -40.0, 40.0),
+        (SquashType::Selu, -30.0, 30.0),
+        (SquashType::Sine, -50.0, 50.0),
+        (SquashType::Cosine, -50.0, 50.0),
+        (SquashType::ArcTan, -1.0e3, 1.0e3),
+        // Extra transcendental windows around the origin, where the curvature is
+        // highest and the approximation is most stressed.
+        (SquashType::Swish, -6.0, 6.0),
+        (SquashType::Sine, -6.3, 6.3),
+        (SquashType::Cosine, -6.3, 6.3),
     ];
 
     /// Max absolute error of a vectorised squash versus scalar `apply_squash`
@@ -251,6 +584,28 @@ mod tests {
     }
 
     #[test]
+    fn issue_243_additions_within_tolerance_over_range() {
+        for (squash, lo, hi) in RANGE_CASES {
+            let err = max_abs_err(squash, lo, hi, 40_000);
+            assert!(
+                err <= SQUASH_SIMD_MAX_ABS_ERR,
+                "{squash:?} max abs err {err} over [{lo}, {hi}] exceeds {SQUASH_SIMD_MAX_ABS_ERR}"
+            );
+        }
+    }
+
+    #[test]
+    fn bipolar_matches_scalar_sign() {
+        // Bipolar is a step at x = 0; away from the jump the vectorised path must
+        // reproduce the scalar sign exactly.
+        for &x in &[-100.0_f32, -1.0, -1e-3, 1e-3, 1.0, 100.0] {
+            let want = apply_squash(SquashType::Bipolar, x);
+            let got = squash_x4(SquashType::Bipolar, [x, x, x, x]).unwrap()[0];
+            assert_eq!(want, got, "Bipolar({x}): want {want}, got {got}");
+        }
+    }
+
+    #[test]
     fn all_four_lanes_match_scalar() {
         // The same value in every lane must reproduce the scalar result; distinct
         // values per lane must each match their own scalar squash.
@@ -291,9 +646,16 @@ mod tests {
         for squash in [
             SquashType::Identity,
             SquashType::Relu,
-            SquashType::Sine,
-            SquashType::Gaussian,
             SquashType::Softplus,
+            SquashType::Tan,
+            SquashType::Square,
+            SquashType::Cube,
+            SquashType::Sqrt,
+            SquashType::Exponential,
+            SquashType::LogSigmoid,
+            SquashType::StdInverse,
+            SquashType::Complement,
+            SquashType::Step,
             SquashType::Minimum,
         ] {
             assert!(
