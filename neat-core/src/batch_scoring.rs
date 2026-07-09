@@ -20,9 +20,14 @@
 //! reordering / `f32` accumulation differences). Every other numeric step is
 //! identical to [`CompiledNetwork::activate_into`]:
 //!
-//! - The **squash** uses the same scalar inline branch (Identity / ReLU /
-//!   Logistic / Tanh, else `apply_squash`) — no vectorised approximation — so
-//!   the squash itself is bit-identical.
+//! - The **squash** for the covered types is evaluated across all 8 (then 4)
+//!   batch lanes at once through the vectorised `squash_x8` / `squash_x4`
+//!   approximations (Issue #243, mirroring `mse_sum_batch_packed`). Those
+//!   approximations stay within `SQUASH_SIMD_MAX_ABS_ERR` of scalar
+//!   `apply_squash`, so results match the per-record reference within the same
+//!   SIMD tolerance the batched weighted sums already introduce (Issue #230).
+//!   Every other type keeps the scalar inline branch (Identity / ReLU /
+//!   Logistic / Tanh, else `apply_squash`), so its squash stays bit-identical.
 //! - **Aggregate** squashes (Minimum, Maximum, If, Hypotenuse, HypotenuseV2,
 //!   Mean) and the **scalar tail** (`records.len() % 8` after the 4-way step)
 //!   run the exact single-record path via `neuron_activation_scalar`, so those
@@ -42,6 +47,7 @@ use crate::simd::{
     weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
 };
 use crate::squash::{SquashType, apply_squash};
+use crate::squash_simd::{squash_x4, squash_x8};
 use crate::synapse_type::SynapseType;
 
 /// Reusable per-worker scratch: eight activation buffers, one per SIMD lane.
@@ -260,15 +266,21 @@ impl CompiledNetwork {
                             end,
                             neuron.bias,
                         );
-                        let st = neuron.squash_type;
-                        act0[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s0));
-                        act1[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s1));
-                        act2[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s2));
-                        act3[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s3));
-                        act4[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s4));
-                        act5[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s5));
-                        act6[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s6));
-                        act7[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s7));
+                        // Vectorised squash across all 8 lanes for the covered
+                        // types (Issue #243); scalar inline fallback otherwise.
+                        let sums = [s0, s1, s2, s3, s4, s5, s6, s7];
+                        let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
+                            let st = neuron.squash_type;
+                            sums.map(|s| inline_squash(st, squash, s))
+                        });
+                        act0[actual_idx] = apply_limit_range(squash, squashed[0]);
+                        act1[actual_idx] = apply_limit_range(squash, squashed[1]);
+                        act2[actual_idx] = apply_limit_range(squash, squashed[2]);
+                        act3[actual_idx] = apply_limit_range(squash, squashed[3]);
+                        act4[actual_idx] = apply_limit_range(squash, squashed[4]);
+                        act5[actual_idx] = apply_limit_range(squash, squashed[5]);
+                        act6[actual_idx] = apply_limit_range(squash, squashed[6]);
+                        act7[actual_idx] = apply_limit_range(squash, squashed[7]);
                     }
                 }
             }
@@ -337,11 +349,17 @@ impl CompiledNetwork {
                             end,
                             neuron.bias,
                         );
-                        let st = neuron.squash_type;
-                        act0[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s0));
-                        act1[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s1));
-                        act2[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s2));
-                        act3[actual_idx] = apply_limit_range(squash, inline_squash(st, squash, s3));
+                        // Vectorised squash across all 4 lanes for the covered
+                        // types (Issue #243); scalar inline fallback otherwise.
+                        let sums = [s0, s1, s2, s3];
+                        let squashed = squash_x4(squash, sums).unwrap_or_else(|| {
+                            let st = neuron.squash_type;
+                            sums.map(|s| inline_squash(st, squash, s))
+                        });
+                        act0[actual_idx] = apply_limit_range(squash, squashed[0]);
+                        act1[actual_idx] = apply_limit_range(squash, squashed[1]);
+                        act2[actual_idx] = apply_limit_range(squash, squashed[2]);
+                        act3[actual_idx] = apply_limit_range(squash, squashed[3]);
                     }
                 }
             }
