@@ -104,20 +104,21 @@ pub fn apply_validate_range(squash_type: SquashType, activation: f32) -> bool {
     activation >= low && activation <= high
 }
 
-/// Clamp a value to the valid range for an activation function
-/// Issue #1142 - WASM Migration Phase 10
+/// Clamp a value to an already-resolved `(low, high)` activation range.
 ///
-/// Returns the value clamped to the valid range.
-/// Infinity values are clamped to the bounds.
-/// NaN returns 0.0 as a safe default.
+/// This is the range-independent core of [`apply_limit_range`]: it takes the
+/// bounds directly instead of re-deriving them from a [`SquashType`] via
+/// [`apply_get_range`]. The batched scoring paths resolve the range **once per
+/// neuron** and then clamp every lane through this helper (Issue #245), so the
+/// per-record inner loop no longer re-runs the 37-arm range `match` for each of
+/// the 8 (then 4) records. `NaN` maps to `0.0` and infinities clamp to the
+/// finite bounds, byte-for-byte identical to [`apply_limit_range`].
 #[inline(always)]
-pub fn apply_limit_range(squash_type: SquashType, value: f32) -> f32 {
+pub fn apply_limit_range_bounds(low: f32, high: f32, value: f32) -> f32 {
     // Handle NaN - return 0 as a safe default
     if value.is_nan() {
         return 0.0;
     }
-
-    let (low, high) = apply_get_range(squash_type);
 
     // Handle infinities by clamping to bounds
     if value == f32::INFINITY {
@@ -129,6 +130,18 @@ pub fn apply_limit_range(squash_type: SquashType, value: f32) -> f32 {
 
     // Clamp to range
     value.max(low).min(high)
+}
+
+/// Clamp a value to the valid range for an activation function
+/// Issue #1142 - WASM Migration Phase 10
+///
+/// Returns the value clamped to the valid range.
+/// Infinity values are clamped to the bounds.
+/// NaN returns 0.0 as a safe default.
+#[inline(always)]
+pub fn apply_limit_range(squash_type: SquashType, value: f32) -> f32 {
+    let (low, high) = apply_get_range(squash_type);
+    apply_limit_range_bounds(low, high, value)
 }
 
 /// Clamp an `f64` value to the valid output range of `squash_type`.

@@ -71,7 +71,9 @@ pub use loss::{
     mae_sum_batch_packed, mape_sum_batch_packed, mse_mean_record, mse_sum_batch_packed,
     msle_sum_batch_packed,
 };
-pub use range::{apply_get_range, apply_limit_range, apply_validate_range};
+pub use range::{
+    apply_get_range, apply_limit_range, apply_limit_range_bounds, apply_validate_range,
+};
 pub use safe_zone::{apply_safe_zone_adjustment, apply_safe_zone_adjustment_batch};
 pub use score_scan::{compute_score_components, scan_max_bias, scan_max_weight};
 pub use squash::apply_squash;

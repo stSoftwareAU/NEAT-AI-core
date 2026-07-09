@@ -41,7 +41,7 @@
 //! input order regardless of batching or thread count.
 
 use crate::network::{CompiledNetwork, NeuronData, SynapseData};
-use crate::range::apply_limit_range;
+use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
     weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
@@ -273,14 +273,18 @@ impl CompiledNetwork {
                             let st = neuron.squash_type;
                             sums.map(|s| inline_squash(st, squash, s))
                         });
-                        act0[actual_idx] = apply_limit_range(squash, squashed[0]);
-                        act1[actual_idx] = apply_limit_range(squash, squashed[1]);
-                        act2[actual_idx] = apply_limit_range(squash, squashed[2]);
-                        act3[actual_idx] = apply_limit_range(squash, squashed[3]);
-                        act4[actual_idx] = apply_limit_range(squash, squashed[4]);
-                        act5[actual_idx] = apply_limit_range(squash, squashed[5]);
-                        act6[actual_idx] = apply_limit_range(squash, squashed[6]);
-                        act7[actual_idx] = apply_limit_range(squash, squashed[7]);
+                        // Issue #245: resolve the output range once per neuron
+                        // and clamp all 8 lanes through the bounds, so the range
+                        // `match` runs once instead of once per record.
+                        let (low, high) = apply_get_range(squash);
+                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
+                        act4[actual_idx] = apply_limit_range_bounds(low, high, squashed[4]);
+                        act5[actual_idx] = apply_limit_range_bounds(low, high, squashed[5]);
+                        act6[actual_idx] = apply_limit_range_bounds(low, high, squashed[6]);
+                        act7[actual_idx] = apply_limit_range_bounds(low, high, squashed[7]);
                     }
                 }
             }
@@ -356,10 +360,13 @@ impl CompiledNetwork {
                             let st = neuron.squash_type;
                             sums.map(|s| inline_squash(st, squash, s))
                         });
-                        act0[actual_idx] = apply_limit_range(squash, squashed[0]);
-                        act1[actual_idx] = apply_limit_range(squash, squashed[1]);
-                        act2[actual_idx] = apply_limit_range(squash, squashed[2]);
-                        act3[actual_idx] = apply_limit_range(squash, squashed[3]);
+                        // Issue #245: resolve the output range once per neuron
+                        // and clamp all 4 lanes through the bounds.
+                        let (low, high) = apply_get_range(squash);
+                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
                     }
                 }
             }
