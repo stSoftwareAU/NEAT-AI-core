@@ -7,7 +7,7 @@
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
 use crate::network::CompiledNetwork;
-use crate::range::apply_limit_range;
+use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
 use crate::squash::{SquashType, apply_squash};
 use crate::squash_simd::{squash_x4, squash_x8};
@@ -228,14 +228,17 @@ macro_rules! batch_8way_activation {
                                 }
                             };
 
-                            act0[actual_idx] = apply_limit_range(squash, squashed[0]);
-                            act1[actual_idx] = apply_limit_range(squash, squashed[1]);
-                            act2[actual_idx] = apply_limit_range(squash, squashed[2]);
-                            act3[actual_idx] = apply_limit_range(squash, squashed[3]);
-                            act4[actual_idx] = apply_limit_range(squash, squashed[4]);
-                            act5[actual_idx] = apply_limit_range(squash, squashed[5]);
-                            act6[actual_idx] = apply_limit_range(squash, squashed[6]);
-                            act7[actual_idx] = apply_limit_range(squash, squashed[7]);
+                            // Issue #245: resolve the output range once per
+                            // neuron and clamp all 8 lanes through the bounds.
+                            let (low, high) = apply_get_range(squash);
+                            act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+                            act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+                            act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+                            act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
+                            act4[actual_idx] = apply_limit_range_bounds(low, high, squashed[4]);
+                            act5[actual_idx] = apply_limit_range_bounds(low, high, squashed[5]);
+                            act6[actual_idx] = apply_limit_range_bounds(low, high, squashed[6]);
+                            act7[actual_idx] = apply_limit_range_bounds(low, high, squashed[7]);
                         }
                     }
                 }
@@ -434,10 +437,12 @@ macro_rules! batch_8way_activation {
                                     }
                                 };
 
-                                act0[actual_idx] = apply_limit_range(squash, squashed[0]);
-                                act1[actual_idx] = apply_limit_range(squash, squashed[1]);
-                                act2[actual_idx] = apply_limit_range(squash, squashed[2]);
-                                act3[actual_idx] = apply_limit_range(squash, squashed[3]);
+                                // Issue #245: resolve the range once per neuron.
+                                let (low, high) = apply_get_range(squash);
+                                act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+                                act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+                                act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+                                act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
                             }
                         }
                     }
@@ -855,10 +860,12 @@ fn mse_sum_batch_4way(
                             }
                         };
 
-                        act0[actual_idx] = apply_limit_range(squash, squashed[0]);
-                        act1[actual_idx] = apply_limit_range(squash, squashed[1]);
-                        act2[actual_idx] = apply_limit_range(squash, squashed[2]);
-                        act3[actual_idx] = apply_limit_range(squash, squashed[3]);
+                        // Issue #245: resolve the output range once per neuron.
+                        let (low, high) = apply_get_range(squash);
+                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
                     }
                 }
             }
@@ -1219,14 +1226,17 @@ fn mse_sum_batch_8way(
                             }
                         };
 
-                        act0[actual_idx] = apply_limit_range(squash, squashed[0]);
-                        act1[actual_idx] = apply_limit_range(squash, squashed[1]);
-                        act2[actual_idx] = apply_limit_range(squash, squashed[2]);
-                        act3[actual_idx] = apply_limit_range(squash, squashed[3]);
-                        act4[actual_idx] = apply_limit_range(squash, squashed[4]);
-                        act5[actual_idx] = apply_limit_range(squash, squashed[5]);
-                        act6[actual_idx] = apply_limit_range(squash, squashed[6]);
-                        act7[actual_idx] = apply_limit_range(squash, squashed[7]);
+                        // Issue #245: resolve the output range once per neuron
+                        // and clamp all 8 lanes through the bounds.
+                        let (low, high) = apply_get_range(squash);
+                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
+                        act4[actual_idx] = apply_limit_range_bounds(low, high, squashed[4]);
+                        act5[actual_idx] = apply_limit_range_bounds(low, high, squashed[5]);
+                        act6[actual_idx] = apply_limit_range_bounds(low, high, squashed[6]);
+                        act7[actual_idx] = apply_limit_range_bounds(low, high, squashed[7]);
                     }
                 }
             }
@@ -1401,10 +1411,12 @@ fn mse_sum_batch_8way(
                                 }
                             };
 
-                            act0[actual_idx] = apply_limit_range(squash, squashed[0]);
-                            act1[actual_idx] = apply_limit_range(squash, squashed[1]);
-                            act2[actual_idx] = apply_limit_range(squash, squashed[2]);
-                            act3[actual_idx] = apply_limit_range(squash, squashed[3]);
+                            // Issue #245: resolve the range once per neuron.
+                            let (low, high) = apply_get_range(squash);
+                            act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+                            act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+                            act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+                            act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
                         }
                     }
                 }

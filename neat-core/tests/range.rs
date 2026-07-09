@@ -1,7 +1,83 @@
 //! Range validation tests (moved from `src/range.rs`).
 
-use neat_core::range::apply_limit_range_f64;
+use neat_core::range::{apply_limit_range_bounds, apply_limit_range_f64};
 use neat_core::{SquashType, apply_get_range, apply_limit_range, apply_validate_range};
+
+/// Every squash type, so the hoisted-bounds helper can be checked against the
+/// squash-dispatching [`apply_limit_range`] for all 37 ranges (Issue #245).
+const ALL_SQUASH: [SquashType; 37] = [
+    SquashType::Identity,
+    SquashType::Logistic,
+    SquashType::Tanh,
+    SquashType::Relu,
+    SquashType::LeakyRelu,
+    SquashType::Sine,
+    SquashType::Cosine,
+    SquashType::Tan,
+    SquashType::ArcTan,
+    SquashType::Gaussian,
+    SquashType::BentIdentity,
+    SquashType::Bipolar,
+    SquashType::BipolarSigmoid,
+    SquashType::HardTanh,
+    SquashType::Absolute,
+    SquashType::Relu6,
+    SquashType::Selu,
+    SquashType::Gelu,
+    SquashType::Swish,
+    SquashType::Mish,
+    SquashType::Elu,
+    SquashType::Softsign,
+    SquashType::Softplus,
+    SquashType::Square,
+    SquashType::Cube,
+    SquashType::Sqrt,
+    SquashType::Exponential,
+    SquashType::LogSigmoid,
+    SquashType::StdInverse,
+    SquashType::Complement,
+    SquashType::Step,
+    SquashType::Isru,
+    SquashType::Minimum,
+    SquashType::Maximum,
+    SquashType::If,
+    SquashType::Hypotenuse,
+    SquashType::HypotenuseV2,
+];
+
+#[test]
+fn limit_range_bounds_matches_apply_limit_range() {
+    // The Issue #245 hoist resolves `(low, high)` once per neuron and clamps
+    // every lane through `apply_limit_range_bounds`. That must be byte-for-byte
+    // identical to the per-value `apply_limit_range` for every squash type and
+    // every edge value, or the batched scoring numerics would change.
+    let values = [
+        0.0f32,
+        -0.5,
+        0.5,
+        1.5,
+        -1.5,
+        6.5,
+        -6.5,
+        1e6,
+        -1e6,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ];
+    for squash in ALL_SQUASH {
+        let (low, high) = apply_get_range(squash);
+        for &v in &values {
+            let want = apply_limit_range(squash, v);
+            let got = apply_limit_range_bounds(low, high, v);
+            assert_eq!(
+                want.to_bits(),
+                got.to_bits(),
+                "{squash:?} value {v}: apply_limit_range={want} but bounds helper={got}"
+            );
+        }
+    }
+}
 
 #[test]
 fn test_get_range_bounded() {
