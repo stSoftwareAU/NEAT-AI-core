@@ -22,43 +22,23 @@ Name tests after the behaviour or outcome (e.g. `relu_maps_negative_to_zero`), n
 
 ## Unsafe & SIMD invariants
 
-The native SIMD hot path (`neat-core/src/simd_native.rs`) is `unsafe`-heavy. These
-invariants are load-bearing — one is a memory-safety (UB) contract — so an agent
-editing the hot path **must** keep them intact.
+The native SIMD hot path (`neat-core/src/simd_native.rs`) carries durable
+soundness rules. They are load-bearing — an edit that ignores one either fails
+the build or ships undefined behaviour. Absorbed from the SIMD/`unsafe`/
+buffer-reuse campaign (PRs #11, #112, #154, #155, #165, #207).
 
-- **Load-time `from_index` validation is the soundness precondition for
-  `get_unchecked`.** The SIMD kernels index the activation buffer (sized to exactly
-  `num_neurons`) with `get_unchecked(from_index)`. `CompiledNetwork::new`
-  (`neat-core/src/network.rs`) validates **once, at load** that every synapse's
-  `from_index < num_neurons`, returning `NetworkError::InvalidSynapseIndex`
-  otherwise. That single check is what makes the unchecked reads sound. **Never
-  remove or bypass it** — a compiled network with `from_index >= num_neurons`
-  would be an out-of-bounds read (UB: heap disclosure or a fault) on every
-  `activate()`. Do not delete it as "redundant".
-- **`unsafe_op_in_unsafe_fn = "deny"` (`Cargo.toml`) governs how intrinsics are
-  wrapped.** Inside a `#[target_feature]` fn, a pure compute intrinsic whose
-  required feature is *already enabled* is **safe** and must **not** be wrapped in
-  `unsafe { … }` — doing so trips `unused_unsafe`. Only these need an explicit
-  `unsafe { … }` block:
-  - `get_unchecked` indexing and its pointer derefs (rely on the bounds invariant
-    above);
-  - pointer load/store intrinsics — `vld1q_f32` / `vst1q_f32` (NEON),
-    `_mm_storeu_ps` / `_mm256_storeu_ps` (x86);
-  - an intrinsic needing a feature the fn does **not** enable — e.g.
-    `_mm256_fmadd_ps` (needs `fma`) inside an `avx2`-only fn.
-- **Every SIMD `unsafe` block carries a `// SAFETY:` note naming its guard.** The
-  note names the `is_x86_feature_detected!` / `is_aarch64_feature_detected!` guard
-  (or the load-time index check) that discharges the block's precondition, keeping
-  the soundness proof next to the code.
-- **Buffer reuse is sound only under one-network-per-thread.** Promoting scratch
-  buffers to reused `CompiledNetwork` fields forces `&mut self` and is sound only
-  because batch scoring gives each thread its own `CompiledNetwork`
-  (`#[derive(Clone)]`). Two rules follow: (1) **reset every reused buffer per call**
-  to the exact fresh-allocation state (activations zeroed then inputs re-copied,
-  hints zeroed, traces cleared) — otherwise a larger neuron's stale entries leak
-  into a smaller one later in the same pass; (2) any such change ships with a
-  **state-leak regression test** that runs the same input on a reused network and
-  asserts it matches a fresh network.
+### Load-time index validation is the soundness precondition for `get_unchecked`
+
+The SIMD kernels read the activation buffer (sized to exactly `num_neurons`)
+with **unchecked** indexing, `get_unchecked(from_index)`. A compiled network
+declaring a synapse with `from_index >= num_neurons` would be an out-of-bounds
+read — **undefined behaviour** on every `activate()`. This is guarded **once, at
+load time**: `CompiledNetwork::new` rejects any out-of-range `from_index` with
+`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs:326`). A network
+that loads successfully is guaranteed in-range, so the `get_unchecked` calls are
+sound and the hot path stays branch-free. **Never remove or bypass that check as
+"redundant" — doing so reintroduces UB behind `get_unchecked`.** (See also the
+memory-safety note in [`SECURITY.md`](SECURITY.md#memory-safety-of-compiled-network-loading).)
 
 ```mermaid
 flowchart LR
@@ -66,9 +46,42 @@ flowchart LR
     B --> C{"every from_index &lt; num_neurons?"}
     C -- no --> D["Err(NetworkError::InvalidSynapseIndex)"]
     C -- yes --> E["network loaded — invariant holds"]
-    E --> F["activate() → SIMD kernels"]
+    E --> F["activate() → weighted_sum_simd"]
     F --> G["get_unchecked(from_index) — sound"]
 ```
+
+### `unsafe` blocks under `unsafe_op_in_unsafe_fn = "deny"`
+
+`Cargo.toml` sets `[workspace.lints.rust] unsafe_op_in_unsafe_fn = "deny"`, and
+`neat-core` opts in via `[lints] workspace = true`. Inside a `#[target_feature]`
+function this changes how intrinsics must be wrapped:
+
+- A **pure compute intrinsic whose required feature is already enabled** is
+  *safe* to call and must **not** be wrapped in `unsafe { … }` — wrapping it
+  trips the `unused_unsafe` lint and fails the `-D warnings` build.
+- Only these genuinely need an `unsafe { … }` block: `get_unchecked` indexing
+  and its pointer derefs; pointer load/store intrinsics (`vld1q_f32` /
+  `vst1q_f32`, `_mm_storeu_ps` / `_mm256_storeu_ps`); and intrinsics needing a
+  feature the enclosing fn does **not** enable (e.g. `_mm256_fmadd_ps` needs
+  `fma` inside an `avx2`-only fn).
+- Every SIMD `unsafe` block must carry a `// SAFETY:` note that **names the
+  `is_*_feature_detected!` guard** (`is_x86_feature_detected!` /
+  `is_aarch64_feature_detected!`) proving the callee's `#[target_feature]`
+  precondition.
+
+### Buffer reuse is sound only one-network-per-thread
+
+Promoting scratch buffers to reused `CompiledNetwork` fields (to cut per-call
+allocation) forces `&mut self` and is sound **only because each thread owns its
+own `CompiledNetwork`** (`#[derive(Clone)]`, one per worker thread). When you do
+this you **must**:
+
+- **Reset every reused buffer per call** to the exact state a fresh allocation
+  would have had (e.g. `fill(0.0)` then re-copy inputs; `clear()` traces).
+  Otherwise a larger neuron's stale entries leak into a smaller one later in the
+  same pass.
+- **Add a state-leak regression test** asserting the reused-buffer path is
+  byte-identical to the fresh-allocation path across differently-sized inputs.
 
 ## CI / secrets
 
