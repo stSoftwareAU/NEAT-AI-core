@@ -57,13 +57,18 @@ the window, and the *Upgrade Cargo Dependencies* workflow feeds it from the
 
 ## Emergency quarantine override
 
+This is the single authoritative home for the emergency override / out-of-cycle
+**emergency dependency bump** procedure; other docs link here rather than
+restate it.
+
 The quarantine window is a deliberate trade-off: it defers brand-new crate
 versions for 24h. That same delay can *block* the urgent case — when the only
 patched version of a vulnerable crate was published minutes ago and the
-advisory is being actively exploited now.
+advisory is being actively exploited now. When an advisory needs an
+out-of-cycle fix an approver may run the upgrade with the window disabled,
+following the runbook below rather than waiting for the weekly bump.
 
-When an actively-exploited advisory's fix is newer than the quarantine window,
-an approver may run the upgrade with the window disabled:
+The window is disabled with either lever:
 
 - **Via the workflow** — dispatch *Upgrade Cargo Dependencies*
   (`workflow_dispatch`) with the `emergency_bypass` input set to `true`. This
@@ -71,9 +76,24 @@ an approver may run the upgrade with the window disabled:
   so the freshly-published fix is applied immediately.
 - **Locally** — run `./bump-deps.sh --quarantine-hours 0`.
 
-After bypassing the window you **must** manually confirm `cargo audit` reports
-no advisories against the bumped tree before merge. The bypass disables only
-the release-age deferral; it does not relax the audit or build gates.
+### Runbook
+
+1. **Triage.** Confirm the advisory affects a crate in `Cargo.lock` and that a
+   patched version exists. `cargo audit` (run locally or via the `security`
+   job) names the advisory and the fixed version.
+2. **Dispatch the bump.** Trigger the *Upgrade Cargo Dependencies* workflow
+   ([`upgrade-dependencies.yml`](.github/workflows/upgrade-dependencies.yml))
+   via `workflow_dispatch` (or the local `./bump-deps.sh` equivalent), using
+   either lever above to collapse the window to 0h when the patched version is
+   newer than the `VIBE_BUMP_QUARANTINE_HOURS` window.
+3. **Verify.** After bypassing the window you **must** confirm `cargo audit`
+   reports no advisories against the bumped tree and that the native and WASM
+   builds pass. The bypass relaxes only the release-age deferral — never the
+   audit or build gates.
+4. **Fast-track the PR.** Mark the upgrade PR as security-driven, get an
+   approver review, and merge to `Develop` ahead of the routine queue.
+5. **Close the loop.** Once merged and released, the advisory may be discussed
+   publicly; update or publish the GitHub Security Advisory accordingly.
 
 ```mermaid
 flowchart TD
@@ -88,31 +108,7 @@ flowchart TD
 
 Use this path only for an actively-exploited advisory whose fix falls inside
 the quarantine window. Routine bumps must continue to honour the default
-window.
-
-## Emergency dependency bump
-
-When an advisory needs an out-of-cycle fix, follow this runbook rather than
-waiting for the weekly bump:
-
-1. **Triage.** Confirm the advisory affects a crate in `Cargo.lock` and that a
-   patched version exists. `cargo audit` (run locally or via the `security`
-   job) names the advisory and the fixed version.
-2. **Dispatch the bump.** Trigger the *Upgrade Cargo Dependencies* workflow
-   ([`upgrade-dependencies.yml`](.github/workflows/upgrade-dependencies.yml))
-   via `workflow_dispatch`. If the patched version is newer than the
-   `VIBE_BUMP_QUARANTINE_HOURS` window, set `emergency_bypass: true` to collapse
-   the window to 0h (see *Emergency quarantine override* above). Locally, the
-   equivalent is `./bump-deps.sh --quarantine-hours 0`.
-3. **Verify.** Confirm `cargo audit` reports no advisories against the bumped
-   tree and that the native and WASM builds pass. The bypass relaxes only the
-   release-age deferral — never the audit or build gates.
-4. **Fast-track the PR.** Mark the upgrade PR as security-driven, get an
-   approver review, and merge to `Develop` ahead of the routine queue.
-5. **Close the loop.** Once merged and released, the advisory may be discussed
-   publicly; update or publish the GitHub Security Advisory accordingly.
-
-For the routine (non-urgent) refresh channels, see
+window. For the routine (non-urgent) refresh channels, see
 [`README.md`](README.md#dependency-updates-two-channels).
 
 ## Review governance (CODEOWNERS + branch protection)

@@ -16,7 +16,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 |------|------|
 | `neat-core/` | Shared computation library; **140+** unit tests in `src/**/*.rs` plus integration tests in `neat-core/tests/` (>350 total). |
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
-| `RELEASING.md` | Versioning/release policy (Issue #251): breaking ⇒ major-equivalent (minor pre-1.0) bump, non-breaking ⇒ patch; `v<version>` tags + releases on `Develop`. |
+| `RELEASING.md` | Single source of truth for the versioning/release policy (Issue #251) — semver, what counts as breaking, and `v<version>` tags/releases on `Develop`. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
@@ -222,9 +222,8 @@ new channel is what *raises* the remediation PR rather than waiting for Monday.
 
 When an actively-exploited advisory's fix is newer than the
 `VIBE_BUMP_QUARANTINE_HOURS` window, an approver can take the documented
-**emergency quarantine override** — dispatch *Upgrade Cargo Dependencies* with
-`emergency_bypass: true` (or run `./bump-deps.sh --quarantine-hours 0`) and
-confirm `cargo audit` is clean before merge. See
+**emergency quarantine override**. The full procedure (both bypass levers, the
+runbook, and the mandatory `cargo audit` re-check) lives in
 [`SECURITY.md`](SECURITY.md#emergency-quarantine-override).
 
 ```mermaid
