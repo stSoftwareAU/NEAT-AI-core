@@ -11,6 +11,26 @@ affected group against this file, with matching host/toolchain metadata.
 > fixtures are synthesised from a fixed-seed PRNG — the 3 MB production
 > `network.json` and the real training corpus are **not** committed.
 
+## Fixture caveat — squash homogeneity (Issue #261)
+
+Every neuron in the `production` / `production_2x` fixtures is uniformly
+`SquashType::Tanh` (`benches/common/mod.rs:168`), asserted by
+`tests/bench_fixtures.rs::production_fixture_squash_is_homogeneous_tanh`. Real
+GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so read every
+`scoring`/`production` A/B below with two corrections in mind:
+
+- **Squash-vectorisation deltas are a lower bound.** Varied-squash creatures
+  also convert scalar `libm` `Gelu`/`Mish` to the vectorised path, gaining at
+  least as much as the all-`Tanh` fixture shows.
+- **Branch-prediction levers are unmeasurable here.** A homogeneous squash means
+  the predictor already nails the one-arm `match`, so a branch-misprediction
+  optimisation shows no delta on this fixture — that is a fixture artefact, not
+  evidence the lever is worthless on real creatures.
+
+The real `GRQ-cluster/network.json` is not on the build host, so it cannot be
+A/B'd here directly; re-run against the pinned creature to confirm on the real
+varied-squash topology.
+
 ## Host / toolchain
 
 | Field | Value |
