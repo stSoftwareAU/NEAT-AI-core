@@ -36,7 +36,7 @@ The `mame-neat` sibling crate mirrors this layout against MAME.
 | Module | Role |
 |--------|------|
 | `squash` | **38 activation variants** (Identity, ReLU, ReLU6, LeakyReLU, SELU, ELU, Logistic, Tanh, HardTanh, Softsign, Softplus, Swish, Mish, GELU, Sine, Cosine, Tan, ArcTan, Gaussian, BentIdentity, BipolarSigmoid, Bipolar, Step, Complement, Absolute, Square, Cube, Sqrt, StdInverse, Exponential, LogSigmoid, ISRU, Minimum, Maximum, If, Hypotenuse, HypotenuseV2, Mean). |
-| `creature` | `CreatureExport` / `NeuronExport` / `SynapseExport` — **`Deserialize` only** (no `Serialize`), plus `compile_creature` to `CompiledNetwork`. |
+| `creature` | `CreatureExport` / `NeuronExport` / `SynapseExport` — derive **both `Deserialize` and `Serialize`** (round-trip landed, Issue #30), plus `compile_creature` to `CompiledNetwork`. |
 | `network` | `CompiledNetwork`, `NeuronData`, `SynapseData` — compiled forward-pass evaluator. |
 | `topological_backprop` | Topologically ordered backprop loop (lifted from `wasm_activation` per #9). |
 | `topology_ops` | Cycle detection, reverse topological order, structural validation, batch validation. |
@@ -88,15 +88,15 @@ Ikaruga computes a topological order with DFS + cycle skip and iterates nodes se
 
 Ikaruga's `BatchEvaluator` imports `burn::tensor` but the batched path is still sequential `inputs.iter().map(…)`. Nothing to port.
 
-### 6. Topology visualisation — 🎯 worth adopting (data-only export, not the GUI)
+### 6. Topology visualisation — ✅ adopted (data-only export, not the GUI)
 
-Ikaruga ships an 855-line `network_view.rs` built on `egui`/`eframe`, live-coupled to `Arc<RwLock<VisualizationState>>`. It is **not headless** and does **not export** DOT, JSON, or any other machine-readable graph format. `neat-core` has **no export path** today.
+Ikaruga ships an 855-line `network_view.rs` built on `egui`/`eframe`, live-coupled to `Arc<RwLock<VisualizationState>>`. It is **not headless** and does **not export** DOT, JSON, or any other machine-readable graph format. At the time of research `neat-core` had no export path.
 
-The useful capability to pull forward is **deterministic topology export** (DOT and/or topology JSON) from `CompiledNetwork`, so downstream tools (Graphviz, web viewers, snapshot diffs) can render networks without linking a GUI stack into `neat-core`. The live `egui` renderer itself is out of scope — any interactive viewer belongs in [NEAT-AI-Explore](https://github.com/stSoftwareAU/NEAT-AI-Explore) or a sibling tool.
+The useful capability was **deterministic topology export** (DOT and/or topology JSON) from `CompiledNetwork`, so downstream tools (Graphviz, web viewers, snapshot diffs) can render networks without linking a GUI stack into `neat-core`. That has **landed**: `neat-core/src/topology_export.rs` provides `to_dot` and `to_topology_json` from `CompiledNetwork` (Issue #22), with tests in `neat-core/tests/topology_export.rs`. The live `egui` renderer itself remains out of scope — any interactive viewer belongs in [NEAT-AI-Explore](https://github.com/stSoftwareAU/NEAT-AI-Explore) or a sibling tool.
 
 - **Priority:** medium.
 - **Effort:** small (1 PR, ~300 LOC + tests).
-- **Tracked by:** existing open issue [#22 — Add CompiledNetwork topology export (DOT/JSON) for debugging and visualisation](https://github.com/stSoftwareAU/NEAT-AI-core/issues/22). **No new issue needed.**
+- **Status:** **done** — shipped via issue [#22 — Add CompiledNetwork topology export (DOT/JSON) for debugging and visualisation](https://github.com/stSoftwareAU/NEAT-AI-core/issues/22) (`neat-core/src/topology_export.rs`).
 
 ### 7. GPU acceleration (Burn + WGPU) — ⛔ out of scope
 
@@ -104,13 +104,15 @@ Ikaruga declares `burn = "0.16"` with WGPU, but `neural_net.rs` openly admits th
 
 No adoption. Record as **explicitly rejected** to avoid re-litigating.
 
-### 8. Serialisation format — 🎯 worth adopting (round-trip JSON on `CreatureExport`)
+### 8. Serialisation format — ✅ adopted (round-trip JSON on `CreatureExport`)
 
-Ikaruga derives both `Serialize` and `Deserialize` on its `Genome`, enabling full round-trip JSON persistence. `neat-core`'s `CreatureExport` currently derives **only** `Deserialize` — networks can be loaded but not written back out. For the topology-export work in #22, and for snapshot diffing, cache priming, and WASM bridging, a symmetric serialise path is worth adding. The JSON shape is fixed by the TypeScript `CreatureExport` contract, so there is no schema design required — only matching `Serialize` derives, `#[serde(rename = …)]` attributes, and a deterministic field ordering test.
+Ikaruga derives both `Serialize` and `Deserialize` on its `Genome`, enabling full round-trip JSON persistence. At the time of research `neat-core`'s `CreatureExport` derived **only** `Deserialize` — networks could be loaded but not written back out. For the topology-export work in #22, and for snapshot diffing, cache priming, and WASM bridging, a symmetric serialise path was worth adding. The JSON shape is fixed by the TypeScript `CreatureExport` contract, so there was no schema design required — only matching `Serialize` derives, `#[serde(rename = …)]` attributes, and a deterministic field ordering test.
+
+That has **landed**: `CreatureExport`, `NeuronExport`, and `SynapseExport` (`neat-core/src/creature.rs`) now derive both `Deserialize` and `Serialize`, so networks round-trip out to JSON as well as in (Issue #30).
 
 - **Priority:** medium.
 - **Effort:** small (~150 LOC + tests: round-trip, deterministic field order, numerical precision on f64 weights).
-- **Issue:** new follow-up issue created per this research.
+- **Status:** **done** — shipped via issue [#30](https://github.com/stSoftwareAU/NEAT-AI-core/issues/30) (`neat-core/src/creature.rs`).
 
 ### 9. Emulator bridge / environment interface (TCP + Lua) — ⛔ out of scope
 
@@ -131,16 +133,18 @@ Ikaruga's `fitness.rs` (579 LOC) encodes per-game scoring heuristics. Fitness is
 | 3 | Population, tournament, crossover | `population.rs` 381 LOC | — | 🌐 parent repo | — |
 | 4 | NeatConfig JSON | `config.rs` | `TrainingDataConfig` only | 🌐 parent repo | — |
 | 5 | Feed-forward evaluation | 4 activations, no SIMD, no backprop | 38 activations + backprop + SIMD + PC | ✅ already richer | — |
-| 6 | Topology visualisation | 855-LOC egui GUI, no export | no export path | 🎯 adopt (data-only export) | [#22](https://github.com/stSoftwareAU/NEAT-AI-core/issues/22) (existing) |
+| 6 | Topology visualisation | 855-LOC egui GUI, no export | `topology_export` (DOT/JSON) | ✅ adopted (data-only export) | [#22](https://github.com/stSoftwareAU/NEAT-AI-core/issues/22) (landed) |
 | 7 | GPU (Burn + WGPU) | declared, unused | — | ⛔ out of scope (breaks WASM) | — |
-| 8 | Genome JSON round-trip | `Serialize` + `Deserialize` | `Deserialize` only | 🎯 adopt | [#30](https://github.com/stSoftwareAU/NEAT-AI-core/issues/30) |
+| 8 | Genome JSON round-trip | `Serialize` + `Deserialize` | `Serialize` + `Deserialize` | ✅ adopted | [#30](https://github.com/stSoftwareAU/NEAT-AI-core/issues/30) (landed) |
 | 9 | Emulator TCP + Lua bridge | 558 LOC + Lua scripts | — | ⛔ out of scope | — |
 | 10 | Fitness scoring | 579 LOC per game | — | ⛔ out of scope | — |
 
-## Adoption candidates (prioritised)
+## Adoption candidates (outcome)
 
-1. **CompiledNetwork topology export (DOT / topology JSON)** — medium priority, small effort. Already scoped in open issue **[#22](https://github.com/stSoftwareAU/NEAT-AI-core/issues/22)**. No new issue needed.
-2. **`CreatureExport` round-trip JSON (`Serialize` on all three export types)** — medium priority, small effort. Tracked by follow-up issue **[#30](https://github.com/stSoftwareAU/NEAT-AI-core/issues/30)** raised alongside this document.
+Both candidates identified by this research have since **shipped** on `Develop`:
+
+1. ✅ **CompiledNetwork topology export (DOT / topology JSON)** — **done**. Landed via issue **[#22](https://github.com/stSoftwareAU/NEAT-AI-core/issues/22)** as `neat-core/src/topology_export.rs` (`to_dot`, `to_topology_json`), tested in `neat-core/tests/topology_export.rs`.
+2. ✅ **`CreatureExport` round-trip JSON (`Serialize` on all three export types)** — **done**. Landed via issue **[#30](https://github.com/stSoftwareAU/NEAT-AI-core/issues/30)**; `CreatureExport` / `NeuronExport` / `SynapseExport` in `neat-core/src/creature.rs` now derive both `Serialize` and `Deserialize`.
 
 Everything else is either already covered more completely by `neat-core`, owned by the parent NEAT-AI repo, or deliberately outside this crate's scope.
 
