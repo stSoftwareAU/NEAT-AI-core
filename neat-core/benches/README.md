@@ -62,6 +62,37 @@ creatures" requirement. The deterministic builders live in
 `benches/common/mod.rs` and are exercised by the `bench_fixtures` integration
 test.
 
+> **Fixture caveat — squash is uniformly `Tanh` (Issue #261).** The `squash`
+> column above is not varied: every neuron in the `production` / `production_2x`
+> shapes is built with `SquashType::Tanh` (`benches/common/mod.rs:168`), locked
+> by `tests/bench_fixtures.rs::production_fixture_squash_is_homogeneous_tanh`.
+> Real GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so on this fixture
+> squash-vectorisation deltas are a **lower bound** and branch-prediction levers
+> are **unmeasurable** (a homogeneous squash lets the predictor nail the
+> one-arm `match`). See [`BASELINE.md`](BASELINE.md) for the full caveat.
+
+## Optimisation levers learned (Issue #261)
+
+Durable negative/counter-intuitive results from the #227 perf campaign, kept
+here so the levers are **not re-attempted** and the numbers are read correctly.
+
+- **The per-record squash cost was the *range lookup*, not branch
+  misprediction (PR #245, 6–8% single-core win).** The #245 issue hypothesised
+  the win would come from eliminating a mispredicted squash `match`. It did not:
+  the fixture is homogeneous `Tanh`, so the predictor already nails that branch
+  (see the fixture caveat above). The real lever was LLVM **failing to CSE**
+  eight identical `apply_get_range(squash)` range-lookups per neuron — the
+  intervening `NaN`/`±Inf` branches blocked the merge, so 7 of every 8 range
+  `match`es per batch were redundant work. **Hoisting** the per-record range
+  lookup removed it. Rule: hoist per-record range lookups; do **not** attribute
+  a perf delta to an unverified cause (here, branch misprediction) — verify the
+  actual lever before recording it.
+- **Corollary for future squash/scoring work.** On a *varied*-squash creature
+  the eliminated misprediction would stack on top of the range-hoist gain, so
+  the committed homogeneous-`Tanh` numbers are a lower bound for production.
+  Chasing branch-misprediction *on this fixture* will measure nothing — validate
+  such levers against the real varied-squash creature, not the synthetic shape.
+
 ## Running
 
 ```bash

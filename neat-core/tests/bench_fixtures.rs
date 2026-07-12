@@ -11,6 +11,7 @@ use common::{
     FanIn, NETWORKS, NetSpec, PRODUCTION_SCORING_RECORDS, build_backprop_data, build_inputs,
     build_network, build_records,
 };
+use neat_core::squash::SquashType;
 
 fn spec(label: &str) -> &'static NetSpec {
     NETWORKS
@@ -79,6 +80,26 @@ fn varied_fan_in_actually_varies_unlike_fixed_shapes() {
         assert!(
             tail.iter().all(|n| n.num_synapses as usize == f),
             "fixed shapes should keep a constant fan-in past the early ramp"
+        );
+    }
+}
+
+#[test]
+fn production_fixture_squash_is_homogeneous_tanh() {
+    // The BASELINE.md / README.md "Fixture caveat" (Issue #261) rests on the
+    // production/production_2x fixtures being uniformly `Tanh`. That homogeneity
+    // makes squash-vectorisation deltas a lower bound (real GRQ creatures also
+    // run scalar-`libm` Gelu/Mish) and makes branch-prediction levers
+    // unmeasurable on the fixture (the predictor already nails a one-arm match).
+    // If a future change diversifies the fixture squash, this test fails so the
+    // documented caveat is revisited rather than silently invalidated.
+    for label in ["production", "production_2x"] {
+        let net = build_network(spec(label), 0x5152_5354);
+        assert!(
+            net.neurons
+                .iter()
+                .all(|n| n.squash_type == SquashType::Tanh as u8),
+            "{label} fixture must be homogeneous Tanh — the bench-doc caveat depends on it"
         );
     }
 }
