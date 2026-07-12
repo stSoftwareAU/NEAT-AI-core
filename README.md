@@ -1,6 +1,17 @@
 # NEAT-AI-core
 
-**Native shared Rust** for [NEAT-AI](https://github.com/stSoftwareAU/NEAT-AI): the **`neat-core`** crate (tests included) lives here as a Cargo workspace member.
+**Native shared Rust** for [NEAT-AI](https://github.com/stSoftwareAU/NEAT-AI) — an implementation of [**NEAT** (NeuroEvolution of Augmenting Topologies)](https://en.wikipedia.org/wiki/Neuroevolution_of_augmenting_topologies): the **`neat-core`** crate (tests included) lives here as a Cargo workspace member.
+
+## Glossary
+
+First-use definitions for the project's core terms, an acronym, and its
+internal automation name. Standard terms link out; the project's own
+vocabulary carries a plain-English gloss.
+
+- <a id="glossary-neat"></a>**NEAT** — [NeuroEvolution of Augmenting Topologies](https://en.wikipedia.org/wiki/Neuroevolution_of_augmenting_topologies), the algorithm that evolves both the weights *and* the topology of a neural network. NEAT-AI is a project built on this idea; this repo is its shared native core.
+- <a id="glossary-creature"></a>**creature** — the project's term for a single evolved individual: a [genome](https://en.wikipedia.org/wiki/Artificial_neural_network) compiled to a runnable network. Scoring pushes many records through one creature.
+- <a id="glossary-squash"></a>**squash** — a neuron's [activation function](https://en.wikipedia.org/wiki/Activation_function) (the non-linearity applied to its weighted input sum). "Standard-squash" neurons use the project's default activation.
+- <a id="glossary-vibe-coder"></a>**Vibe Coder** — the automated agent that raises the routine dependency-bump and quality PRs (it runs `bump-deps.sh` before `quality.sh` on every such PR).
 
 ## Test-driven development
 
@@ -21,7 +32,7 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. The `rust-gates` job runs the lint (`cargo clippy -D warnings`) and compile/syntax (`cargo check --all-targets`) gates on **every push to `Develop` and every pull request**; the `quality` job is the full PR pipeline. |
-| `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build (Vibe Coder hook). |
+| `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
 | `.github/dependabot.yml` | Advisory-triggered security-update fast lane — raises a fix PR the moment a RustSec/OSV advisory lands, independent of the weekly bump. |
 | `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`). |
 | `LICENSE`, `.gitleaks.toml` | Inherited from NEAT-AI `Develop`. |
@@ -43,7 +54,7 @@ cargo bench -p neat-core --bench hot_paths
 |---------|---------|--------|
 | `parallel` | off | Native-only data-parallel record scoring via `rayon` (Issue #179). Adds `CompiledNetwork::score_records_parallel`, which chunks records across the rayon pool. Off by default, so the default build and the `wasm32` build pull in **no** `rayon` symbols and keep their single-thread path. |
 
-Scoring a production-size dataset pushes many records through one creature — an
+Scoring a production-size dataset pushes many records through one [creature](#glossary-creature) — an
 embarrassingly parallel workload *across records*. Both `score_records` and
 `score_records_parallel` drive the forward pass through the **8-record batched
 SIMD path** (Issue #230): records are grouped into 8s (then a 4-record group,
@@ -53,7 +64,7 @@ across the lanes. On the gather-bound production topology this cut single-core
 scoring time by **~39%** (see `docs/archive/pr-summaries/pr-summary-230.md`).
 With the `parallel` feature the throughput additionally scales with core count.
 
-Standard-squash neurons now sum **across records** rather than across synapses,
+Standard-[squash](#glossary-squash) neurons now sum **across records** rather than across synapses,
 so their `f32` results match the per-record `activate` reference within a small
 tolerance (SIMD re-association), while the sequential and parallel paths agree
 bit-for-bit. Output order always matches input order.
