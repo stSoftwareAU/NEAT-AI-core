@@ -24,6 +24,28 @@ Public issues are fine once an advisory is published and remediated.
 We aim to acknowledge a report within two working days and to agree a
 disclosure timeline with the reporter.
 
+## Memory safety of compiled-network loading
+
+Untrusted compiled-network input (a `.bin` buffer) is made safe for the native
+SIMD forward pass by a single load-time validation. The SIMD kernels in
+`neat-core/src/simd_native.rs` index the activation buffer — sized to exactly
+`num_neurons` — with **unchecked** indexing (`get_unchecked(from_index)`) for
+speed. A synapse whose `from_index >= num_neurons` would therefore be an
+out-of-bounds read (undefined behaviour: heap information disclosure or a fault)
+on every `activate()`.
+
+`CompiledNetwork::new` upholds the precondition once, at deserialisation time:
+it rejects any synapse referencing an index outside `0..num_neurons` with
+`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs:326`, Issue #207).
+A network that loads successfully is guaranteed to have every `from_index` in
+range, which is what makes the downstream `get_unchecked` calls sound.
+
+**This `from_index < num_neurons` check must never be removed or bypassed.**
+It is the whole memory-safety guarantee for the SIMD hot path — deleting it as
+"redundant" reintroduces the out-of-bounds read. See the engineering-facing
+statement of this invariant in
+[`AGENTS.md`](AGENTS.md#unsafe--simd-invariants).
+
 ## Dependency bump quarantine
 
 Dependency bumps honour a release-age **quarantine window**
