@@ -55,17 +55,25 @@ jobs:
         # dtolnay/rust-toolchain@stable
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
-      - name: Install cargo-edit and cargo-outdated
+      - name: Install cargo-audit and cargo-outdated
+        # cargo-audit is required by bump-deps.sh; cargo-outdated is used for the
+        # informational report below. cargo-edit is intentionally dropped — the
+        # dep refresh now goes through bump-deps.sh (cargo update), not
+        # cargo upgrade, so cargo-edit is no longer needed.
         # taiki-e/install-action@v2.79.2
         uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d
         with:
-          tool: cargo-edit,cargo-outdated
+          tool: cargo-audit,cargo-outdated
 
       - name: Bump crate version (if needed) and upgrade dependencies
         # PR_BREAKING_LABEL is the boolean result of a controlled GitHub
         # expression (not user text), so it is safe to read from the env.
         env:
           PR_BREAKING_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') }}
+          # Issue #76 — crates.io versions younger than this many hours are
+          # deferred by bump-deps.sh so this PR bump path honours the same
+          # release-age quarantine as the scheduled upgrade-dependencies.yml.
+          VIBE_BUMP_QUARANTINE_HOURS: ${{ vars.VIBE_BUMP_QUARANTINE_HOURS || '24' }}
         run: |
           set -euo pipefail
           BASE_BRANCH="Develop"
@@ -121,9 +129,16 @@ jobs:
             rm -f Cargo.toml.bak
           fi
 
-          echo "Running cargo upgrade --incompatible and cargo update (NEAT-AI-Discovery quality.sh parity)..."
-          cargo upgrade --incompatible
-          cargo update
+          # Refresh crates.io dependencies through bump-deps.sh so the
+          # release-age quarantine (Issue #76) is honoured on the PR bump path
+          # too. A direct upgrade/update here would bypass the quarantine and
+          # re-open the fast-flagged supply-chain window the script closes.
+          # --skip-build: the downstream quality / rust-gates jobs already
+          # compile the bumped tree; cargo audit still runs here for an early
+          # advisory signal.
+          echo "Refreshing dependencies via bump-deps.sh (quarantine-aware)..."
+          chmod +x bump-deps.sh
+          ./bump-deps.sh --quarantine-hours "${VIBE_BUMP_QUARANTINE_HOURS}" --skip-build
           cargo outdated -R || true
 
       - name: Commit version and dependency changes
