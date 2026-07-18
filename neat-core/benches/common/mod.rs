@@ -55,12 +55,21 @@ pub enum FanIn {
     /// the production creature's sparse average (~13). Used by the wide/shallow
     /// `production` shapes, which are gather-bound rather than dense.
     VariedAround(usize),
+    /// Distribute *exactly* this many synapses across the non-input neurons, as
+    /// evenly as possible. Used by the `production_exact` shape (Issue #286) so
+    /// the fixture reproduces the committed `GRQ-cluster/network.json` synapse
+    /// count to the synapse, not just its ~13 average. See
+    /// [`FanIn::exact_schedule`].
+    ExactTotal(usize),
 }
 
 impl FanIn {
     /// Number of incoming connections for a neuron that has `max_fan` strictly
     /// earlier neurons to draw from. Only [`FanIn::VariedAround`] consumes an
     /// RNG draw, so [`FanIn::Fixed`] shapes keep their exact prior sequence.
+    /// [`FanIn::ExactTotal`] is not drawn per-neuron — its per-neuron counts come
+    /// from [`FanIn::exact_schedule`] — so `draw` treats it as a no-connection
+    /// fallback that is never reached on the exact path.
     pub fn draw(self, rng: &mut Lcg, max_fan: usize) -> usize {
         let target = match self {
             FanIn::Fixed(f) => f,
@@ -68,8 +77,44 @@ impl FanIn {
                 let span = (2 * avg).saturating_sub(1).max(1);
                 1 + rng.next_below(span)
             }
+            FanIn::ExactTotal(_) => 0,
         };
         target.min(max_fan)
+    }
+
+    /// Pre-computed per-neuron fan-in schedule for variants whose total synapse
+    /// count is fixed exactly. Returns `None` for the RNG-drawn variants
+    /// ([`FanIn::Fixed`] / [`FanIn::VariedAround`]) so their existing draw
+    /// sequence — and therefore every committed baseline — is left untouched.
+    ///
+    /// [`FanIn::ExactTotal`] spreads `total` synapses as evenly as possible
+    /// across `num_non_inputs` neurons: each neuron gets `total / num_non_inputs`
+    /// synapses, and the `total % num_non_inputs` remainder is handed out
+    /// one-per-neuron using a Bresenham stride so the extra-synapse neurons are
+    /// interleaved across the range rather than clustered at the front. The
+    /// schedule therefore sums to **exactly** `total` by construction, with at
+    /// most two distinct fan-in values (`base` and `base + 1`).
+    pub fn exact_schedule(self, num_non_inputs: usize) -> Option<Vec<usize>> {
+        match self {
+            FanIn::ExactTotal(total) => {
+                if num_non_inputs == 0 {
+                    return Some(Vec::new());
+                }
+                let base = total / num_non_inputs;
+                let remainder = total % num_non_inputs;
+                let schedule = (0..num_non_inputs)
+                    .map(|n| {
+                        // Bresenham even distribution: exactly `remainder` neurons
+                        // across the whole range receive one extra synapse.
+                        let extra =
+                            (n + 1) * remainder / num_non_inputs - n * remainder / num_non_inputs;
+                        base + extra
+                    })
+                    .collect();
+                Some(schedule)
+            }
+            FanIn::Fixed(_) | FanIn::VariedAround(_) => None,
+        }
     }
 }
 
@@ -96,7 +141,11 @@ impl NetSpec {
 /// a huge input layer, a modest neuron count and a sparse ~13 average fan-in,
 /// which is gather-bound in a way the dense shapes are not. `production_2x`
 /// doubles neurons and synapses to cover #175's "or larger creatures" clause.
-pub const NETWORKS: [NetSpec; 5] = [
+/// `production_exact` (Issue #286) pins the fixture to the committed
+/// `GRQ-cluster/network.json` topology — 1,666 non-input neurons, 21,513
+/// synapses, 2,461 inputs — to the synapse, giving the Criterion baseline a
+/// reproducible production-topology anchor.
+pub const NETWORKS: [NetSpec; 6] = [
     NetSpec {
         label: "small_50",
         num_neurons: 50,
@@ -134,6 +183,18 @@ pub const NETWORKS: [NetSpec; 5] = [
         num_outputs: 2,
         fan_in: FanIn::VariedAround(13),
     },
+    NetSpec {
+        label: "production_exact",
+        // Exact GRQ-cluster/network.json topology (Issue #286): 2461 inputs +
+        // 1666 non-input neurons = 4127 total, exactly 21,513 synapses. Unlike
+        // `production`'s ~13-average VariedAround, ExactTotal pins the synapse
+        // count to the committed production model so the baseline is anchored to
+        // the real topology rather than an approximation of it.
+        num_neurons: 4127,
+        num_inputs: 2461,
+        num_outputs: 1,
+        fan_in: FanIn::ExactTotal(21_513),
+    },
 ];
 
 /// Build a deterministic feedforward [`CompiledNetwork`] from a [`NetSpec`].
@@ -146,12 +207,21 @@ pub fn build_network(spec: &NetSpec, seed: u64) -> CompiledNetwork {
     let num_inputs = spec.num_inputs;
     let mut rng = Lcg::new(seed);
     let num_non_inputs = spec.num_non_inputs();
+    // `Some` only for exact-count shapes; the RNG-drawn shapes stay `None` so
+    // their per-neuron `draw` sequence — and every committed baseline — is
+    // byte-for-byte unchanged.
+    let schedule = spec.fan_in.exact_schedule(num_non_inputs);
     let mut neurons = Vec::with_capacity(num_non_inputs);
     let mut synapses = Vec::new();
 
     for n in 0..num_non_inputs {
         let global_idx = num_inputs + n;
-        let this_fan = spec.fan_in.draw(&mut rng, global_idx);
+        let this_fan = match &schedule {
+            // Cap by strictly-earlier neurons for soundness; never truncates on
+            // the production_exact shape (num_inputs ≫ per-neuron fan-in).
+            Some(sched) => sched[n].min(global_idx),
+            None => spec.fan_in.draw(&mut rng, global_idx),
+        };
         let start_synapse = synapses.len() as u32;
         for _ in 0..this_fan {
             let from = rng.next_below(global_idx);
@@ -261,6 +331,10 @@ pub fn build_backprop_data(spec: &NetSpec, seed: u64) -> BackpropData {
     let num_inputs = spec.num_inputs;
     let num_outputs = spec.num_outputs;
     let mut rng = Lcg::new(seed);
+    // Exact-count shapes use a pre-computed schedule; RNG-drawn shapes stay
+    // `None` so their existing draw sequence is untouched (mirrors
+    // `build_network`).
+    let schedule = spec.fan_in.exact_schedule(spec.num_non_inputs());
     let mut neurons = Vec::with_capacity(num_neurons);
 
     // Input neurons first.
@@ -291,7 +365,10 @@ pub fn build_backprop_data(spec: &NetSpec, seed: u64) -> BackpropData {
             rng.next_signed(),
         ));
 
-        let this_fan = spec.fan_in.draw(&mut rng, global_idx);
+        let this_fan = match &schedule {
+            Some(sched) => sched[global_idx - num_inputs].min(global_idx),
+            None => spec.fan_in.draw(&mut rng, global_idx),
+        };
         inward_starts[global_idx] = inward_indices.len() as u32;
         inward_counts[global_idx] = this_fan as u32;
         for _ in 0..this_fan {
