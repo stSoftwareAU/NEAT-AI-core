@@ -173,6 +173,48 @@ lane sub-issue's optimisation is measured against.
 > single-core scoring latency as ~62–92 ms (±~20%). A lane sub-issue must A/B
 > with `--save-baseline` inside a single invocation to stay inside this band.
 
+## Record-interleaved scoring optimisation (Issue #287)
+
+The single-thread scoring hot path (`score_records` → `score_batch_into`, the
+same lane NEAT-AI's per-creature wasm32 workers drive) now transposes each
+group of eight records into a **record-interleaved** activation buffer:
+lane `l` of source neuron `n` lives at `inter[n * 8 + l]`, so all eight records
+for a synapse's source are contiguous. Each gather in
+`weighted_sum_interleaved_8` is then one cache-line read (two adjacent 4-wide
+loads on NEON / one `_mm256_loadu_ps` on AVX2 / one contiguous `f32x4` pair on
+wasm `simd128`) instead of eight scattered per-lane loads, and each neuron's
+eight outputs are a single contiguous store. This extends the #230 batched-SIMD
+approach to the gather itself; it is layout-driven, so the win is portable
+across the native and `wasm32` builds. Networks containing aggregate squashes
+(Minimum/Maximum/If/Hypotenuse/HypotenuseV2/Mean) keep the original per-lane
+path; the all-standard-squash production topology takes the fast path.
+
+**Methodology (controls for the laptop thermal band above).** Because separate
+`cargo bench` invocations drift, the A/B was run as **alternating** old/new
+rounds of the *same* prebuilt bench binaries, capturing the unchanged
+`forward_pass` benchmark alongside `scoring` as a drift control. `forward_pass`
+stayed flat across old/new (34.65 µs vs 34.71 µs mean), confirming the `scoring`
+delta is the code change, not thermal drift.
+
+**Measured 2026-07-18**, GRQ host class (Apple M4 Pro), rustc 1.97.0,
+`--release`, 4 alternating rounds (Criterion `--sample-size 60`):
+
+| `production_exact` (median) | old | new | change |
+| --- | --- | --- | --- |
+| `scoring` (4096 records) mean of 4 rounds | 101.4 ms | 48.1 ms | **−52% (≈2.1×)** |
+| `forward_pass` control (unchanged) mean | 34.65 µs | 34.71 µs | flat |
+
+Every round showed the interleaved path far faster on `scoring` (old
+83/104/109/109 ms → new 49/50/53/40 ms). At the ~48 ms new scoring figure the
+per-creature ~2.24 M-record corpus pass (see the latency table above) drops from
+≈33.9 s toward the low-20s-of-seconds on a single core — a direct win on the
+score-per-hour metric. `forward_pass` (the single-record `activate` path) is
+untouched and unaffected. Numerics: full 8-record groups are bit-identical to
+the prior per-lane 8-record path (same FMA order); the `records.len() % 8` tail
+runs the exact single-record kernel, so single-record scoring stays
+bit-for-bit identical to `activate` (asserted by
+`tests/interleaved_scoring_parity.rs` and the existing scoring parity suite).
+
 ## Reproducing
 
 ```bash
