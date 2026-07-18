@@ -454,6 +454,68 @@ pub fn weighted_sum_simd_8records(
     )
 }
 
+/// Issue #287 - record-interleaved 8-lane weighted sum for the batched scoring
+/// hot path.
+///
+/// `inter` is the transposed batch activation buffer: lane `l` of source neuron
+/// `n` lives at `inter[n * 8 + l]`, so all eight records for a synapse's source
+/// are contiguous. Each gather is then two adjacent 4-wide reads from one cache
+/// line instead of eight scattered per-lane loads, cutting gather traffic on the
+/// gather-bound production topology. Numerically identical to
+/// [`weighted_sum_simd_8records`]: same per-synapse FMA order, bias seeded into
+/// every lane.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+pub fn weighted_sum_interleaved_8(
+    synapses: &[SynapseData],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; 8] {
+    if end <= start {
+        return [bias; 8];
+    }
+
+    let mut acc03 = f32x4_splat(bias);
+    let mut acc47 = f32x4_splat(bias);
+
+    for i in start..end {
+        let synapse = &synapses[i];
+        let base = synapse.from_index as usize * 8;
+        let weights = f32x4_splat(synapse.weight);
+
+        // The eight lanes are contiguous, so these read one cache line.
+        let acts03 = f32x4(
+            inter[base],
+            inter[base + 1],
+            inter[base + 2],
+            inter[base + 3],
+        );
+        let acts47 = f32x4(
+            inter[base + 4],
+            inter[base + 5],
+            inter[base + 6],
+            inter[base + 7],
+        );
+
+        acc03 = f32x4_relaxed_madd(weights, acts03, acc03);
+        acc47 = f32x4_relaxed_madd(weights, acts47, acc47);
+    }
+
+    [
+        f32x4_extract_lane::<0>(acc03),
+        f32x4_extract_lane::<1>(acc03),
+        f32x4_extract_lane::<2>(acc03),
+        f32x4_extract_lane::<3>(acc03),
+        f32x4_extract_lane::<0>(acc47),
+        f32x4_extract_lane::<1>(acc47),
+        f32x4_extract_lane::<2>(acc47),
+        f32x4_extract_lane::<3>(acc47),
+    ]
+}
+
 // Native (non-wasm32) multi-record helpers now live in `simd_native.rs` and use
 // AVX2/FMA on x86_64, NEON on aarch64, falling back to scalar elsewhere.
 #[cfg(not(target_arch = "wasm32"))]
@@ -466,6 +528,7 @@ mod simd_native;
 // kernels and run on the primary `activate()` forward-pass hot path.
 #[cfg(not(target_arch = "wasm32"))]
 pub use simd_native::{
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
-    weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
+    weighted_sum_interleaved_8, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
+    weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
+    weighted_sum_simd_8records,
 };

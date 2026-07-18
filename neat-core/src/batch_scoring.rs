@@ -43,27 +43,46 @@
 use crate::network::{CompiledNetwork, NeuronData, SynapseData};
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
-    weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
+    weighted_sum_interleaved_8, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
+    weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
+    weighted_sum_simd_8records,
 };
 use crate::squash::{SquashType, apply_squash};
 use crate::squash_simd::{squash_x4, squash_x8};
 use crate::synapse_type::SynapseType;
 
-/// Reusable per-worker scratch: eight activation buffers, one per SIMD lane.
+/// Number of records processed per SIMD batch (one lane each).
+pub(crate) const SCORING_LANES: usize = 8;
+
+/// Reusable per-worker scratch for the batched scoring forward pass.
 ///
 /// Owning the buffers here lets the sequential path allocate once for a whole
 /// batch and the parallel path allocate once per rayon worker (via
 /// `for_each_init`), instead of once per chunk.
+///
+/// Two layouts are held so scoring can pick the cheaper gather per network
+/// (Issue #287):
+///
+/// - `inter` is the **record-interleaved** buffer used by the fast path when the
+///   network has no aggregate-squash neurons: lane `l` of neuron `n` lives at
+///   `inter[n * SCORING_LANES + l]`, so a synapse's eight records are contiguous
+///   and each gather reads one cache line instead of eight scattered buffers.
+/// - `acts` is the original eight-buffer (one-per-lane) layout, retained for the
+///   fallback path that scores networks containing aggregate squashes
+///   (Minimum/Maximum/If/Hypotenuse/HypotenuseV2/Mean), whose exact
+///   single-record kernels index a contiguous per-lane activation slice.
 pub struct BatchScratch {
     acts: [Vec<f32>; 8],
+    inter: Vec<f32>,
 }
 
 impl BatchScratch {
-    /// Allocate eight zeroed activation buffers sized to the network.
+    /// Allocate the zeroed activation buffers sized to the network: eight
+    /// per-lane buffers plus one interleaved buffer of `num_neurons * 8`.
     pub fn new(num_neurons: usize) -> Self {
         Self {
             acts: std::array::from_fn(|_| vec![0.0f32; num_neurons]),
+            inter: vec![0.0f32; num_neurons * SCORING_LANES],
         }
     }
 }
@@ -184,11 +203,165 @@ impl CompiledNetwork {
     ///
     /// Record `i` (0-based within `records`) writes its outputs to
     /// `out[i * num_outputs .. (i + 1) * num_outputs]`; `out` must be exactly
-    /// `records.len() * num_outputs` long. Records are grouped into 8s and
-    /// driven through [`weighted_sum_simd_8records`], then a 4-record group via
-    /// [`weighted_sum_simd_4records`], then a scalar tail — matching the
-    /// remainder handling of `mse_sum_batch_packed`.
+    /// `records.len() * num_outputs` long.
+    ///
+    /// Dispatches between two numerically-equivalent layouts (Issue #287):
+    ///
+    /// - **Interleaved fast path** ([`Self::score_batch_interleaved`]) when the
+    ///   network has no aggregate-squash neurons — the common case, including the
+    ///   all-standard-squash production topology. Records are transposed so each
+    ///   synapse gather reads one cache line.
+    /// - **Per-lane fallback** ([`Self::score_batch_per_lane`]) otherwise, which
+    ///   keeps aggregate squashes (Minimum/Maximum/If/Hypotenuse/HypotenuseV2/
+    ///   Mean) on the exact single-record kernels.
+    ///
+    /// Both group records into 8s then a 4-record group then a scalar tail, and
+    /// both are bit-identical on the covered standard-squash neurons.
     pub(crate) fn score_batch_into(
+        &self,
+        scratch: &mut BatchScratch,
+        records: &[Vec<f32>],
+        num_outputs: usize,
+        out: &mut [f32],
+    ) {
+        if self.has_aggregate_squash() {
+            self.score_batch_per_lane(scratch, records, num_outputs, out);
+        } else {
+            self.score_batch_interleaved(scratch, records, num_outputs, out);
+        }
+    }
+
+    /// True when any non-constant neuron uses an aggregate squash whose exact
+    /// kernel needs a contiguous per-lane activation slice (so the interleaved
+    /// fast path does not apply). O(neurons); the scoring batch dwarfs it.
+    fn has_aggregate_squash(&self) -> bool {
+        self.neurons.iter().any(|neuron| {
+            !neuron.is_constant
+                && matches!(
+                    SquashType::from(neuron.squash_type),
+                    SquashType::Minimum
+                        | SquashType::Maximum
+                        | SquashType::If
+                        | SquashType::Hypotenuse
+                        | SquashType::HypotenuseV2
+                        | SquashType::Mean
+                )
+        })
+    }
+
+    /// Record-interleaved scoring fast path (Issue #287).
+    ///
+    /// Transposes each group of eight records into `scratch.inter`
+    /// (`inter[n * 8 + l]` = lane `l` of neuron `n`) so every synapse gather in
+    /// [`weighted_sum_interleaved_8`] reads one contiguous cache line rather than
+    /// eight scattered per-lane buffers, and each neuron's eight outputs are a
+    /// contiguous store. Full 8-record groups are bit-identical to the per-lane
+    /// 8-record path (same FMA order and vectorised squash); the trailing
+    /// `records.len() % 8` records run the exact single-record kernel
+    /// ([`neuron_activation_scalar`]) so they stay bit-for-bit identical to
+    /// `activate` — matching the per-lane fallback's scalar-tail guarantee. Only
+    /// called when [`Self::has_aggregate_squash`] is false, so the group path
+    /// needs no aggregate kernel.
+    fn score_batch_interleaved(
+        &self,
+        scratch: &mut BatchScratch,
+        records: &[Vec<f32>],
+        num_outputs: usize,
+        out: &mut [f32],
+    ) {
+        const L: usize = SCORING_LANES;
+        let num_inputs = self.num_inputs;
+        let num_neurons = self.num_neurons;
+        let output_start = num_neurons - num_outputs;
+        let n = records.len();
+
+        // `inter` (fast group path) and `acts[0]` (exact scalar tail) are disjoint
+        // fields, so borrow both at once.
+        let BatchScratch { acts, inter } = scratch;
+        let tail_act = &mut acts[0];
+
+        let mut base = 0usize;
+
+        // ---- full 8-record groups -------------------------------------------
+        while base + L <= n {
+            // Transpose L records into the interleaved buffer.
+            for l in 0..L {
+                let rec = &records[base + l];
+                let in_len = rec.len().min(num_inputs);
+                for i in 0..in_len {
+                    inter[i * L + l] = rec[i];
+                }
+                for i in in_len..num_inputs {
+                    inter[i * L + l] = 0.0;
+                }
+            }
+
+            // Forward pass, all L lanes at once.
+            for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
+                let out_base = (num_inputs + neuron_idx) * L;
+
+                if neuron.is_constant {
+                    let v = apply_limit_range(SquashType::Identity, neuron.bias);
+                    for slot in inter[out_base..out_base + L].iter_mut() {
+                        *slot = v;
+                    }
+                    continue;
+                }
+
+                let squash = SquashType::from(neuron.squash_type);
+                let start = neuron.start_synapse as usize;
+                let end = start + neuron.num_synapses as usize;
+                let sums =
+                    weighted_sum_interleaved_8(&self.synapses, inter, start, end, neuron.bias);
+
+                // Vectorised squash across all 8 lanes for the covered types
+                // (Issue #243); scalar inline fallback otherwise.
+                let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
+                    let st = neuron.squash_type;
+                    sums.map(|s| inline_squash(st, squash, s))
+                });
+
+                // Resolve the output range once per neuron (Issue #245) and clamp
+                // all 8 lanes; the writes land in one contiguous cache line.
+                let (low, high) = apply_get_range(squash);
+                for l in 0..L {
+                    inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
+                }
+            }
+
+            // Scatter each lane's outputs to the flat buffer.
+            for l in 0..L {
+                let dst = (base + l) * num_outputs;
+                for o in 0..num_outputs {
+                    out[dst + o] = inter[(output_start + o) * L + l];
+                }
+            }
+
+            base += L;
+        }
+
+        // ---- exact single-record tail (records.len() % 8) -------------------
+        // Bit-identical to `activate`, so a lone or partial trailing group keeps
+        // the strict single-record parity guarantee.
+        while base < n {
+            load_record(tail_act, &records[base], num_inputs);
+            for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
+                let actual_idx = num_inputs + neuron_idx;
+                tail_act[actual_idx] = neuron_activation_scalar(&self.synapses, tail_act, neuron);
+            }
+            let dst = base * num_outputs;
+            out[dst..dst + num_outputs]
+                .copy_from_slice(&tail_act[output_start..output_start + num_outputs]);
+            base += 1;
+        }
+    }
+
+    /// Per-lane fallback scoring path — the original eight-buffer layout, kept
+    /// verbatim for networks containing aggregate squashes (Issue #287). Record
+    /// `i` writes `out[i * num_outputs ..]`; records are grouped into 8s
+    /// ([`weighted_sum_simd_8records`]), then a 4-record group
+    /// ([`weighted_sum_simd_4records`]), then a scalar tail.
+    fn score_batch_per_lane(
         &self,
         scratch: &mut BatchScratch,
         records: &[Vec<f32>],

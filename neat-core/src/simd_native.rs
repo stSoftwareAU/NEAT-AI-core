@@ -77,6 +77,33 @@ fn weighted_sum_simd_4records_scalar(
     (sum0, sum1, sum2, sum3)
 }
 
+/// Scalar fallback for the record-interleaved 8-lane weighted sum (Issue #287).
+///
+/// `inter` is the transposed batch activation buffer: lane `l` of neuron `n`
+/// lives at `inter[n * 8 + l]`, so all eight records for a source neuron are
+/// contiguous. This mirrors [`weighted_sum_simd_8records_scalar`] numerically —
+/// same per-synapse FMA order, bias seeded into every lane — so the covered
+/// scoring path is bit-identical whichever gather layout is used.
+#[inline]
+fn weighted_sum_interleaved_8_scalar(
+    synapses: &[SynapseData],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; 8] {
+    let mut acc = [bias; 8];
+    for synapse in synapses.iter().take(end).skip(start) {
+        let base = synapse.from_index as usize * 8;
+        let w = synapse.weight;
+        let chunk = &inter[base..base + 8];
+        for l in 0..8 {
+            acc[l] += chunk[l] * w;
+        }
+    }
+    acc
+}
+
 #[cfg(target_arch = "x86_64")]
 mod x86 {
     use super::SynapseData;
@@ -130,6 +157,46 @@ mod x86 {
         (
             out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
         )
+    }
+
+    /// Record-interleaved 8-lane weighted sum (Issue #287).
+    ///
+    /// `inter` holds the transposed batch: the eight records for source neuron
+    /// `n` are contiguous at `inter[n * 8 .. n * 8 + 8]`, so each synapse gather
+    /// is a single `_mm256_loadu_ps` from one cache line instead of eight
+    /// scattered scalar loads — the whole point of the layout change.
+    ///
+    /// # Safety
+    /// Caller must ensure AVX2 is enabled (`is_x86_feature_detected!("avx2")`).
+    /// Issue #287 - `inter.len()` must be `num_neurons * 8` and every
+    /// `synapse.from_index` in `start..end` must be `< num_neurons`, so
+    /// `from_index * 8 + 8 <= inter.len()`; `CompiledNetwork::new` validates the
+    /// synapse index range at load time. The 8-wide read is then in bounds.
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    pub unsafe fn weighted_sum_interleaved_8_avx2(
+        synapses: &[SynapseData],
+        inter: &[f32],
+        start: usize,
+        end: usize,
+        bias: f32,
+    ) -> [f32; 8] {
+        let mut acc = _mm256_set1_ps(bias);
+        let ptr = inter.as_ptr();
+        for i in start..end {
+            let synapse = unsafe { synapses.get_unchecked(i) };
+            let base = synapse.from_index as usize * 8;
+            let w = synapse.weight;
+            // SAFETY: base + 8 <= inter.len() by the load-time index validation
+            // documented above; the unaligned 8-wide load is in bounds.
+            let acts = unsafe { _mm256_loadu_ps(ptr.add(base)) };
+            let ws = _mm256_set1_ps(w);
+            // `_mm256_fmadd_ps` needs `fma` (mirrors the 8records kernel above).
+            acc = unsafe { _mm256_fmadd_ps(ws, acts, acc) };
+        }
+        let mut out = [0.0_f32; 8];
+        unsafe { _mm256_storeu_ps(out.as_mut_ptr(), acc) };
+        out
     }
 
     /// # Safety
@@ -379,6 +446,49 @@ mod aarch64 {
         (
             o03[0], o03[1], o03[2], o03[3], o47[0], o47[1], o47[2], o47[3],
         )
+    }
+
+    /// Record-interleaved 8-lane weighted sum (Issue #287).
+    ///
+    /// `inter` holds the transposed batch: the eight records for source neuron
+    /// `n` are contiguous at `inter[n * 8 .. n * 8 + 8]`, so each synapse gather
+    /// is two adjacent `vld1q_f32` loads from one cache line instead of eight
+    /// scattered scalar loads staged through a stack array.
+    ///
+    /// # Safety
+    /// Caller must ensure NEON is available (typical on aarch64-apple-darwin /
+    /// linux-aarch64). Issue #287 - `inter.len()` must be `num_neurons * 8` and
+    /// every `synapse.from_index` in `start..end` must be `< num_neurons`, so
+    /// `from_index * 8 + 8 <= inter.len()`; `CompiledNetwork::new` validates the
+    /// synapse index range at load time, making the two 4-wide reads in bounds.
+    #[target_feature(enable = "neon")]
+    #[inline]
+    pub unsafe fn weighted_sum_interleaved_8_neon(
+        synapses: &[SynapseData],
+        inter: &[f32],
+        start: usize,
+        end: usize,
+        bias: f32,
+    ) -> [f32; 8] {
+        let mut acc03 = vdupq_n_f32(bias);
+        let mut acc47 = vdupq_n_f32(bias);
+        let ptr = inter.as_ptr();
+        for i in start..end {
+            let synapse = unsafe { synapses.get_unchecked(i) };
+            let base = synapse.from_index as usize * 8;
+            let w = synapse.weight;
+            // SAFETY: base + 8 <= inter.len() by the load-time index validation
+            // documented above; both 4-wide reads are in bounds.
+            let a03 = unsafe { vld1q_f32(ptr.add(base)) };
+            let a47 = unsafe { vld1q_f32(ptr.add(base + 4)) };
+            let vw = vdupq_n_f32(w);
+            acc03 = vfmaq_f32(acc03, vw, a03);
+            acc47 = vfmaq_f32(acc47, vw, a47);
+        }
+        let mut out = [0.0_f32; 8];
+        unsafe { vst1q_f32(out.as_mut_ptr(), acc03) };
+        unsafe { vst1q_f32(out.as_mut_ptr().add(4), acc47) };
+        out
     }
 
     /// # Safety
@@ -631,6 +741,49 @@ pub fn weighted_sum_simd_8records(
     weighted_sum_simd_8records_scalar(
         synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
     )
+}
+
+/// Record-interleaved 8-lane weighted sum (Issue #287): AVX2+FMA on x86_64,
+/// NEON on aarch64, else scalar. `inter` is the transposed batch buffer
+/// (`inter[n * 8 + l]` = lane `l` of neuron `n`), so each synapse gather touches
+/// one cache line instead of eight scattered per-lane buffers.
+#[inline]
+pub fn weighted_sum_interleaved_8(
+    synapses: &[SynapseData],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; 8] {
+    if end <= start {
+        return [bias; 8];
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: the `is_x86_feature_detected!("avx2")` guard proves AVX2 is
+            // available, satisfying the `#[target_feature(enable = "avx2")]`
+            // precondition on `weighted_sum_interleaved_8_avx2`.
+            return unsafe {
+                x86::weighted_sum_interleaved_8_avx2(synapses, inter, start, end, bias)
+            };
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            // SAFETY: the `is_aarch64_feature_detected!("neon")` guard proves NEON
+            // is available, satisfying the `#[target_feature(enable = "neon")]`
+            // precondition on `weighted_sum_interleaved_8_neon`.
+            return unsafe {
+                aarch64::weighted_sum_interleaved_8_neon(synapses, inter, start, end, bias)
+            };
+        }
+    }
+
+    weighted_sum_interleaved_8_scalar(synapses, inter, start, end, bias)
 }
 
 /// 4-record weighted sum: FMA+SSE on x86_64, NEON on aarch64, else scalar.
