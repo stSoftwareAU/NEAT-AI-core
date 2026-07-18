@@ -58,7 +58,7 @@ mod bench {
         // Production-representative volume (Issue #228); see `PRODUCTION_SCORING_RECORDS`.
         const NUM_RECORDS: usize = PRODUCTION_SCORING_RECORDS;
 
-        for label in ["production", "production_2x"] {
+        for label in ["production", "production_2x", "production_exact"] {
             let s = spec(label);
             let net = build_network(s, 0x5EED);
             let records = build_records(net.num_inputs(), NUM_RECORDS);

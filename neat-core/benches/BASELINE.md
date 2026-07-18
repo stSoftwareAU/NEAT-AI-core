@@ -13,8 +13,8 @@ affected group against this file, with matching host/toolchain metadata.
 
 ## Fixture caveat — squash homogeneity (Issue #261)
 
-Every neuron in the `production` / `production_2x` fixtures is uniformly
-`SquashType::Tanh` (`benches/common/mod.rs:168`), asserted by
+Every neuron in the `production` / `production_2x` / `production_exact` fixtures
+is uniformly `SquashType::Tanh` (`benches/common/mod.rs`), asserted by
 `tests/bench_fixtures.rs::production_fixture_squash_is_homogeneous_tanh`. Real
 GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so read every
 `scoring`/`production` A/B below with two corrections in mind:
@@ -105,6 +105,224 @@ The single-core `parallel_scoring` figure (16.86 Krecords/s for `production`)
 matches the `hot_paths` `scoring` group (16.87 Krecords/s) — both drive the same
 sequential `score_records` path, an internal consistency check on the fixture.
 
+## Production-exact topology baseline (Issue #286)
+
+Dated anchor for the **exact** committed `GRQ-cluster/network.json` topology —
+**1,666 non-input neurons, 21,513 synapses, 2,461 inputs** (4,127 total neurons,
+one output). Unlike the `production` shape's ~13-average `VariedAround` fan-in,
+the `production_exact` shape uses `FanIn::ExactTotal(21_513)`, which spreads the
+synapses across the 1,666 neurons as evenly as possible (12 or 13 each,
+Bresenham-interleaved) so the synapse count reproduces the real model to the
+synapse. Seeded synthesis is deterministic and asserted exact by
+`tests/bench_fixtures.rs::production_exact_matches_committed_grq_topology`.
+
+**Measured 2026-07-18** on the same GRQ host class, toolchain **rustc 1.97.0**
+(the earlier `production`/`production_2x` rows above were taken on rustc 1.96.0,
+so compare across sections only within a lane, not across toolchains).
+
+| Field | Value |
+| --- | --- |
+| Host | Apple M4 Pro — 12 cores (8P + 4E), 24 GB, macOS (arm64) |
+| Logical cores (`available_parallelism`) | 12 |
+| Toolchain | rustc 1.97.0 |
+| Criterion | 0.8.2 |
+| Build | `--release` (bench profile) |
+
+### Single-thread lane (`cargo bench -p neat-core --bench hot_paths -- production_exact`)
+
+| Group / benchmark | production_exact | Throughput |
+| --- | --- | --- |
+| `forward_pass` | 30.76 µs `[30.19, 31.35]` | ~134 Melem/s |
+| `batched_scoring/trace_batch_4way` | 122.65 µs `[120.98, 124.33]` | — |
+| `batched_scoring/mse_sum_8records` | 242.08 µs `[239.09, 244.99]` | — |
+| `backprop` | 214.14 µs `[210.46, 218.05]` | ~19.3 Melem/s |
+| `scoring` (4096 records) | 91.50 ms `[90.05, 92.96]` | 44.77 Krecords/s |
+
+### Parallel lane (`cargo bench -p neat-core --features parallel --bench parallel_scoring -- production_exact`)
+
+4096 records scored through one creature inside a fixed-size rayon pool.
+
+| Shape | 1 core | 12 cores | records/s (1 → 12) | Speed-up |
+| --- | --- | --- | --- | --- |
+| `production_exact` | 61.84 ms `[60.36, 63.38]` | 24.62 ms `[22.35, 26.98]` | 66.23 K → 166.4 K | 2.51× |
+
+### Per-creature scoring latency → the project metric
+
+The project metric is **score improvement per wall-clock hour**, and per
+generation a single creature forward-passes the whole ~2.24 M-record corpus to
+compute its fitness (see the record-count calibration above). At the measured
+`production_exact` throughput that per-creature scoring pass costs:
+
+| Lane | records/s | Per-creature corpus pass (~2.24 M records) |
+| --- | --- | --- |
+| Single core | 66.2 K | ≈ **33.9 s** |
+| 12 cores | 166.4 K | ≈ **13.5 s** |
+
+That per-creature latency is the denominator of the metric: halving it doubles
+the creatures a fixed wall-clock budget can score, so it is the figure every
+lane sub-issue's optimisation is measured against.
+
+> **Scoring-lane variance (be honest about it).** The ~90 ms `hot_paths`
+> `scoring` figure and the ~62 ms `parallel_scoring` `1_core` figure exercise the
+> *same* sequential `score_records` path, so in principle they match — but they
+> were taken in separate `cargo bench` invocations and the ~90 ms → ~62 ms spread
+> is real run-to-run variance (thermal state on the laptop-class M4 Pro under a
+> ~90 ms single-shot benchmark with 100 iterations). Treat the **`parallel_scoring`
+> 1-core/12-core pair as the authoritative scoring anchor** — both were measured
+> in one invocation, so their 2.51× ratio is internally consistent — and read the
+> single-core scoring latency as ~62–92 ms (±~20%). A lane sub-issue must A/B
+> with `--save-baseline` inside a single invocation to stay inside this band.
+
+## Record-interleaved scoring optimisation (Issue #287)
+
+The single-thread scoring hot path (`score_records` → `score_batch_into`, the
+same lane NEAT-AI's per-creature wasm32 workers drive) now transposes each
+group of eight records into a **record-interleaved** activation buffer:
+lane `l` of source neuron `n` lives at `inter[n * 8 + l]`, so all eight records
+for a synapse's source are contiguous. Each gather in
+`weighted_sum_interleaved_8` is then one cache-line read (two adjacent 4-wide
+loads on NEON / one `_mm256_loadu_ps` on AVX2 / one contiguous `f32x4` pair on
+wasm `simd128`) instead of eight scattered per-lane loads, and each neuron's
+eight outputs are a single contiguous store. This extends the #230 batched-SIMD
+approach to the gather itself; it is layout-driven, so the win is portable
+across the native and `wasm32` builds. Networks containing aggregate squashes
+(Minimum/Maximum/If/Hypotenuse/HypotenuseV2/Mean) keep the original per-lane
+path; the all-standard-squash production topology takes the fast path.
+
+**Methodology (controls for the laptop thermal band above).** Because separate
+`cargo bench` invocations drift, the A/B was run as **alternating** old/new
+rounds of the *same* prebuilt bench binaries, capturing the unchanged
+`forward_pass` benchmark alongside `scoring` as a drift control. `forward_pass`
+stayed flat across old/new (34.65 µs vs 34.71 µs mean), confirming the `scoring`
+delta is the code change, not thermal drift.
+
+**Measured 2026-07-18**, GRQ host class (Apple M4 Pro), rustc 1.97.0,
+`--release`, 4 alternating rounds (Criterion `--sample-size 60`):
+
+| `production_exact` (median) | old | new | change |
+| --- | --- | --- | --- |
+| `scoring` (4096 records) mean of 4 rounds | 101.4 ms | 48.1 ms | **−52% (≈2.1×)** |
+| `forward_pass` control (unchanged) mean | 34.65 µs | 34.71 µs | flat |
+
+Every round showed the interleaved path far faster on `scoring` (old
+83/104/109/109 ms → new 49/50/53/40 ms). At the ~48 ms new scoring figure the
+per-creature ~2.24 M-record corpus pass (see the latency table above) drops from
+≈33.9 s toward the low-20s-of-seconds on a single core — a direct win on the
+score-per-hour metric. `forward_pass` (the single-record `activate` path) is
+untouched and unaffected. Numerics: full 8-record groups are bit-identical to
+the prior per-lane 8-record path (same FMA order); the `records.len() % 8` tail
+runs the exact single-record kernel, so single-record scoring stays
+bit-for-bit identical to `activate` (asserted by
+`tests/interleaved_scoring_parity.rs` and the existing scoring parity suite).
+
+## Native (`--features parallel`) vs wasm32 scoring lane — decision (Issue #288)
+
+The `parallel` feature (rayon, #179) has always compiled the native
+`CompiledNetwork::score_records_parallel` entry point but was never A/B'd
+against the wasm32 lane at production scale, so production never routed
+per-creature scoring to it. This section quantifies the trade-off and records
+the decision.
+
+**Verdict: route production per-creature scoring to the native rayon lane where
+the native `rust_scorer` is built.** Native beats wasm32 on the production
+fixture on both axes — per-core codegen (NEON + FMA vs simd128 + relaxed-madd)
+and, decisively, by using idle cores the single-threaded wasm32 lane cannot.
+This is a **positive result**; the core-side native path
+(`score_records_parallel` with its sequential/wasm32 fallback) is ready, and the
+production wiring is raised
+cross-repo (NEAT-AI #3399 WorkerPool idle-tail, GRQ #3400 flags) per the issue's
+one-root-cause-one-repo rule — this issue owns only the neat-core native path,
+benchmark, and this decision.
+
+### The two lanes being compared
+
+Both lanes drive the **same** `score_records` forward pass (the #287
+record-interleaved batched-SIMD gather); they differ only in codegen and thread
+count:
+
+- **wasm32 single-thread** — the algorithm as compiled to `wasm32-unknown-unknown`
+  with `simd128` + `relaxed-simd` (`f32x4_relaxed_madd`), `wasm-opt`-optimised,
+  run in Node. This is the production wasm codegen the `wasm_activation` bundle
+  ships. In NEAT-AI the WorkerPool runs one creature per worker with no wasm
+  threads, so a single creature's scoring is single-threaded — this row is its
+  ceiling.
+- **native** — the same source compiled for `aarch64-apple-darwin` (AVX2/FMA on
+  x86, NEON on ARM), scored through a fixed-size rayon pool of 1 or 12 workers
+  via `score_records_parallel`.
+
+### Measured 2026-07-18 — GRQ host class
+
+Apple M4 Pro (8P + 4E, 12 logical cores), 24 GB, macOS (arm64), rustc 1.97.0,
+`--release`. 4096 records (one production shard; see the record-count
+calibration above) scored through one creature.
+
+- **Native**: `cargo bench -p neat-core --features parallel --bench parallel_scoring`
+  (Criterion, `--sample-size 30`), median estimate.
+- **wasm32**: `wasm-pack build --target nodejs --release` of a throwaway harness
+  that reuses the committed `benches/common` fixtures and calls the identical
+  `score_records`, driven by `node` timing `score_once()` (median of 20, after a
+  5-iteration warm-up). Harness source and commands under **Reproducing** below.
+
+| Shape | wasm32 1-thread | native 1 core | native 12 cores |
+| --- | --- | --- | --- |
+| `production` | 125.4 ms · 32.7 K rec/s | 45.96 ms · 89.1 K rec/s | 15.47 ms · 264.8 K rec/s |
+| `production_2x` | 207.8 ms · 19.7 K rec/s | 102.7 ms · 39.9 K rec/s | 32.52 ms · 126.0 K rec/s |
+| `production_exact` | 83.40 ms · 49.1 K rec/s | 46.77 ms · 87.6 K rec/s | 17.56 ms · 233.3 K rec/s |
+
+Native-over-wasm32 speed-ups on the exact committed topology
+(`production_exact`, 1,666 neurons / 21,513 synapses / 2,461 inputs):
+
+| Comparison | production_exact | Interpretation |
+| --- | --- | --- |
+| native 1 core ÷ wasm32 1-thread | **1.78×** | pure codegen: NEON + FMA vs simd128 + relaxed-madd |
+| native 12 cores ÷ wasm32 1-thread | **4.75×** | the production reality — one creature on native uses cores wasm32 cannot |
+| native 12 cores ÷ native 1 core | 2.66× | rayon per-creature scaling across 8P + 4E |
+
+The codegen delta ranges 1.78–2.73× across the three shapes; the full native
+12-core-vs-wasm32 delta ranges 4.75–8.10×.
+
+### The per-creature parallelism win zone
+
+The project metric is **score improvement per wall-clock hour**, whose
+denominator is the per-creature ~2.24 M-record corpus pass. At the
+`production_exact` throughputs above that pass costs:
+
+| Lane | records/s | Per-creature corpus pass (~2.24 M records) |
+| --- | --- | --- |
+| wasm32 single-thread | 49.1 K | ≈ **45.6 s** |
+| native single core | 87.6 K | ≈ **25.6 s** |
+| native 12 cores | 233.3 K | ≈ **9.6 s** |
+
+Two distinct wins stack:
+
+1. **Codegen win (whole generation).** Native's ~1.8× per-core advantage applies
+   to *every* creature regardless of core occupancy — it is not tail-specific.
+2. **Idle-core win (the tail).** NEAT-AI's WorkerPool saturates cores while
+   un-scored creatures outnumber cores, but at the **generation-end tail** fewer
+   creatures than cores remain and cores go idle. wasm32 workers are
+   single-threaded per creature, so that idle time is wasted; native
+   `score_records_parallel` lets each remaining creature spread its record batch
+   across the idle cores. This tail is the **per-creature parallelism win zone**
+   — where native rayon converts otherwise-idle cores into throughput.
+
+### Honesty caveats
+
+- **12-core variance.** The all-core medians were taken at `--sample-size 30` on
+  a laptop-class 8P + 4E part; run-to-run spread is wide (Criterion flagged the
+  all-core groups as noisy). The parallel scaling is sub-linear (2.66–3.16×, not
+  12×) because the ~40 MiB batch is memory-bandwidth-bound and the 4 efficiency
+  cores are slower than the 8 performance cores. The **single-thread codegen
+  delta is stable and by itself justifies native**; the parallel scaling is the
+  bonus that pays off most in the idle-tail.
+- **Fixture squash homogeneity.** As above (Issue #261) the fixtures are
+  all-`Tanh`; real `Gelu`/`Mish` creatures run scalar `libm` on wasm32, which
+  the native SIMD/`libm` split widens further — so the native advantage here is
+  a lower bound, not an upper one.
+- **wasm32 lane is a codegen ceiling, not the production wasm scorer.** This
+  measures the shared `score_records` compiled to wasm32. NEAT-AI's production
+  wasm path additionally pays JS↔wasm orchestration per record, so the real
+  wasm32 scoring lane is no faster than this row — reinforcing the verdict.
+
 ## Reproducing
 
 ```bash
@@ -127,4 +345,72 @@ first, then re-run after the change:
 cargo bench -p neat-core --bench hot_paths -- --save-baseline before
 # … apply change …
 cargo bench -p neat-core --bench hot_paths -- --baseline before
+```
+
+### wasm32 scoring anchor (Issue #288)
+
+Criterion is native-only, so the wasm32 row in the native-vs-wasm32 decision is
+measured with a throwaway `wasm-pack` harness that reuses the committed
+`benches/common` fixtures and calls the identical `CompiledNetwork::score_records`.
+`score_records` is a plain `pub` method (not feature- or target-gated), so the
+wasm32 build scores the same production topology through the same code path,
+compiled with `simd128` + `relaxed-simd` and `wasm-opt`-optimised — the
+production `wasm_activation` bundle's codegen. Create a scratch crate outside the
+workspace:
+
+```toml
+# Cargo.toml
+[package]
+name = "wasmbench288"
+version = "0.0.0"
+edition = "2024"
+[lib]
+crate-type = ["cdylib"]
+[dependencies]
+neat-core = { path = "/abs/path/to/NEAT-AI-core/neat-core" }
+wasm-bindgen = "0.2.126"
+[profile.release]
+opt-level = 3
+lto = true
+```
+
+```rust
+// src/lib.rs
+use std::cell::RefCell;
+use wasm_bindgen::prelude::*;
+#[path = "/abs/path/to/NEAT-AI-core/neat-core/benches/common/mod.rs"]
+#[allow(dead_code)]
+mod common;
+use common::{NETWORKS, PRODUCTION_SCORING_RECORDS, build_network, build_records};
+use neat_core::network::CompiledNetwork;
+thread_local! {
+    static ST: RefCell<Option<(CompiledNetwork, Vec<Vec<f32>>, usize)>> =
+        const { RefCell::new(None) };
+}
+#[wasm_bindgen]
+pub fn setup(code: u32) {
+    let label = ["production", "production_2x", "production_exact"][code as usize];
+    let s = NETWORKS.iter().find(|s| s.label == label).unwrap();
+    let net = build_network(s, 0x5EED);
+    let recs = build_records(net.num_inputs(), PRODUCTION_SCORING_RECORDS);
+    ST.with(|c| *c.borrow_mut() = Some((net, recs, s.num_outputs)));
+}
+#[wasm_bindgen]
+pub fn score_once() -> f32 {
+    ST.with(|c| {
+        let b = c.borrow();
+        let (net, recs, no) = b.as_ref().unwrap();
+        net.score_records(recs, *no).iter().sum()
+    })
+}
+```
+
+```bash
+wasm-pack build --target nodejs --release --out-dir pkg
+# Node: setup(code) once, then time score_once() (median of ~20, warm up first),
+# records/sec = PRODUCTION_SCORING_RECORDS / median_seconds.
+node -e 'import("./pkg/wasmbench288.js").then(m=>{m.setup(2);
+  for(let i=0;i<5;i++)m.score_once();
+  const t=[];for(let i=0;i<20;i++){const a=performance.now();m.score_once();t.push(performance.now()-a);}
+  t.sort((x,y)=>x-y);console.log("median ms",t[10].toFixed(2));})'
 ```
