@@ -64,6 +64,14 @@ across the lanes. On the gather-bound production topology this cut single-core
 scoring time by **~39%** (see `docs/archive/pr-summaries/pr-summary-230.md`).
 With the `parallel` feature the throughput additionally scales with core count.
 
+On the exact committed production topology the native lane beats the wasm32 lane
+**1.78×** per core (NEON + FMA vs `simd128` + relaxed-madd) and **4.75×** at 12
+cores versus a single-threaded wasm32 creature — so where the native `rust_scorer`
+is built, production per-creature scoring should use `score_records_parallel`.
+See the native-vs-wasm32 decision, numbers, and the generation-end idle-core
+"win zone" in [`neat-core/benches/BASELINE.md`](neat-core/benches/BASELINE.md)
+(Issue #288).
+
 Standard-[squash](#glossary-squash) neurons now sum **across records** rather than across synapses,
 so their `f32` results match the per-record `activate` reference within a small
 tolerance (SIMD re-association), while the sequential and parallel paths agree
