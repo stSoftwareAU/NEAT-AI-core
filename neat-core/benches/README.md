@@ -21,7 +21,7 @@ There are two bench targets:
 | `forward_pass` | `CompiledNetwork::activate` | small ~50, medium ~500, large ~5000, `production`, `production_2x` |
 | `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` | same five shapes |
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
-| `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x` |
+| `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
 
@@ -52,6 +52,17 @@ can be misleading.
 | `large_5000` | 32 | 4968 | 5000 | 16 | 24 (fixed) | ~119k |
 | `production` | 2461 | 1673 | 4134 | 1 | ~13 (varied) | ~21.7k |
 | `production_2x` | 4922 | 3346 | 8268 | 2 | ~13 (varied) | ~43.5k |
+| `production_exact` | 2461 | 1666 | 4127 | 1 | ~12.9 (exact) | **21,513** |
+
+`production_exact` (Issue #286) pins the fixture to the committed
+`GRQ-cluster/network.json` topology — 1,666 non-input neurons, **exactly**
+21,513 synapses, 2,461 inputs — so the Criterion baseline is anchored to the
+real production model rather than `production`'s ~13-average approximation.
+Unlike the `VariedAround` shapes it uses `FanIn::ExactTotal`, which distributes
+the 21,513 synapses across the 1,666 neurons as evenly as possible (a Bresenham
+stride, so the two fan-in values — 12 and 13 — are interleaved, not clustered).
+Its label starts with `production`, so the `production` regex filter and the
+`scoring` group pick it up automatically.
 
 The `production` shape is synthesised from the seeded PRNG to match the real
 creature's dimensions — the 3 MB `network.json` is **not** committed. Fan-in for
@@ -64,7 +75,8 @@ test.
 
 > **Fixture caveat — squash is uniformly `Tanh` (Issue #261).** The `squash`
 > column above is not varied: every neuron in the `production` / `production_2x`
-> shapes is built with `SquashType::Tanh` (`benches/common/mod.rs:168`), locked
+> / `production_exact` shapes is built with `SquashType::Tanh`
+> (`benches/common/mod.rs`), locked
 > by `tests/bench_fixtures.rs::production_fixture_squash_is_homogeneous_tanh`.
 > Real GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so on this fixture
 > squash-vectorisation deltas are a **lower bound** and branch-prediction levers
@@ -114,7 +126,8 @@ cargo bench -p neat-core --bench hot_paths -- production
 
 `parallel_scoring.rs` reports records/sec for scoring a batch through one
 creature on **a single core versus all available cores**, using the
-`production`/`production_2x` shapes. It scores inside a rayon pool of a fixed
+`production`/`production_2x`/`production_exact` shapes. It scores inside a rayon
+pool of a fixed
 size, so the 1-core and all-core measurements share one code path and differ
 only in pool size.
 

@@ -13,8 +13,8 @@ affected group against this file, with matching host/toolchain metadata.
 
 ## Fixture caveat — squash homogeneity (Issue #261)
 
-Every neuron in the `production` / `production_2x` fixtures is uniformly
-`SquashType::Tanh` (`benches/common/mod.rs:168`), asserted by
+Every neuron in the `production` / `production_2x` / `production_exact` fixtures
+is uniformly `SquashType::Tanh` (`benches/common/mod.rs`), asserted by
 `tests/bench_fixtures.rs::production_fixture_squash_is_homogeneous_tanh`. Real
 GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so read every
 `scoring`/`production` A/B below with two corrections in mind:
@@ -104,6 +104,74 @@ Throughput highlights: `forward_pass` ≈ 126 Melem/s (production) / 123 Melem/s
 The single-core `parallel_scoring` figure (16.86 Krecords/s for `production`)
 matches the `hot_paths` `scoring` group (16.87 Krecords/s) — both drive the same
 sequential `score_records` path, an internal consistency check on the fixture.
+
+## Production-exact topology baseline (Issue #286)
+
+Dated anchor for the **exact** committed `GRQ-cluster/network.json` topology —
+**1,666 non-input neurons, 21,513 synapses, 2,461 inputs** (4,127 total neurons,
+one output). Unlike the `production` shape's ~13-average `VariedAround` fan-in,
+the `production_exact` shape uses `FanIn::ExactTotal(21_513)`, which spreads the
+synapses across the 1,666 neurons as evenly as possible (12 or 13 each,
+Bresenham-interleaved) so the synapse count reproduces the real model to the
+synapse. Seeded synthesis is deterministic and asserted exact by
+`tests/bench_fixtures.rs::production_exact_matches_committed_grq_topology`.
+
+**Measured 2026-07-18** on the same GRQ host class, toolchain **rustc 1.97.0**
+(the earlier `production`/`production_2x` rows above were taken on rustc 1.96.0,
+so compare across sections only within a lane, not across toolchains).
+
+| Field | Value |
+| --- | --- |
+| Host | Apple M4 Pro — 12 cores (8P + 4E), 24 GB, macOS (arm64) |
+| Logical cores (`available_parallelism`) | 12 |
+| Toolchain | rustc 1.97.0 |
+| Criterion | 0.8.2 |
+| Build | `--release` (bench profile) |
+
+### Single-thread lane (`cargo bench -p neat-core --bench hot_paths -- production_exact`)
+
+| Group / benchmark | production_exact | Throughput |
+| --- | --- | --- |
+| `forward_pass` | 30.76 µs `[30.19, 31.35]` | ~134 Melem/s |
+| `batched_scoring/trace_batch_4way` | 122.65 µs `[120.98, 124.33]` | — |
+| `batched_scoring/mse_sum_8records` | 242.08 µs `[239.09, 244.99]` | — |
+| `backprop` | 214.14 µs `[210.46, 218.05]` | ~19.3 Melem/s |
+| `scoring` (4096 records) | 91.50 ms `[90.05, 92.96]` | 44.77 Krecords/s |
+
+### Parallel lane (`cargo bench -p neat-core --features parallel --bench parallel_scoring -- production_exact`)
+
+4096 records scored through one creature inside a fixed-size rayon pool.
+
+| Shape | 1 core | 12 cores | records/s (1 → 12) | Speed-up |
+| --- | --- | --- | --- | --- |
+| `production_exact` | 61.84 ms `[60.36, 63.38]` | 24.62 ms `[22.35, 26.98]` | 66.23 K → 166.4 K | 2.51× |
+
+### Per-creature scoring latency → the project metric
+
+The project metric is **score improvement per wall-clock hour**, and per
+generation a single creature forward-passes the whole ~2.24 M-record corpus to
+compute its fitness (see the record-count calibration above). At the measured
+`production_exact` throughput that per-creature scoring pass costs:
+
+| Lane | records/s | Per-creature corpus pass (~2.24 M records) |
+| --- | --- | --- |
+| Single core | 66.2 K | ≈ **33.9 s** |
+| 12 cores | 166.4 K | ≈ **13.5 s** |
+
+That per-creature latency is the denominator of the metric: halving it doubles
+the creatures a fixed wall-clock budget can score, so it is the figure every
+lane sub-issue's optimisation is measured against.
+
+> **Scoring-lane variance (be honest about it).** The ~90 ms `hot_paths`
+> `scoring` figure and the ~62 ms `parallel_scoring` `1_core` figure exercise the
+> *same* sequential `score_records` path, so in principle they match — but they
+> were taken in separate `cargo bench` invocations and the ~90 ms → ~62 ms spread
+> is real run-to-run variance (thermal state on the laptop-class M4 Pro under a
+> ~90 ms single-shot benchmark with 100 iterations). Treat the **`parallel_scoring`
+> 1-core/12-core pair as the authoritative scoring anchor** — both were measured
+> in one invocation, so their 2.51× ratio is internally consistent — and read the
+> single-core scoring latency as ~62–92 ms (±~20%). A lane sub-issue must A/B
+> with `--save-baseline` inside a single invocation to stay inside this band.
 
 ## Reproducing
 
