@@ -35,6 +35,7 @@ pub mod training_bin_stream;
 pub mod training_data;
 pub mod training_state;
 pub mod unsquash;
+pub mod wasm_dataset;
 
 // Issue #36 — WASM-only `#[wasm_bindgen]` shims that wrap apply_* helpers,
 // tuple returns, and the byte-packed `propagate_topological` ABI. Native
@@ -56,6 +57,7 @@ pub use training_data::{
     SeekingRecordReader, TrainingDataConfig, TrainingDataError, TrainingDataIterator,
     TrainingRecord, find_bin_files, read_dir as read_training_dir, read_file as read_training_file,
 };
+pub use wasm_dataset::{DatasetError, DatasetRegistry, TrainingDataset};
 
 // Re-export core functions
 pub use accumulate::{
