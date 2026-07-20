@@ -41,6 +41,15 @@ the full dataset never re-crosses the JS↔WASM boundary after the initial load.
   `_peak_bytes`) carry byte counts and record indices as `u64` (JS `BigInt`), so
   the surface is Memory64-ready for the >4 GB jobs the milestone targets.
 
+Lane (d) — Issue #299 — verifies the GRQ-side adoption end-to-end: GRQ's
+`worker/learn.sh` injects a **RAM-aware** `--v8-flags=--max-old-space-size`
+(sized by `memory_calc.sh`, floored safely below the 8 GB tier) and fails **loud**
+on a V8 heap abort (exit 133). The neat-core acceptance model
+[`tests/perf/learn_flags_wiring.ts`](tests/perf/learn_flags_wiring.ts) re-derives
+that selection lock-step with GRQ and pins the budget-fit / safe-fall-back
+invariants; see
+[`docs/research/wasm64-lane-d-grq-learn-wiring-verification.md`](docs/research/wasm64-lane-d-grq-learn-wiring-verification.md).
+
 ```mermaid
 sequenceDiagram
     participant JS as NEAT-AI Learn.ts
