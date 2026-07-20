@@ -413,6 +413,28 @@ jobs:
           skip: "./target,./.git"
           ignore_words_list: renderD,mape
 
+  # Issue #297 — wasm64 lane (b) Memory64 runtime guard. The committed smoke
+  # test instantiates a minimal `(memory i64 ...)` module, grows linear memory
+  # past the wasm32 4 GiB ceiling, and round-trips a BigInt (64-bit) pointer
+  # across the JS↔WASM boundary. A Deno/V8 upgrade that drops or breaks Wasm 3.0
+  # Memory64 support fails HERE, in CI, rather than being rediscovered mid-port.
+  wasm64-memory64-smoke:
+    name: wasm64 Memory64 smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        # actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Install Deno
+        # denoland/setup-deno@v2.0.5
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with:
+          deno-version: "2.9.3"
+
+      - name: Run Memory64 smoke test
+        run: deno test tests/wasm64_memory64_smoke_test.ts < /dev/null
+
   security:
     uses: ./.github/workflows/security.yml
     if: github.event_name == 'pull_request'
