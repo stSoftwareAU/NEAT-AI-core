@@ -76,6 +76,32 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# Issue #322 — actions/checkout writes the workflow GITHUB_TOKEN into
+# .git/config by default, leaving a usable credential on disk for every later
+# step in the job. This job only lints Markdown and validates Mermaid blocks:
+# it never pushes back to the repository and fetches no private submodule, so
+# the credential is pure blast radius.
+@test "markdown-lint workflow checkout does not persist credentials on disk" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+checkouts = [
+    s for s in data["jobs"]["markdownlint"]["steps"]
+    if str(s.get("uses", "")).startswith("actions/checkout@")
+]
+assert checkouts, "no actions/checkout step found"
+for step in checkouts:
+    with_ = step.get("with") or {}
+    assert with_.get("persist-credentials") is False, (
+        f"checkout persists credentials: {step}"
+    )
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "markdown-lint workflow does not pin actions/setup-node to a deprecated Node 20 SHA" {
   # Regression test for Issue #98 — actions/setup-node@v4
   # (SHA 49933ea5288caeca8642d1e84afbd3f7d6820020) ships the Node 20
