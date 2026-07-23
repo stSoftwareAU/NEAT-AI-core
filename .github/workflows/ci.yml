@@ -19,6 +19,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Least-privilege default GITHUB_TOKEN scope for every job (Issue #309).
+# Read-only jobs (quality, rust-gates, scripts-and-spelling, wasm64-memory64-smoke,
+# validation) inherit this; jobs that must push (version-increment, version-gate,
+# auto-format) override it with their own broader job-level permissions block.
+permissions:
+  contents: read
+
 jobs:
   version-increment:
     name: Auto-increment Versions
