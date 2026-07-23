@@ -1,10 +1,13 @@
 name: Markdown Lint
 
+# Issue #316 — PR-only, matching actionlint.yml/gitleaks.yml/semgrep.yml. As a
+# lint gate it already runs on the PR; re-running it on push to Develop would
+# duplicate that run, burning CI minutes for no new signal.
+
 on:
   pull_request:
     branches: ["*"]
-  push:
-    branches: [Develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
