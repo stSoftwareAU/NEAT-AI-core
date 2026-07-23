@@ -11,7 +11,11 @@ name: Gitleaks
 
 on:
   pull_request:
-    branches: ["*"]
+    # Issue #328 — GitHub branch-filter globs treat `*` as "any chars except
+    # /", so a bare "*" never matches milestone/<slug> feature branches. Add an
+    # explicit "milestone/*" pattern so this secret scan runs on milestone
+    # sub-issue PRs too, not just the single rollup PR into the default branch.
+    branches: ["*", "milestone/*"]
 
 permissions:
   contents: read
