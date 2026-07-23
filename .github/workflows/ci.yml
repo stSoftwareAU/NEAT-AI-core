@@ -349,9 +349,15 @@ jobs:
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
+        # Issue #318 — `persist-credentials: false` keeps the workflow
+        # GITHUB_TOKEN out of .git/config. This job only compiles and lints;
+        # it never pushes back and fetches no private submodule, so the
+        # persisted credential would only widen the blast radius of a
+        # compromised later step.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain@stable
