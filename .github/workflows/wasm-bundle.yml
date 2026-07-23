@@ -21,7 +21,14 @@ jobs:
     steps:
       - name: Checkout
         # actions/checkout@v6.0.2
+        # Issue #325 — `persist-credentials: false` keeps the workflow
+        # GITHUB_TOKEN out of .git/config. This job builds the bundle and
+        # publishes the per-commit Release via `gh` using GH_TOKEN from the
+        # environment; it never pushes back through the git remote, so the
+        # persisted token would be pure blast radius for any later step.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain (with wasm32 target)
         # dtolnay/rust-toolchain@stable
