@@ -477,6 +477,13 @@ jobs:
     uses: ./.github/workflows/security.yml
     if: github.event_name == 'pull_request'
     needs: [version-increment]
+    # Issue #312 — least-privilege GITHUB_TOKEN. A reusable-workflow caller with
+    # no permissions block hands the called workflow the repository's broad
+    # default scopes. Grant only what security.yml needs: read the repo
+    # (checkout, cargo audit) plus the dependency-review PR comment summary.
+    permissions:
+      contents: read
+      pull-requests: write
     with:
       include-dependency-review: true
 
