@@ -92,6 +92,13 @@ cargo test --workspace
 cargo bench -p neat-core --bench hot_paths
 ```
 
+The committed TypeScript helpers under `tests/` carry their own basic-validity
+gate (Issue #307): `./scripts/typescript-check.sh` type-checks every `.ts` file
+with `deno check`. It runs inside `./quality.sh` and as the CI `typescript-gate`
+job on every push and pull request, so a syntax or type error fails the build.
+Basic validity only — it is not a style or lint gate, and it requires
+[Deno](https://docs.deno.com/runtime/getting_started/installation/).
+
 ## Cargo features
 
 | Feature | Default | Effect |
