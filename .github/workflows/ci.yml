@@ -477,6 +477,12 @@ jobs:
     name: wasm64 Memory64 smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 10 # single deno smoke test
+    # Issue #331 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, install Deno, run one committed smoke test); it never writes,
+    # so it must not inherit the repository's broad default write scopes.
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
