@@ -492,6 +492,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: [version-increment]
+    # Issue #313 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, cargo metadata, manifest/README/rustdoc file checks); it never
+    # writes, so it must not inherit the repository's broad default scopes.
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
