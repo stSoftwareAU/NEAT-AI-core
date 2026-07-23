@@ -29,7 +29,7 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
-@test "actionlint workflow triggers on PRs and on pushes to Develop" {
+@test "actionlint workflow gates PRs only and does not re-run on push to Develop" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
@@ -40,9 +40,11 @@ data = yaml.safe_load(open("$WORKFLOW"))
 triggers = data.get("on") or data.get(True)
 assert triggers is not None, data
 assert "pull_request" in triggers, triggers
-push = triggers.get("push") or {}
-branches = push.get("branches") or []
-assert "Develop" in branches, branches
+# Issue #314 — a lint/check workflow gates the PR; re-running it on push to
+# the default branch duplicates the run that already gated the merge.
+push = triggers.get("push")
+branches = (push or {}).get("branches") or []
+assert "Develop" not in branches, branches
 PY
   [ "$status" -eq 0 ]
 }
