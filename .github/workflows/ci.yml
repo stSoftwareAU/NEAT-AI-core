@@ -339,6 +339,10 @@ jobs:
     # PR-only auto-bump / auto-format jobs above, so direct pushes to Develop
     # (which skip those jobs) are still gated against lint regressions and
     # syntax errors. The full `quality` job remains the comprehensive PR gate.
+    # Issue #310 — least privilege: this job only checks out and compiles/lints
+    # the repo, so read-only contents is all the GITHUB_TOKEN needs.
+    permissions:
+      contents: read
     env:
       RUSTFLAGS: "-D warnings"
 
