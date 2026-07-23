@@ -422,6 +422,7 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       # ShellCheck Lint — upstream project: https://github.com/koalaman/shellcheck
       # We install the apt package (which ships koalaman/shellcheck) and scan all *.sh files
