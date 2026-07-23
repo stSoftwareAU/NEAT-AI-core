@@ -8,6 +8,7 @@
 #   - third-party actions are SHA-pinned (consistent with Issue #77),
 #   - the install step pins both version and SHA-256 (supply-chain hygiene
 #     mirroring gitleaks.yml from Issue #99 and wasm-pack from Issue #78),
+#   - the checkout step does not persist the GITHUB_TOKEN on disk (Issue #317),
 #   - if `actionlint` is installed locally, it passes against the current
 #     workflows on disk (behavioural sanity check).
 
@@ -120,6 +121,32 @@ assert re.match(r"^[0-9a-f]{64}$", str(sha256)), sha256
 # The run script must invoke sha256sum -c to verify the downloaded asset.
 run_script = step.get("run", "")
 assert "sha256sum" in run_script and "-c" in run_script, run_script
+PY
+  [ "$status" -eq 0 ]
+}
+
+# Issue #317 — actions/checkout writes the workflow GITHUB_TOKEN into
+# .git/config by default, leaving a usable credential on disk for every later
+# step in the job. This job only lints workflow files: it never pushes back to
+# the repository and fetches no private submodule, so the credential is pure
+# blast radius.
+@test "actionlint workflow checkout does not persist credentials on disk" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+checkouts = [
+    s for s in data["jobs"]["actionlint"]["steps"]
+    if str(s.get("uses", "")).startswith("actions/checkout@")
+]
+assert checkouts, "no actions/checkout step found"
+for step in checkouts:
+    with_ = step.get("with") or {}
+    assert with_.get("persist-credentials") is False, (
+        f"checkout persists credentials: {step}"
+    )
 PY
   [ "$status" -eq 0 ]
 }

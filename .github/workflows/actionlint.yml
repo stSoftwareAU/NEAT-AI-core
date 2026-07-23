@@ -28,7 +28,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout@v6.0.2
+      # Issue #317 — `persist-credentials: false` keeps the workflow
+      # GITHUB_TOKEN out of .git/config. This job only lints workflow files:
+      # it never pushes back and fetches no private submodule, so leaving the
+      # credential on disk would only widen the blast radius of a compromised
+      # step.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
       # Install actionlint CLI from a version-pinned release tarball with
       # SHA-256 verification. Bump ACTIONLINT_VERSION + ACTIONLINT_SHA256
