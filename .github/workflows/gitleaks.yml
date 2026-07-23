@@ -17,6 +17,12 @@ on:
     # sub-issue PRs too, not just the single rollup PR into the default branch.
     branches: ["*", "milestone/*"]
 
+# Issue #334 — one live secret scan per branch. The scan covers full history, so
+# a superseded run duplicates work already redone by its replacement.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

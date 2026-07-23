@@ -19,6 +19,16 @@ on:
       - milestone/*
   workflow_dispatch:
 
+# Issue #334 — the heaviest gate in the repo: one run compiles the workspace
+# several times over (quality + rust-gates). Every `synchronize` push to an open
+# PR — including the bot pushes from `version-increment`/`auto-format` — queued
+# a fresh run on top of one still compiling, so a few rapid pushes stacked runs
+# several deep. Keying the group on the workflow *and* the ref keeps one live
+# run per branch and cancels the superseded ones, whose results nobody reads.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 

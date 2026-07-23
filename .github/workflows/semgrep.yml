@@ -8,6 +8,12 @@ on:
     # PRs too, not just the single rollup PR into the default branch.
     branches: ["*", "milestone/*"]
 
+# Issue #334 — one live SAST scan per branch. Each run pulls the semgrep
+# container before scanning, so stacked runs are expensive as well as redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

@@ -24,6 +24,12 @@ on:
     branches: ["*", "milestone/*"]
   workflow_dispatch:
 
+# Issue #334 — one live lint run per branch. A superseded run only reports on a
+# commit that has already been replaced, so cancelling it costs no signal.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
