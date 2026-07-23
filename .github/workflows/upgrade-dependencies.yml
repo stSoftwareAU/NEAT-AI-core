@@ -22,6 +22,7 @@ jobs:
   upgrade:
     name: Upgrade dependencies and create PR
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # cargo upgrade + full build/test before PR
     steps:
       - name: Checkout
         # actions/checkout@v6.0.2

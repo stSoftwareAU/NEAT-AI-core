@@ -30,6 +30,7 @@ permissions:
 jobs:
   actionlint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # lint-only: install actionlint + scan workflows
     steps:
       # actions/checkout@v6.0.2
       # Issue #317 — `persist-credentials: false` keeps the workflow

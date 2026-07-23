@@ -19,6 +19,7 @@ jobs:
   release:
     name: Tag and release on version bump
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # tag + gh release create
     steps:
       - name: Checkout
         # actions/checkout@v6.0.2

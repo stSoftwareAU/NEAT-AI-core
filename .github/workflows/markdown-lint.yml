@@ -19,6 +19,7 @@ permissions:
 jobs:
   markdownlint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # lint-only: markdownlint-cli2 over docs
     steps:
       # actions/checkout@v6.0.2 — Issue #97/#99: bumped off Node 20 (EOL 2026-09-16).
       # Issue #322 — `persist-credentials: false` keeps the workflow

@@ -26,6 +26,7 @@ jobs:
   version-increment:
     name: Auto-increment Versions
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # version bump + push
     if: github.event_name == 'pull_request'
     permissions:
       contents: write
@@ -163,6 +164,7 @@ jobs:
   version-gate:
     name: Breaking-change version gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # version comparison only
     if: github.event_name == 'pull_request'
     needs: [version-increment]
     permissions:
@@ -208,6 +210,7 @@ jobs:
   auto-format:
     name: Auto-format Code
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # cargo fmt + push
     if: github.event_name == 'pull_request'
     needs: [version-increment]
     permissions:
@@ -264,6 +267,7 @@ jobs:
   quality:
     name: Quality Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # cargo build + clippy + tests + docs
     if: github.event_name == 'pull_request'
     needs: [version-increment, auto-format]
     # Issue #309 — least-privilege GITHUB_TOKEN. This job only reads the repo
@@ -337,6 +341,7 @@ jobs:
   rust-gates:
     name: Lint & Compile Gates
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # cargo fmt/clippy/check across the workspace
     # Issue #143 — explicit Rust lint + compile/syntax gates that run on every
     # push to Develop AND every pull request. Deliberately independent of the
     # PR-only auto-bump / auto-format jobs above, so direct pushes to Develop
@@ -390,6 +395,7 @@ jobs:
   typescript-gate:
     name: TypeScript validity gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # deno check over committed .ts helpers
 
     steps:
       - name: Checkout code
@@ -410,6 +416,7 @@ jobs:
   scripts-and-spelling:
     name: Scripts & spelling
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # shellcheck + bats + codespell
     if: github.event_name == 'pull_request'
     needs: [version-increment]
     # Issue #311 — least-privilege GITHUB_TOKEN. This job only reads the repo
@@ -469,6 +476,7 @@ jobs:
   wasm64-memory64-smoke:
     name: wasm64 Memory64 smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # single deno smoke test
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
@@ -500,6 +508,7 @@ jobs:
   validation:
     name: Project Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # cargo metadata + manifest/doc checks
     if: github.event_name == 'pull_request'
     needs: [version-increment]
     # Issue #313 — least-privilege GITHUB_TOKEN. This job only reads the repo
