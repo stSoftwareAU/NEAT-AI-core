@@ -86,6 +86,33 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# Issue #323 — actions/checkout writes the workflow GITHUB_TOKEN into
+# .git/config by default, leaving a usable credential on disk for every later
+# step in the job. The release job cuts the tag and publishes the release via
+# `gh` with GH_TOKEN from the environment, and its git operations
+# (`git ls-remote origin`) target a public repository that needs no credential,
+# so the persisted token is pure blast radius.
+@test "release workflow checkout does not persist credentials on disk" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+checkouts = [
+    s for s in data["jobs"]["release"]["steps"]
+    if str(s.get("uses", "")).startswith("actions/checkout@")
+]
+assert checkouts, "no actions/checkout step found"
+for step in checkouts:
+    with_ = step.get("with") or {}
+    assert with_.get("persist-credentials") is False, (
+        f"checkout persists credentials: {step}"
+    )
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "SBOM is generated before the Release is published" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
