@@ -14,6 +14,9 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - Develop
+      # Issue #327 — milestone sub-issue PRs target a shared milestone/<slug>
+      # branch; `*` never crosses `/`, so this single-level glob gates them too.
+      - milestone/*
   workflow_dispatch:
 
 env:
