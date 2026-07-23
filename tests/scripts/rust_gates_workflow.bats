@@ -15,7 +15,9 @@
 #   - a job invokes an explicit compile/syntax gate (cargo check / cargo build),
 #   - the gate job runs on push (not restricted to pull_request only), so direct
 #     pushes to Develop are gated too,
-#   - third-party actions in the gate job are SHA-pinned (Issue #77).
+#   - third-party actions in the gate job are SHA-pinned (Issue #77),
+#   - the gate job's checkout does not persist the GITHUB_TOKEN on disk
+#     (Issue #318).
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
@@ -139,6 +141,32 @@ for job in data["jobs"].values():
         if uses is None:
             continue
         assert sha_re.match(uses), f"action not SHA-pinned: {uses}"
+PY
+  [ "$status" -eq 0 ]
+}
+
+# Issue #318 — actions/checkout writes the workflow GITHUB_TOKEN into
+# .git/config by default, leaving a usable credential on disk for every later
+# step in the job. The rust-gates job only checks out, compiles and lints: it
+# never pushes back to the repository and fetches no private submodule, so the
+# persisted credential is pure blast radius.
+@test "ci rust-gates checkout does not persist credentials on disk" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+checkouts = [
+    s for s in data["jobs"]["rust-gates"]["steps"]
+    if str(s.get("uses", "")).startswith("actions/checkout@")
+]
+assert checkouts, "no actions/checkout step found in rust-gates"
+for step in checkouts:
+    with_ = step.get("with") or {}
+    assert with_.get("persist-credentials") is False, (
+        f"checkout persists credentials: {step}"
+    )
 PY
   [ "$status" -eq 0 ]
 }
