@@ -263,6 +263,11 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: [version-increment, auto-format]
+    # Issue #309 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, git pull, cargo deny/fmt/clippy/test/doc); it never pushes, so
+    # it must not inherit the repository's broad default write scopes.
+    permissions:
+      contents: read
     env:
       RUSTFLAGS: "-D warnings"
 
