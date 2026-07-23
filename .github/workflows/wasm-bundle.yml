@@ -18,6 +18,7 @@ jobs:
   publish:
     name: Build and publish wasm_activation bundle
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # wasm-pack release build + bundle publish
     steps:
       - name: Checkout
         # actions/checkout@v6.0.2
