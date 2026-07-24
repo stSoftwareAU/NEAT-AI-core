@@ -2,7 +2,17 @@ name: Semgrep
 
 on:
   pull_request:
-    branches: ["*"]
+    # Issue #330 — GitHub branch-filter globs treat `*` as "any chars except
+    # /", so a bare "*" never matches milestone/<slug> feature branches. Add an
+    # explicit "milestone/*" pattern so this scan runs on milestone sub-issue
+    # PRs too, not just the single rollup PR into the default branch.
+    branches: ["*", "milestone/*"]
+
+# Issue #334 — one live SAST scan per branch. Each run pulls the semgrep
+# container before scanning, so stacked runs are expensive as well as redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -10,11 +20,21 @@ permissions:
 jobs:
   semgrep:
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # container pull + full SAST scan
     container:
-      image: semgrep/semgrep
+      # Issue #335 — a bare image name resolves to the mutable `:latest` tag,
+      # which the registry owner (or anyone who compromises that account) can
+      # re-point at any time; the new image would then run with this job's
+      # GITHUB_TOKEN, SEMGREP_APP_TOKEN and checked-out source. Pin by digest
+      # so the image is immutable, same as `uses:` SHA pins (Issue #77).
+      # semgrep/semgrep:1.170.1 — `:latest` as of 2026-07. Refresh with
+      # `docker buildx imagetools inspect semgrep/semgrep:latest`.
+      image: semgrep/semgrep@sha256:98c2572fced2474539fd27cab3207ebd8e95e4e7aab4c3b381fdc5e2641d9941
     steps:
       # actions/checkout@v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
       - run: semgrep ci --config p/default
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}

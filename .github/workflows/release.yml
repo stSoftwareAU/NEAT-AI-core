@@ -19,12 +19,19 @@ jobs:
   release:
     name: Tag and release on version bump
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # tag + gh release create
     steps:
       - name: Checkout
         # actions/checkout@v6.0.2
+        # Issue #323 — `persist-credentials: false` keeps the workflow
+        # GITHUB_TOKEN out of .git/config. This job cuts the tag and publishes
+        # the release via `gh` using GH_TOKEN from the environment, and its git
+        # operations (`git ls-remote origin`) target a public repo that needs
+        # no credential, so the persisted token would be pure blast radius.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Decide whether this version needs a release
         id: gate

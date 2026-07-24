@@ -2,8 +2,12 @@ name: Actionlint
 
 # Issue #96 — CI lint gate for GitHub Actions workflows.
 #
-# Runs the upstream actionlint binary (rhysd/actionlint) on every push to
-# Develop and every pull request so workflow regressions fail the build.
+# Runs the upstream actionlint binary (rhysd/actionlint) on every pull request
+# so workflow regressions fail the build before merge.
+#
+# Issue #314 — PR-only, matching gitleaks.yml/semgrep.yml. As a check gate it
+# already runs on the PR; re-running it on push to Develop would duplicate that
+# run, burning CI minutes for no new signal.
 #
 # Install pattern mirrors gitleaks.yml (Issue #99) and the wasm-pack pinned
 # install (Issue #78): download a version-pinned release tarball and verify
@@ -12,10 +16,19 @@ name: Actionlint
 # to commit SHAs (Issue #77).
 
 on:
-  push:
-    branches: [Develop]
   pull_request:
-    branches: ["*"]
+    # Issue #326 — GitHub branch-filter globs treat `*` as "any chars except
+    # /", so a bare "*" never matches milestone/<slug> feature branches. Add an
+    # explicit "milestone/*" pattern so this lint gate runs on milestone
+    # sub-issue PRs too, not just the single rollup PR into the default branch.
+    branches: ["*", "milestone/*"]
+  workflow_dispatch:
+
+# Issue #334 — one live lint run per branch. A superseded run only reports on a
+# commit that has already been replaced, so cancelling it costs no signal.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,9 +36,17 @@ permissions:
 jobs:
   actionlint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # lint-only: install actionlint + scan workflows
     steps:
       # actions/checkout@v6.0.2
+      # Issue #317 — `persist-credentials: false` keeps the workflow
+      # GITHUB_TOKEN out of .git/config. This job only lints workflow files:
+      # it never pushes back and fetches no private submodule, so leaving the
+      # credential on disk would only widen the blast radius of a compromised
+      # step.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
       # Install actionlint CLI from a version-pinned release tarball with
       # SHA-256 verification. Bump ACTIONLINT_VERSION + ACTIONLINT_SHA256

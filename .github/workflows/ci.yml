@@ -14,7 +14,20 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - Develop
+      # Issue #327 — milestone sub-issue PRs target a shared milestone/<slug>
+      # branch; `*` never crosses `/`, so this single-level glob gates them too.
+      - milestone/*
   workflow_dispatch:
+
+# Issue #334 — the heaviest gate in the repo: one run compiles the workspace
+# several times over (quality + rust-gates). Every `synchronize` push to an open
+# PR — including the bot pushes from `version-increment`/`auto-format` — queued
+# a fresh run on top of one still compiling, so a few rapid pushes stacked runs
+# several deep. Keying the group on the workflow *and* the ref keeps one live
+# run per branch and cancels the superseded ones, whose results nobody reads.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +36,7 @@ jobs:
   version-increment:
     name: Auto-increment Versions
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # version bump + push
     if: github.event_name == 'pull_request'
     permissions:
       contents: write
@@ -160,6 +174,7 @@ jobs:
   version-gate:
     name: Breaking-change version gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # version comparison only
     if: github.event_name == 'pull_request'
     needs: [version-increment]
     permissions:
@@ -205,6 +220,7 @@ jobs:
   auto-format:
     name: Auto-format Code
     runs-on: ubuntu-latest
+    timeout-minutes: 20 # cargo fmt + push
     if: github.event_name == 'pull_request'
     needs: [version-increment]
     permissions:
@@ -261,8 +277,14 @@ jobs:
   quality:
     name: Quality Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # cargo build + clippy + tests + docs
     if: github.event_name == 'pull_request'
     needs: [version-increment, auto-format]
+    # Issue #309 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, git pull, cargo deny/fmt/clippy/test/doc); it never pushes, so
+    # it must not inherit the repository's broad default write scopes.
+    permissions:
+      contents: read
     env:
       RUSTFLAGS: "-D warnings"
 
@@ -329,20 +351,36 @@ jobs:
   rust-gates:
     name: Lint & Compile Gates
     runs-on: ubuntu-latest
-    # Issue #143 — explicit Rust lint + compile/syntax gates that run on every
-    # push to Develop AND every pull request. Deliberately independent of the
-    # PR-only auto-bump / auto-format jobs above, so direct pushes to Develop
-    # (which skip those jobs) are still gated against lint regressions and
-    # syntax errors. The full `quality` job remains the comprehensive PR gate.
+    timeout-minutes: 45 # cargo fmt/clippy/check across the workspace
+    # Issue #143 — explicit Rust lint + compile/syntax gates. Deliberately
+    # independent of the PR-only auto-bump / auto-format jobs above, so direct
+    # pushes to Develop (which skip those jobs) are still gated against lint
+    # regressions and syntax errors.
+    # Issue #337 — on pull requests the `quality` job already runs the identical
+    # clippy invocation (which compiles the workspace, subsuming `cargo check`),
+    # so running this job there compiled and linted the workspace twice per PR
+    # in separate jobs with separate caches. Scope it to the events `quality`
+    # does not cover; `quality` stays the comprehensive PR gate.
+    if: github.event_name != 'pull_request'
+    # Issue #310 — least privilege: this job only checks out and compiles/lints
+    # the repo, so read-only contents is all the GITHUB_TOKEN needs.
+    permissions:
+      contents: read
     env:
       RUSTFLAGS: "-D warnings"
 
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
+        # Issue #318 — `persist-credentials: false` keeps the workflow
+        # GITHUB_TOKEN out of .git/config. This job only compiles and lints;
+        # it never pushes back and fetches no private submodule, so the
+        # persisted credential would only widen the blast radius of a
+        # compromised later step.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain@stable
@@ -365,11 +403,42 @@ jobs:
       - name: Lint gate (cargo clippy)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  # Issue #307 — TypeScript basic-validity gate. Runs on every push to Develop
+  # AND every pull request (no PR-only guard), so a syntax or type error in the
+  # committed .ts helpers cannot land unnoticed. Basic validity only — this is
+  # not a style or lint gate. The same script backs the local quality.sh run.
+  typescript-gate:
+    name: TypeScript validity gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # deno check over committed .ts helpers
+
+    steps:
+      - name: Checkout code
+        # actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Install Deno
+        # denoland/setup-deno@v2.0.5
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed
+        with:
+          deno-version: "2.9.3"
+
+      - name: Type-check TypeScript sources (deno check)
+        run: |
+          chmod +x scripts/typescript-check.sh
+          ./scripts/typescript-check.sh
+
   scripts-and-spelling:
     name: Scripts & spelling
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # shellcheck + bats + codespell
     if: github.event_name == 'pull_request'
     needs: [version-increment]
+    # Issue #311 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, shellcheck, bash -n, codespell); it never pushes, so it must
+    # not inherit the repository's broad default write scopes.
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
@@ -378,6 +447,7 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       # ShellCheck Lint — upstream project: https://github.com/koalaman/shellcheck
       # We install the apt package (which ships koalaman/shellcheck) and scan all *.sh files
@@ -421,10 +491,24 @@ jobs:
   wasm64-memory64-smoke:
     name: wasm64 Memory64 smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 10 # single deno smoke test
+    # Issue #331 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, install Deno, run one committed smoke test); it never writes,
+    # so it must not inherit the repository's broad default write scopes.
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
+        # Issue #332 — `persist-credentials: false` keeps the workflow
+        # GITHUB_TOKEN out of .git/config. This job only reads the repo
+        # (install Deno, run one committed smoke test); it never pushes back
+        # and fetches no private submodule, so leaving the credential on disk
+        # would only widen the blast radius of a compromised step.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
       - name: Install Deno
         # denoland/setup-deno@v2.0.5
@@ -439,22 +523,41 @@ jobs:
     uses: ./.github/workflows/security.yml
     if: github.event_name == 'pull_request'
     needs: [version-increment]
+    # Issue #312 — least-privilege GITHUB_TOKEN. A reusable-workflow caller with
+    # no permissions block hands the called workflow the repository's broad
+    # default scopes. Grant only what security.yml needs: read the repo
+    # (checkout, cargo audit) plus the dependency-review PR comment summary.
+    permissions:
+      contents: read
+      pull-requests: write
     with:
       include-dependency-review: true
 
   validation:
     name: Project Validation
     runs-on: ubuntu-latest
+    timeout-minutes: 15 # cargo metadata + manifest/doc checks
     if: github.event_name == 'pull_request'
     needs: [version-increment]
+    # Issue #313 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, cargo metadata, manifest/README/rustdoc file checks); it never
+    # writes, so it must not inherit the repository's broad default scopes.
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
+        # Issue #320 — `persist-credentials: false` keeps the workflow
+        # GITHUB_TOKEN out of .git/config. This job only reads the repo
+        # (manifest, README and rustdoc checks); it never pushes back and
+        # fetches no private submodule, so the persisted credential would only
+        # widen the blast radius of a compromised later step.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust toolchain
         # dtolnay/rust-toolchain@stable

@@ -47,6 +47,10 @@ else
     echo "   Install with: brew install bats-core  (or your package manager)"
 fi
 
+# TypeScript basic-validity gate (Issue #307) — mirrors the CI typescript-gate job.
+echo "🧾 Checking TypeScript sources (deno check)..."
+./scripts/typescript-check.sh </dev/null
+
 # Optional: codespell (CI runs this; install: pip install codespell)
 if command -v codespell &>/dev/null; then
     echo "📖 Running codespell..."

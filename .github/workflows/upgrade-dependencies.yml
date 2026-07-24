@@ -22,6 +22,7 @@ jobs:
   upgrade:
     name: Upgrade dependencies and create PR
     runs-on: ubuntu-latest
+    timeout-minutes: 45 # cargo upgrade + full build/test before PR
     steps:
       - name: Checkout
         # actions/checkout@v6.0.2
@@ -51,6 +52,10 @@ jobs:
           # actively-exploited advisory (Issue #124 — see SECURITY.md).
           VIBE_BUMP_QUARANTINE_HOURS: ${{ inputs.emergency_bypass == true && '0' || vars.VIBE_BUMP_QUARANTINE_HOURS || '24' }}
         run: |
+          # pipefail is mandatory: without it `| tee` masks a bump-deps.sh
+          # failure as success and the workflow opens a PR claiming gates
+          # passed that never ran clean (Issue #336).
+          set -euo pipefail
           # bump-deps.sh applies the release-age quarantine, then runs
           # cargo audit + dual native/wasm builds. A non-zero exit means the
           # bump is unsafe; the worker reverts per the contract.

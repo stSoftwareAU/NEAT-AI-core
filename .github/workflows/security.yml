@@ -12,6 +12,7 @@ on:
 jobs:
   security:
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # cargo audit + dependency review
     permissions:
       contents: read
       pull-requests: write
