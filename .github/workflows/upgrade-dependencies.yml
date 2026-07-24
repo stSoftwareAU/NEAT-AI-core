@@ -52,6 +52,10 @@ jobs:
           # actively-exploited advisory (Issue #124 — see SECURITY.md).
           VIBE_BUMP_QUARANTINE_HOURS: ${{ inputs.emergency_bypass == true && '0' || vars.VIBE_BUMP_QUARANTINE_HOURS || '24' }}
         run: |
+          # GitHub's default (unspecified-shell) run is `bash -e {0}` WITHOUT
+          # pipefail, so a non-zero exit from bump-deps.sh below would be masked
+          # by `tee`. Enable pipefail so the pipe reports the script's status.
+          set -euo pipefail
           # bump-deps.sh applies the release-age quarantine, then runs
           # cargo audit + dual native/wasm builds. A non-zero exit means the
           # bump is unsafe; the worker reverts per the contract.
