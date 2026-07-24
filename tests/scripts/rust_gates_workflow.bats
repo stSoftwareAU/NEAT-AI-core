@@ -15,6 +15,8 @@
 #   - a job invokes an explicit compile/syntax gate (cargo check / cargo build),
 #   - the gate job runs on push (not restricted to pull_request only), so direct
 #     pushes to Develop are gated too,
+#   - exactly one job lints on a pull_request event (Issue #337 — no duplicate
+#     clippy gate),
 #   - third-party actions in the gate job are SHA-pinned (Issue #77),
 #   - the gate job's checkout does not persist the GITHUB_TOKEN on disk
 #     (Issue #318).
@@ -22,6 +24,41 @@
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   WORKFLOW="${REPO_ROOT}/.github/workflows/ci.yml"
+
+  # Shared Python helpers, interpolated into the heredocs below. `runs_on`
+  # answers the observable question "would this job run for event X?" —
+  # replacing an earlier substring check on the `if:` text, which could not
+  # tell `github.event_name == 'pull_request'` (PR only) from
+  # `github.event_name != 'pull_request'` (everything but a PR).
+  read -r -d '' HELPERS <<'HELPERS_PY' || true
+import re
+
+def runs_on(job, event):
+    cond = str(job.get("if", "")).strip()
+    if not cond:
+        return True
+    expr = cond
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2].strip()
+    m = re.fullmatch(r"github\.event_name\s*(==|!=)\s*'([^']+)'", expr)
+    if not m:  # unrecognised condition — assume the job runs
+        return True
+    op, value = m.groups()
+    return event == value if op == "==" else event != value
+
+def has_lint(job):
+    return any(
+        "cargo clippy" in s.get("run", "") and "-D warnings" in s.get("run", "")
+        for s in job.get("steps", [])
+    )
+
+def has_compile(job):
+    return any(
+        ("cargo check" in s.get("run", "") or "cargo build" in s.get("run", ""))
+        and "--all-targets" in s.get("run", "")
+        for s in job.get("steps", [])
+    )
+HELPERS_PY
 }
 
 @test "ci workflow file exists" {
@@ -96,33 +133,40 @@ PY
   fi
   run python3 - <<PY
 import yaml
+$HELPERS
 data = yaml.safe_load(open("$WORKFLOW"))
 
-def has_lint(job):
-    return any(
-        "cargo clippy" in s.get("run", "") and "-D warnings" in s.get("run", "")
-        for s in job.get("steps", [])
-    )
-
-def has_compile(job):
-    return any(
-        ("cargo check" in s.get("run", "") or "cargo build" in s.get("run", ""))
-        and "--all-targets" in s.get("run", "")
-        for s in job.get("steps", [])
-    )
-
-# At least one job must carry BOTH gates and must not be restricted to
-# pull_request only, so direct pushes to Develop are gated too.
+# At least one job must carry BOTH gates and must actually run on a push
+# event, so direct pushes to Develop are gated too.
 gate_jobs = [
     job for job in data["jobs"].values()
     if has_lint(job) and has_compile(job)
 ]
 assert gate_jobs, "no single job carries both the lint and compile gates"
-runs_on_push = [
-    job for job in gate_jobs
-    if "pull_request" not in str(job.get("if", ""))
+runs_on_push = [job for job in gate_jobs if runs_on(job, "push")]
+assert runs_on_push, "lint+compile gate job does not run on push events"
+PY
+  [ "$status" -eq 0 ]
+}
+
+# Issue #337 — `quality` and `rust-gates` both ran the identical
+# `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+# on every pull request, compiling the whole workspace twice in separate jobs
+# with separate caches. Exactly one job must lint a PR; `rust-gates` keeps its
+# stated purpose by running on the events `quality` does not cover.
+@test "exactly one job runs the clippy lint gate on a pull_request event" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+$HELPERS
+data = yaml.safe_load(open("$WORKFLOW"))
+linting = [
+    name for name, job in data["jobs"].items()
+    if has_lint(job) and runs_on(job, "pull_request")
 ]
-assert runs_on_push, "lint+compile gate job is restricted to pull_request only"
+assert len(linting) == 1, f"expected exactly one PR lint job, got {linting}"
 PY
   [ "$status" -eq 0 ]
 }
