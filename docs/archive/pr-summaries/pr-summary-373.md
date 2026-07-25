@@ -50,5 +50,7 @@ private `GRQ` name into this paragraph once, so the guard has demonstrated value
   passes after the reword.
 - `README.md does not reference the private trainer's internal scripts` —
   asserts `worker/learn.sh` and `memory_calc.sh` are absent from the README.
+- `README.md does not reference the stSoftwareAU/GRQ path` — asserts the private
+  repo's full path is absent.
 - Existing suite run unchanged as a regression check: `cargo test --workspace`
   and `./scripts/typescript-check.sh` both pass.

@@ -40,3 +40,9 @@ setup() {
   run grep -nE "worker/learn\.sh|memory_calc\.sh" "$README"
   [ "$status" -ne 0 ]
 }
+
+@test "README.md does not reference the stSoftwareAU/GRQ path" {
+  [ -f "$README" ]
+  run grep -niF "stSoftwareAU/GRQ" "$README"
+  [ "$status" -ne 0 ]
+}
