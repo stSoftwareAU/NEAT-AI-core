@@ -65,7 +65,7 @@ flowchart TD
 | 64 GB / 65536 | 24576 | 24576 | ✓ |
 
 Full finding:
-[`docs/research/wasm64-lane-d-grq-learn-wiring-verification.md`](../../research/wasm64-lane-d-grq-learn-wiring-verification.md).
+[`docs/research/wasm64-lane-d-learn-wiring-verification.md`](../../research/wasm64-lane-d-learn-wiring-verification.md).
 
 ## Test Plan
 

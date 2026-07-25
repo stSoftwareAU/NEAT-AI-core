@@ -8,8 +8,9 @@ guess.
 ## Question
 
 Production learn jobs were scaled down to fit a ~4 GB ceiling even though the
-GRQ hosts have far more RAM (GRQ#3508: `Learn.ts` exit 133 OOME at ~4.2 GB).
-Before committing to a wasm64 build or a data-offload architecture we must prove
+production hosts have far more RAM (the motivating failure: `Learn.ts` exit 133
+OOME at ~4.2 GB). Before committing to a wasm64 build or a data-offload
+architecture we must prove
 **which pool binds**: the V8 JS heap (old-space) or WASM linear memory.
 
 ## The two ceilings are distinguishable by signature
@@ -34,7 +35,7 @@ tests. Both probes — `Deno.memoryUsage()` **and**
 `WebAssembly.Memory.buffer.byteLength` — are captured together, because
 NEAT-AI#3410 shows a single-probe MemoryMonitor misreads the limit.
 
-### V8 old-space (JS heap) — matches GRQ#3508
+### V8 old-space (JS heap) — matches the production failure
 
 `heap` mode grows retained plain-JS objects until the process aborts:
 
@@ -50,7 +51,8 @@ $ LEARN_OOME_REPRO=1 deno run --allow-env \
 exit=133
 ```
 
-This is the **exact GRQ#3508 signature**: exit 133, `Reached heap limit`. It is
+This is the **exact production-failure signature**: exit 133, `Reached heap
+limit`. It is
 a V8 old-space abort.
 
 Raising the cap lets the *identical* job complete:
@@ -95,8 +97,9 @@ subject to this 4 GiB wall.
 ## Silent-failure risk found: exit 133 is a native abort with no marker
 
 A V8 old-space OOM is a **native process abort**, not a catchable JS exception —
-the crashing child cannot print its own `[learn] FAIL:` marker. GRQ node.sh
-downgrades a marker-less non-zero exit to success (GRQ#2391), so an exit-133
+the crashing child cannot print its own `[learn] FAIL:` marker. The downstream
+production launcher downgrades a marker-less non-zero exit to success (the
+silent-failure downgrade behaviour), so an exit-133
 learn crash would be **silently reported green**. The harness closes this at the
 launcher: `markerForExit()` / the `guard` mode subprocess the learn child and
 synthesise the marker on exit 133:
@@ -107,7 +110,7 @@ $ LEARN_OOME_REPRO=1 deno run --allow-env --allow-run \
 [learn] FAIL: v8-heap | child exited 133 (Reached heap limit) with no marker
 ```
 
-Lane (d) (GRQ wiring, #299) must adopt this launcher-side rule: **treat exit 133
+Lane (d) (downstream wiring, #299) must adopt this launcher-side rule: **treat exit 133
 as a hard failure regardless of marker**.
 
 ## Attribution and recommendation
@@ -124,17 +127,17 @@ flowchart TD
     G --> H["Pursue lane (b) wasm64 and/or (c) data-offload"]
 ```
 
-- **The currently observed production ceiling is the V8 JS heap.** GRQ#3508's
-  captured signature is exit 133 / `Reached heap limit` — the V8 old-space
+- **The currently observed production ceiling is the V8 JS heap.** The
+  production failure's captured signature is exit 133 / `Reached heap limit` — the V8 old-space
   abort, reproduced here byte-for-byte. It is **not** a `WebAssembly.Memory`
   RangeError or an out-of-bounds trap, so WASM linear memory is not what is
   binding today.
 - **The cheap fix is the correct first move.** Raising
   `--v8-flags=--max-old-space-size=<N>` demonstrably lets a previously-OOMing
-  old-space job complete, and the GRQ hosts have the RAM for it.
+  old-space job complete, and the production hosts have the RAM for it.
 - **Do not pursue lanes (b)/(c) yet, but do not close them.** On current
   evidence the wasm64 build (b) and data-offload (c) are not required to clear
-  GRQ#3508. They become necessary if, and only if, either:
+  the production failure. They become necessary if, and only if, either:
   1. the dual-probe on the **real** Learn.ts job attributes the peak to WASM
      linear memory or external buffers (not `heapUsed`); or
   2. raising old-space merely walks the job toward the wasm32 4 GiB wall as the
@@ -142,8 +145,8 @@ flowchart TD
 
 ### What remains — owned by lane (d) (#299)
 
-Acceptance step 3 (re-run the *actual* failing production job on an 8 GB GRQ
-host under the raised flag) requires the GRQ learn invocation and an 8 GB host,
+Acceptance step 3 (re-run the *actual* failing production job on an 8 GB
+production host under the raised flag) requires the downstream learn invocation and an 8 GB host,
 which lane (d) (#299) owns end-to-end. Lane (d) should run the real job with the
 dual probe from this harness and confirm the peak is `heapUsed`-dominated before
 the "heap cap suffices" conclusion is locked in and #295 is closed. If that
