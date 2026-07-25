@@ -2,116 +2,85 @@
 
 ## Summary
 
-NEAT-AI-core is public; the four `tests/perf/` acceptance-model files named the
-private downstream trainer repository — its internal scripts, its CI test files
-and its private issue numbers — 26 times across their comments (finding
-`BP-36e39327d964`, private-repo-reference audit check 3). The tests were already
-self-contained and runnable by anyone, but their prose pointed readers at a
-repository and issue numbers they cannot open, so those references carried no
-information a public reader could act on.
+The four acceptance-model sources under `tests/perf/` named the private
+downstream training repository directly in comments — 26 mentions across the
+repo name, its private issue slugs, its internal script paths
+(`worker/learn.sh`, `worker/shared/memory_calc.sh`,
+`test/worker/MemoryCalcHeapSize.ts`), its prefixed environment overrides and a
+private host name. NEAT-AI-core is public, so those references directed
+readers at material they cannot open and carried no information a public reader
+could act on (finding `BP-36e39327d964`, check 3 of the private-repo-reference
+audit).
 
-All mentions are now reworded to **concept level**, reusing the vocabulary
-already settled in the lane (d) research doc (Issue #374): "the downstream
-production training system", "the learn launcher script", "the shared
-memory-calc helper", "lock-step with the production memory-sizing formula". The
-silent-failure guard is described by its failure mode — *a marker-less non-zero
-exit must not be downgraded to success* (Issue #3234) — instead of by a private
-issue number.
+All mentions are reworded to concept level, matching the vocabulary already
+established by the README (#373) and research-doc (#374) fixes — "the downstream
+training system's launch scripts", "the production learn launcher", "lock-step
+with the production memory-sizing formula", and the guarded failure mode stated
+directly ("a marker-less non-zero exit must never be downgraded to success",
+Issue #3234). **No test logic, constants or asserted numbers changed.**
 
-**No test logic, constants, or assertions changed.** The lock-step MB values
-(8 GB → 4326, 16 GB → 9651, 4 GB → 1664) and every exported function are
-untouched; only comments and two test *names* that embedded a private issue
-number were edited.
+Two stale in-repo links were also repaired: the lane (d) research doc was
+renamed in #374, but a merge left the old `wasm64-lane-d-grq-…` path in both
+`README.md` and `learn_flags_wiring.ts`, so both links were broken *and* still
+carried the private repo name. The README guard for this was already failing on
+the branch base.
 
-Two adjacent fixes were needed to leave the gate green:
-
-- Added `tests/scripts/perf_private_repo_reference.bats` — the regression guard
-  for this finding (a milestone merge re-introduced the private name into the
-  README once already, so pinning the outcome matters).
-- Fixed the README link to the lane (d) research doc, which still pointed at the
-  pre-rename filename that carried the private repo name. That doc was renamed
-  by #381 without the README being updated, leaving a broken in-repo link that
-  was **already failing** the existing `private_repo_reference.bats` gate on
-  `Develop`.
-
-Closes #375.
+Closes #375
 
 ## Evidence
 
-This is a comments-and-docs change to backend/CLI test sources — there is no web
-interface to screenshot. The evidence is the guard test going red → green and
-the unchanged perf suite staying green.
+Backend/CLI-only change — comments and a bats guard, no web interface to
+screenshot. Verified by tests instead.
 
-**Guard test fails against the un-reworded sources (5 of 6 red):**
-
-```text
-1..6
-ok 1 all four perf acceptance-model files exist
-not ok 2 perf sources name no private repository
-not ok 3 perf sources reference no private repository path or issue slug
-not ok 4 perf sources name none of the private trainer's internal scripts
-not ok 5 perf sources name none of the private trainer's CI test files
-not ok 6 perf sources link only research docs that exist
-```
-
-**…and passes after the rewording:**
+`tests/scripts/private_repo_reference.bats` gains three "what" guards that read
+the committed sources and assert the private references are absent. They fail
+against the un-reworded files and pass after the rewording:
 
 ```text
-1..6
-ok 1 all four perf acceptance-model files exist
-ok 2 perf sources name no private repository
-ok 3 perf sources reference no private repository path or issue slug
-ok 4 perf sources name none of the private trainer's internal scripts
-ok 5 perf sources name none of the private trainer's CI test files
-ok 6 perf sources link only research docs that exist
+# before (guards added, sources not yet reworded)
+not ok 7 perf acceptance models name no private repository
+not ok 8 perf acceptance models reference no private internal script paths
+not ok 9 perf acceptance models link the renamed lane (d) doc, not the old name
+
+# after
+1..9
+ok 1..9   (all pass, including the previously-failing README link guard #6)
 ```
 
-**The perf acceptance models are unaffected — all 26 tests still pass:**
+The unchanged behaviour of the acceptance models is confirmed by their own Deno
+suites:
 
 ```text
-deno test --allow-env --allow-read tests/perf/learn_flags_wiring_test.ts \
-                                   tests/perf/learn_oome_repro_test.ts
-ok | 26 passed | 0 failed (103ms)
+deno test --allow-env tests/perf/learn_flags_wiring_test.ts \
+                      tests/perf/learn_oome_repro_test.ts
+ok | 26 passed | 0 failed (295ms)
 ```
 
-**Full local gate:** `./quality.sh < /dev/null` → `✅ All quality checks passed!`
-with **zero** `not ok` bats results (264 bats tests, previously 1 red from the
-stale README link).
-
-What the audit checks, and where each check now lands:
+`./quality.sh` passes end to end (shellcheck, bats, `deno check`, codespell,
+`cargo deny`, clippy, `cargo test --workspace`, docs, release build).
 
 ```mermaid
 flowchart LR
-    A["tests/perf/*.ts<br/>comments"] --> B{"private-repo<br/>audit check 3"}
-    B -- "private repo name" --> C["'the downstream production<br/>training system'"]
-    B -- "internal script paths" --> D["'the learn launcher script',<br/>'the shared memory-calc helper'"]
-    B -- "private issue numbers" --> E["failure mode described:<br/>marker-less non-zero exit<br/>must not become success"]
-    C --> F["perf_private_repo_reference.bats<br/>pins the outcome"]
-    D --> F
-    E --> F
+    A["tests/perf/*.ts comments"] -->|named| B["private repo, issues,<br/>script paths, env overrides"]
+    A -->|reworded to| C["downstream training system,<br/>production launcher/selector"]
+    D["private_repo_reference.bats"] -->|guards| C
+    E["README.md + learn_flags_wiring.ts"] -->|link fixed to| F["wasm64-lane-d-learn-wiring-verification.md"]
 ```
 
 ## Test Plan
 
-Added — `tests/scripts/perf_private_repo_reference.bats` (6 "what" tests over
-the committed artefacts, matching the style of the existing
-`private_repo_reference.bats` / `readme_private_repo_reference.bats` guards):
-
-- `all four perf acceptance-model files exist`
-- `perf sources name no private repository` — word-boundary token match
-- `perf sources reference no private repository path or issue slug` — catches
-  `stSoftwareAU/…`, `…#NNNN` and host-name slugs
-- `perf sources name none of the private trainer's internal scripts`
-- `perf sources name none of the private trainer's CI test files`
-- `perf sources link only research docs that exist` — every
-  `docs/research/*.md` link in the perf sources must resolve in the tree (this
-  is what caught the stale lane (d) filename)
-
-Unchanged and re-run to prove no behaviour drift:
-
-- `tests/perf/learn_flags_wiring_test.ts` — 13 tests (RAM-aware heap selection,
-  floors, budget-fit, flag token, fail marker)
-- `tests/perf/learn_oome_repro_test.ts` — 13 tests (crash classification, peak
-  attribution, wasm32 4 GiB ceiling, marker synthesis)
-- `tests/scripts/private_repo_reference.bats` — now fully green, including the
-  README lane (d) link assertion that was red before this PR
+- **Added** `tests/scripts/private_repo_reference.bats`:
+  - `perf acceptance models name no private repository` — no private repo token
+    in any form (bare name, issue slug, prefixed env override) across the four
+    sources.
+  - `perf acceptance models reference no private internal script paths` — no
+    `worker/learn.sh`, `worker/node.sh`, `memory_calc.sh`,
+    `stage_fail_marker.sh` or `MemoryCalc*.ts`.
+  - `perf acceptance models link the renamed lane (d) doc, not the old name` —
+    the doc reference resolves to the file that exists in the tree.
+- **Existing, unchanged and still green**: the 13 wiring "what" tests in
+  `tests/perf/learn_flags_wiring_test.ts` and the 13 in
+  `tests/perf/learn_oome_repro_test.ts` pin every number the reworded comments
+  describe, so a rewording that drifted from behaviour would show up there.
+- **Pre-existing failure fixed**: `README links the renamed lane (d) doc, not
+  the old name` was failing on the branch base and now passes.
