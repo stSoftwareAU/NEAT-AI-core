@@ -30,21 +30,25 @@ changing it now would break the link.
 Documentation-only change — no web interface to screenshot and no runtime
 behaviour altered, so no Playwright evidence applies.
 
-- `grep -n "GRQ" README.md` now returns no matches (it previously matched lines
-  44 and 49).
+- `grep -nE "\bGRQ\b" README.md` now returns no matches (it previously matched
+  the lane (d) paragraph).
 - `./quality.sh < /dev/null` passes cleanly (exit 0): shellcheck, `deno check`,
   codespell, `cargo deny`, `cargo fmt`, `cargo clippy -D warnings`,
   `cargo check`, `cargo test --workspace`, `cargo doc` and the release build.
-- `git status` shows `README.md` as the only modified file — no dependency or
-  lockfile churn.
 
 ## Test Plan
 
-No tests were added or modified. The change is prose-only, and this repo's
-`AGENTS.md` explicitly discourages source-grep assertions as tests ("How tests
-tie to implementation detail and are discouraged: … source greps"), so a test
-that greps `README.md` for a banned string would violate the repo's own testing
-rule. The existing suite was run unchanged as a regression check:
+Added `tests/scripts/readme_private_repo_reference.bats` — a regression guard in
+the same artefact-content "what" test style as the existing
+`tests/scripts/readme_glossary.bats` (it asserts on the observable content of the
+published README, not on source implementation detail, so it stays within
+`AGENTS.md`'s testing rule). A milestone merge had already re-introduced the
+private `GRQ` name into this paragraph once, so the guard has demonstrated value.
 
-- `cargo test --workspace --lib --tests --all-features` — all tests pass.
-- `./scripts/typescript-check.sh` — TypeScript sources still valid.
+- `README.md does not name the private repository (GRQ token)` — greps for the
+  `\bGRQ\b` token and asserts it is absent. Fails against the pre-fix README,
+  passes after the reword.
+- `README.md does not reference the private trainer's internal scripts` —
+  asserts `worker/learn.sh` and `memory_calc.sh` are absent from the README.
+- Existing suite run unchanged as a regression check: `cargo test --workspace`
+  and `./scripts/typescript-check.sh` both pass.
