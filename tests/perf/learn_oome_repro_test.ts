@@ -116,7 +116,7 @@ Deno.test("growWasmToCeiling hits the hard 4 GiB cap when asked for more", () =>
 });
 
 Deno.test("markerForExit synthesises a FAIL marker for a marker-less exit 133", () => {
-  // The GRQ#2391 gap: V8 aborts natively, so the child prints no marker.
+  // The silent-failure gap: V8 aborts natively, so the child prints no marker.
   assertEquals(
     markerForExit(133, "some gc log\n#\n# Fatal JavaScript out of memory\n"),
     "[learn] FAIL: v8-heap | child exited 133 (Reached heap limit) with no marker",

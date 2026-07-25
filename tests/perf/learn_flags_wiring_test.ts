@@ -1,11 +1,11 @@
-// learn_flags_wiring_test.ts — "what" tests for the wasm64 lane (d) GRQ
-// learn-invocation wiring model (Issue #299).
+// learn_flags_wiring_test.ts — "what" tests for the wasm64 lane (d)
+// downstream-trainer learn-invocation wiring model (Issue #299).
 //
-// These pin the RAM-aware `--v8-flags=--max-old-space-size` selection GRQ's
-// `worker/learn.sh` injects, verified from neat-core. The expected MB values are
-// the SAME numbers GRQ's own CI asserts in `test/worker/MemoryCalcHeapSize.ts`
-// (e.g. 8 GB → 4326, 16 GB → 9651, 4 GB → 1664): if GRQ's sizing formula drifts,
-// these lock-step values catch it here too.
+// These pin the RAM-aware `--v8-flags=--max-old-space-size` selection the
+// downstream trainer's learn launcher injects, verified from neat-core. The
+// expected MB values are the SAME numbers the trainer's own CI asserts for its
+// memory-sizing formula (e.g. 8 GB → 4326, 16 GB → 9651, 4 GB → 1664): if the
+// production sizing formula drifts, these lock-step values catch it here too.
 //
 // Run: deno test tests/perf/learn_flags_wiring_test.ts
 
@@ -30,14 +30,14 @@ const host = (totalGb: number, availableMb?: number): HostMemory => ({
   availableMb,
 });
 
-// --- RAM-aware heap selection, lock-step with GRQ MemoryCalcHeapSize.ts --------
+// --- RAM-aware heap selection, lock-step with the production memory-sizing tests --
 
 Deno.test("selectMaxOldSpaceSizeMb: 4 GB host gets 1664 MB (above the 1536 floor)", () => {
   // (4096 - 1536) * 65 / 100 = 1664
   assertEquals(selectMaxOldSpaceSizeMb(host(4)), 1664);
 });
 
-Deno.test("selectMaxOldSpaceSizeMb: 8 GB host gets 4326 MB (the GRQ#3508 tier)", () => {
+Deno.test("selectMaxOldSpaceSizeMb: 8 GB host gets 4326 MB (the production OOME tier)", () => {
   // (8192 - 1536) * 65 / 100 = 4326
   assertEquals(selectMaxOldSpaceSizeMb(host(8)), 4326);
 });
@@ -58,10 +58,11 @@ Deno.test("selectMaxOldSpaceSizeMb: 2 GB host is floored at 1536 MB", () => {
 });
 
 Deno.test("selectMaxOldSpaceSizeMb: constrained 8 GB host sizes off AVAILABLE, not total (#3342)", () => {
-  // GRQ-26: 8 GB total but only 3865 MB available. Heap = (3865 - 1536) * 65 /
-  // 100 = 1513; the available-aware floor steps down to min(3072, 3865 * 45 /
-  // 100 = 1739) = 1739, so the selection is 1739 — far below the fixed-3072
-  // over-commit that fatal-OOM'd GRQ-26, and below the 4326 a roomy 8 GB gets.
+  // Constrained host: 8 GB total but only 3865 MB available. Heap =
+  // (3865 - 1536) * 65 / 100 = 1513; the available-aware floor steps down to
+  // min(3072, 3865 * 45 / 100 = 1739) = 1739, so the selection is 1739 — far
+  // below the fixed-3072 over-commit that fatal-OOM'd such a host, and below the
+  // 4326 a roomy 8 GB gets.
   assertEquals(selectMaxOldSpaceSizeMb(host(8, 3865)), 1739);
   assertGreater(
     selectMaxOldSpaceSizeMb(host(8)),
@@ -112,7 +113,7 @@ Deno.test("learnV8HeapFlag: composes the --v8-flags=--max-old-space-size token",
   );
 });
 
-// --- Silent-failure guard (GRQ#2391 / #3234) ----------------------------------
+// --- Silent-failure guard (Issue #3234) ---------------------------------------
 
 Deno.test("learnFailMarkerForExit: a marker-less exit-133 abort gets a [learn] FAIL: marker", () => {
   assertEquals(

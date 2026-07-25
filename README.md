@@ -49,7 +49,7 @@ The neat-core acceptance model
 [`tests/perf/learn_flags_wiring.ts`](tests/perf/learn_flags_wiring.ts) re-derives
 that selection lock-step with the production selector and pins the budget-fit /
 safe-fall-back invariants; see
-[`docs/research/wasm64-lane-d-grq-learn-wiring-verification.md`](docs/research/wasm64-lane-d-grq-learn-wiring-verification.md).
+[`docs/research/wasm64-lane-d-learn-wiring-verification.md`](docs/research/wasm64-lane-d-learn-wiring-verification.md).
 
 ```mermaid
 sequenceDiagram
