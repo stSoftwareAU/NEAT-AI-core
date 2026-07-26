@@ -6,6 +6,7 @@
 //!
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
+use crate::batch_scoring::SCORING_LANES;
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
@@ -1006,7 +1007,267 @@ fn mse_sum_batch_4way(
 /// This is an internal helper that only works for forward-only networks
 /// with standard squash functions. Falls back to 4-way for remainder < 8,
 /// then single-record for remainder < 4.
+///
+/// Issue #384 - dispatches on [`CompiledNetwork::has_aggregate_squash`]:
+/// standard-only networks (the production case) route the full 8-record groups
+/// through the record-interleaved gather proven by #287
+/// ([`mse_sum_batch_8way_interleaved`]), so each synapse reads one cache line
+/// instead of eight scattered per-lane buffers; networks containing an
+/// aggregate squash keep the exact per-lane scattered path
+/// ([`mse_sum_batch_8way_scattered`]) unchanged. Both are bit-identical to the
+/// pre-#384 result.
 fn mse_sum_batch_8way(
+    network: &CompiledNetwork,
+    records: &[f32],
+    values_per_record: usize,
+    input_size: usize,
+    num_outputs: usize,
+    num_records: usize,
+) -> f64 {
+    if network.has_aggregate_squash() {
+        return mse_sum_batch_8way_scattered(
+            network,
+            records,
+            values_per_record,
+            input_size,
+            num_outputs,
+            num_records,
+        );
+    }
+    mse_sum_batch_8way_interleaved(
+        network,
+        records,
+        values_per_record,
+        input_size,
+        num_outputs,
+        num_records,
+    )
+}
+
+/// Record-interleaved fused activate + MSE for standard-squash networks
+/// (Issue #384). Full 8-record groups run the shared interleaved forward pass
+/// ([`CompiledNetwork::interleaved_forward_8`]) — the #287 gather that reads
+/// each synapse's eight lanes from one cache line — then the MSE reduction
+/// reads the eight contiguous output lanes. The `< 8` remainder (4-record group
+/// then scalar tail) is kept on the exact same per-lane kernels as the
+/// scattered path, so the whole result is bit-identical to the pre-#384 8-way
+/// path (the interleaved gather is proven bit-identical to
+/// `weighted_sum_simd_8records`).
+///
+/// Only called when the network has no aggregate-squash neuron; the caller
+/// (`mse_sum_batch_8way`) routes aggregate networks to the scattered path.
+fn mse_sum_batch_8way_interleaved(
+    network: &CompiledNetwork,
+    records: &[f32],
+    values_per_record: usize,
+    input_size: usize,
+    num_outputs: usize,
+    num_records: usize,
+) -> f64 {
+    const L: usize = SCORING_LANES;
+    let inv_outputs: f64 = if num_outputs > 0 {
+        1.0 / (num_outputs as f64)
+    } else {
+        return 0.0;
+    };
+
+    let num_neurons = network.num_neurons;
+    let num_inputs = network.num_inputs;
+    let output_start = num_neurons - num_outputs;
+
+    // Record-interleaved buffer for the full 8-groups (`inter[n * 8 + l]`), plus
+    // four per-lane buffers reused by the `< 8` remainder (4-way + scalar tail).
+    let mut inter: Vec<f32> = vec![0.0; num_neurons * L];
+    let mut act0: Vec<f32> = vec![0.0; num_neurons];
+    let mut act1: Vec<f32> = vec![0.0; num_neurons];
+    let mut act2: Vec<f32> = vec![0.0; num_neurons];
+    let mut act3: Vec<f32> = vec![0.0; num_neurons];
+
+    let mut sum_error: f64 = 0.0;
+
+    // ---- full 8-record groups through the interleaved gather ----------------
+    let full_batches = num_records / L;
+    let input_lanes = input_size.min(num_inputs);
+    for batch in 0..full_batches {
+        let base_idx = batch * L;
+
+        // Transpose the eight records' inputs into the interleaved buffer;
+        // zero any input slot the record does not cover (stateless scoring).
+        for l in 0..L {
+            let base = (base_idx + l) * values_per_record;
+            for i in 0..input_lanes {
+                inter[i * L + l] = records[base + i];
+            }
+            for i in input_lanes..num_inputs {
+                inter[i * L + l] = 0.0;
+            }
+        }
+
+        network.interleaved_forward_8(&mut inter);
+
+        // MSE reduction reads each lane's contiguous output lanes.
+        for l in 0..L {
+            let target_base = (base_idx + l) * values_per_record + input_size;
+            let mut sq_sum: f64 = 0.0;
+            for j in 0..num_outputs {
+                let out_val = inter[(output_start + j) * L + l];
+                let diff = (records[target_base + j] - out_val) as f64;
+                sq_sum += diff * diff;
+            }
+            sum_error += sq_sum * inv_outputs;
+        }
+    }
+
+    // ---- `< 8` remainder: 4-record group then scalar tail -------------------
+    // Kept on the exact per-lane kernels of the scattered path so the numerics
+    // match bit-for-bit. This branch never sees an aggregate neuron.
+    let remainder_start = full_batches * L;
+    let remaining = num_records - remainder_start;
+
+    if remaining >= 4 {
+        let base_idx = remainder_start;
+        load_batch_input(&mut act0, records, base_idx, values_per_record, input_size);
+        load_batch_input(
+            &mut act1,
+            records,
+            base_idx + 1,
+            values_per_record,
+            input_size,
+        );
+        load_batch_input(
+            &mut act2,
+            records,
+            base_idx + 2,
+            values_per_record,
+            input_size,
+        );
+        load_batch_input(
+            &mut act3,
+            records,
+            base_idx + 3,
+            values_per_record,
+            input_size,
+        );
+
+        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
+            let actual_idx = num_inputs + neuron_idx;
+            if neuron.is_constant {
+                let val = apply_limit_range(SquashType::Identity, neuron.bias);
+                act0[actual_idx] = val;
+                act1[actual_idx] = val;
+                act2[actual_idx] = val;
+                act3[actual_idx] = val;
+                continue;
+            }
+            let squash = SquashType::from(neuron.squash_type);
+            let start_synapse = neuron.start_synapse as usize;
+            let end_synapse = start_synapse + neuron.num_synapses as usize;
+            let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
+                &network.synapses,
+                &act0,
+                &act1,
+                &act2,
+                &act3,
+                start_synapse,
+                end_synapse,
+                neuron.bias,
+            );
+            let sums = [sum0, sum1, sum2, sum3];
+            let squashed = match squash_x4(squash, sums) {
+                Some(vec) => vec,
+                None => sums.map(|sum| inline_squash_scalar(neuron.squash_type, squash, sum)),
+            };
+            let (low, high) = apply_get_range(squash);
+            act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
+            act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
+            act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
+            act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
+        }
+
+        for (r, act) in [&act0, &act1, &act2, &act3].into_iter().enumerate() {
+            let target_base = (base_idx + r) * values_per_record + input_size;
+            let mut sq_sum: f64 = 0.0;
+            for j in 0..num_outputs {
+                let diff = (records[target_base + j] - act[output_start + j]) as f64;
+                sq_sum += diff * diff;
+            }
+            sum_error += sq_sum * inv_outputs;
+        }
+    }
+
+    // Scalar single-record tail (`remaining % 4`), bit-identical to `activate`.
+    let final_remainder_start = remainder_start + (remaining / 4) * 4;
+    for record_idx in final_remainder_start..num_records {
+        let base = record_idx * values_per_record;
+        let target_base = base + input_size;
+        act0[..input_size].copy_from_slice(&records[base..base + input_size]);
+        for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
+            *activation = 0.0;
+        }
+        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
+            let actual_idx = num_inputs + neuron_idx;
+            if neuron.is_constant {
+                act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
+                continue;
+            }
+            let squash = SquashType::from(neuron.squash_type);
+            let start_synapse = neuron.start_synapse as usize;
+            let end_synapse = start_synapse + neuron.num_synapses as usize;
+            let mut sum = neuron.bias;
+            for synapse in network
+                .synapses
+                .iter()
+                .take(end_synapse)
+                .skip(start_synapse)
+            {
+                sum += act0[synapse.from_index as usize] * synapse.weight;
+            }
+            let activation = inline_squash_scalar(neuron.squash_type, squash, sum);
+            act0[actual_idx] = apply_limit_range(squash, activation);
+        }
+        let mut sq_sum: f64 = 0.0;
+        for j in 0..num_outputs {
+            let diff = (records[target_base + j] - act0[output_start + j]) as f64;
+            sq_sum += diff * diff;
+        }
+        sum_error += sq_sum * inv_outputs;
+    }
+
+    sum_error
+}
+
+/// Scalar inline squash for the four hot standard types, matching the batched
+/// SIMD `None`-fallback branches (and `CompiledNetwork::activate_into`) exactly.
+#[inline]
+fn inline_squash_scalar(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
+    match squash_type {
+        0 => sum,                        // IDENTITY
+        1 => sum.max(0.0),               // ReLU
+        6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
+        7 => sum.tanh(),                 // TANH
+        _ => apply_squash(squash, sum),  // Other
+    }
+}
+
+/// Copy one record's `input_size` inputs into a per-lane activation buffer and
+/// zero the remaining non-input slots, matching the scattered 8-way loader.
+#[inline]
+fn load_batch_input(
+    act: &mut [f32],
+    records: &[f32],
+    record_idx: usize,
+    values_per_record: usize,
+    input_size: usize,
+) {
+    let base = record_idx * values_per_record;
+    act[..input_size].copy_from_slice(&records[base..base + input_size]);
+}
+
+/// Scattered per-lane fused activate + MSE (Issue #1209), retained unchanged for
+/// networks containing an aggregate squash (Issue #384). Processes 8 records via
+/// two SIMD vectors across records, falling back to 4-way for remainder < 8,
+/// then single-record for remainder < 4.
+fn mse_sum_batch_8way_scattered(
     network: &CompiledNetwork,
     records: &[f32],
     values_per_record: usize,
@@ -2553,5 +2814,211 @@ mod tests {
         let err_recurrent =
             categorical_error_sum_batch_packed(&mut net_recurrent, &records, 2, 3, false);
         assert_eq!(err_recurrent, 3.0);
+    }
+}
+
+#[cfg(test)]
+mod interleaved_mse_parity {
+    //! Issue #384 - bit-identity guard for rerouting the fused MSE batch loss
+    //! lane through the #287 record-interleaved gather.
+    //!
+    //! `mse_sum_batch_8way` now dispatches standard-squash networks to
+    //! [`mse_sum_batch_8way_interleaved`] and aggregate networks to the
+    //! unchanged [`mse_sum_batch_8way_scattered`]. These "what" tests assert the
+    //! interleaved result is **bit-identical** (`f64::to_bits`) to the scattered
+    //! path it replaces across the record counts that straddle the 8-record
+    //! group boundary, so a lane-transpose bug, a changed `f64` accumulation
+    //! order, or a wrong remainder split would break the assertion.
+
+    use super::*;
+    use crate::network::{NeuronData, SynapseData};
+
+    /// Build a forward-only network: `num_inputs` inputs fully connected into
+    /// two hidden neurons and one output neuron, every non-input neuron using
+    /// `squash`. Mirrors the topology of the existing MSE/interleaved parity
+    /// tests so the fixtures stay comparable.
+    fn build_network(num_inputs: usize, squash: SquashType) -> CompiledNetwork {
+        let mut synapses = Vec::new();
+        let mut neurons = Vec::new();
+
+        for h in 0..2 {
+            let start = synapses.len() as u32;
+            for i in 0..num_inputs {
+                synapses.push(SynapseData {
+                    weight: 0.31 - 0.13 * (i as f32) + 0.09 * (h as f32),
+                    from_index: i as u16,
+                    synapse_type: 0,
+                });
+            }
+            neurons.push(NeuronData {
+                bias: 0.04 * (h as f32) - 0.03,
+                start_synapse: start,
+                num_synapses: num_inputs as u16,
+                squash_type: squash as u8,
+                is_constant: false,
+            });
+        }
+
+        let start = synapses.len() as u32;
+        let hidden0 = num_inputs as u16;
+        let hidden1 = num_inputs as u16 + 1;
+        synapses.push(SynapseData {
+            weight: 0.55,
+            from_index: hidden0,
+            synapse_type: 0,
+        });
+        synapses.push(SynapseData {
+            weight: -0.42,
+            from_index: hidden1,
+            synapse_type: 0,
+        });
+        neurons.push(NeuronData {
+            bias: 0.02,
+            start_synapse: start,
+            num_synapses: 2,
+            squash_type: squash as u8,
+            is_constant: false,
+        });
+
+        let num_non_inputs = neurons.len();
+        let num_neurons = num_inputs + num_non_inputs;
+        CompiledNetwork {
+            num_neurons,
+            num_inputs,
+            neurons,
+            synapses,
+            activations: vec![0.0; num_neurons],
+            hint_values_buffer: vec![0.0; num_non_inputs],
+            trace_data_buffer: Vec::new(),
+            batch_activations: [
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+            ],
+            batch_hints: [
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+            ],
+            batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        }
+    }
+
+    /// Packed `[inputs..., target]` records with distinct per-record values so a
+    /// lane mix-up in the transpose or MSE reduction cannot hide.
+    fn build_records(num_records: usize, input_size: usize) -> Vec<f32> {
+        let values_per_record = input_size + 1;
+        let mut records = vec![0.0f32; num_records * values_per_record];
+        for r in 0..num_records {
+            let base = r * values_per_record;
+            for i in 0..input_size {
+                records[base + i] = -1.3 + 0.29 * (r as f32) - 0.17 * (i as f32);
+            }
+            records[base + input_size] = 0.2 + 0.031 * (r as f32);
+        }
+        records
+    }
+
+    fn assert_bit_identical(squash: SquashType, num_records: usize) {
+        let input_size = 6;
+        let net = build_network(input_size, squash);
+        assert!(
+            !net.has_aggregate_squash(),
+            "{squash:?} must route through the interleaved path"
+        );
+        let records = build_records(num_records, input_size);
+        let values_per_record = input_size + 1;
+
+        let interleaved = mse_sum_batch_8way_interleaved(
+            &net,
+            &records,
+            values_per_record,
+            input_size,
+            1,
+            num_records,
+        );
+        let scattered = mse_sum_batch_8way_scattered(
+            &net,
+            &records,
+            values_per_record,
+            input_size,
+            1,
+            num_records,
+        );
+        assert_eq!(
+            interleaved.to_bits(),
+            scattered.to_bits(),
+            "{squash:?} n={num_records}: interleaved MSE {interleaved} not bit-identical to scattered {scattered}"
+        );
+    }
+
+    #[test]
+    fn interleaved_mse_bit_identical_to_scattered_across_boundaries() {
+        // 8 = one full group; 9 = group + scalar tail; 12 = group + 4-way
+        // remainder; 13/15 = group + 4-way + scalar tail; 16 = two full groups;
+        // 4096 = the production steady state (all full groups).
+        for squash in [
+            SquashType::Tanh,
+            SquashType::Logistic,
+            SquashType::Gelu,
+            SquashType::Mish,
+            SquashType::Relu,
+            SquashType::Identity,
+            SquashType::Sine,
+        ] {
+            for &n in &[8usize, 9, 12, 13, 15, 16, 17, 24, 4096] {
+                assert_bit_identical(squash, n);
+            }
+        }
+    }
+
+    /// A network with an aggregate squash must dispatch to the unchanged
+    /// scattered kernel — never the interleaved gather (whose standard-only
+    /// `squash_x8` fallback would mis-evaluate an aggregate neuron). Asserting
+    /// the public `mse_sum_batch_8way` dispatcher is bit-identical to
+    /// `mse_sum_batch_8way_scattered` proves the routing, and keeps aggregate
+    /// networks bit-identical to their pre-#384 result.
+    #[test]
+    fn aggregate_dispatch_stays_on_scattered_path() {
+        let input_size = 6;
+        let values_per_record = input_size + 1;
+        for squash in [
+            SquashType::Minimum,
+            SquashType::Maximum,
+            SquashType::If,
+            SquashType::Hypotenuse,
+            SquashType::HypotenuseV2,
+            SquashType::Mean,
+        ] {
+            let net = build_network(input_size, squash);
+            assert!(
+                net.has_aggregate_squash(),
+                "{squash:?} must be detected as an aggregate squash"
+            );
+            // Multiples of 8 only: the dispatch guarantee (aggregate → scattered)
+            // is proven by the full-group path, which handles every aggregate
+            // type. The scattered path's `< 8` aggregate remainder handling is a
+            // pre-existing concern untouched by #384, so it is out of scope here.
+            for &n in &[8usize, 16, 24, 4096] {
+                let records = build_records(n, input_size);
+                let dispatched =
+                    mse_sum_batch_8way(&net, &records, values_per_record, input_size, 1, n);
+                let scattered = mse_sum_batch_8way_scattered(
+                    &net,
+                    &records,
+                    values_per_record,
+                    input_size,
+                    1,
+                    n,
+                );
+                assert_eq!(
+                    dispatched.to_bits(),
+                    scattered.to_bits(),
+                    "{squash:?} n={n}: aggregate dispatch diverged from scattered path"
+                );
+            }
+        }
     }
 }

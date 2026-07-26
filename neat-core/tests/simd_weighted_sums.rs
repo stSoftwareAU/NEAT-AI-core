@@ -2,8 +2,9 @@
 
 use neat_core::network::SynapseData;
 use neat_core::simd::{
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
-    weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
+    weighted_sum_interleaved_8, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
+    weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
+    weighted_sum_simd_8records,
 };
 
 /// Helper to create test synapse data
@@ -464,5 +465,69 @@ fn test_8records_empty() {
     );
     for r in [r0, r1, r2, r3, r4, r5, r6, r7] {
         assert!((r - 3.0).abs() < 1e-6);
+    }
+}
+
+// Issue #384 - the record-interleaved gather (`weighted_sum_interleaved_8`,
+// #287) is the kernel the fused MSE loss lane now routes through. Its result
+// must be *bit-identical* to the eight-scattered-buffer `weighted_sum_simd_8records`
+// (same seeded-bias FMA order, only the memory layout differs), because the MSE
+// reroute relies on that identity to stay numerically unchanged.
+
+/// Transpose eight per-lane activation buffers into the record-interleaved
+/// layout `inter[n * 8 + l]` the interleaved gather expects.
+fn interleave_lanes(acts: &[Vec<f32>; 8], num_neurons: usize) -> Vec<f32> {
+    let mut inter = vec![0.0f32; num_neurons * 8];
+    for (l, act) in acts.iter().enumerate() {
+        for n in 0..num_neurons {
+            inter[n * 8 + l] = act[n];
+        }
+    }
+    inter
+}
+
+#[test]
+fn interleaved_8_is_bit_identical_to_scattered_8records() {
+    let num_neurons = 17usize;
+    // Distinct per-lane activation buffers so a lane mix-up cannot hide.
+    let acts: [Vec<f32>; 8] = std::array::from_fn(|l| {
+        (0..num_neurons)
+            .map(|n| (((n * 8 + l) as f32) * 0.019).sin() * 1.3 - 0.2)
+            .collect()
+    });
+    let inter = interleave_lanes(&acts, num_neurons);
+
+    // Sweep synapse counts across the SIMD body and every tail remainder, with
+    // repeated / wrapped from_index values matching real fan-in.
+    for count in 0..=40usize {
+        let synapses: Vec<SynapseData> = (0..count)
+            .map(|i| make_synapse((i % num_neurons) as u16, ((i as f32) * 0.11).cos() * 0.8))
+            .collect();
+        for &bias in &[0.0f32, -0.37, 1.25] {
+            let scattered = weighted_sum_simd_8records(
+                &synapses, &acts[0], &acts[1], &acts[2], &acts[3], &acts[4], &acts[5], &acts[6],
+                &acts[7], 0, count, bias,
+            );
+            let scattered = [
+                scattered.0,
+                scattered.1,
+                scattered.2,
+                scattered.3,
+                scattered.4,
+                scattered.5,
+                scattered.6,
+                scattered.7,
+            ];
+            let interleaved = weighted_sum_interleaved_8(&synapses, &inter, 0, count, bias);
+            for l in 0..8 {
+                assert_eq!(
+                    interleaved[l].to_bits(),
+                    scattered[l].to_bits(),
+                    "count={count} bias={bias} lane={l}: interleaved {} vs scattered {} not bit-identical",
+                    interleaved[l],
+                    scattered[l]
+                );
+            }
+        }
     }
 }

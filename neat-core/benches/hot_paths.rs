@@ -103,6 +103,37 @@ fn bench_batched_scoring(c: &mut Criterion) {
                 });
             },
         );
+
+        // Production-sized fused MSE batch (Issue #384). The 8-record case above
+        // over-weights the per-call buffer setup; scoring a full
+        // `PRODUCTION_SCORING_RECORDS` batch measures the steady-state gather
+        // cost that the #287 interleaved reroute targets. Only the gather-bound
+        // `production*` shapes are representative, so restrict the heavy case to
+        // them (reachable via `--bench hot_paths -- mse_sum_production`).
+        if spec.label.starts_with("production") {
+            let mut loss_net_prod = net.clone();
+            let prod_records = build_inputs(
+                (num_inputs + num_outputs) * PRODUCTION_SCORING_RECORDS,
+                0xFEED_BEEF,
+            );
+            group.throughput(Throughput::Elements(PRODUCTION_SCORING_RECORDS as u64));
+            group.bench_with_input(
+                BenchmarkId::new("mse_sum_production", spec.label),
+                &prod_records,
+                |b, records| {
+                    b.iter(|| {
+                        let sum = mse_sum_batch_packed(
+                            &mut loss_net_prod,
+                            black_box(records),
+                            black_box(num_inputs),
+                            black_box(num_outputs),
+                            black_box(true),
+                        );
+                        black_box(sum);
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }

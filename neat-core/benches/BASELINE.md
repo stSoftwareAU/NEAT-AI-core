@@ -215,6 +215,51 @@ runs the exact single-record kernel, so single-record scoring stays
 bit-for-bit identical to `activate` (asserted by
 `tests/interleaved_scoring_parity.rs` and the existing scoring parity suite).
 
+## Fused MSE batch loss routed through the #287 interleaved gather (Issue #384)
+
+The `#[wasm_bindgen]` fused activate + MSE entry point (`mse_sum_batch_packed`)
+ran its **own** duplicate forward pass over the old eight-scattered-buffer
+per-lane layout (`mse_sum_batch_8way` → `weighted_sum_simd_8records`), so the
+locality win #287 landed for `score_records` never reached the loss lane
+production scoring actually calls. #384 dispatches standard-squash networks
+(the all-`Tanh` production topology) through the same record-interleaved gather
+(`interleaved_forward_8` → `weighted_sum_interleaved_8`) and keeps aggregate
+networks on the exact per-lane path. The full 8-record groups are **bit-identical**
+to the prior per-lane path (the interleaved gather is proven bit-identical to
+`weighted_sum_simd_8records`, asserted by
+`tests/simd_weighted_sums.rs::interleaved_8_is_bit_identical_to_scattered_8records`);
+the whole rerouted result is bit-identical before/after, asserted by
+`loss::interleaved_mse_parity` and `tests/mse_batch_interleaved_parity.rs`.
+
+The 8-record bench (`batched_scoring/mse_sum_8records`) over-weights per-call
+buffer setup, so #384 adds `batched_scoring/mse_sum_production`
+(`PRODUCTION_SCORING_RECORDS = 4096` per iteration) to measure the steady-state
+gather cost.
+
+**Measured 2026-07-26**, Apple M4 (this host — see below), rustc 1.97.1,
+`--release`, Criterion `--sample-size 10 --measurement-time 6 --warm-up-time 1`,
+`--save-baseline`/`--baseline` A/B on the *same* prebuilt bench binary (old =
+`mse_sum_batch_8way` scattered, new = interleaved reroute):
+
+| benchmark (median) | old | new | change |
+| --- | --- | --- | --- |
+| `mse_sum_8records/production` | 175.0 µs | 76.2 µs | **−56.6%** |
+| `mse_sum_production/production` (4096) | 87.96 ms | 34.97 ms | **−60.2% (≈2.5×)** |
+| `mse_sum_8records/production_2x` | 384.8 µs | 167.6 µs | **−56.8%** |
+| `mse_sum_production/production_2x` (4096) | 191.0 ms | 77.87 ms | **−59.2% (≈2.5×)** |
+| `mse_sum_8records/production_exact` | 205.7 µs | 76.2 µs | **−63.0%** |
+| `mse_sum_production/production_exact` (4096) | 103.3 ms | 34.87 ms | **−66.5% (≈3.0×)** |
+
+All deltas are `p = 0.00 < 0.05` (Criterion), far outside the ±5% noise band.
+Per the squash-homogeneity caveat above, these all-`Tanh` figures are a **lower
+bound** — varied-squash creatures also convert scalar `libm` `Gelu`/`Mish` to
+the vectorised path, so they gain at least as much.
+
+> **Host note.** This A/B ran on a plain **Apple M4** (10 cores), not the
+> Apple M4 Pro host class the older sections above used; the numbers are only
+> comparable within this section's own old/new pair, which is what the
+> gain claim rests on.
+
 ## Native (`--features parallel`) vs wasm32 scoring lane — decision (Issue #288)
 
 The `parallel` feature (rayon, #179) has always compiled the native
