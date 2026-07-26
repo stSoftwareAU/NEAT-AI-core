@@ -107,8 +107,13 @@ jobs:
           if [ "$SKIP_VERSION_BUMP" = false ] && git show-ref --verify --quiet refs/remotes/origin/$BASE_BRANCH; then
             BASE_VERSION=$(git show origin/$BASE_BRANCH:Cargo.toml 2>/dev/null | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/' || echo "")
             CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-            if [ -n "$BASE_VERSION" ] && [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" != "$BASE_VERSION" ]; then
-              echo "Version already differs from base — skipping semver bump"
+            # Skip only when HEAD is *ahead* of the base version. A milestone
+            # feature branch can sit behind Develop; skipping there left the PR
+            # on a downgrade that the version gate below then rejected.
+            chmod +x scripts/check-version-bump.sh
+            if [ -n "$BASE_VERSION" ] && [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" != "$BASE_VERSION" ] &&
+              scripts/check-version-bump.sh "$BASE_VERSION" "$CURRENT_VERSION" false >/dev/null 2>&1; then
+              echo "Version already ahead of base — skipping semver bump"
               SKIP_VERSION_BUMP=true
             fi
           fi
@@ -136,7 +141,15 @@ jobs:
             fi
             echo "Breaking change signalled: $BREAKING"
 
-            NEW_VERSION=$(scripts/next-version.sh "$CURRENT_VERSION" "$BREAKING")
+            # Bump from whichever is higher — this branch's version or the base
+            # branch's — so a branch lagging Develop lands above it, not below.
+            BUMP_FROM="$CURRENT_VERSION"
+            if [ -n "${BASE_VERSION:-}" ] &&
+              ! scripts/check-version-bump.sh "$BASE_VERSION" "$CURRENT_VERSION" false >/dev/null 2>&1; then
+              echo "Version $CURRENT_VERSION is behind base $BASE_VERSION — bumping from base"
+              BUMP_FROM="$BASE_VERSION"
+            fi
+            NEW_VERSION=$(scripts/next-version.sh "$BUMP_FROM" "$BREAKING")
             echo "Bumping crate version to: $NEW_VERSION"
             ESCAPED_CURRENT=$(printf '%s' "$CURRENT_VERSION" | sed 's/[\/.^$*+?()[\]{}|]/\\&/g')
             sed -i.bak "s/^version = \"$ESCAPED_CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
