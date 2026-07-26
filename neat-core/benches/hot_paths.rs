@@ -24,7 +24,8 @@ use neat_core::simd::{
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
-use neat_core::topology_ops::compute_reverse_topological_order;
+use neat_core::topology_ops::{compute_reverse_topological_order, scan_available_connections};
+use neat_core::training_data::TrainingDataConfig;
 use neat_core::unsquash::apply_unsquash;
 use neat_core::wasm_dataset::TrainingDataset;
 
