@@ -260,6 +260,85 @@ the vectorised path, so they gain at least as much.
 > comparable within this section's own old/new pair, which is what the
 > gain claim rests on.
 
+## Flat-slice record **input** for batched scoring (Issue #386)
+
+Issue #229 flattened the scoring *output* to one contiguous buffer, but the
+*input* stayed a `&[Vec<f32>]` — one heap allocation per record for the caller and a
+`Vec` header to pointer-chase on every lane load, even though the kernels only
+ever read a record as `&[f32]`. #386 adds the matching flat *input* contract
+(`score_records_flat` / `_flat_into` / `score_records_parallel_flat`): record
+`i`'s inputs are `inputs[i * stride .. i * stride + stride]`, mirroring the flat
+output layout and the packed buffer the fused loss lane already takes
+(`mse_sum_batch_packed`). The `&[Vec<f32>]` entry points are unchanged wrappers
+over the same kernel, so both layouts are **bit-identical**
+(`tests/flat_record_scoring_parity.rs`).
+
+The real win is `TrainingDataset::evaluate_mse` (the >4 GB Memory64 offload lane
+from #298). It stored inputs contiguously in SoA layout yet scored **one record
+at a time** through `activate` — re-bounds-checking per record, allocating a
+fresh `Vec<f32>` per record via `to_vec()` (exactly the per-record allocation
+removed by #229), and never touching the 8-record interleaved SIMD path from
+issues #230/#287. It now bounds-checks once, takes `input_batch(start, count)` as a
+single slice, and drives it through the flat batched path in 1024-record chunks
+(a multiple of the 8-record SIMD group, so grouping and results are unchanged
+while the scratch output buffer stays a bounded constant).
+
+**Methodology.** Same alternating-rounds protocol as #287 above, because
+separate `cargo bench` invocations on this laptop drift by more than the effect
+being measured on the smaller groups: old/new rounds of the *same* prebuilt
+bench binaries, run back to back, with the untouched `forward_pass` benchmark
+captured alongside as a drift control.
+
+**Measured 2026-07-26**, Apple M4 (the #384 host — see the host note above),
+rustc 1.97.0, `--release`, Criterion
+`--sample-size 10 --measurement-time 5 --warm-up-time 1`.
+
+`dataset_evaluate_mse` (4096 records/iteration), mean of the alternating rounds:
+
+| benchmark (mean of rounds) | old | new | change |
+| --- | --- | --- | --- |
+| `dataset_evaluate_mse/production` | 330.3 ms | 69.9 ms | **−78.8% (≈4.7×)** |
+| `dataset_evaluate_mse/production_2x` | 686.7 ms | 149.7 ms | **−78.2% (≈4.6×)** |
+| `dataset_evaluate_mse/production_exact` | 283.6 ms | 69.6 ms | **−75.5% (≈4.1×)** |
+
+Drift controls — both must be flat, and are:
+
+| control (mean of rounds) | old | new | change |
+| --- | --- | --- | --- |
+| `forward_pass/production_exact` | 48.10 µs | 49.42 µs | flat |
+| `scoring/production` (4096) | 74.25 ms | 72.87 ms | flat |
+| `scoring/production_2x` (4096) | 165.17 ms | 163.06 ms | flat |
+| `scoring/production_exact` (4096) | 70.72 ms | 69.90 ms | flat |
+
+The `scoring` group is the no-regression gate for the `&[Vec<f32>]` wrapper: it
+routes through the same rewritten kernel and must not pay for the new input
+layout. It does not.
+
+`scoring_flat` is the new group scoring the *same* shard through the flat input
+entry point, so the delta against `scoring` isolates the per-record `Vec` header
+indirection (both fixtures are built outside the timed loop, so the caller-side
+one-allocation-per-record the `&[Vec<f32>]` signature forces is *additional*
+saving not counted here):
+
+| benchmark (mean of rounds) | `scoring` | `scoring_flat` | change |
+| --- | --- | --- | --- |
+| `production` (4096) | 72.87 ms | 70.34 ms | −3.5% |
+| `production_2x` (4096) | 163.06 ms | 149.70 ms | −8.2% |
+
+`parallel_scoring` was A/B'd the same way (6 alternating rounds on
+`production_exact`, prebuilt old/new binaries) and is flat — as expected, since
+it drives the identical `score_batch_into`:
+
+| `parallel_scoring/production_exact` | old (mean) | new (mean) | change |
+| --- | --- | --- | --- |
+| `1_core` | 71.5 ms | 69.4 ms | flat |
+| `12_cores` | 41.4 ms | 43.3 ms | flat (within a ±25% run-to-run spread) |
+
+> **12-core noise.** The `12_cores` lane builds a fresh `ThreadPoolBuilder` per
+> iteration and is scheduler-sensitive; across six alternating rounds old spanned
+> 38.0–47.2 ms and new spanned 36.4–51.4 ms, so the ~5% mean gap is well inside
+> the spread. The clean `1_core` signal is flat-to-slightly-better.
+
 ## Native (`--features parallel`) vs wasm32 scoring lane — decision (Issue #288)
 
 The `parallel` feature (rayon, #179) has always compiled the native

@@ -22,6 +22,8 @@ There are two bench targets:
 | `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` (all shapes), production-sized `mse_sum_batch_packed` (`mse_sum_production`, Issue #384) | 8-record: same five shapes; `mse_sum_production`: `production`, `production_2x`, `production_exact` |
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
 | `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
+| `scoring_flat` | `CompiledNetwork::score_records_flat` over the same batch in flat-slice input layout (Issue #386) | `production`, `production_2x`, `production_exact` |
+| `dataset_evaluate_mse` | `TrainingDataset::evaluate_mse` over a production-sized batch (Issue #386) | `production`, `production_2x`, `production_exact` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
 
@@ -30,6 +32,12 @@ through one creature via `score_records`, so `hot_paths` reports single-core
 scoring throughput at production record volume alongside the parallel harness.
 It covers only the gather-bound `production` shapes and is reachable with the
 `production` filter (`--bench hot_paths -- production`).
+
+`scoring_flat` scores the *same* shard through the flat-slice input entry point
+(Issue #386), so the delta against `scoring` isolates the cost of the per-record
+`Vec` header indirection. `dataset_evaluate_mse` measures the WASM
+dataset-offload evaluation call (Issue #298) end to end at the same record
+volume — bounds check, forward pass and MSE accumulation.
 
 Networks and inputs are built **once** outside the timed closure from a
 fixed-seed PRNG with fixed topologies, and `criterion::black_box` guards inputs

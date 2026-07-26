@@ -9,6 +9,7 @@
 //! wrappers over exactly this API).
 
 use neat_core::network::CompiledNetwork;
+use neat_core::squash::SquashType;
 use neat_core::training_data::TrainingDataConfig;
 use neat_core::wasm_dataset::{DatasetError, DatasetRegistry, TrainingDataset};
 
@@ -40,12 +41,136 @@ fn summing_identity_network(num_inputs: usize, bias: f64) -> CompiledNetwork {
     CompiledNetwork::new(&data).expect("network should parse")
 }
 
+/// Build a compiled network with `num_inputs` inputs and a single `Tanh` output
+/// neuron summing every input (weight 1.0) plus `bias`.
+///
+/// Unlike the identity network this is non-linear, so the batched SIMD path's
+/// vectorised squash is genuinely exercised rather than collapsing to exact
+/// arithmetic — the equivalence assertions below therefore mean something.
+fn summing_tanh_network(num_inputs: usize, bias: f64) -> CompiledNetwork {
+    let mut data = Vec::new();
+    let num_neurons = (num_inputs + 1) as u32;
+    data.extend_from_slice(&num_neurons.to_le_bytes());
+    data.extend_from_slice(&(num_inputs as u32).to_le_bytes());
+
+    data.extend_from_slice(&bias.to_le_bytes()); // bias f64
+    data.push(SquashType::Tanh as u8); // squash TANH
+    data.push(0); // is_constant = false
+    data.extend_from_slice(&(num_inputs as u16).to_le_bytes()); // num_synapses
+
+    for from_index in 0..num_inputs as u16 {
+        data.extend_from_slice(&from_index.to_le_bytes());
+        data.push(0); // synapse_type
+        data.push(0); // padding
+        data.extend_from_slice(&0.35_f64.to_le_bytes()); // weight f64
+    }
+
+    CompiledNetwork::new(&data).expect("network should parse")
+}
+
 /// Pack interleaved records (each: inputs then outputs) into `.bin` bytes.
 fn pack(records: &[Vec<f32>]) -> Vec<u8> {
     records
         .iter()
         .flat_map(|r| r.iter().flat_map(|v| v.to_le_bytes()))
         .collect()
+}
+
+/// Per-record reference MSE — the pre-#386 implementation, retained here as the
+/// equivalence oracle for the batched rewrite. Scores one record at a time via
+/// the single-record `activate` path and accumulates in `f64`.
+fn reference_mse(
+    dataset: &TrainingDataset,
+    network: &mut CompiledNetwork,
+    start: usize,
+    count: usize,
+) -> f32 {
+    if count == 0 {
+        return 0.0;
+    }
+    let num_outputs = dataset.num_outputs();
+    let mut squared_error_sum = 0.0f64;
+    for offset in 0..count {
+        let index = start + offset;
+        let inputs = dataset.record_inputs(index).unwrap();
+        let targets = dataset.record_outputs(index).unwrap();
+        let outputs = network.activate(inputs, num_outputs);
+        for (predicted, expected) in outputs.iter().zip(targets.iter()) {
+            let diff = f64::from(*predicted) - f64::from(*expected);
+            squared_error_sum += diff * diff;
+        }
+    }
+    (squared_error_sum / (count * num_outputs) as f64) as f32
+}
+
+/// Deterministic dataset of `count` records, `num_inputs` inputs + 1 target.
+fn synthetic_dataset(num_inputs: usize, count: usize) -> TrainingDataset {
+    let records: Vec<Vec<f32>> = (0..count)
+        .map(|r| {
+            let mut row: Vec<f32> = (0..num_inputs)
+                .map(|i| ((r * 5 + i * 3) as f32 * 0.021).sin() * 0.8)
+                .collect();
+            row.push(((r * 11) as f32 * 0.013).cos() * 0.5);
+            row
+        })
+        .collect();
+    TrainingDataset::from_packed_bytes(&pack(&records), TrainingDataConfig::new(num_inputs, 1))
+        .expect("fixture should be well-formed")
+}
+
+/// SIMD tolerance the batched vectorised squash/weighted sums already carry
+/// (Issue #230 / #243), applied to the `f32` MSE.
+const MSE_TOL: f32 = 2e-3;
+
+#[test]
+fn evaluate_mse_matches_the_per_record_reference_across_group_boundaries() {
+    // Record counts straddling the 8-record SIMD group boundary, so the group
+    // path, the 4-record group and the exact scalar tail are all covered.
+    for &count in &[0usize, 1, 7, 8, 9, 12, 100] {
+        let dataset = synthetic_dataset(6, count.max(1));
+        let mut net = summing_tanh_network(6, 0.1);
+        let want = reference_mse(&dataset, &mut net, 0, count);
+        let got = dataset.evaluate_mse(&mut net, 0, count).unwrap();
+        assert!(
+            (got - want).abs() <= MSE_TOL,
+            "count {count}: batched MSE {got} vs per-record reference {want}"
+        );
+    }
+}
+
+#[test]
+fn evaluate_mse_matches_the_per_record_reference_on_an_offset_batch() {
+    // A mid-dataset batch must read from the right offset, not from record 0.
+    let dataset = synthetic_dataset(6, 40);
+    let mut net = summing_tanh_network(6, 0.1);
+    let want = reference_mse(&dataset, &mut net, 11, 21);
+    let got = dataset.evaluate_mse(&mut net, 11, 21).unwrap();
+    assert!(
+        (got - want).abs() <= MSE_TOL,
+        "offset batch MSE {got} vs per-record reference {want}"
+    );
+}
+
+#[test]
+fn evaluate_mse_returns_zero_for_an_empty_batch() {
+    let dataset = synthetic_dataset(4, 8);
+    let mut net = summing_tanh_network(4, 0.0);
+    assert_eq!(dataset.evaluate_mse(&mut net, 0, 0).unwrap(), 0.0);
+}
+
+#[test]
+fn evaluate_mse_rejects_an_empty_batch_starting_past_the_end() {
+    // A zero-count batch is still bounds-checked — `start` must be in range.
+    let dataset = synthetic_dataset(4, 8);
+    let mut net = summing_tanh_network(4, 0.0);
+    assert_eq!(
+        dataset.evaluate_mse(&mut net, 9, 0).unwrap_err(),
+        DatasetError::BatchOutOfRange {
+            start: 9,
+            count: 0,
+            num_records: 8,
+        }
+    );
 }
 
 #[test]
