@@ -687,19 +687,47 @@ fn build_pc_engine(inference_steps: u32) -> PredictiveCodingEngine {
     )
 }
 
+/// Settling iterations the predictive-coding benches drive per `infer` call.
+const PC_INFERENCE_STEPS: u32 = 50;
+
 /// Predictive-coding settling loop — `PredictiveCodingEngine::infer` and
 /// `infer_batch` on a production-shaped topology (Issue #389).
+///
+/// **Both cases are supervised.** An *unsupervised* run is not a settling
+/// benchmark at all: step 2 of `infer` initialises every non-input latent from
+/// its own forward prediction, so the first `compute_errors` returns exactly
+/// zero for every neuron, energy is `0.0`, and the loop converges and exits on
+/// iteration 1 — measuring initialisation, not the loop the issue is about.
+/// Clamping the outputs to targets perturbs the settled state, so all
+/// [`PC_INFERENCE_STEPS`] iterations run (asserted below).
 fn bench_pc_inference(c: &mut Criterion) {
     let mut group = c.benchmark_group("pc_inference");
-    let engine = build_pc_engine(50);
+    let engine = build_pc_engine(PC_INFERENCE_STEPS);
     let mut lcg = Lcg::new(0x1234_5678);
     let input: Vec<f32> = (0..engine.num_inputs())
         .map(|_| lcg.next_signed())
         .collect();
+    let targets: Vec<f32> = (0..engine.num_outputs())
+        .map(|_| lcg.next_signed())
+        .collect();
 
+    // Fail loud if the fixture stops exercising the full settling loop, or
+    // settles into a non-finite state that would make the timings meaningless.
+    let probe = engine.infer(&input, Some(&targets));
+    assert_eq!(
+        probe.steps_used, PC_INFERENCE_STEPS,
+        "pc_inference fixture converged early — the bench would not measure the settling loop"
+    );
+    assert!(
+        probe.final_energy.is_finite() && probe.latents.iter().all(|v| v.is_finite()),
+        "pc_inference fixture diverged to a non-finite state"
+    );
+
+    // One element per settling step actually executed.
+    group.throughput(Throughput::Elements(PC_INFERENCE_STEPS as u64));
     group.bench_function("single_settle", |b| {
         b.iter(|| {
-            let r = engine.infer(black_box(&input), None);
+            let r = engine.infer(black_box(&input), black_box(Some(&targets[..])));
             black_box(r);
         });
     });
@@ -712,9 +740,13 @@ fn bench_pc_inference(c: &mut Criterion) {
         })
         .collect();
     let batch_refs: Vec<&[f32]> = batch.iter().map(|v| v.as_slice()).collect();
+    let batch_targets: Vec<&[f32]> = (0..batch_refs.len()).map(|_| &targets[..]).collect();
+    group.throughput(Throughput::Elements(
+        PC_INFERENCE_STEPS as u64 * batch_refs.len() as u64,
+    ));
     group.bench_function("batch_32", |b| {
         b.iter(|| {
-            let r = engine.infer_batch(black_box(&batch_refs), None);
+            let r = engine.infer_batch(black_box(&batch_refs), black_box(Some(&batch_targets)));
             black_box(r);
         });
     });
