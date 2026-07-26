@@ -24,7 +24,7 @@ use neat_core::simd::{
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
-use neat_core::topology_ops::scan_available_connections;
+use neat_core::topology_ops::{compute_reverse_topological_order, scan_available_connections};
 use neat_core::training_data::TrainingDataConfig;
 use neat_core::unsquash::apply_unsquash;
 use neat_core::wasm_dataset::TrainingDataset;
@@ -403,6 +403,27 @@ fn bench_topology_ops(c: &mut Criterion) {
                         black_box(&from_indices),
                         black_box(&to_indices),
                         black_box(&is_constant),
+                        black_box(num_neurons),
+                        black_box(num_inputs),
+                    );
+                    black_box(out);
+                });
+            },
+        );
+
+        // Backprop-ordering setup — `compute_reverse_topological_order`
+        // (Issue #388). Runs once per creature per generation, so its
+        // per-neuron adjacency allocations sat on the hot path.
+        group.throughput(Throughput::Elements(
+            (spec.num_neurons + spec.num_synapses) as u64,
+        ));
+        group.bench_function(
+            BenchmarkId::new("compute_reverse_topological_order", spec.label),
+            |b| {
+                b.iter(|| {
+                    let out = compute_reverse_topological_order(
+                        black_box(&from_indices),
+                        black_box(&to_indices),
                         black_box(num_neurons),
                         black_box(num_inputs),
                     );

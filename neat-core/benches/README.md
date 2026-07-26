@@ -24,7 +24,7 @@ There are two bench targets:
 | `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
 | `scoring_flat` | `CompiledNetwork::score_records_flat` over the same batch in flat-slice input layout (Issue #386) | `production`, `production_2x`, `production_exact` |
 | `dataset_evaluate_mse` | `TrainingDataset::evaluate_mse` over a production-sized batch (Issue #386) | `production`, `production_2x`, `production_exact` |
-| `topology_ops` | `scan_available_connections` — the mutation-time availability scan (Issue #387) | `n1666_21513`, `n4127_21513` |
+| `topology_ops` | `scan_available_connections` — the mutation-time availability scan (Issue #387); `compute_reverse_topological_order` — the per-creature backprop-ordering setup (Issue #388) | `n1666_21513`, `n4127_21513` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
 
@@ -42,6 +42,14 @@ lists, not `CompiledNetwork`s): `n1666_21513` is the anchor named in #387 —
 `n4127_21513` puts the same synapse count on the full `production_exact` neuron
 count. Throughput is reported per candidate slot (`n²`), so a reintroduced dense
 `n × n` existence matrix or result-vector realloc chain shows up directly.
+
+`compute_reverse_topological_order` (Issue #388) shares those two topologies but
+reports throughput per graph element (`neurons + synapses`), the work its Kahn
+walk actually does. Its inward adjacency is CSR, so a regression back to a
+per-neuron `Vec<Vec<u32>>` — n + 1 allocations and a pointer chase per neuron —
+shows up as a throughput drop here. `cargo run --release --example
+reverse_topo_order_alloc_ab` measures the same function's allocation count
+directly against the pre-#388 shape.
 
 `scoring_flat` scores the *same* shard through the flat-slice input entry point
 (Issue #386), so the delta against `scoring` isolates the cost of the per-record
