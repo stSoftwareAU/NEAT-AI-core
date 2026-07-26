@@ -54,6 +54,59 @@ use crate::synapse_type::SynapseType;
 /// Number of records processed per SIMD batch (one lane each).
 pub(crate) const SCORING_LANES: usize = 8;
 
+/// Input source for a batched scoring pass (Issue #386).
+///
+/// Both variants are scored through the **same** kernels, so the flat entry
+/// points are bit-identical to the nested ones on identical data:
+///
+/// - [`RecordInput::Nested`] wraps the legacy `&[Vec<f32>]` — one heap
+///   allocation per record — kept so existing callers and benches are
+///   unaffected.
+/// - [`RecordInput::Flat`] wraps one contiguous buffer: record `i`'s inputs are
+///   `inputs[i * stride .. i * stride + stride]`, mirroring the flat *output*
+///   contract (Issue #229) and the fused-loss lane's packed input
+///   (`mse_sum_batch_packed`). No per-record allocation and no `Vec`-header
+///   pointer-chase on each lane load.
+#[derive(Clone, Copy)]
+pub(crate) enum RecordInput<'a> {
+    /// Legacy vector-of-vectors layout.
+    Nested(&'a [Vec<f32>]),
+    /// Flat contiguous layout with a fixed per-record `stride`.
+    Flat {
+        /// Contiguous input buffer holding `len()` records back to back.
+        inputs: &'a [f32],
+        /// Elements per record; record `i` is `inputs[i*stride .. i*stride+stride]`.
+        stride: usize,
+    },
+}
+
+impl RecordInput<'_> {
+    /// Number of records this source yields.
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            RecordInput::Nested(records) => records.len(),
+            RecordInput::Flat { inputs, stride } => {
+                if *stride == 0 {
+                    0
+                } else {
+                    inputs.len() / *stride
+                }
+            }
+        }
+    }
+
+    /// Inputs for record `i` as a contiguous slice. Callers only ever pass
+    /// `i < len()`, so both arms index in range.
+    #[inline]
+    fn record(&self, i: usize) -> &[f32] {
+        match self {
+            RecordInput::Nested(records) => &records[i],
+            RecordInput::Flat { inputs, stride } => &inputs[i * *stride..i * *stride + *stride],
+        }
+    }
+}
+
 /// Reusable per-worker scratch for the batched scoring forward pass.
 ///
 /// Owning the buffers here lets the sequential path allocate once for a whole
@@ -220,7 +273,7 @@ impl CompiledNetwork {
     pub(crate) fn score_batch_into(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordInput,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -269,7 +322,7 @@ impl CompiledNetwork {
     fn score_batch_interleaved(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordInput,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -290,7 +343,7 @@ impl CompiledNetwork {
         while base + L <= n {
             // Transpose L records into the interleaved buffer.
             for l in 0..L {
-                let rec = &records[base + l];
+                let rec = records.record(base + l);
                 let in_len = rec.len().min(num_inputs);
                 for i in 0..in_len {
                     inter[i * L + l] = rec[i];
@@ -318,7 +371,7 @@ impl CompiledNetwork {
         // Bit-identical to `activate`, so a lone or partial trailing group keeps
         // the strict single-record parity guarantee.
         while base < n {
-            load_record(tail_act, &records[base], num_inputs);
+            load_record(tail_act, records.record(base), num_inputs);
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
                 tail_act[actual_idx] = neuron_activation_scalar(&self.synapses, tail_act, neuron);
@@ -389,7 +442,7 @@ impl CompiledNetwork {
     fn score_batch_per_lane(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordInput,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -404,14 +457,14 @@ impl CompiledNetwork {
 
         // ---- 8-record batches ------------------------------------------------
         while base + 8 <= n {
-            load_record(act0, &records[base], num_inputs);
-            load_record(act1, &records[base + 1], num_inputs);
-            load_record(act2, &records[base + 2], num_inputs);
-            load_record(act3, &records[base + 3], num_inputs);
-            load_record(act4, &records[base + 4], num_inputs);
-            load_record(act5, &records[base + 5], num_inputs);
-            load_record(act6, &records[base + 6], num_inputs);
-            load_record(act7, &records[base + 7], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
+            load_record(act1, records.record(base + 1), num_inputs);
+            load_record(act2, records.record(base + 2), num_inputs);
+            load_record(act3, records.record(base + 3), num_inputs);
+            load_record(act4, records.record(base + 4), num_inputs);
+            load_record(act5, records.record(base + 5), num_inputs);
+            load_record(act6, records.record(base + 6), num_inputs);
+            load_record(act7, records.record(base + 7), num_inputs);
 
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
@@ -508,10 +561,10 @@ impl CompiledNetwork {
 
         // ---- 4-record batch (0 or 1 of them) ---------------------------------
         if base + 4 <= n {
-            load_record(act0, &records[base], num_inputs);
-            load_record(act1, &records[base + 1], num_inputs);
-            load_record(act2, &records[base + 2], num_inputs);
-            load_record(act3, &records[base + 3], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
+            load_record(act1, records.record(base + 1), num_inputs);
+            load_record(act2, records.record(base + 2), num_inputs);
+            load_record(act3, records.record(base + 3), num_inputs);
 
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
@@ -588,7 +641,7 @@ impl CompiledNetwork {
         // Exact single-record path so tail records are bit-identical to the
         // reference.
         while base < n {
-            load_record(act0, &records[base], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
                 act0[actual_idx] = neuron_activation_scalar(&self.synapses, act0, neuron);

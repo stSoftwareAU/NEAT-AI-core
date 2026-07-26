@@ -44,7 +44,7 @@
 //! through [`CompiledNetwork::activate_into`], so the batch performs a **single**
 //! output allocation instead of one heap allocation per record.
 
-use crate::batch_scoring::BatchScratch;
+use crate::batch_scoring::{BatchScratch, RecordInput};
 use crate::network::CompiledNetwork;
 
 /// Records per rayon task on the parallel path. A multiple of 8 so every task's
@@ -76,8 +76,56 @@ impl CompiledNetwork {
     pub fn score_records(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
         let mut outputs = vec![0.0f32; records.len() * num_outputs];
         let mut scratch = BatchScratch::new(self.num_neurons);
-        self.score_batch_into(&mut scratch, records, num_outputs, &mut outputs);
+        self.score_batch_into(
+            &mut scratch,
+            RecordInput::Nested(records),
+            num_outputs,
+            &mut outputs,
+        );
         outputs
+    }
+
+    /// Score every record from one **flat** contiguous input buffer, returning a
+    /// single flat output buffer (Issue #386).
+    ///
+    /// Record `i`'s inputs are `inputs[i * stride .. i * stride + stride]`, and
+    /// its outputs occupy `out[i * num_outputs .. (i + 1) * num_outputs]` — the
+    /// same flat output contract as [`CompiledNetwork::score_records`], and the
+    /// same layout the fused-loss lane's packed input uses
+    /// (`mse_sum_batch_packed`). The number of records is `inputs.len() /
+    /// stride`; any trailing partial record (when `stride` does not divide
+    /// `inputs.len()`) is ignored, mirroring `mse_sum_batch_packed`.
+    ///
+    /// This drives the **identical** batched SIMD kernels as the nested
+    /// [`CompiledNetwork::score_records`] path — the two are bit-identical on the
+    /// same data — but takes zero-copy contiguous input, so a caller that already
+    /// holds a packed buffer (e.g. [`crate::wasm_dataset::TrainingDataset`]) pays
+    /// no per-record `Vec` allocation and no `Vec`-header pointer-chase.
+    pub fn score_records_flat(&self, inputs: &[f32], stride: usize, num_outputs: usize) -> Vec<f32> {
+        let num_records = if stride == 0 { 0 } else { inputs.len() / stride };
+        let mut outputs = vec![0.0f32; num_records * num_outputs];
+        self.score_records_flat_into(inputs, stride, num_outputs, &mut outputs);
+        outputs
+    }
+
+    /// Flat-input scoring into a caller-owned output buffer (Issue #386).
+    ///
+    /// `out` must be exactly `(inputs.len() / stride) * num_outputs` long. Lets a
+    /// caller reuse one output buffer across batches without re-allocating.
+    pub fn score_records_flat_into(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+        out: &mut [f32],
+    ) {
+        let mut scratch = BatchScratch::new(self.num_neurons);
+        self.score_batch_into(
+            &mut scratch,
+            RecordInput::Flat { inputs, stride },
+            num_outputs,
+            out,
+        );
     }
 
     /// Score every record across the `rayon` thread pool, writing into a single
@@ -106,10 +154,76 @@ impl CompiledNetwork {
             .for_each_init(
                 || BatchScratch::new(self.num_neurons),
                 |scratch, (out_chunk, rec_chunk)| {
-                    self.score_batch_into(scratch, rec_chunk, num_outputs, out_chunk)
+                    self.score_batch_into(
+                        scratch,
+                        RecordInput::Nested(rec_chunk),
+                        num_outputs,
+                        out_chunk,
+                    )
                 },
             );
         outputs
+    }
+
+    /// Flat-input counterpart of [`CompiledNetwork::score_records_parallel`]
+    /// (Issue #386): score a flat contiguous input buffer across the `rayon`
+    /// pool into one flat output buffer in input order.
+    ///
+    /// Record `i`'s inputs are `inputs[i * stride .. i * stride + stride]` and
+    /// its outputs live in `out[i * num_outputs ..]`. Input and output are split
+    /// into aligned `PARALLEL_CHUNK_RECORDS`-record chunks (a multiple of the
+    /// SIMD batch), so every record lands on the same primitive as the
+    /// sequential [`CompiledNetwork::score_records_flat`] and the results are
+    /// bit-identical regardless of thread count.
+    ///
+    /// Available with the `parallel` feature on native targets.
+    #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+    pub fn score_records_flat_parallel(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+    ) -> Vec<f32> {
+        use rayon::prelude::*;
+        let num_records = if stride == 0 { 0 } else { inputs.len() / stride };
+        let mut outputs = vec![0.0f32; num_records * num_outputs];
+        if stride == 0 {
+            return outputs;
+        }
+        // Score only whole records; ignore any trailing partial record so the
+        // input chunks are exact record multiples (mirrors `score_records_flat`).
+        let scored_inputs = &inputs[..num_records * stride];
+        outputs
+            .par_chunks_mut(PARALLEL_CHUNK_RECORDS * num_outputs)
+            .zip(scored_inputs.par_chunks(PARALLEL_CHUNK_RECORDS * stride))
+            .for_each_init(
+                || BatchScratch::new(self.num_neurons),
+                |scratch, (out_chunk, in_chunk)| {
+                    self.score_batch_into(
+                        scratch,
+                        RecordInput::Flat {
+                            inputs: in_chunk,
+                            stride,
+                        },
+                        num_outputs,
+                        out_chunk,
+                    )
+                },
+            );
+        outputs
+    }
+
+    /// Sequential fallback for [`CompiledNetwork::score_records_flat_parallel`]
+    /// when the `parallel` feature is disabled or building for `wasm32`. Same
+    /// signature and identical results — just single-threaded.
+    #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
+    pub fn score_records_flat_parallel(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+    ) -> Vec<f32> {
+        self.score_records_flat(inputs, stride, num_outputs)
     }
 
     /// Sequential fallback for [`CompiledNetwork::score_records_parallel`] when

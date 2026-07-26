@@ -264,6 +264,15 @@ impl TrainingDataset {
     /// and the batch bounds are supplied per call — the training arrays never
     /// re-cross the boundary. Fails loud on an out-of-range batch or a
     /// network/dataset input-arity mismatch.
+    ///
+    /// The whole batch is scored through the **flat batched SIMD path** (Issue
+    /// #386): the contiguous SoA input slice for the batch is driven through
+    /// [`CompiledNetwork::score_records_flat`] in one call — one bounds check,
+    /// no per-record `Vec` allocation, and the same 8-record interleaved SIMD
+    /// kernel the rest of the crate uses. Standard-squash results therefore
+    /// match the prior per-record `activate` path within the batched SIMD `f32`
+    /// tolerance rather than bit-for-bit (see [`crate::batch_scoring`]); the
+    /// scalar tail (`count % 8`) stays exact.
     pub fn evaluate_mse(
         &self,
         network: &mut CompiledNetwork,
@@ -276,25 +285,25 @@ impl TrainingDataset {
                 dataset_inputs: self.num_inputs(),
             });
         }
-        // Bounds-check the whole batch up front (fail loud before any work).
-        self.batch_bounds(start, count, self.num_inputs())?;
-        self.batch_bounds(start, count, self.num_outputs())?;
+        // One bounds check for the whole batch's inputs and targets (fail loud
+        // before any scoring); the returned slices are contiguous SoA runs.
+        let inputs = self.input_batch(start, count)?;
+        let targets = self.target_batch(start, count)?;
 
         if count == 0 {
             return Ok(0.0);
         }
 
+        let num_inputs = self.num_inputs();
         let num_outputs = self.num_outputs();
+        // Score the entire batch in one flat call — record `i`'s outputs land in
+        // `outputs[i * num_outputs ..]`, aligned with the SoA `targets` slice.
+        let outputs = network.score_records_flat(inputs, num_inputs, num_outputs);
+
         let mut squared_error_sum = 0.0f64;
-        for offset in 0..count {
-            let index = start + offset;
-            let inputs = self.record_inputs(index)?;
-            let targets = self.record_outputs(index)?;
-            let outputs = network.activate(inputs, num_outputs);
-            for (predicted, expected) in outputs.iter().zip(targets.iter()) {
-                let diff = f64::from(*predicted) - f64::from(*expected);
-                squared_error_sum += diff * diff;
-            }
+        for (predicted, expected) in outputs.iter().zip(targets.iter()) {
+            let diff = f64::from(*predicted) - f64::from(*expected);
+            squared_error_sum += diff * diff;
         }
 
         let terms = (count * num_outputs) as f64;
