@@ -54,6 +54,71 @@ use crate::synapse_type::SynapseType;
 /// Number of records processed per SIMD batch (one lane each).
 pub(crate) const SCORING_LANES: usize = 8;
 
+/// Input records for one scoring batch, in either supported layout (Issue #386).
+///
+/// The kernels below only ever need `&[f32]` per record, so both layouts feed
+/// the *same* forward pass and produce bit-identical results:
+///
+/// - [`RecordBatch::PerRecord`] — one owned `Vec<f32>` per record, the original
+///   layout kept for existing callers.
+/// - [`RecordBatch::Flat`] — a single contiguous buffer where record `i`
+///   occupies `inputs[i * stride .. i * stride + stride]`, mirroring the flat
+///   *output* contract from Issue #229 and the packed input layout the fused
+///   loss lane already takes ([`crate::loss::mse_sum_batch_packed`]). Callers
+///   that already hold a contiguous buffer — the WASM dataset offload path
+///   ([`crate::wasm_dataset::TrainingDataset`]) — pass it straight through with
+///   no per-record allocation and no re-marshalling.
+#[derive(Clone, Copy)]
+pub(crate) enum RecordBatch<'a> {
+    /// One owned vector per record.
+    PerRecord(&'a [Vec<f32>]),
+    /// Records packed contiguously at a fixed stride.
+    Flat {
+        /// Packed inputs — exactly `record_count * stride` values.
+        inputs: &'a [f32],
+        /// Values per record. Non-zero, and a divisor of `inputs.len()`.
+        stride: usize,
+    },
+}
+
+impl<'a> RecordBatch<'a> {
+    /// Build a flat-layout batch, failing loud (Issue #3234) on a stride that
+    /// cannot describe records at all or a buffer that is not a whole number of
+    /// records — either would silently mis-slice every record downstream.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stride` is zero or `inputs.len()` is not a multiple of it.
+    #[inline]
+    pub(crate) fn flat(inputs: &'a [f32], stride: usize) -> Self {
+        assert!(stride > 0, "flat record stride must be greater than zero");
+        assert!(
+            inputs.len().is_multiple_of(stride),
+            "flat record buffer of {} values is not a whole number of records at stride {stride}",
+            inputs.len()
+        );
+        Self::Flat { inputs, stride }
+    }
+
+    /// Number of records in the batch.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::PerRecord(records) => records.len(),
+            Self::Flat { inputs, stride } => inputs.len() / stride,
+        }
+    }
+
+    /// Inputs for record `index`.
+    #[inline]
+    pub(crate) fn record(&self, index: usize) -> &'a [f32] {
+        match self {
+            Self::PerRecord(records) => &records[index],
+            Self::Flat { inputs, stride } => &inputs[index * stride..(index + 1) * stride],
+        }
+    }
+}
+
 /// Reusable per-worker scratch for the batched scoring forward pass.
 ///
 /// Owning the buffers here lets the sequential path allocate once for a whole
@@ -199,7 +264,11 @@ fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
 }
 
 impl CompiledNetwork {
-    /// Score a contiguous slice of records through the batched SIMD path.
+    /// Score a batch of records through the batched SIMD path.
+    ///
+    /// `records` may be in either input layout ([`RecordBatch`]) — per-record
+    /// `Vec`s or one contiguous flat buffer at a fixed stride. The kernels read
+    /// each record as `&[f32]`, so the two layouts are bit-identical.
     ///
     /// Record `i` (0-based within `records`) writes its outputs to
     /// `out[i * num_outputs .. (i + 1) * num_outputs]`; `out` must be exactly
@@ -220,7 +289,7 @@ impl CompiledNetwork {
     pub(crate) fn score_batch_into(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordBatch<'_>,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -269,7 +338,7 @@ impl CompiledNetwork {
     fn score_batch_interleaved(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordBatch<'_>,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -290,7 +359,7 @@ impl CompiledNetwork {
         while base + L <= n {
             // Transpose L records into the interleaved buffer.
             for l in 0..L {
-                let rec = &records[base + l];
+                let rec = records.record(base + l);
                 let in_len = rec.len().min(num_inputs);
                 for i in 0..in_len {
                     inter[i * L + l] = rec[i];
@@ -318,7 +387,7 @@ impl CompiledNetwork {
         // Bit-identical to `activate`, so a lone or partial trailing group keeps
         // the strict single-record parity guarantee.
         while base < n {
-            load_record(tail_act, &records[base], num_inputs);
+            load_record(tail_act, records.record(base), num_inputs);
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
                 tail_act[actual_idx] = neuron_activation_scalar(&self.synapses, tail_act, neuron);
@@ -389,7 +458,7 @@ impl CompiledNetwork {
     fn score_batch_per_lane(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordBatch<'_>,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -404,14 +473,14 @@ impl CompiledNetwork {
 
         // ---- 8-record batches ------------------------------------------------
         while base + 8 <= n {
-            load_record(act0, &records[base], num_inputs);
-            load_record(act1, &records[base + 1], num_inputs);
-            load_record(act2, &records[base + 2], num_inputs);
-            load_record(act3, &records[base + 3], num_inputs);
-            load_record(act4, &records[base + 4], num_inputs);
-            load_record(act5, &records[base + 5], num_inputs);
-            load_record(act6, &records[base + 6], num_inputs);
-            load_record(act7, &records[base + 7], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
+            load_record(act1, records.record(base + 1), num_inputs);
+            load_record(act2, records.record(base + 2), num_inputs);
+            load_record(act3, records.record(base + 3), num_inputs);
+            load_record(act4, records.record(base + 4), num_inputs);
+            load_record(act5, records.record(base + 5), num_inputs);
+            load_record(act6, records.record(base + 6), num_inputs);
+            load_record(act7, records.record(base + 7), num_inputs);
 
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
@@ -508,10 +577,10 @@ impl CompiledNetwork {
 
         // ---- 4-record batch (0 or 1 of them) ---------------------------------
         if base + 4 <= n {
-            load_record(act0, &records[base], num_inputs);
-            load_record(act1, &records[base + 1], num_inputs);
-            load_record(act2, &records[base + 2], num_inputs);
-            load_record(act3, &records[base + 3], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
+            load_record(act1, records.record(base + 1), num_inputs);
+            load_record(act2, records.record(base + 2), num_inputs);
+            load_record(act3, records.record(base + 3), num_inputs);
 
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
@@ -588,7 +657,7 @@ impl CompiledNetwork {
         // Exact single-record path so tail records are bit-identical to the
         // reference.
         while base < n {
-            load_record(act0, &records[base], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
                 act0[actual_idx] = neuron_activation_scalar(&self.synapses, act0, neuron);

@@ -33,8 +33,17 @@
 //! network/dataset shape mismatch surfaces immediately rather than degrading
 //! into a silent wrong result.
 
+use crate::batch_scoring::{BatchScratch, RecordBatch};
 use crate::network::CompiledNetwork;
 use crate::training_data::TrainingDataConfig;
+
+/// Records scored per [`TrainingDataset::evaluate_mse`] chunk.
+///
+/// A multiple of the 8-record SIMD group, so chunking does not change which
+/// records are grouped (and therefore does not change the result), while keeping
+/// the scratch output buffer a bounded, constant size no matter how large the
+/// requested batch is — the >4 GB Memory64 lane can ask for millions of records.
+const EVAL_CHUNK_RECORDS: usize = 1024;
 
 /// Errors from the training-data offload path.
 #[derive(Debug, PartialEq)]
@@ -264,34 +273,60 @@ impl TrainingDataset {
     /// and the batch bounds are supplied per call — the training arrays never
     /// re-cross the boundary. Fails loud on an out-of-range batch or a
     /// network/dataset input-arity mismatch.
+    ///
+    /// The batch is bounds-checked **once** and then driven through the flat
+    /// batched scoring path (Issue #386): the SoA input buffer is already in the
+    /// layout [`CompiledNetwork::score_records_flat`] wants, so it is handed over
+    /// as one slice — no per-record `Vec`, no per-record bounds check, and the
+    /// full 8-record interleaved SIMD path (Issues #230 / #287) instead of the
+    /// single-record `activate` kernel. Records are scored in fixed-size chunks
+    /// (a multiple of the 8-record SIMD group, so grouping is unchanged) to keep
+    /// the scratch output buffer bounded on the >4 GB Memory64 offload lane.
+    ///
+    /// Numerics: the batched path re-associates the `f32` weighted sums and uses
+    /// the vectorised squash, so the result matches the per-record reference
+    /// within the documented SIMD tolerance (see [`crate::batch_scoring`]) rather
+    /// than bit-for-bit. The MSE itself still accumulates in `f64`.
     pub fn evaluate_mse(
         &self,
         network: &mut CompiledNetwork,
         start: usize,
         count: usize,
     ) -> Result<f32, DatasetError> {
-        if network.num_inputs != self.num_inputs() {
+        let num_inputs = self.num_inputs();
+        let num_outputs = self.num_outputs();
+        if network.num_inputs != num_inputs {
             return Err(DatasetError::ShapeMismatch {
                 network_inputs: network.num_inputs,
-                dataset_inputs: self.num_inputs(),
+                dataset_inputs: num_inputs,
             });
         }
-        // Bounds-check the whole batch up front (fail loud before any work).
-        self.batch_bounds(start, count, self.num_inputs())?;
-        self.batch_bounds(start, count, self.num_outputs())?;
+        // Bounds-check the whole batch once, up front (fail loud before any
+        // work), then read it as two contiguous slices.
+        let inputs = self.input_batch(start, count)?;
+        let targets = self.target_batch(start, count)?;
 
         if count == 0 {
             return Ok(0.0);
         }
 
-        let num_outputs = self.num_outputs();
+        let mut scratch = BatchScratch::new(network.num_neurons);
+        let mut outputs = vec![0.0f32; EVAL_CHUNK_RECORDS.min(count) * num_outputs];
         let mut squared_error_sum = 0.0f64;
-        for offset in 0..count {
-            let index = start + offset;
-            let inputs = self.record_inputs(index)?;
-            let targets = self.record_outputs(index)?;
-            let outputs = network.activate(inputs, num_outputs);
-            for (predicted, expected) in outputs.iter().zip(targets.iter()) {
+
+        for (input_chunk, target_chunk) in inputs
+            .chunks(EVAL_CHUNK_RECORDS * num_inputs)
+            .zip(targets.chunks(EVAL_CHUNK_RECORDS * num_outputs))
+        {
+            let chunk_records = input_chunk.len() / num_inputs;
+            let predicted = &mut outputs[..chunk_records * num_outputs];
+            network.score_batch_into(
+                &mut scratch,
+                RecordBatch::flat(input_chunk, num_inputs),
+                num_outputs,
+                predicted,
+            );
+            for (predicted, expected) in predicted.iter().zip(target_chunk.iter()) {
                 let diff = f64::from(*predicted) - f64::from(*expected);
                 squared_error_sum += diff * diff;
             }
