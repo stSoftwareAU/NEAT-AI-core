@@ -143,14 +143,50 @@ pub fn validate_topology(from_indices: &[u32], to_indices: &[u32]) -> Vec<i32> {
     vec![VALID, 0]
 }
 
+/// First `to` index the availability scan considers for a given `from`.
+///
+/// Forward-only (`to > from`) and never targeting an input neuron
+/// (`to >= num_inputs`), so the scan starts at whichever bound is higher.
+#[inline]
+fn scan_start_to(from_idx: usize, input_count: usize) -> usize {
+    if from_idx + 1 > input_count {
+        from_idx + 1
+    } else {
+        input_count
+    }
+}
+
+/// Whether `to_idx` is a constant neuron the scan must skip.
+///
+/// Indices beyond `is_constant` are treated as non-constant, preserving the
+/// original bounds-tolerant behaviour on a short `is_constant` buffer.
+#[inline]
+fn scan_is_constant(is_constant: &[u8], to_idx: usize) -> bool {
+    to_idx < is_constant.len() && is_constant[to_idx] != 0
+}
+
 /// Scan for available forward-only connection slots.
 ///
 /// Returns all `(from, to)` pairs where `from < to`, `to >= num_inputs`, the
-/// target neuron is not constant, and no connection already exists. Uses a
-/// flat boolean array for O(1) existence checks.
+/// target neuron is not constant, and no connection already exists.
+///
+/// Issue #387 — existence is answered from a compressed per-`from` run of
+/// existing targets (an `O(n + synapses)` adjacency built once), merge-walked
+/// against the candidate range. The previous implementation allocated a dense
+/// `n × n` boolean matrix for the same answer: 2.78 MB zeroed per call on the
+/// production topology to record ~21.5k synapses, a fill factor under 0.8%.
+/// The candidate count is also computed up front so the result vector is
+/// allocated exactly once at its final size instead of growing through a
+/// realloc chain. Output — pairs and their order — is unchanged.
+///
+/// Sorted input is *not* required: each per-`from` run is sorted on build, so
+/// an unsorted or duplicate-bearing edge list yields the same answer.
 ///
 /// # Returns
-/// Flattened `[from, to, from, to, ...]` pairs.
+/// Flattened `[from, to, from, to, ...]` pairs. Returns an empty vector for
+/// malformed input — mismatched `from`/`to` lengths, an implausibly large
+/// `num_neurons`, or a candidate count whose result vector could not be
+/// addressed — rather than panicking (which would trap under WASM).
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn scan_available_connections(
     from_indices: &[u32],
@@ -162,45 +198,136 @@ pub fn scan_available_connections(
     let n = num_neurons as usize;
     let input_count = num_inputs as usize;
 
-    // Issue NEAT-AI #2659 — defensive bail-out before the O(n^2)
-    // allocation. A length mismatch or pathologically large
-    // `num_neurons` previously caused a multiplication panic (and so a
-    // WASM trap) instead of a defined empty result.
+    // Issue NEAT-AI #2659 — defensive bail-out. A length mismatch or a
+    // pathologically large `num_neurons` previously caused a multiplication
+    // panic (and so a WASM trap) instead of a defined empty result. The
+    // `n * n` plausibility bound is retained: it is no longer an allocation
+    // size, but it still rejects a neuron count whose forward-pair space
+    // could never be materialised.
     if from_indices.len() != to_indices.len() {
         return Vec::new();
     }
-    let conn_set_len = match n.checked_mul(n) {
-        Some(v) if v <= isize::MAX as usize => v,
-        _ => return Vec::new(),
-    };
+    if n.checked_mul(n).is_none_or(|v| v > isize::MAX as usize) {
+        return Vec::new();
+    }
+    if n == 0 {
+        return Vec::new();
+    }
 
-    let mut conn_set = vec![false; conn_set_len];
+    // -----------------------------------------------------------------
+    // Compressed adjacency: for each `from`, the ascending run of existing
+    // targets that could ever block a candidate. Only pairs the scan can
+    // actually emit are retained (`to > from`, `to >= input_count`,
+    // both endpoints in range), which drops backward, self and
+    // out-of-range synapses exactly as the old matrix lookup did.
+    // -----------------------------------------------------------------
+    let mut starts = vec![0usize; n + 1];
     for i in 0..from_indices.len() {
         let from = from_indices[i] as usize;
         let to = to_indices[i] as usize;
-        if from < n && to < n {
-            conn_set[from * n + to] = true;
+        if from < n && to < n && to > from && to >= input_count {
+            starts[from + 1] += 1;
         }
     }
+    for f in 0..n {
+        starts[f + 1] += starts[f];
+    }
+    let mut cursor = starts.clone();
+    let mut targets = vec![0u32; starts[n]];
+    for i in 0..from_indices.len() {
+        let from = from_indices[i] as usize;
+        let to = to_indices[i] as usize;
+        if from < n && to < n && to > from && to >= input_count {
+            targets[cursor[from]] = to as u32;
+            cursor[from] += 1;
+        }
+    }
+    // Each run is already ascending for a `validate_topology`-clean edge
+    // list, so this is an O(run) insertion-sort pass in the common case; it
+    // is what lets an unsorted list fall through to the same answer.
+    for f in 0..n {
+        targets[starts[f]..starts[f + 1]].sort_unstable();
+    }
 
-    let mut available = Vec::new();
+    // Prefix sums of constant neurons, so "how many constants in
+    // [start_to, n)?" is O(1) per `from`.
+    let mut const_prefix = vec![0u32; n + 1];
+    for j in 0..n {
+        const_prefix[j + 1] = const_prefix[j] + u32::from(scan_is_constant(is_constant, j));
+    }
 
+    // -----------------------------------------------------------------
+    // Exact candidate count — O(n + synapses), no O(n^2) pre-pass. For each
+    // `from` the candidate range is [start_to, n); subtract the constants in
+    // that range and the distinct existing (non-constant) targets in it.
+    // The two subtracted sets are disjoint, so the result never underflows.
+    // -----------------------------------------------------------------
+    let mut total_pairs: usize = 0;
     for from_idx in 0..n {
-        let start_to = if from_idx + 1 > input_count {
-            from_idx + 1
-        } else {
-            input_count
-        };
-        for to_idx in start_to..n {
-            if to_idx < is_constant.len() && is_constant[to_idx] != 0 {
+        let start_to = scan_start_to(from_idx, input_count);
+        if start_to >= n {
+            continue;
+        }
+        let span = n - start_to;
+        let constants = (const_prefix[n] - const_prefix[start_to]) as usize;
+        let mut blocked = 0usize;
+        let mut previous: Option<u32> = None;
+        for k in starts[from_idx]..starts[from_idx + 1] {
+            let target = targets[k];
+            // A duplicate edge blocks the same slot once.
+            if previous == Some(target) {
                 continue;
             }
-            if !conn_set[from_idx * n + to_idx] {
-                available.push(from_idx as u32);
-                available.push(to_idx as u32);
+            previous = Some(target);
+            if !scan_is_constant(is_constant, target as usize) {
+                blocked += 1;
             }
         }
+        total_pairs += span - constants - blocked;
     }
+
+    // Flattened pairs: two `u32` per candidate. Refuse rather than abort if
+    // the exact result could not be addressed.
+    let capacity = match total_pairs.checked_mul(2) {
+        Some(c)
+            if c.checked_mul(size_of::<u32>())
+                .is_some_and(|b| b <= isize::MAX as usize) =>
+        {
+            c
+        }
+        _ => return Vec::new(),
+    };
+
+    let mut available: Vec<u32> = Vec::with_capacity(capacity);
+
+    for from_idx in 0..n {
+        let start_to = scan_start_to(from_idx, input_count);
+        if start_to >= n {
+            continue;
+        }
+        // Merge-walk: `to_idx` ascends, so the run cursor only moves forward.
+        let mut p = starts[from_idx];
+        let end = starts[from_idx + 1];
+        for to_idx in start_to..n {
+            if scan_is_constant(is_constant, to_idx) {
+                continue;
+            }
+            while p < end && (targets[p] as usize) < to_idx {
+                p += 1;
+            }
+            if p < end && targets[p] as usize == to_idx {
+                continue;
+            }
+            available.push(from_idx as u32);
+            available.push(to_idx as u32);
+        }
+    }
+
+    debug_assert_eq!(
+        available.len(),
+        capacity,
+        "pre-sized capacity must match the emitted pair count"
+    );
 
     available
 }
@@ -795,6 +922,257 @@ mod tests {
     // -----------------------------------------------------------------------
     // scan_available_connections (Issue #1959)
     // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // Differential coverage for the Issue #387 rewrite.
+    //
+    // `reference_scan_available_connections` is the pre-#387 dense `n × n`
+    // boolean-matrix implementation, kept verbatim as the oracle. The
+    // optimised implementation must return a byte-identical `Vec<u32>` —
+    // same pairs, same order — for every topology below.
+    // -----------------------------------------------------------------------
+
+    /// Pre-#387 implementation: dense `n × n` boolean matrix, O(n^2) scan.
+    /// Retained only as the differential-test oracle.
+    fn reference_scan_available_connections(
+        from_indices: &[u32],
+        to_indices: &[u32],
+        is_constant: &[u8],
+        num_neurons: u32,
+        num_inputs: u32,
+    ) -> Vec<u32> {
+        let n = num_neurons as usize;
+        let input_count = num_inputs as usize;
+
+        if from_indices.len() != to_indices.len() {
+            return Vec::new();
+        }
+        let conn_set_len = match n.checked_mul(n) {
+            Some(v) if v <= isize::MAX as usize => v,
+            _ => return Vec::new(),
+        };
+
+        let mut conn_set = vec![false; conn_set_len];
+        for i in 0..from_indices.len() {
+            let from = from_indices[i] as usize;
+            let to = to_indices[i] as usize;
+            if from < n && to < n {
+                conn_set[from * n + to] = true;
+            }
+        }
+
+        let mut available = Vec::new();
+
+        for from_idx in 0..n {
+            let start_to = if from_idx + 1 > input_count {
+                from_idx + 1
+            } else {
+                input_count
+            };
+            for to_idx in start_to..n {
+                if to_idx < is_constant.len() && is_constant[to_idx] != 0 {
+                    continue;
+                }
+                if !conn_set[from_idx * n + to_idx] {
+                    available.push(from_idx as u32);
+                    available.push(to_idx as u32);
+                }
+            }
+        }
+
+        available
+    }
+
+    /// SplitMix64-style deterministic PRNG so the randomised cases are
+    /// reproducible across runs and platforms.
+    struct TestRng(u64);
+
+    impl TestRng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            if bound == 0 {
+                0
+            } else {
+                (self.next_u64() % bound as u64) as usize
+            }
+        }
+    }
+
+    /// A randomised topology under test.
+    struct RandomTopology {
+        from: Vec<u32>,
+        to: Vec<u32>,
+        is_constant: Vec<u8>,
+        num_neurons: u32,
+        num_inputs: u32,
+    }
+
+    /// Build a random topology. `density` is the percentage of *all* forward
+    /// `(from, to)` pairs that carry a synapse — 0 gives an empty synapse
+    /// list, 100 gives a fully-connected forward graph. `duplicate_rate` is
+    /// the percentage of emitted edges repeated a second time. `sorted`
+    /// controls whether the emitted edge list is in `validate_topology` order
+    /// or deliberately shuffled (the defensive path).
+    fn random_topology(
+        rng: &mut TestRng,
+        num_neurons: u32,
+        num_inputs: u32,
+        density: u32,
+        duplicate_rate: u32,
+        constant_rate: u32,
+        sorted: bool,
+    ) -> RandomTopology {
+        let n = num_neurons as usize;
+        let mut from = Vec::new();
+        let mut to = Vec::new();
+        for f in 0..n {
+            for t in (f + 1)..n {
+                if (rng.below(100) as u32) >= density {
+                    continue;
+                }
+                from.push(f as u32);
+                to.push(t as u32);
+                // Duplicates stay adjacent, so a sorted list remains sorted.
+                if (rng.below(100) as u32) < duplicate_rate {
+                    from.push(f as u32);
+                    to.push(t as u32);
+                }
+            }
+        }
+
+        if !sorted {
+            // Fisher–Yates over the pair list, keeping `from`/`to` aligned.
+            for i in (1..from.len()).rev() {
+                let j = rng.below(i + 1);
+                from.swap(i, j);
+                to.swap(i, j);
+            }
+        }
+
+        let is_constant = (0..n)
+            .map(|_| u8::from((rng.below(100) as u32) < constant_rate))
+            .collect();
+
+        RandomTopology {
+            from,
+            to,
+            is_constant,
+            num_neurons,
+            num_inputs,
+        }
+    }
+
+    fn assert_matches_reference(case: &str, topology: &RandomTopology) {
+        let expected = reference_scan_available_connections(
+            &topology.from,
+            &topology.to,
+            &topology.is_constant,
+            topology.num_neurons,
+            topology.num_inputs,
+        );
+        let actual = scan_available_connections(
+            &topology.from,
+            &topology.to,
+            &topology.is_constant,
+            topology.num_neurons,
+            topology.num_inputs,
+        );
+        assert_eq!(actual, expected, "divergence from reference for {case}");
+    }
+
+    #[test]
+    fn scan_available_connections_matches_reference_on_random_topologies() {
+        let mut rng = TestRng(0x5EED_1234_ABCD_0001);
+
+        for num_neurons in [1u32, 2, 3, 5, 9, 16, 31] {
+            for num_inputs in [0u32, 1, num_neurons / 2, num_neurons] {
+                if num_inputs > num_neurons {
+                    continue;
+                }
+                // density 0 = empty synapse list, 100 = fully connected.
+                for density in [0u32, 15, 60, 100] {
+                    for duplicate_rate in [0u32, 30] {
+                        for constant_rate in [0u32, 25, 100] {
+                            for sorted in [true, false] {
+                                let topology = random_topology(
+                                    &mut rng,
+                                    num_neurons,
+                                    num_inputs,
+                                    density,
+                                    duplicate_rate,
+                                    constant_rate,
+                                    sorted,
+                                );
+                                let case = format!(
+                                    "n={num_neurons} inputs={num_inputs} density={density} \
+                                     dup={duplicate_rate} const={constant_rate} sorted={sorted}"
+                                );
+                                assert_matches_reference(&case, &topology);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scan_available_connections_matches_reference_with_out_of_range_and_duplicate_edges() {
+        // Duplicates, self-connections, backward edges and out-of-range
+        // endpoints must all be tolerated identically to the reference.
+        let topology = RandomTopology {
+            from: vec![0, 0, 1, 2, 2, 3, 4, 99, 2],
+            to: vec![3, 3, 3, 2, 4, 1, 4, 4, 500],
+            is_constant: vec![0, 1, 0, 0, 0],
+            num_neurons: 5,
+            num_inputs: 2,
+        };
+        assert_matches_reference("hostile edge list", &topology);
+    }
+
+    #[test]
+    fn scan_available_connections_matches_reference_with_short_is_constant_buffer() {
+        // `is_constant` shorter than `num_neurons`: indices past the end are
+        // treated as non-constant by both implementations.
+        let topology = RandomTopology {
+            from: vec![0, 1],
+            to: vec![2, 3],
+            is_constant: vec![0, 1],
+            num_neurons: 6,
+            num_inputs: 2,
+        };
+        assert_matches_reference("short is_constant", &topology);
+    }
+
+    #[test]
+    fn scan_available_connections_num_inputs_equals_num_neurons_is_empty() {
+        // Every neuron is an input, so no candidate `to` exists.
+        let from: [u32; 0] = [];
+        let to: [u32; 0] = [];
+        let is_const = [0u8; 4];
+        let result = scan_available_connections(&from, &to, &is_const, 4, 4);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn scan_available_connections_unsorted_edges_match_sorted_equivalent() {
+        // The rewrite must not depend on the caller having sorted the edge
+        // list: the same edges in a different order give the same answer.
+        let is_const = [0u8; 6];
+        let sorted =
+            scan_available_connections(&[0u32, 0, 1, 2], &[3u32, 4, 3, 5], &is_const, 6, 2);
+        let shuffled =
+            scan_available_connections(&[2u32, 0, 1, 0], &[5u32, 4, 3, 3], &is_const, 6, 2);
+        assert_eq!(sorted, shuffled);
+        assert!(!sorted.is_empty());
+    }
 
     #[test]
     fn scan_available_simple() {
