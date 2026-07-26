@@ -24,6 +24,7 @@ use neat_core::simd::{
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
+use neat_core::topology_ops::scan_available_connections;
 use neat_core::training_data::TrainingDataConfig;
 use neat_core::unsquash::apply_unsquash;
 use neat_core::wasm_dataset::TrainingDataset;
@@ -299,6 +300,120 @@ const SQUASH_SPREAD: [SquashType; 10] = [
     SquashType::Gaussian,
 ];
 
+/// A deterministic sorted forward-only topology for the topology-ops group.
+///
+/// Emits exactly `num_synapses` synapses spread as evenly as possible over the
+/// non-input neurons, each drawing sources from strictly earlier neurons, so the
+/// `(from, to)` list comes out ascending-sorted exactly as `validate_topology`
+/// requires. Mirrors the production creature's shape at the neuron count the
+/// mutation-time scan actually sees.
+struct TopologySpec {
+    label: &'static str,
+    num_neurons: usize,
+    num_inputs: usize,
+    num_synapses: usize,
+}
+
+/// Topology shapes for `scan_available_connections` (Issue #387).
+///
+/// `n1666_21513` is the production anchor named in the issue: 1,666 neurons
+/// carrying 21,513 synapses — a fill factor under 0.8%, which is what made the
+/// old dense `n × n` matrix so wasteful.
+const TOPOLOGIES: [TopologySpec; 2] = [
+    TopologySpec {
+        label: "n1666_21513",
+        num_neurons: 1666,
+        num_inputs: 100,
+        num_synapses: 21_513,
+    },
+    TopologySpec {
+        label: "n4127_21513",
+        num_neurons: 4127,
+        num_inputs: 2461,
+        num_synapses: 21_513,
+    },
+];
+
+/// Build `(from_indices, to_indices, is_constant)` for a [`TopologySpec`].
+fn build_topology(spec: &TopologySpec) -> (Vec<u32>, Vec<u32>, Vec<u8>) {
+    let mut rng = Lcg::new(0x7061_7468);
+    let num_non_inputs = spec.num_neurons - spec.num_inputs;
+    // Per-target fan-in, distributed as evenly as the synapse budget allows.
+    let base = spec.num_synapses / num_non_inputs;
+    let remainder = spec.num_synapses % num_non_inputs;
+
+    let mut from_indices = Vec::with_capacity(spec.num_synapses);
+    let mut to_indices = Vec::with_capacity(spec.num_synapses);
+    // Collect per-`from` target lists so the emitted pairs come out sorted by
+    // `from` then `to`, matching the ordering contract the scan relies on.
+    let mut per_from: Vec<Vec<u32>> = vec![Vec::new(); spec.num_neurons];
+
+    for offset in 0..num_non_inputs {
+        let to = spec.num_inputs + offset;
+        let want = base + usize::from(offset < remainder);
+        let fan = want.min(to);
+        let mut drawn = 0usize;
+        let mut attempts = 0usize;
+        while drawn < fan && attempts < fan * 8 {
+            attempts += 1;
+            let from = rng.next_below(to);
+            if per_from[from].contains(&(to as u32)) {
+                continue;
+            }
+            per_from[from].push(to as u32);
+            drawn += 1;
+        }
+    }
+
+    for (from, targets) in per_from.iter_mut().enumerate() {
+        targets.sort_unstable();
+        for &to in targets.iter() {
+            from_indices.push(from as u32);
+            to_indices.push(to);
+        }
+    }
+
+    // A handful of constant neurons, matching the production mix.
+    let mut is_constant = vec![0u8; spec.num_neurons];
+    for i in 0..spec.num_neurons {
+        if i >= spec.num_inputs && i % 97 == 0 {
+            is_constant[i] = 1;
+        }
+    }
+
+    (from_indices, to_indices, is_constant)
+}
+
+/// Mutation-time topology ops — `scan_available_connections` (Issue #387).
+fn bench_topology_ops(c: &mut Criterion) {
+    let mut group = c.benchmark_group("topology_ops");
+    for spec in &TOPOLOGIES {
+        let (from_indices, to_indices, is_constant) = build_topology(spec);
+        let num_neurons = spec.num_neurons as u32;
+        let num_inputs = spec.num_inputs as u32;
+        // One element per candidate slot the scan has to consider.
+        group.throughput(Throughput::Elements(
+            (spec.num_neurons * spec.num_neurons) as u64,
+        ));
+        group.bench_function(
+            BenchmarkId::new("scan_available_connections", spec.label),
+            |b| {
+                b.iter(|| {
+                    let out = scan_available_connections(
+                        black_box(&from_indices),
+                        black_box(&to_indices),
+                        black_box(&is_constant),
+                        black_box(num_neurons),
+                        black_box(num_inputs),
+                    );
+                    black_box(out);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 /// Activation primitives — `weighted_sum_simd` family plus squash/unsquash.
 fn bench_activation_primitives(c: &mut Criterion) {
     // weighted_sum_simd family over a representative synapse block.
@@ -465,5 +580,6 @@ criterion_group!(
     bench_scoring_flat,
     bench_dataset_evaluate_mse,
     bench_activation_primitives,
+    bench_topology_ops,
 );
 criterion_main!(benches);

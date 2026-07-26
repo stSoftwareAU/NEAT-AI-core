@@ -24,6 +24,7 @@ There are two bench targets:
 | `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
 | `scoring_flat` | `CompiledNetwork::score_records_flat` over the same batch in flat-slice input layout (Issue #386) | `production`, `production_2x`, `production_exact` |
 | `dataset_evaluate_mse` | `TrainingDataset::evaluate_mse` over a production-sized batch (Issue #386) | `production`, `production_2x`, `production_exact` |
+| `topology_ops` | `scan_available_connections` — the mutation-time availability scan (Issue #387) | `n1666_21513`, `n4127_21513` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
 
@@ -32,6 +33,15 @@ through one creature via `score_records`, so `hot_paths` reports single-core
 scoring throughput at production record volume alongside the parallel harness.
 It covers only the gather-bound `production` shapes and is reachable with the
 `production` filter (`--bench hot_paths -- production`).
+
+The `topology_ops` group (Issue #387) covers the mutation-time helpers, which
+are not per-record hot paths but are paid repeatedly across the population every
+generation. Its topologies are built locally in `hot_paths.rs` (they are edge
+lists, not `CompiledNetwork`s): `n1666_21513` is the anchor named in #387 —
+1,666 neurons carrying 21,513 synapses, a fill factor under 0.8% — and
+`n4127_21513` puts the same synapse count on the full `production_exact` neuron
+count. Throughput is reported per candidate slot (`n²`), so a reintroduced dense
+`n × n` existence matrix or result-vector realloc chain shows up directly.
 
 `scoring_flat` scores the *same* shard through the flat-slice input entry point
 (Issue #386), so the delta against `scoring` isolates the cost of the per-record
