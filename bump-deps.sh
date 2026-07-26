@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # bump-deps.sh — refresh Cargo dependencies before quality.sh (Issue #38).
 #
-# Invoked by the Vibe Coder worker before quality.sh per the contract in
-# stSoftwareAU/VibeCoding#1613. NEAT-AI-core is the root of the stSoftware
-# dependency chain (see stSoftwareAU/VibeCoding#1614), so there are no
-# internal pins to refresh — the script focuses on:
+# Invoked by the Vibe Coder worker before quality.sh: it refreshes external
+# Cargo dependencies ahead of the quality gate, honouring the quarantine
+# window. NEAT-AI-core is the root of the internal dependency chain, so there
+# are no internal pins to refresh — the script focuses on:
 #
 #   1. External: crates.io — `cargo update`, honouring the quarantine window
 #      (`--quarantine-hours`, default `$VIBE_BUMP_QUARANTINE_HOURS` / 24h)
