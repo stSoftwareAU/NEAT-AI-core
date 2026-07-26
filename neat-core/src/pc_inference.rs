@@ -112,6 +112,33 @@ pub struct PcInferenceResult {
     pub converged: bool,
 }
 
+/// Reusable working buffers for the settling loop (Issue #389).
+///
+/// Holding `latents`, `predictions` and `errors` across steps — and, in
+/// [`PredictiveCodingEngine::infer_batch`], across samples — keeps the settling
+/// loop's allocation count O(1) in the number of steps and samples rather than
+/// allocating two fresh `Vec`s per step.
+struct PcScratch {
+    /// Latent values for all neurons (length `num_neurons`).
+    latents: Vec<f32>,
+    /// Per-neuron prediction (length `neurons.len()`).
+    predictions: Vec<f32>,
+    /// Per-neuron prediction error (length `neurons.len()`).
+    errors: Vec<f32>,
+}
+
+impl PcScratch {
+    /// Allocates zeroed buffers sized to `engine`'s topology.
+    fn for_engine(engine: &PredictiveCodingEngine) -> Self {
+        let n = engine.neurons.len();
+        PcScratch {
+            latents: vec![0.0f32; engine.num_neurons],
+            predictions: vec![0.0f32; n],
+            errors: vec![0.0f32; n],
+        }
+    }
+}
+
 /// The Predictive Coding inference engine.
 ///
 /// Holds the network topology and configuration for running the iterative
@@ -235,21 +262,32 @@ impl PredictiveCodingEngine {
         weighted_sum
     }
 
-    /// Computes prediction errors for all non-input neurons.
+    /// Computes prediction errors for all non-input neurons into caller-owned
+    /// buffers, avoiding a per-call allocation (Issue #389).
     ///
-    /// Returns (predictions, errors) vectors indexed by neuron_rel_idx.
-    fn compute_errors(&self, latents: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    /// `predictions` and `errors` must each have length `self.neurons.len()`;
+    /// every element is overwritten, so their prior contents are irrelevant.
+    fn compute_errors_into(&self, latents: &[f32], predictions: &mut [f32], errors: &mut [f32]) {
         let n = self.neurons.len();
-        let mut predictions = vec![0.0f32; n];
-        let mut errors = vec![0.0f32; n];
-
         for i in 0..n {
             let prediction = self.compute_prediction(i, latents);
             let latent = latents[self.num_inputs + i];
             predictions[i] = prediction;
             errors[i] = latent - prediction;
         }
+    }
 
+    /// Computes prediction errors for all non-input neurons.
+    ///
+    /// Returns (predictions, errors) vectors indexed by neuron_rel_idx. Thin
+    /// allocating wrapper over [`compute_errors_into`], retained for the
+    /// wrapper-equivalence unit test; the hot path uses `compute_errors_into`.
+    #[cfg(test)]
+    fn compute_errors(&self, latents: &[f32]) -> (Vec<f32>, Vec<f32>) {
+        let n = self.neurons.len();
+        let mut predictions = vec![0.0f32; n];
+        let mut errors = vec![0.0f32; n];
+        self.compute_errors_into(latents, &mut predictions, &mut errors);
         (predictions, errors)
     }
 
@@ -268,22 +306,56 @@ impl PredictiveCodingEngine {
     /// * `input` - Input values (one per input neuron).
     /// * `targets` - Optional supervised targets for output neurons.
     pub fn infer(&self, input: &[f32], targets: Option<&[f32]>) -> PcInferenceResult {
-        let mut latents = vec![0.0f32; self.num_neurons];
+        let mut scratch = PcScratch::for_engine(self);
+        let (final_energy, energy_history, steps_used, converged) =
+            self.settle(input, targets, &mut scratch);
+
+        // For a single call the scratch buffers hold exactly the result state,
+        // so move them out rather than cloning.
+        PcInferenceResult {
+            latents: scratch.latents,
+            predictions: scratch.predictions,
+            errors: scratch.errors,
+            final_energy,
+            energy_history,
+            steps_used,
+            converged,
+        }
+    }
+
+    /// Runs the settling loop into the supplied scratch buffers.
+    ///
+    /// On return `scratch.latents`, `scratch.predictions` and `scratch.errors`
+    /// hold the final settled state. Returns the scalar results plus the
+    /// per-iteration energy history.
+    ///
+    /// The buffers are fully reset up front (Issue #389 buffer-reuse rule), so
+    /// reusing one `PcScratch` across samples is byte-identical to allocating a
+    /// fresh set per call.
+    fn settle(
+        &self,
+        input: &[f32],
+        targets: Option<&[f32]>,
+        scratch: &mut PcScratch,
+    ) -> (f32, Vec<f32>, u32, bool) {
+        // Reset latents to the zeroed state a fresh allocation would have, so
+        // stale values (e.g. inputs past `input_len`) never leak across reuse.
+        scratch.latents.fill(0.0);
 
         // Step 1: Clamp input neurons.
         let input_len = input.len().min(self.num_inputs);
-        latents[..input_len].copy_from_slice(&input[..input_len]);
+        scratch.latents[..input_len].copy_from_slice(&input[..input_len]);
 
         // Step 2: Initialise hidden/output neurons from forward prediction.
         for i in 0..self.neurons.len() {
-            latents[self.num_inputs + i] = self.compute_prediction(i, &latents);
+            scratch.latents[self.num_inputs + i] = self.compute_prediction(i, &scratch.latents);
         }
 
         // Clamp output neurons to targets if provided.
         if let Some(tgt) = targets {
             let output_start = self.num_neurons - self.num_outputs;
             for j in 0..self.num_outputs.min(tgt.len()) {
-                latents[output_start + j] = tgt[j];
+                scratch.latents[output_start + j] = tgt[j];
             }
         }
 
@@ -293,8 +365,12 @@ impl PredictiveCodingEngine {
         let mut steps_used = 0u32;
 
         // Compute initial errors.
-        let (mut predictions, mut errors) = self.compute_errors(&latents);
-        let mut energy = Self::compute_energy(&errors);
+        self.compute_errors_into(
+            &scratch.latents,
+            &mut scratch.predictions,
+            &mut scratch.errors,
+        );
+        let mut energy = Self::compute_energy(&scratch.errors);
         energy_history.push(energy);
 
         for t in 0..self.inference_steps {
@@ -307,9 +383,17 @@ impl PredictiveCodingEngine {
             }
 
             // Update hidden neuron latents.
+            //
+            // The derivative below is recomputed per inbound edge on purpose:
+            // updates are written to `latents[hidden_idx]` inside this loop and
+            // read back by `compute_pre_activation` for later neurons in the
+            // same step (Gauss-Seidel ordering). Hoisting a per-step derivative
+            // cache would change the numerics whenever a target's inbound sum
+            // reads a latent already updated this step, so it is left intact
+            // (Issue #389).
             for &hidden_idx in &self.hidden_indices {
                 let hidden_rel = hidden_idx - self.num_inputs;
-                let hidden_error = errors[hidden_rel];
+                let hidden_error = scratch.errors[hidden_rel];
 
                 // Term 1: error at this neuron.
                 let mut gradient = hidden_error;
@@ -317,36 +401,38 @@ impl PredictiveCodingEngine {
                 // Term 2: contribution from downstream neurons.
                 for outward in &self.outward_connections[hidden_idx] {
                     let target_rel = outward.to - self.num_inputs;
-                    let target_error = errors[target_rel];
+                    let target_error = scratch.errors[target_rel];
 
                     // Compute derivative of the target neuron's squash function.
                     let target_squash = self.neurons[target_rel].squash_type;
-                    let pre_activation = self.compute_pre_activation(target_rel, &latents);
+                    let pre_activation = self.compute_pre_activation(target_rel, &scratch.latents);
                     let derivative = apply_derivative(target_squash, pre_activation);
 
                     gradient -= outward.weight * target_error * derivative;
                 }
 
                 // Update latent value: x(l) -= η · ∂E/∂x(l).
-                latents[hidden_idx] -= self.inference_rate * gradient;
+                scratch.latents[hidden_idx] -= self.inference_rate * gradient;
             }
 
             // Re-clamp input neurons.
-            latents[..input_len].copy_from_slice(&input[..input_len]);
+            scratch.latents[..input_len].copy_from_slice(&input[..input_len]);
 
             // Re-clamp output neurons to targets if provided.
             if let Some(tgt) = targets {
                 let output_start = self.num_neurons - self.num_outputs;
                 for j in 0..self.num_outputs.min(tgt.len()) {
-                    latents[output_start + j] = tgt[j];
+                    scratch.latents[output_start + j] = tgt[j];
                 }
             }
 
             // Recompute errors and energy.
-            let (new_pred, new_err) = self.compute_errors(&latents);
-            predictions = new_pred;
-            errors = new_err;
-            energy = Self::compute_energy(&errors);
+            self.compute_errors_into(
+                &scratch.latents,
+                &mut scratch.predictions,
+                &mut scratch.errors,
+            );
+            energy = Self::compute_energy(&scratch.errors);
             energy_history.push(energy);
         }
 
@@ -355,32 +441,40 @@ impl PredictiveCodingEngine {
             converged = true;
         }
 
-        PcInferenceResult {
-            latents,
-            predictions,
-            errors,
-            final_energy: energy,
-            energy_history,
-            steps_used,
-            converged,
-        }
+        (energy, energy_history, steps_used, converged)
     }
 
     /// Runs inference on a batch of samples.
     ///
     /// Each sample is processed independently using the same network topology.
-    /// Returns a vector of results, one per sample.
+    /// Returns a vector of results, one per sample. One set of scratch buffers
+    /// is reused across every sample (Issue #389), so the batch allocates the
+    /// per-step working `Vec`s once rather than once per sample.
     pub fn infer_batch(
         &self,
         inputs: &[&[f32]],
         targets: Option<&[&[f32]]>,
     ) -> Vec<PcInferenceResult> {
+        let mut scratch = PcScratch::for_engine(self);
         inputs
             .iter()
             .enumerate()
             .map(|(i, input)| {
                 let tgt = targets.map(|t| t[i]);
-                self.infer(input, tgt)
+                let (final_energy, energy_history, steps_used, converged) =
+                    self.settle(input, tgt, &mut scratch);
+
+                // The scratch buffers are reused for the next sample, so the
+                // per-sample result owns its own copies of the settled state.
+                PcInferenceResult {
+                    latents: scratch.latents.clone(),
+                    predictions: scratch.predictions.clone(),
+                    errors: scratch.errors.clone(),
+                    final_energy,
+                    energy_history,
+                    steps_used,
+                    converged,
+                }
             })
             .collect()
     }
@@ -626,3 +720,60 @@ impl PredictiveCodingEngine {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+// Behavioural coverage lives in `tests/pc_inference.rs`; this module only holds
+// unit checks that need access to private helpers.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 2 inputs → 1 hidden (Tanh) → 1 output (Identity).
+    fn engine() -> PredictiveCodingEngine {
+        let neurons = vec![
+            PcNeuron {
+                bias: 0.2,
+                squash_type: SquashType::Tanh,
+                is_hidden: true,
+                conn_start: 0,
+                conn_count: 2,
+            },
+            PcNeuron {
+                bias: -0.1,
+                squash_type: SquashType::Identity,
+                is_hidden: false,
+                conn_start: 2,
+                conn_count: 1,
+            },
+        ];
+        let connections = vec![
+            PcConnection {
+                from: 0,
+                weight: 0.5,
+            },
+            PcConnection {
+                from: 1,
+                weight: -0.3,
+            },
+            PcConnection {
+                from: 2,
+                weight: 1.0,
+            },
+        ];
+        PredictiveCodingEngine::new_from_parts(2, 1, neurons, connections, 10, 0.05, 1e-6)
+    }
+
+    #[test]
+    fn compute_errors_wrapper_matches_into() {
+        let engine = engine();
+        let latents = [0.7f32, -0.4, 0.15, 0.9];
+
+        let (pred_alloc, err_alloc) = engine.compute_errors(&latents);
+
+        let n = engine.neurons.len();
+        let mut pred_into = vec![f32::NAN; n];
+        let mut err_into = vec![f32::NAN; n];
+        engine.compute_errors_into(&latents, &mut pred_into, &mut err_into);
+
+        assert_eq!(pred_alloc, pred_into);
+        assert_eq!(err_alloc, err_into);
+    }
+}

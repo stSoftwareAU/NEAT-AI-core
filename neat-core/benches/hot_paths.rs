@@ -17,6 +17,7 @@ use std::hint::black_box;
 
 use neat_core::loss::mse_sum_batch_packed;
 use neat_core::network::SynapseData;
+use neat_core::pc_inference::{PcConnection, PcNeuron, PredictiveCodingEngine};
 use neat_core::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_simd,
     weighted_sum_simd_4records, weighted_sum_simd_8records,
@@ -620,6 +621,106 @@ fn bench_activation_primitives(c: &mut Criterion) {
     squash4_group.finish();
 }
 
+/// Builds a deterministic, production-shaped predictive-coding topology:
+/// a wide input layer feeding several multi-fan-in hidden layers and an output
+/// layer. Fan-in > 1 across layers exercises the settling loop's per-edge
+/// derivative path (Issue #389).
+fn build_pc_engine(inference_steps: u32) -> PredictiveCodingEngine {
+    let mut lcg = Lcg::new(0x9C0D_E389);
+    let num_inputs = 32usize;
+    let hidden_layers = [96usize, 96, 48];
+    let num_outputs = 8usize;
+    let fan_in = 16usize;
+
+    let mut neurons: Vec<PcNeuron> = Vec::new();
+    let mut connections: Vec<PcConnection> = Vec::new();
+
+    // `prev` holds the full neuron indices of the previous layer; the first
+    // hidden layer draws from the input neurons.
+    let mut prev: Vec<usize> = (0..num_inputs).collect();
+    let mut next_full = num_inputs;
+
+    let mut layer_sizes: Vec<usize> = hidden_layers.to_vec();
+    layer_sizes.push(num_outputs);
+
+    for (li, &size) in layer_sizes.iter().enumerate() {
+        let is_hidden = li < hidden_layers.len();
+        let squash = if is_hidden {
+            SquashType::Tanh
+        } else {
+            SquashType::Identity
+        };
+        let mut this_layer: Vec<usize> = Vec::with_capacity(size);
+        for _ in 0..size {
+            let conn_start = connections.len();
+            let k = fan_in.min(prev.len());
+            for _ in 0..k {
+                let src = prev[lcg.next_below(prev.len())];
+                connections.push(PcConnection {
+                    from: src,
+                    weight: lcg.next_signed() * 0.5,
+                });
+            }
+            neurons.push(PcNeuron {
+                bias: lcg.next_signed() * 0.1,
+                squash_type: squash,
+                is_hidden,
+                conn_start,
+                conn_count: connections.len() - conn_start,
+            });
+            this_layer.push(next_full);
+            next_full += 1;
+        }
+        prev = this_layer;
+    }
+
+    // Threshold of 0 keeps the loop from converging early so the benchmark
+    // measures the full steps-exhausted settling cost.
+    PredictiveCodingEngine::new_from_parts(
+        num_inputs,
+        num_outputs,
+        neurons,
+        connections,
+        inference_steps,
+        0.05,
+        0.0,
+    )
+}
+
+/// Predictive-coding settling loop — `PredictiveCodingEngine::infer` and
+/// `infer_batch` on a production-shaped topology (Issue #389).
+fn bench_pc_inference(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pc_inference");
+    let engine = build_pc_engine(50);
+    let mut lcg = Lcg::new(0x1234_5678);
+    let input: Vec<f32> = (0..engine.num_inputs())
+        .map(|_| lcg.next_signed())
+        .collect();
+
+    group.bench_function("single_settle", |b| {
+        b.iter(|| {
+            let r = engine.infer(black_box(&input), None);
+            black_box(r);
+        });
+    });
+
+    let batch: Vec<Vec<f32>> = (0..32)
+        .map(|_| {
+            (0..engine.num_inputs())
+                .map(|_| lcg.next_signed())
+                .collect()
+        })
+        .collect();
+    let batch_refs: Vec<&[f32]> = batch.iter().map(|v| v.as_slice()).collect();
+    group.bench_function("batch_32", |b| {
+        b.iter(|| {
+            let r = engine.infer_batch(black_box(&batch_refs), None);
+            black_box(r);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_forward_pass,
@@ -631,5 +732,6 @@ criterion_group!(
     bench_dataset_evaluate_mse,
     bench_activation_primitives,
     bench_topology_ops,
+    bench_pc_inference,
 );
 criterion_main!(benches);
