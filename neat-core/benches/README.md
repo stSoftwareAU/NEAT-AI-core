@@ -54,8 +54,8 @@ can be misleading.
 | `production_2x` | 4922 | 3346 | 8268 | 2 | ~13 (varied) | ~43.5k |
 | `production_exact` | 2461 | 1666 | 4127 | 1 | ~12.9 (exact) | **21,513** |
 
-`production_exact` (Issue #286) pins the fixture to the committed
-`GRQ-cluster/network.json` topology — 1,666 non-input neurons, **exactly**
+`production_exact` (Issue #286) pins the fixture to the committed production
+creature topology — 1,666 non-input neurons, **exactly**
 21,513 synapses, 2,461 inputs — so the Criterion baseline is anchored to the
 real production model rather than `production`'s ~13-average approximation.
 Unlike the `VariedAround` shapes it uses `FanIn::ExactTotal`, which distributes
@@ -78,7 +78,7 @@ test.
 > / `production_exact` shapes is built with `SquashType::Tanh`
 > (`benches/common/mod.rs`), locked
 > by `tests/bench_fixtures.rs::production_fixture_squash_is_homogeneous_tanh`.
-> Real GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so on this fixture
+> Real production creatures also run `Gelu`/`Mish` (scalar `libm`), so on this fixture
 > squash-vectorisation deltas are a **lower bound** and branch-prediction levers
 > are **unmeasurable** (a homogeneous squash lets the predictor nail the
 > one-arm `match`). See [`BASELINE.md`](BASELINE.md) for the full caveat.
@@ -133,7 +133,7 @@ only in pool size.
 
 The batch is `PRODUCTION_SCORING_RECORDS` records (defined in
 `benches/common/mod.rs` and shared with the `hot_paths` `scoring` group). That
-count is **calibrated to production record volume** — one GRQ-cluster training
+count is **calibrated to production record volume** — one production training
 shard, ~4.3k records — rather than an arbitrary token batch. The derivation is
 documented in [`BASELINE.md`](BASELINE.md).
 

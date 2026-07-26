@@ -16,7 +16,7 @@ affected group against this file, with matching host/toolchain metadata.
 Every neuron in the `production` / `production_2x` / `production_exact` fixtures
 is uniformly `SquashType::Tanh` (`benches/common/mod.rs`), asserted by
 `tests/bench_fixtures.rs::production_fixture_squash_is_homogeneous_tanh`. Real
-GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so read every
+production creatures also run `Gelu`/`Mish` (scalar `libm`), so read every
 `scoring`/`production` A/B below with two corrections in mind:
 
 - **Squash-vectorisation deltas are a lower bound.** Varied-squash creatures
@@ -27,7 +27,7 @@ GRQ creatures also run `Gelu`/`Mish` (scalar `libm`), so read every
   optimisation shows no delta on this fixture — that is a fixture artefact, not
   evidence the lever is worthless on real creatures.
 
-The real `GRQ-cluster/network.json` is not on the build host, so it cannot be
+The real production `network.json` is not on the build host, so it cannot be
 A/B'd here directly; re-run against the pinned creature to confirm on the real
 varied-squash topology.
 
@@ -35,7 +35,7 @@ varied-squash topology.
 
 | Field | Value |
 | --- | --- |
-| Host class | Apple Silicon (GRQ host class) |
+| Host class | Apple Silicon (Apple M4 Pro class) |
 | CPU | Apple M4 Pro — 12 cores (8 performance + 4 efficiency) |
 | Logical cores (`available_parallelism`) | 12 |
 | RAM | 24 GB |
@@ -53,9 +53,9 @@ deviation on the same host indicates the fixed-seed setup is broken.
 `parallel_scoring` and the `hot_paths` `scoring` group score
 `PRODUCTION_SCORING_RECORDS = 4096` records per iteration (defined in
 `benches/common/mod.rs`), replacing the prior uncalibrated 2048-record token
-batch. Derivation, from the committed GRQ-cluster telemetry
-(`GRQ-cluster/performance.csv`, the 32-generation production run whose totals
-match `result.json`: `generations = 32`, `total_time_ms = 3,042,879`,
+batch. Derivation, from committed production-run telemetry
+(a 32-generation production run whose totals
+match the run summary: `generations = 32`, `total_time_ms = 3,042,879`,
 `fitnessMs = 2,901,473` — ~95% of wall clock):
 
 | Quantity | Value | Source |
@@ -107,7 +107,7 @@ sequential `score_records` path, an internal consistency check on the fixture.
 
 ## Production-exact topology baseline (Issue #286)
 
-Dated anchor for the **exact** committed `GRQ-cluster/network.json` topology —
+Dated anchor for the **exact** committed production creature topology —
 **1,666 non-input neurons, 21,513 synapses, 2,461 inputs** (4,127 total neurons,
 one output). Unlike the `production` shape's ~13-average `VariedAround` fan-in,
 the `production_exact` shape uses `FanIn::ExactTotal(21_513)`, which spreads the
@@ -116,7 +116,7 @@ Bresenham-interleaved) so the synapse count reproduces the real model to the
 synapse. Seeded synthesis is deterministic and asserted exact by
 `tests/bench_fixtures.rs::production_exact_matches_committed_grq_topology`.
 
-**Measured 2026-07-18** on the same GRQ host class, toolchain **rustc 1.97.0**
+**Measured 2026-07-18** on the same Apple M4 Pro host class, toolchain **rustc 1.97.0**
 (the earlier `production`/`production_2x` rows above were taken on rustc 1.96.0,
 so compare across sections only within a lane, not across toolchains).
 
@@ -196,7 +196,7 @@ rounds of the *same* prebuilt bench binaries, capturing the unchanged
 stayed flat across old/new (34.65 µs vs 34.71 µs mean), confirming the `scoring`
 delta is the code change, not thermal drift.
 
-**Measured 2026-07-18**, GRQ host class (Apple M4 Pro), rustc 1.97.0,
+**Measured 2026-07-18**, Apple M4 Pro host class, rustc 1.97.0,
 `--release`, 4 alternating rounds (Criterion `--sample-size 60`):
 
 | `production_exact` (median) | old | new | change |
@@ -230,7 +230,8 @@ and, decisively, by using idle cores the single-threaded wasm32 lane cannot.
 This is a **positive result**; the core-side native path
 (`score_records_parallel` with its sequential/wasm32 fallback) is ready, and the
 production wiring is raised
-cross-repo (NEAT-AI #3399 WorkerPool idle-tail, GRQ #3400 flags) per the issue's
+cross-repo (a WorkerPool idle-tail change and a host-flags change in the
+downstream production repos) per the issue's
 one-root-cause-one-repo rule — this issue owns only the neat-core native path,
 benchmark, and this decision.
 
@@ -250,7 +251,7 @@ count:
   x86, NEON on ARM), scored through a fixed-size rayon pool of 1 or 12 workers
   via `score_records_parallel`.
 
-### Measured 2026-07-18 — GRQ host class
+### Measured 2026-07-18 — Apple M4 Pro host class
 
 Apple M4 Pro (8P + 4E, 12 logical cores), 24 GB, macOS (arm64), rustc 1.97.0,
 `--release`. 4096 records (one production shard; see the record-count

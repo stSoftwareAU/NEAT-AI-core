@@ -40,7 +40,7 @@ fn production_shapes_are_registered_with_expected_dimensions() {
 #[test]
 fn production_exact_matches_committed_grq_topology() {
     // Issue #286: the `production_exact` fixture must reproduce the committed
-    // GRQ-cluster/network.json topology to the synapse — 1,666 non-input
+    // production creature topology to the synapse — 1,666 non-input
     // neurons, 21,513 synapses, 2,461 inputs — so the Criterion baseline is
     // anchored to the real production model rather than a ~13-average estimate.
     let spec = spec("production_exact");
@@ -197,7 +197,7 @@ fn varied_fan_in_actually_varies_unlike_fixed_shapes() {
 fn production_fixture_squash_is_homogeneous_tanh() {
     // The BASELINE.md / README.md "Fixture caveat" (Issue #261) rests on the
     // production/production_2x fixtures being uniformly `Tanh`. That homogeneity
-    // makes squash-vectorisation deltas a lower bound (real GRQ creatures also
+    // makes squash-vectorisation deltas a lower bound (real production creatures also
     // run scalar-`libm` Gelu/Mish) and makes branch-prediction levers
     // unmeasurable on the fixture (the predictor already nails a one-arm match).
     // If a future change diversifies the fixture squash, this test fails so the
