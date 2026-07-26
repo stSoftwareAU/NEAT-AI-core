@@ -70,6 +70,29 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# Semgrep package_managers.dependabot.dependabot-missing-cooldown requires an
+# explicit cooldown.default-days (>= 7) on every package-ecosystem entry so
+# newly published crates are not proposed the day they appear. Security
+# updates still bypass cooldown.
+@test "cargo ecosystem entry sets a cooldown default-days of at least 7" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import sys, yaml
+with open("$DEPENDABOT_FILE") as fh:
+    data = yaml.safe_load(fh)
+cargo = [u for u in (data.get("updates") or []) if u.get("package-ecosystem") == "cargo"]
+assert cargo, "no cargo package-ecosystem entry found"
+for u in cargo:
+    cooldown = u.get("cooldown") or {}
+    days = cooldown.get("default-days")
+    assert isinstance(days, int) and days >= 7, \
+        f"cargo ecosystem entry must set cooldown.default-days >= 7, got {days!r}"
+PY
+  [ "$status" -eq 0 ]
+}
+
 # Security-update PRs are raised independently of the version-update schedule,
 # but a bounded open-pull-requests-limit keeps the advisory fast-lane from
 # being throttled to the default of 5. Assert the cargo entry sets one.

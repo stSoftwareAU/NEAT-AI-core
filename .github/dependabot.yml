@@ -15,6 +15,12 @@ updates:
       # Routine version bumps stay weekly to mirror upgrade-dependencies.yml;
       # security advisories raise PRs immediately, outside this window.
       interval: "weekly"
+    # Semgrep package_managers.dependabot.dependabot-missing-cooldown — wait
+    # before proposing version bumps of newly published crates so supply-chain
+    # compromise has time to surface. Security updates are unaffected (they
+    # bypass cooldown and still open immediately).
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
