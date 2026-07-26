@@ -28,7 +28,7 @@
 // See `docs/research/wasm64-lane-d-learn-wiring-verification.md`.
 
 /** Fixed headroom (MB) reserved for Rust FFI + OS caches before apportioning to
- * V8 — `MEMORY_FFI_OS_HEADROOM_MB` in memory_calc.sh (#1768). */
+ * V8 — the FFI/OS-headroom constant in the shared memory-budget helper. */
 export const FFI_OS_HEADROOM_MB = 1536;
 /** Share of the post-headroom budget granted to V8 (`get_max_heap_size` default). */
 export const HEAP_PERCENTAGE = 65;
@@ -54,7 +54,7 @@ export interface HostMemory {
 }
 
 /**
- * Mirror of `memory_calc.sh get_heap_floor_mb`. Hosts below 8 GB keep the global
+ * Mirror of the shared memory-budget helper's `get_heap_floor_mb`. Hosts below 8 GB keep the global
  * 1536 MB floor. The 8 GB tier uses a 3072 MB working-set floor that steps
  * **down** on a constrained host (available-aware, #3342, always on for the
  * learn/teams victim): capped at a minority share (45%) of *available* RAM but
@@ -77,7 +77,7 @@ export function heapFloorMb(host: HostMemory): number {
 }
 
 /**
- * Mirror of `memory_calc.sh get_max_heap_size`: the `--max-old-space-size` value
+ * Mirror of the shared memory-budget helper's `get_max_heap_size`: the `--max-old-space-size` value
  * (MB) the downstream trainer's learn invocation selects for a host.
  *
  *   heap = clamp((available - FFI_OS_HEADROOM) * 65%, floor(total) .. 24576)
@@ -92,7 +92,7 @@ export function selectMaxOldSpaceSizeMb(host: HostMemory): number {
   return heap;
 }
 
-/** The exact `--v8-flags` token `worker/learn.sh` injects for the learn stage. */
+/** The exact `--v8-flags` token the learn launcher script injects for the learn stage. */
 export function learnV8HeapFlag(host: HostMemory): string {
   return `--v8-flags=--max-old-space-size=${selectMaxOldSpaceSizeMb(host)}`;
 }

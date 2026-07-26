@@ -85,7 +85,7 @@ sequenceDiagram
 | `.github/workflows/ci.yml` | CI gate. The `rust-gates` job runs the lint (`cargo clippy -D warnings`) and compile/syntax (`cargo check --all-targets`) gates on **every push to `Develop`** (and `workflow_dispatch`); on pull requests the `quality` job — the full PR pipeline — runs the same clippy gate, so `rust-gates` is skipped there rather than compiling the workspace twice (Issue #337). |
 | `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
 | `.github/dependabot.yml` | Advisory-triggered security-update fast lane — raises a fix PR the moment a RustSec/OSV advisory lands, independent of the weekly bump. |
-| `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`). |
+| `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`), workflow contracts and published-artefact guards. Runs in `./quality.sh` **and** in the CI `scripts-and-spelling` job (Issue #397), so a regression fails on the PR rather than on a contributor's machine. |
 | `LICENSE`, `.gitleaks.toml` | Inherited from NEAT-AI `Develop`. |
 
 ## Build

@@ -487,6 +487,19 @@ jobs:
           done < <(find . -name "*.sh" -not -path "./target/*" -not -path "./.git/*")
           exit "$exit_code"
 
+      # Issue #397 — the bats suite (which holds the Issue #375 public-safety
+      # assertions over tests/perf/) was enforced by the local quality.sh gate
+      # only, so a regression landed on Develop green and surfaced on a
+      # contributor's machine. Run it here so that class fails on the PR.
+      - name: Install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+          bats --version
+
+      - name: Run bash helper tests (bats)
+        run: bats tests/scripts
+
       - name: Run codespell
         # codespell-project/actions-codespell@v2.2
         uses: codespell-project/actions-codespell@8f01853be192eb0f849a5c7d721450e7a467c579
