@@ -179,7 +179,13 @@ PY
   [ "$status" -eq 0 ]
 }
 
-@test "markdown-lint workflow gates Mermaid validation on a Deno worker module" {
+# Issue #379 — business-logic change, documented deliberately. This test
+# previously asserted the opposite ("gates Mermaid validation on a Deno worker
+# module"): the step was conditional on `worker/deno/mod.ts`, a module that
+# never exists in this repository, so the gate self-skipped on every run and a
+# broken diagram in docs/archive/pr-summaries/pr-summary-334.md landed
+# unnoticed. The gate is now unconditional and repo-owned.
+@test "markdown-lint workflow validates Mermaid unconditionally with the repo-owned gate" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
@@ -189,9 +195,46 @@ data = yaml.safe_load(open("$WORKFLOW"))
 steps = data["jobs"]["markdownlint"]["steps"]
 mermaid = [s for s in steps if s.get("name") == "Validate Mermaid blocks"]
 assert mermaid, "Validate Mermaid blocks step missing"
-guard = mermaid[0].get("if", "")
-assert "detect-deno" in guard and "present" in guard, guard
+step = mermaid[0]
+assert "if" not in step, f"Mermaid validation is conditional: {step}"
+assert "scripts/check_mermaid.ts" in step["run"], step["run"]
+# No step may reference a module owned by another repository.
+for s in steps:
+    assert "worker/deno/mod.ts" not in str(s.get("run", "")), s
+    assert "worker/deno/mod.ts" not in str(s.get("if", "")), s
 PY
+  [ "$status" -eq 0 ]
+}
+
+# The gate is worthless if its own unit tests never run in CI.
+@test "markdown-lint workflow runs the Mermaid gate unit tests" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+runs = [s.get("run", "") for s in data["jobs"]["markdownlint"]["steps"]]
+assert any(
+    "deno test" in r and "tests/check_mermaid_test.ts" in r for r in runs
+), runs
+PY
+  [ "$status" -eq 0 ]
+}
+
+# Behavioural check: the committed gate must actually reject a broken diagram
+# and accept the current tree.
+@test "repo-owned Mermaid gate rejects a broken diagram and passes the tree" {
+  if ! command -v deno &>/dev/null; then
+    skip "deno required for the Mermaid gate"
+  fi
+  TMP="$(mktemp -d)"
+  printf '```mermaid\nsequenceDiagram\n    A->>B: one; two\n```\n' > "$TMP/bad.md"
+  run deno run --allow-read "${REPO_ROOT}/scripts/check_mermaid.ts" "$TMP"
+  rm -rf "$TMP"
+  [ "$status" -ne 0 ]
+
+  run deno run --allow-read "${REPO_ROOT}/scripts/check_mermaid.ts" "$REPO_ROOT"
   [ "$status" -eq 0 ]
 }
 
