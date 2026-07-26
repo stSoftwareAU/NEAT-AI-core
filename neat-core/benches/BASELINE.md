@@ -448,6 +448,42 @@ Two distinct wins stack:
   wasm path additionally pays JS↔wasm orchestration per record, so the real
   wasm32 scoring lane is no faster than this row — reinforcing the verdict.
 
+## Backprop-setup adjacency: `Vec<Vec<u32>>` → CSR (Issue #388)
+
+`compute_reverse_topological_order` built its inward adjacency as one `Vec` per
+neuron — `n + 1` heap allocations per creature plus the geometric regrowth of
+every inner `Vec` — and Kahn's walk then chased a separate pointer per neuron.
+It now builds a **CSR** triple (`inward_starts` prefix sum + flat
+`inward_indices`) in two passes, so the walk reads one contiguous array. The
+returned order is unchanged, element for element
+(`reverse_topological_order_matches_reference_on_random_dags`).
+
+**Measured 2026-07-26**, Apple M4 Pro (12 cores, 24 GB, macOS 26.5.2 arm64),
+rustc 1.97.0, Criterion 0.8.2, `--release` bench profile. New group
+`reverse_topological_order`; times are Criterion's mean `[lower, upper]`, and
+the change column is Criterion's own `--baseline` comparison median.
+
+| Shape | Before (`Vec<Vec<u32>>`) | After (CSR) | Change |
+| --- | --- | --- | --- |
+| `small_50` | 15.60 µs `[13.33, 18.37]` | 5.88 µs `[5.21, 6.63]` | −62.3% |
+| `medium_500` | 169.48 µs `[144.80, 199.02]` | 94.51 µs `[85.89, 104.21]` | −44.2% |
+| `large_5000` | 2.361 ms `[2.071, 2.682]` | 1.799 ms `[1.679, 1.928]` | −23.8% |
+| `production` | 588.97 µs `[533.27, 648.77]` | 231.09 µs `[204.74, 261.11]` | −60.8% |
+| `production_2x` | 1.372 ms `[1.211, 1.550]` | 490.28 µs `[448.27, 536.87]` | −64.3% |
+| **`production_exact`** (1,666 non-input neurons, 21,513 synapses) | **547.19 µs** `[503.07, 594.92]` | **234.34 µs** `[213.14, 257.97]` | **−57.2%** |
+
+Allocation count for one call at production shape (4,127 neurons / 2,461 inputs
+/ ~21.7 k synapses), counted with the same counting-allocator harness as
+`neat-core/tests/reverse_topological_allocations.rs`:
+
+| Shape | Before | After |
+| --- | --- | --- |
+| n = 128 | 239 | 7 |
+| production (n = 4,127) | 5,021 | **7** |
+
+The count is now independent of neuron count — asserted permanently by
+`reverse_topological_order_allocation_count_does_not_scale_with_neurons`.
+
 ## Reproducing
 
 ```bash

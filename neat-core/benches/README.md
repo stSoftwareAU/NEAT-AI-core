@@ -21,6 +21,7 @@ There are two bench targets:
 | `forward_pass` | `CompiledNetwork::activate` | small ~50, medium ~500, large ~5000, `production`, `production_2x` |
 | `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` (all shapes), production-sized `mse_sum_batch_packed` (`mse_sum_production`, Issue #384) | 8-record: same five shapes; `mse_sum_production`: `production`, `production_2x`, `production_exact` |
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
+| `reverse_topological_order` | `compute_reverse_topological_order` over a creature's full synapse list (Issue #388) | all six shapes |
 | `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
 | `scoring_flat` | `CompiledNetwork::score_records_flat` over the same batch in flat-slice input layout (Issue #386) | `production`, `production_2x`, `production_exact` |
 | `dataset_evaluate_mse` | `TrainingDataset::evaluate_mse` over a production-sized batch (Issue #386) | `production`, `production_2x`, `production_exact` |
