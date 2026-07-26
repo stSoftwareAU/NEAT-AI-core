@@ -143,14 +143,50 @@ pub fn validate_topology(from_indices: &[u32], to_indices: &[u32]) -> Vec<i32> {
     vec![VALID, 0]
 }
 
+/// First `to` index the availability scan considers for a given `from`.
+///
+/// Forward-only (`to > from`) and never targeting an input neuron
+/// (`to >= num_inputs`), so the scan starts at whichever bound is higher.
+#[inline]
+fn scan_start_to(from_idx: usize, input_count: usize) -> usize {
+    if from_idx + 1 > input_count {
+        from_idx + 1
+    } else {
+        input_count
+    }
+}
+
+/// Whether `to_idx` is a constant neuron the scan must skip.
+///
+/// Indices beyond `is_constant` are treated as non-constant, preserving the
+/// original bounds-tolerant behaviour on a short `is_constant` buffer.
+#[inline]
+fn scan_is_constant(is_constant: &[u8], to_idx: usize) -> bool {
+    to_idx < is_constant.len() && is_constant[to_idx] != 0
+}
+
 /// Scan for available forward-only connection slots.
 ///
 /// Returns all `(from, to)` pairs where `from < to`, `to >= num_inputs`, the
-/// target neuron is not constant, and no connection already exists. Uses a
-/// flat boolean array for O(1) existence checks.
+/// target neuron is not constant, and no connection already exists.
+///
+/// Issue #387 — existence is answered from a compressed per-`from` run of
+/// existing targets (an `O(n + synapses)` adjacency built once), merge-walked
+/// against the candidate range. The previous implementation allocated a dense
+/// `n × n` boolean matrix for the same answer: 2.78 MB zeroed per call on the
+/// production topology to record ~21.5k synapses, a fill factor under 0.8%.
+/// The candidate count is also computed up front so the result vector is
+/// allocated exactly once at its final size instead of growing through a
+/// realloc chain. Output — pairs and their order — is unchanged.
+///
+/// Sorted input is *not* required: each per-`from` run is sorted on build, so
+/// an unsorted or duplicate-bearing edge list yields the same answer.
 ///
 /// # Returns
-/// Flattened `[from, to, from, to, ...]` pairs.
+/// Flattened `[from, to, from, to, ...]` pairs. Returns an empty vector for
+/// malformed input — mismatched `from`/`to` lengths, an implausibly large
+/// `num_neurons`, or a candidate count whose result vector could not be
+/// addressed — rather than panicking (which would trap under WASM).
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn scan_available_connections(
     from_indices: &[u32],
@@ -162,45 +198,136 @@ pub fn scan_available_connections(
     let n = num_neurons as usize;
     let input_count = num_inputs as usize;
 
-    // Issue NEAT-AI #2659 — defensive bail-out before the O(n^2)
-    // allocation. A length mismatch or pathologically large
-    // `num_neurons` previously caused a multiplication panic (and so a
-    // WASM trap) instead of a defined empty result.
+    // Issue NEAT-AI #2659 — defensive bail-out. A length mismatch or a
+    // pathologically large `num_neurons` previously caused a multiplication
+    // panic (and so a WASM trap) instead of a defined empty result. The
+    // `n * n` plausibility bound is retained: it is no longer an allocation
+    // size, but it still rejects a neuron count whose forward-pair space
+    // could never be materialised.
     if from_indices.len() != to_indices.len() {
         return Vec::new();
     }
-    let conn_set_len = match n.checked_mul(n) {
-        Some(v) if v <= isize::MAX as usize => v,
-        _ => return Vec::new(),
-    };
+    if n.checked_mul(n).is_none_or(|v| v > isize::MAX as usize) {
+        return Vec::new();
+    }
+    if n == 0 {
+        return Vec::new();
+    }
 
-    let mut conn_set = vec![false; conn_set_len];
+    // -----------------------------------------------------------------
+    // Compressed adjacency: for each `from`, the ascending run of existing
+    // targets that could ever block a candidate. Only pairs the scan can
+    // actually emit are retained (`to > from`, `to >= input_count`,
+    // both endpoints in range), which drops backward, self and
+    // out-of-range synapses exactly as the old matrix lookup did.
+    // -----------------------------------------------------------------
+    let mut starts = vec![0usize; n + 1];
     for i in 0..from_indices.len() {
         let from = from_indices[i] as usize;
         let to = to_indices[i] as usize;
-        if from < n && to < n {
-            conn_set[from * n + to] = true;
+        if from < n && to < n && to > from && to >= input_count {
+            starts[from + 1] += 1;
         }
     }
+    for f in 0..n {
+        starts[f + 1] += starts[f];
+    }
+    let mut cursor = starts.clone();
+    let mut targets = vec![0u32; starts[n]];
+    for i in 0..from_indices.len() {
+        let from = from_indices[i] as usize;
+        let to = to_indices[i] as usize;
+        if from < n && to < n && to > from && to >= input_count {
+            targets[cursor[from]] = to as u32;
+            cursor[from] += 1;
+        }
+    }
+    // Each run is already ascending for a `validate_topology`-clean edge
+    // list, so this is an O(run) insertion-sort pass in the common case; it
+    // is what lets an unsorted list fall through to the same answer.
+    for f in 0..n {
+        targets[starts[f]..starts[f + 1]].sort_unstable();
+    }
 
-    let mut available = Vec::new();
+    // Prefix sums of constant neurons, so "how many constants in
+    // [start_to, n)?" is O(1) per `from`.
+    let mut const_prefix = vec![0u32; n + 1];
+    for j in 0..n {
+        const_prefix[j + 1] = const_prefix[j] + u32::from(scan_is_constant(is_constant, j));
+    }
 
+    // -----------------------------------------------------------------
+    // Exact candidate count — O(n + synapses), no O(n^2) pre-pass. For each
+    // `from` the candidate range is [start_to, n); subtract the constants in
+    // that range and the distinct existing (non-constant) targets in it.
+    // The two subtracted sets are disjoint, so the result never underflows.
+    // -----------------------------------------------------------------
+    let mut total_pairs: usize = 0;
     for from_idx in 0..n {
-        let start_to = if from_idx + 1 > input_count {
-            from_idx + 1
-        } else {
-            input_count
-        };
-        for to_idx in start_to..n {
-            if to_idx < is_constant.len() && is_constant[to_idx] != 0 {
+        let start_to = scan_start_to(from_idx, input_count);
+        if start_to >= n {
+            continue;
+        }
+        let span = n - start_to;
+        let constants = (const_prefix[n] - const_prefix[start_to]) as usize;
+        let mut blocked = 0usize;
+        let mut previous: Option<u32> = None;
+        for k in starts[from_idx]..starts[from_idx + 1] {
+            let target = targets[k];
+            // A duplicate edge blocks the same slot once.
+            if previous == Some(target) {
                 continue;
             }
-            if !conn_set[from_idx * n + to_idx] {
-                available.push(from_idx as u32);
-                available.push(to_idx as u32);
+            previous = Some(target);
+            if !scan_is_constant(is_constant, target as usize) {
+                blocked += 1;
             }
         }
+        total_pairs += span - constants - blocked;
     }
+
+    // Flattened pairs: two `u32` per candidate. Refuse rather than abort if
+    // the exact result could not be addressed.
+    let capacity = match total_pairs.checked_mul(2) {
+        Some(c)
+            if c.checked_mul(size_of::<u32>())
+                .is_some_and(|b| b <= isize::MAX as usize) =>
+        {
+            c
+        }
+        _ => return Vec::new(),
+    };
+
+    let mut available: Vec<u32> = Vec::with_capacity(capacity);
+
+    for from_idx in 0..n {
+        let start_to = scan_start_to(from_idx, input_count);
+        if start_to >= n {
+            continue;
+        }
+        // Merge-walk: `to_idx` ascends, so the run cursor only moves forward.
+        let mut p = starts[from_idx];
+        let end = starts[from_idx + 1];
+        for to_idx in start_to..n {
+            if scan_is_constant(is_constant, to_idx) {
+                continue;
+            }
+            while p < end && (targets[p] as usize) < to_idx {
+                p += 1;
+            }
+            if p < end && targets[p] as usize == to_idx {
+                continue;
+            }
+            available.push(from_idx as u32);
+            available.push(to_idx as u32);
+        }
+    }
+
+    debug_assert_eq!(
+        available.len(),
+        capacity,
+        "pre-sized capacity must match the emitted pair count"
+    );
 
     available
 }
@@ -211,14 +338,6 @@ pub fn scan_available_connections(
 /// indices ordered with output neurons first, then hidden neurons after
 /// their downstream consumers. Input neurons are excluded. Neurons remaining
 /// in cycles are appended at the end.
-///
-/// The inward adjacency is built as a **CSR** (compressed sparse row) triple in
-/// two passes over the synapse list (Issue #388) — the same layout
-/// [`crate::PropagateInput`] uses for its inward lists. The previous
-/// `Vec<Vec<u32>>` cost one heap allocation per neuron (1,666 on the production
-/// topology) plus the geometric regrowth of every inner `Vec`; the CSR form is
-/// a fixed handful of allocations regardless of neuron count and lets the walk
-/// below read one contiguous array.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn compute_reverse_topological_order(
     from_indices: &[u32],
@@ -239,77 +358,75 @@ pub fn compute_reverse_topological_order(
     if input_count > n {
         return Vec::new();
     }
-    // The CSR offsets are `u32`; a synapse list longer than `u32::MAX` would
-    // overflow the prefix sum. Unreachable in practice (that is a 16 GiB edge
-    // list, and `usize` is 32-bit under WASM anyway), but bail out rather than
-    // wrap silently.
-    if from_indices.len() > u32::MAX as usize {
-        return Vec::new();
-    }
 
-    // A synapse survives into the adjacency when it is not a self-loop and
-    // both endpoints are inside the declared neuron count. Defensive: a
-    // pathological evolved creature can emit stale indices after a neuron
-    // rename, and panicking here traps the whole WASM run; #2659.
-    let survives = |from: usize, to: usize| from != to && from < n && to < n;
+    let mut out_degree = vec![0i32; n];
 
-    // Pass 1 — inward degree per neuron, counted one slot to the right so the
-    // prefix sum below turns the counts straight into row starts. The `n + 1`
-    // length must be representable: `usize` is 32-bit under WASM, where a
-    // `num_neurons` of `u32::MAX` would wrap it to zero and trap on the first
-    // index. Bail out the same way the other malformed inputs do.
-    let Some(starts_len) = n.checked_add(1) else {
-        return Vec::new();
-    };
-    let mut inward_starts = vec![0u32; starts_len];
-    let mut surviving = 0usize;
+    // -----------------------------------------------------------------
+    // Issue #388 — inward adjacency as CSR (compressed sparse row) rather
+    // than one `Vec<u32>` per neuron. The old shape cost n + 1 heap
+    // allocations per call plus the geometric regrowth of every inner
+    // `Vec`, and scattered Kahn's walk across n unrelated allocations. The
+    // CSR form is three allocations total and the walk reads one contiguous
+    // run per neuron — the same layout `PropagateInput` already uses for
+    // its inward lists.
+    //
+    // A synapse is retained here exactly when the old code would have
+    // pushed it: not a self-loop, and both endpoints inside `n`. Filtering
+    // identically in both passes is what keeps the emitted order
+    // element-identical to the pre-#388 implementation.
+    // -----------------------------------------------------------------
+
+    // Pass 1 — inward degree per neuron, accumulated one slot to the right
+    // so the prefix sum below turns it straight into run starts.
+    let mut inward_starts = vec![0usize; n + 1];
     for i in 0..from_indices.len() {
         let from = from_indices[i] as usize;
         let to = to_indices[i] as usize;
-        if !survives(from, to) {
+
+        // Defensive: skip synapses whose endpoints fall outside the
+        // declared neuron count rather than panicking. Production has
+        // observed pathological evolved creatures emitting stale indices
+        // after a neuron rename; #2659.
+        if from == to || from >= n || to >= n {
             continue;
         }
         inward_starts[to + 1] += 1;
-        surviving += 1;
+    }
+    for t in 0..n {
+        inward_starts[t + 1] += inward_starts[t];
     }
 
-    // Prefix sum — neuron `v`'s inward sources live in
-    // `inward_indices[inward_starts[v]..inward_starts[v + 1]]`.
-    for v in 0..n {
-        inward_starts[v + 1] += inward_starts[v];
-    }
-
-    // Pass 2 — fill the flat index array through a per-row moving cursor, in
-    // synapse order, so each row lists its sources in the same order the
-    // per-neuron `Vec` push did. Out-degree is accumulated in the same pass.
-    let mut out_degree = vec![0i32; n];
-    let mut cursor: Vec<u32> = inward_starts[..n].to_vec();
-    let mut inward_indices = vec![0u32; surviving];
+    // Pass 2 — fill the flat index array with a moving per-neuron cursor.
+    // `out_degree` is accumulated here too, on the same surviving synapses.
+    let mut cursor = inward_starts.clone();
+    let mut inward_indices = vec![0u32; inward_starts[n]];
     for i in 0..from_indices.len() {
         let from = from_indices[i] as usize;
         let to = to_indices[i] as usize;
-        if !survives(from, to) {
+
+        if from == to || from >= n || to >= n {
             continue;
         }
-
         if from >= input_count {
             out_degree[from] += 1;
         }
-
-        let slot = cursor[to] as usize;
-        inward_indices[slot] = from as u32;
-        cursor[to] = slot as u32 + 1;
+        inward_indices[cursor[to]] = from as u32;
+        cursor[to] += 1;
     }
 
-    let non_inputs = n - input_count;
-    let mut queue: Vec<usize> = Vec::with_capacity(non_inputs);
+    // Ready queue and result hold at most one entry per non-input neuron.
+    // The queue can exceed that only on a duplicate-edge topology, where
+    // the capacity is a hint rather than a bound.
+    let non_input_count = n - input_count;
+    let mut queue: Vec<usize> = Vec::with_capacity(non_input_count);
     for i in input_count..n {
         if out_degree[i] == 0 {
             queue.push(i);
         }
     }
 
-    let mut result: Vec<u32> = Vec::with_capacity(non_inputs);
+    let mut result: Vec<u32> = Vec::with_capacity(non_input_count);
+    // Indexed by absolute neuron index, so this stays `n` wide.
     let mut visited = vec![false; n];
     let mut head = 0;
 
@@ -323,13 +440,10 @@ pub fn compute_reverse_topological_order(
         visited[idx] = true;
         result.push(idx as u32);
 
-        let row_start = inward_starts[idx] as usize;
-        let row_end = inward_starts[idx + 1] as usize;
-        for &source in &inward_indices[row_start..row_end] {
-            let from = source as usize;
-            if from == idx {
-                continue;
-            }
+        // Self-loops were dropped when the adjacency was built, so no
+        // `from == idx` check is needed inside this run.
+        for k in inward_starts[idx]..inward_starts[idx + 1] {
+            let from = inward_indices[k] as usize;
             if from < input_count {
                 continue;
             }
@@ -842,6 +956,257 @@ mod tests {
     // scan_available_connections (Issue #1959)
     // -----------------------------------------------------------------------
 
+    // -----------------------------------------------------------------------
+    // Differential coverage for the Issue #387 rewrite.
+    //
+    // `reference_scan_available_connections` is the pre-#387 dense `n × n`
+    // boolean-matrix implementation, kept verbatim as the oracle. The
+    // optimised implementation must return a byte-identical `Vec<u32>` —
+    // same pairs, same order — for every topology below.
+    // -----------------------------------------------------------------------
+
+    /// Pre-#387 implementation: dense `n × n` boolean matrix, O(n^2) scan.
+    /// Retained only as the differential-test oracle.
+    fn reference_scan_available_connections(
+        from_indices: &[u32],
+        to_indices: &[u32],
+        is_constant: &[u8],
+        num_neurons: u32,
+        num_inputs: u32,
+    ) -> Vec<u32> {
+        let n = num_neurons as usize;
+        let input_count = num_inputs as usize;
+
+        if from_indices.len() != to_indices.len() {
+            return Vec::new();
+        }
+        let conn_set_len = match n.checked_mul(n) {
+            Some(v) if v <= isize::MAX as usize => v,
+            _ => return Vec::new(),
+        };
+
+        let mut conn_set = vec![false; conn_set_len];
+        for i in 0..from_indices.len() {
+            let from = from_indices[i] as usize;
+            let to = to_indices[i] as usize;
+            if from < n && to < n {
+                conn_set[from * n + to] = true;
+            }
+        }
+
+        let mut available = Vec::new();
+
+        for from_idx in 0..n {
+            let start_to = if from_idx + 1 > input_count {
+                from_idx + 1
+            } else {
+                input_count
+            };
+            for to_idx in start_to..n {
+                if to_idx < is_constant.len() && is_constant[to_idx] != 0 {
+                    continue;
+                }
+                if !conn_set[from_idx * n + to_idx] {
+                    available.push(from_idx as u32);
+                    available.push(to_idx as u32);
+                }
+            }
+        }
+
+        available
+    }
+
+    /// SplitMix64-style deterministic PRNG so the randomised cases are
+    /// reproducible across runs and platforms.
+    struct TestRng(u64);
+
+    impl TestRng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, bound: usize) -> usize {
+            if bound == 0 {
+                0
+            } else {
+                (self.next_u64() % bound as u64) as usize
+            }
+        }
+    }
+
+    /// A randomised topology under test.
+    struct RandomTopology {
+        from: Vec<u32>,
+        to: Vec<u32>,
+        is_constant: Vec<u8>,
+        num_neurons: u32,
+        num_inputs: u32,
+    }
+
+    /// Build a random topology. `density` is the percentage of *all* forward
+    /// `(from, to)` pairs that carry a synapse — 0 gives an empty synapse
+    /// list, 100 gives a fully-connected forward graph. `duplicate_rate` is
+    /// the percentage of emitted edges repeated a second time. `sorted`
+    /// controls whether the emitted edge list is in `validate_topology` order
+    /// or deliberately shuffled (the defensive path).
+    fn random_topology(
+        rng: &mut TestRng,
+        num_neurons: u32,
+        num_inputs: u32,
+        density: u32,
+        duplicate_rate: u32,
+        constant_rate: u32,
+        sorted: bool,
+    ) -> RandomTopology {
+        let n = num_neurons as usize;
+        let mut from = Vec::new();
+        let mut to = Vec::new();
+        for f in 0..n {
+            for t in (f + 1)..n {
+                if (rng.below(100) as u32) >= density {
+                    continue;
+                }
+                from.push(f as u32);
+                to.push(t as u32);
+                // Duplicates stay adjacent, so a sorted list remains sorted.
+                if (rng.below(100) as u32) < duplicate_rate {
+                    from.push(f as u32);
+                    to.push(t as u32);
+                }
+            }
+        }
+
+        if !sorted {
+            // Fisher–Yates over the pair list, keeping `from`/`to` aligned.
+            for i in (1..from.len()).rev() {
+                let j = rng.below(i + 1);
+                from.swap(i, j);
+                to.swap(i, j);
+            }
+        }
+
+        let is_constant = (0..n)
+            .map(|_| u8::from((rng.below(100) as u32) < constant_rate))
+            .collect();
+
+        RandomTopology {
+            from,
+            to,
+            is_constant,
+            num_neurons,
+            num_inputs,
+        }
+    }
+
+    fn assert_matches_reference(case: &str, topology: &RandomTopology) {
+        let expected = reference_scan_available_connections(
+            &topology.from,
+            &topology.to,
+            &topology.is_constant,
+            topology.num_neurons,
+            topology.num_inputs,
+        );
+        let actual = scan_available_connections(
+            &topology.from,
+            &topology.to,
+            &topology.is_constant,
+            topology.num_neurons,
+            topology.num_inputs,
+        );
+        assert_eq!(actual, expected, "divergence from reference for {case}");
+    }
+
+    #[test]
+    fn scan_available_connections_matches_reference_on_random_topologies() {
+        let mut rng = TestRng(0x5EED_1234_ABCD_0001);
+
+        for num_neurons in [1u32, 2, 3, 5, 9, 16, 31] {
+            for num_inputs in [0u32, 1, num_neurons / 2, num_neurons] {
+                if num_inputs > num_neurons {
+                    continue;
+                }
+                // density 0 = empty synapse list, 100 = fully connected.
+                for density in [0u32, 15, 60, 100] {
+                    for duplicate_rate in [0u32, 30] {
+                        for constant_rate in [0u32, 25, 100] {
+                            for sorted in [true, false] {
+                                let topology = random_topology(
+                                    &mut rng,
+                                    num_neurons,
+                                    num_inputs,
+                                    density,
+                                    duplicate_rate,
+                                    constant_rate,
+                                    sorted,
+                                );
+                                let case = format!(
+                                    "n={num_neurons} inputs={num_inputs} density={density} \
+                                     dup={duplicate_rate} const={constant_rate} sorted={sorted}"
+                                );
+                                assert_matches_reference(&case, &topology);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scan_available_connections_matches_reference_with_out_of_range_and_duplicate_edges() {
+        // Duplicates, self-connections, backward edges and out-of-range
+        // endpoints must all be tolerated identically to the reference.
+        let topology = RandomTopology {
+            from: vec![0, 0, 1, 2, 2, 3, 4, 99, 2],
+            to: vec![3, 3, 3, 2, 4, 1, 4, 4, 500],
+            is_constant: vec![0, 1, 0, 0, 0],
+            num_neurons: 5,
+            num_inputs: 2,
+        };
+        assert_matches_reference("hostile edge list", &topology);
+    }
+
+    #[test]
+    fn scan_available_connections_matches_reference_with_short_is_constant_buffer() {
+        // `is_constant` shorter than `num_neurons`: indices past the end are
+        // treated as non-constant by both implementations.
+        let topology = RandomTopology {
+            from: vec![0, 1],
+            to: vec![2, 3],
+            is_constant: vec![0, 1],
+            num_neurons: 6,
+            num_inputs: 2,
+        };
+        assert_matches_reference("short is_constant", &topology);
+    }
+
+    #[test]
+    fn scan_available_connections_num_inputs_equals_num_neurons_is_empty() {
+        // Every neuron is an input, so no candidate `to` exists.
+        let from: [u32; 0] = [];
+        let to: [u32; 0] = [];
+        let is_const = [0u8; 4];
+        let result = scan_available_connections(&from, &to, &is_const, 4, 4);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn scan_available_connections_unsorted_edges_match_sorted_equivalent() {
+        // The rewrite must not depend on the caller having sorted the edge
+        // list: the same edges in a different order give the same answer.
+        let is_const = [0u8; 6];
+        let sorted =
+            scan_available_connections(&[0u32, 0, 1, 2], &[3u32, 4, 3, 5], &is_const, 6, 2);
+        let shuffled =
+            scan_available_connections(&[2u32, 0, 1, 0], &[5u32, 4, 3, 3], &is_const, 6, 2);
+        assert_eq!(sorted, shuffled);
+        assert!(!sorted.is_empty());
+    }
+
     #[test]
     fn scan_available_simple() {
         // 4 neurons: 2 inputs (0,1), 1 hidden (2), 1 output (3)
@@ -894,259 +1259,6 @@ mod tests {
         assert!(pos_of(6) < pos_of(4));
         assert!(pos_of(6) < pos_of(3));
         assert!(pos_of(7) < pos_of(5));
-    }
-
-    // -----------------------------------------------------------------------
-    // compute_reverse_topological_order — CSR adjacency differential
-    // (Issue #388).
-    //
-    // The inward adjacency moved from a `Vec<Vec<u32>>` (one heap allocation
-    // per neuron) to a CSR triple built in two passes. The order the function
-    // returns is a contract of the backprop path, so these tests pin the CSR
-    // result to the pre-change `Vec<Vec<u32>>` reference **element for
-    // element** across randomised topologies — an off-by-one in the prefix sum
-    // or the cursor fill permutes or truncates the order and fails here.
-    // -----------------------------------------------------------------------
-
-    /// Pre-change reference: Kahn's walk over a per-neuron `Vec<Vec<u32>>`
-    /// inward adjacency. Kept verbatim (bar naming) as the differential oracle.
-    fn reference_reverse_topological_order(
-        from_indices: &[u32],
-        to_indices: &[u32],
-        num_neurons: u32,
-        num_inputs: u32,
-    ) -> Vec<u32> {
-        let n = num_neurons as usize;
-        let input_count = num_inputs as usize;
-
-        if from_indices.len() != to_indices.len() {
-            return Vec::new();
-        }
-        if input_count > n {
-            return Vec::new();
-        }
-
-        let mut out_degree = vec![0i32; n];
-        let mut inward: Vec<Vec<u32>> = vec![Vec::new(); n];
-
-        for i in 0..from_indices.len() {
-            let from = from_indices[i] as usize;
-            let to = to_indices[i] as usize;
-
-            if from == to {
-                continue;
-            }
-            if from >= n || to >= n {
-                continue;
-            }
-            if from >= input_count {
-                out_degree[from] += 1;
-            }
-            inward[to].push(from as u32);
-        }
-
-        let mut queue: Vec<usize> = Vec::new();
-        for i in input_count..n {
-            if out_degree[i] == 0 {
-                queue.push(i);
-            }
-        }
-
-        let mut result: Vec<u32> = Vec::new();
-        let mut visited = vec![false; n];
-        let mut head = 0;
-
-        while head < queue.len() {
-            let idx = queue[head];
-            head += 1;
-
-            if visited[idx] {
-                continue;
-            }
-            visited[idx] = true;
-            result.push(idx as u32);
-
-            for j in 0..inward[idx].len() {
-                let from = inward[idx][j] as usize;
-                if from == idx {
-                    continue;
-                }
-                if from < input_count {
-                    continue;
-                }
-                if visited[from] {
-                    continue;
-                }
-
-                out_degree[from] -= 1;
-                if out_degree[from] <= 0 {
-                    queue.push(from);
-                }
-            }
-        }
-
-        for i in input_count..n {
-            if !visited[i] {
-                result.push(i as u32);
-            }
-        }
-
-        result
-    }
-
-    /// Tiny SplitMix64-style PRNG so the randomised cases are reproducible
-    /// without pulling in a dependency (same shape as `benches/common`'s `Lcg`).
-    struct TestRng(u64);
-
-    impl TestRng {
-        fn next_u64(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = self.0;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^ (z >> 31)
-        }
-
-        fn below(&mut self, bound: usize) -> usize {
-            (self.next_u64() % bound as u64) as usize
-        }
-    }
-
-    /// Random feedforward DAG: every edge runs from a strictly earlier neuron
-    /// to a later non-input neuron.
-    fn random_dag(rng: &mut TestRng, n: usize, input_count: usize) -> (Vec<u32>, Vec<u32>) {
-        let mut from = Vec::new();
-        let mut to = Vec::new();
-        for target in input_count..n {
-            let fan = rng.below(6);
-            for _ in 0..fan {
-                from.push(rng.below(target) as u32);
-                to.push(target as u32);
-            }
-        }
-        (from, to)
-    }
-
-    #[test]
-    fn reverse_topological_order_matches_reference_on_random_dags() {
-        let mut rng = TestRng(0x0388_0388);
-        for case in 0..200 {
-            let input_count = 1 + rng.below(8);
-            let n = input_count + 1 + rng.below(40);
-            let (from, to) = random_dag(&mut rng, n, input_count);
-
-            let actual =
-                compute_reverse_topological_order(&from, &to, n as u32, input_count as u32);
-            let expected =
-                reference_reverse_topological_order(&from, &to, n as u32, input_count as u32);
-
-            assert_eq!(
-                actual,
-                expected,
-                "case {case}: CSR order diverged from the reference \
-                 (n={n}, inputs={input_count}, synapses={})",
-                from.len()
-            );
-            // Every non-input neuron appears exactly once in a DAG.
-            assert_eq!(
-                actual.len(),
-                n - input_count,
-                "case {case}: order truncated"
-            );
-        }
-    }
-
-    #[test]
-    fn reverse_topological_order_matches_reference_with_cycles() {
-        // Back-edges create cycles; those neurons must still be appended at the
-        // end in ascending index order, identically to the reference.
-        let mut rng = TestRng(0xC0FF_EE01);
-        for case in 0..200 {
-            let input_count = 1 + rng.below(5);
-            let n = input_count + 2 + rng.below(30);
-            let (mut from, mut to) = random_dag(&mut rng, n, input_count);
-
-            let back_edges = 1 + rng.below(4);
-            for _ in 0..back_edges {
-                let a = input_count + rng.below(n - input_count);
-                let b = input_count + rng.below(n - input_count);
-                from.push(a.max(b) as u32);
-                to.push(a.min(b) as u32);
-            }
-
-            let actual =
-                compute_reverse_topological_order(&from, &to, n as u32, input_count as u32);
-            let expected =
-                reference_reverse_topological_order(&from, &to, n as u32, input_count as u32);
-
-            assert_eq!(
-                actual, expected,
-                "case {case}: CSR order diverged from the reference on a cyclic graph"
-            );
-        }
-    }
-
-    #[test]
-    fn reverse_topological_order_matches_reference_on_malformed_edges() {
-        // Self-loops, out-of-range endpoints and duplicate edges mixed into an
-        // otherwise valid DAG: the CSR path must skip exactly what the
-        // reference skipped, and must not panic (a trap aborts the WASM run).
-        let mut rng = TestRng(0xBAD0_5EED);
-        for case in 0..200 {
-            let input_count = 1 + rng.below(5);
-            let n = input_count + 2 + rng.below(25);
-            let (mut from, mut to) = random_dag(&mut rng, n, input_count);
-
-            // Self-loop.
-            let s = input_count + rng.below(n - input_count);
-            from.push(s as u32);
-            to.push(s as u32);
-            // Out-of-range `from`.
-            from.push((n + 1 + rng.below(50)) as u32);
-            to.push((input_count + rng.below(n - input_count)) as u32);
-            // Out-of-range `to`.
-            from.push(rng.below(n) as u32);
-            to.push((n + 1 + rng.below(50)) as u32);
-            // Duplicate of an existing edge, when there is one to duplicate.
-            if !from.is_empty() {
-                let dup = rng.below(from.len());
-                let (f, t) = (from[dup], to[dup]);
-                from.push(f);
-                to.push(t);
-            }
-
-            let actual =
-                compute_reverse_topological_order(&from, &to, n as u32, input_count as u32);
-            let expected =
-                reference_reverse_topological_order(&from, &to, n as u32, input_count as u32);
-
-            assert_eq!(
-                actual, expected,
-                "case {case}: CSR order diverged from the reference on malformed edges"
-            );
-        }
-    }
-
-    #[test]
-    fn reverse_topological_order_matches_reference_on_edge_case_shapes() {
-        // Degenerate shapes the randomised generator will not reach.
-        let cases: [(&[u32], &[u32], u32, u32); 6] = [
-            (&[], &[], 0, 0),               // empty graph
-            (&[], &[], 4, 4),               // all neurons are inputs
-            (&[], &[], 4, 0),               // no inputs, no edges
-            (&[0], &[1], 2, 99),            // input_count > n
-            (&[0, 1, 2], &[2, 2], 4, 2),    // mismatched lengths
-            (&[0, 0, 0], &[0, 0, 0], 3, 1), // nothing but self-loops
-        ];
-
-        for (i, (from, to, n, inputs)) in cases.iter().enumerate() {
-            let actual = compute_reverse_topological_order(from, to, *n, *inputs);
-            let expected = reference_reverse_topological_order(from, to, *n, *inputs);
-            assert_eq!(
-                actual, expected,
-                "edge case {i} diverged from the reference"
-            );
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -1378,5 +1490,287 @@ mod tests {
         let from: [u32; 0] = [];
         let to: [u32; 0] = [];
         assert_eq!(detect_cycles(&from, &to, 3, 2), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_reverse_topological_order — CSR differential guard (Issue #388)
+    //
+    // `reference_reverse_topological_order` below is the pre-#388
+    // `Vec<Vec<u32>>` implementation, kept verbatim as the behavioural
+    // oracle. The CSR rewrite is an allocation change only, so every input
+    // must produce an *element-identical* order. Any off-by-one in the
+    // prefix sum or the cursor fill permutes or truncates the result and
+    // fails these tests at `cargo test` time.
+    // -----------------------------------------------------------------------
+
+    /// Pre-#388 reference: inward adjacency as one `Vec<u32>` per neuron.
+    fn reference_reverse_topological_order(
+        from_indices: &[u32],
+        to_indices: &[u32],
+        num_neurons: u32,
+        num_inputs: u32,
+    ) -> Vec<u32> {
+        let n = num_neurons as usize;
+        let input_count = num_inputs as usize;
+
+        if from_indices.len() != to_indices.len() {
+            return Vec::new();
+        }
+        if input_count > n {
+            return Vec::new();
+        }
+
+        let mut out_degree = vec![0i32; n];
+        let mut inward: Vec<Vec<u32>> = vec![Vec::new(); n];
+
+        for i in 0..from_indices.len() {
+            let from = from_indices[i] as usize;
+            let to = to_indices[i] as usize;
+
+            if from == to {
+                continue;
+            }
+            if from >= n || to >= n {
+                continue;
+            }
+            if from >= input_count {
+                out_degree[from] += 1;
+            }
+            inward[to].push(from as u32);
+        }
+
+        let mut queue: Vec<usize> = Vec::new();
+        for i in input_count..n {
+            if out_degree[i] == 0 {
+                queue.push(i);
+            }
+        }
+
+        let mut result: Vec<u32> = Vec::new();
+        let mut visited = vec![false; n];
+        let mut head = 0;
+
+        while head < queue.len() {
+            let idx = queue[head];
+            head += 1;
+
+            if visited[idx] {
+                continue;
+            }
+            visited[idx] = true;
+            result.push(idx as u32);
+
+            for j in 0..inward[idx].len() {
+                let from = inward[idx][j] as usize;
+                if from == idx {
+                    continue;
+                }
+                if from < input_count {
+                    continue;
+                }
+                if visited[from] {
+                    continue;
+                }
+
+                out_degree[from] -= 1;
+                if out_degree[from] <= 0 {
+                    queue.push(from);
+                }
+            }
+        }
+
+        for i in input_count..n {
+            if !visited[i] {
+                result.push(i as u32);
+            }
+        }
+
+        result
+    }
+
+    /// Build a random forward-only DAG: every real `from` is strictly earlier
+    /// than its `to`, so the edge list is acyclic by construction.
+    ///
+    /// Self-loops and out-of-range endpoints are sprinkled in deliberately —
+    /// both passes of the CSR build must filter them *identically*, and a
+    /// clean DAG would never expose a mismatch.
+    fn random_dag(rng: &mut TestRng, n: usize, input_count: usize) -> (Vec<u32>, Vec<u32>) {
+        let mut from_indices = Vec::new();
+        let mut to_indices = Vec::new();
+        for to in input_count..n {
+            if rng.below(4) == 0 {
+                // Self-loop: counted nowhere, dropped by both passes.
+                from_indices.push(to as u32);
+                to_indices.push(to as u32);
+            }
+            if rng.below(8) == 0 {
+                // Out-of-range endpoint: skipped, never indexed.
+                from_indices.push((n + 7) as u32);
+                to_indices.push(to as u32);
+            }
+            let fan = rng.below(5);
+            for _ in 0..fan {
+                let from = rng.below(to);
+                from_indices.push(from as u32);
+                to_indices.push(to as u32);
+            }
+        }
+        (from_indices, to_indices)
+    }
+
+    #[test]
+    fn reverse_topological_order_matches_reference_on_random_dags() {
+        let mut rng = TestRng(0x1234_5678_9ABC_DEF0);
+        for case in 0..200u32 {
+            let n = 2 + rng.below(60);
+            let input_count = rng.below(n);
+            let (from, to) = random_dag(&mut rng, n, input_count);
+
+            let expected =
+                reference_reverse_topological_order(&from, &to, n as u32, input_count as u32);
+            let actual =
+                compute_reverse_topological_order(&from, &to, n as u32, input_count as u32);
+
+            assert_eq!(
+                actual, expected,
+                "case {case}: n={n} inputs={input_count} from={from:?} to={to:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reverse_topological_order_matches_reference_on_malformed_inputs() {
+        // Self-loops, out-of-range endpoints, duplicate edges, back edges
+        // (cycles) and degenerate neuron counts — the defensive paths.
+        let cases: [(&[u32], &[u32], u32, u32); 11] = [
+            (&[0, 1, 99], &[2, 2, 3], 4, 2),
+            (&[0, 1], &[2, 99], 4, 2),
+            (&[0, 1, 2], &[2, 2], 4, 2),
+            (&[0], &[1], 2, 99),
+            (&[2, 2], &[2, 3], 4, 2),
+            (&[3, 4], &[4, 3], 5, 2),
+            (&[0, 0, 0], &[2, 2, 2], 3, 1),
+            (&[], &[], 5, 2),
+            (&[], &[], 0, 0),
+            (&[2, 3, 4], &[3, 4, 2], 6, 2),
+            // A self-loop with no input neurons: if the counting pass keeps
+            // the self-loop the fill pass drops, neuron 0's run gains an
+            // unwritten slot that reads as a phantom inward edge from
+            // neuron 0 and releases it into the queue one step early.
+            (&[1, 0, 0, 5], &[1, 2, 3, 2], 6, 0),
+        ];
+
+        for (i, (from, to, n, inputs)) in cases.iter().enumerate() {
+            let expected = reference_reverse_topological_order(from, to, *n, *inputs);
+            let actual = compute_reverse_topological_order(from, to, *n, *inputs);
+            assert_eq!(actual, expected, "malformed case {i}");
+        }
+    }
+
+    #[test]
+    fn reverse_topological_order_appends_cycle_members_in_ascending_order() {
+        // 2 inputs; neurons 2..4 form a cycle (2→3→4→2), 5 is a clean tail.
+        let from = [0u32, 2, 3, 4, 1];
+        let to = [2u32, 3, 4, 2, 5];
+        let result = compute_reverse_topological_order(&from, &to, 6, 2);
+        // 5 is reachable by Kahn's walk; the cycle members follow, ascending.
+        assert_eq!(result, vec![5, 2, 3, 4]);
+    }
+
+    // Additional CSR differential cases carried over from the parallel
+    // Issue #388 landing on `Develop` (PR #399), preserved through the
+    // milestone merge so trunk keeps its coverage.
+
+    #[test]
+    fn reverse_topological_order_matches_reference_with_cycles() {
+        // Back-edges create cycles; those neurons must still be appended at the
+        // end in ascending index order, identically to the reference.
+        let mut rng = TestRng(0xC0FF_EE01);
+        for case in 0..200 {
+            let input_count = 1 + rng.below(5);
+            let n = input_count + 2 + rng.below(30);
+            let (mut from, mut to) = random_dag(&mut rng, n, input_count);
+
+            let back_edges = 1 + rng.below(4);
+            for _ in 0..back_edges {
+                let a = input_count + rng.below(n - input_count);
+                let b = input_count + rng.below(n - input_count);
+                from.push(a.max(b) as u32);
+                to.push(a.min(b) as u32);
+            }
+
+            let actual =
+                compute_reverse_topological_order(&from, &to, n as u32, input_count as u32);
+            let expected =
+                reference_reverse_topological_order(&from, &to, n as u32, input_count as u32);
+
+            assert_eq!(
+                actual, expected,
+                "case {case}: CSR order diverged from the reference on a cyclic graph"
+            );
+        }
+    }
+
+    #[test]
+    fn reverse_topological_order_matches_reference_on_malformed_edges() {
+        // Self-loops, out-of-range endpoints and duplicate edges mixed into an
+        // otherwise valid DAG: the CSR path must skip exactly what the
+        // reference skipped, and must not panic (a trap aborts the WASM run).
+        let mut rng = TestRng(0xBAD0_5EED);
+        for case in 0..200 {
+            let input_count = 1 + rng.below(5);
+            let n = input_count + 2 + rng.below(25);
+            let (mut from, mut to) = random_dag(&mut rng, n, input_count);
+
+            // Self-loop.
+            let s = input_count + rng.below(n - input_count);
+            from.push(s as u32);
+            to.push(s as u32);
+            // Out-of-range `from`.
+            from.push((n + 1 + rng.below(50)) as u32);
+            to.push((input_count + rng.below(n - input_count)) as u32);
+            // Out-of-range `to`.
+            from.push(rng.below(n) as u32);
+            to.push((n + 1 + rng.below(50)) as u32);
+            // Duplicate of an existing edge, when there is one to duplicate.
+            if !from.is_empty() {
+                let dup = rng.below(from.len());
+                let (f, t) = (from[dup], to[dup]);
+                from.push(f);
+                to.push(t);
+            }
+
+            let actual =
+                compute_reverse_topological_order(&from, &to, n as u32, input_count as u32);
+            let expected =
+                reference_reverse_topological_order(&from, &to, n as u32, input_count as u32);
+
+            assert_eq!(
+                actual, expected,
+                "case {case}: CSR order diverged from the reference on malformed edges"
+            );
+        }
+    }
+
+    #[test]
+    fn reverse_topological_order_matches_reference_on_edge_case_shapes() {
+        // Degenerate shapes the randomised generator will not reach.
+        let cases: [(&[u32], &[u32], u32, u32); 6] = [
+            (&[], &[], 0, 0),               // empty graph
+            (&[], &[], 4, 4),               // all neurons are inputs
+            (&[], &[], 4, 0),               // no inputs, no edges
+            (&[0], &[1], 2, 99),            // input_count > n
+            (&[0, 1, 2], &[2, 2], 4, 2),    // mismatched lengths
+            (&[0, 0, 0], &[0, 0, 0], 3, 1), // nothing but self-loops
+        ];
+
+        for (i, (from, to, n, inputs)) in cases.iter().enumerate() {
+            let actual = compute_reverse_topological_order(from, to, *n, *inputs);
+            let expected = reference_reverse_topological_order(from, to, *n, *inputs);
+            assert_eq!(
+                actual, expected,
+                "edge case {i} diverged from the reference"
+            );
+        }
     }
 }

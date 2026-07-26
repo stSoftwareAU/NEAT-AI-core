@@ -40,6 +40,12 @@ the full dataset never re-crosses the JS↔WASM boundary after the initial load.
 - WASM shims (`training_data_load` / `_evaluate_mse` / `_free` / `_byte_len` /
   `_peak_bytes`) carry byte counts and record indices as `u64` (JS `BigInt`), so
   the surface is Memory64-ready for the >4 GB jobs the milestone targets.
+- `TrainingDataset::evaluate_mse` bounds-checks the batch **once** and hands the
+  contiguous SoA input slice straight to the flat batched scoring path
+  (Issue #386) — no per-record `Vec`, no per-record bounds check, full 8-record
+  interleaved SIMD. That is a **~4–5×** speed-up over the previous
+  one-record-at-a-time `activate` loop at production shard volume; see
+  [`neat-core/benches/BASELINE.md`](neat-core/benches/BASELINE.md).
 
 Lane (d) — Issue #299 — verifies the downstream adoption end-to-end: the
 production trainer's launch script injects a **RAM-aware**
@@ -137,6 +143,34 @@ let outputs = net.score_records(&records, num_outputs);
 // same results, in input order.
 let outputs = net.score_records_parallel(&records, num_outputs);
 ```
+
+### Flat record input (Issue #386)
+
+Both the input and the output of a scoring batch have a flat, contiguous
+contract. Record `i`'s inputs are `inputs[i * stride .. i * stride + stride]`
+and its outputs are `out[i * num_outputs .. (i + 1) * num_outputs]`. Callers
+that already hold a contiguous buffer — the `TrainingDataset` offload lane
+above, or anything reading a packed `.bin` shard — pass it straight through,
+skipping the one-heap-allocation-per-record the `&[Vec<f32>]` signature forces
+(4,096 allocations for a ~40 MiB production shard). A `stride` narrower than the
+network's input arity zero-fills the uncovered inputs, exactly as a short `Vec`
+does.
+
+```rust
+// One contiguous buffer of records * stride values — no per-record Vec.
+let outputs = net.score_records_flat(&inputs, stride, num_outputs);
+
+// Same, into a caller-owned buffer, or across the rayon pool.
+net.score_records_flat_into(&inputs, stride, num_outputs, &mut out);
+let outputs = net.score_records_parallel_flat(&inputs, stride, num_outputs);
+```
+
+The `&[Vec<f32>]` entry points remain and drive the identical kernel, so the two
+layouts are **bit-identical** — asserted across the 8-record group boundary and
+both dispatch arms by
+[`tests/flat_record_scoring_parity.rs`](neat-core/tests/flat_record_scoring_parity.rs).
+A malformed batch (zero `stride`, or a buffer that is not a whole number of
+records) **panics** rather than silently mis-slicing every record.
 
 ```mermaid
 flowchart LR

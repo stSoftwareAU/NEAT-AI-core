@@ -17,6 +17,7 @@ use std::hint::black_box;
 
 use neat_core::loss::mse_sum_batch_packed;
 use neat_core::network::SynapseData;
+use neat_core::pc_inference::{PcConnection, PcNeuron, PredictiveCodingEngine};
 use neat_core::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_simd,
     weighted_sum_simd_4records, weighted_sum_simd_8records,
@@ -24,8 +25,10 @@ use neat_core::simd::{
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
-use neat_core::topology_ops::compute_reverse_topological_order;
+use neat_core::topology_ops::{compute_reverse_topological_order, scan_available_connections};
+use neat_core::training_data::TrainingDataConfig;
 use neat_core::unsquash::apply_unsquash;
+use neat_core::wasm_dataset::TrainingDataset;
 
 /// Deterministic network/backprop fixtures, shared with the `bench_fixtures`
 /// integration test (Issue #176) so the production-scale builders are exercised
@@ -104,6 +107,37 @@ fn bench_batched_scoring(c: &mut Criterion) {
                 });
             },
         );
+
+        // Production-sized fused MSE batch (Issue #384). The 8-record case above
+        // over-weights the per-call buffer setup; scoring a full
+        // `PRODUCTION_SCORING_RECORDS` batch measures the steady-state gather
+        // cost that the #287 interleaved reroute targets. Only the gather-bound
+        // `production*` shapes are representative, so restrict the heavy case to
+        // them (reachable via `--bench hot_paths -- mse_sum_production`).
+        if spec.label.starts_with("production") {
+            let mut loss_net_prod = net.clone();
+            let prod_records = build_inputs(
+                (num_inputs + num_outputs) * PRODUCTION_SCORING_RECORDS,
+                0xFEED_BEEF,
+            );
+            group.throughput(Throughput::Elements(PRODUCTION_SCORING_RECORDS as u64));
+            group.bench_with_input(
+                BenchmarkId::new("mse_sum_production", spec.label),
+                &prod_records,
+                |b, records| {
+                    b.iter(|| {
+                        let sum = mse_sum_batch_packed(
+                            &mut loss_net_prod,
+                            black_box(records),
+                            black_box(num_inputs),
+                            black_box(num_outputs),
+                            black_box(true),
+                        );
+                        black_box(sum);
+                    });
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -196,6 +230,91 @@ fn bench_scoring(c: &mut Criterion) {
     group.finish();
 }
 
+/// Flat-slice record **input** scoring — `score_records_flat` over the same
+/// production shard the `scoring` group scores as `&[Vec<f32>]` (Issue #386).
+///
+/// Same kernel, same records, same output layout; only the input layout differs,
+/// so the delta against `scoring` is the cost of the per-record `Vec` header
+/// pointer-chase on each lane load. The one-heap-allocation-per-record the
+/// `&[Vec<f32>]` signature forces on the *caller* is not measured here (both
+/// fixtures are built outside the timed loop) — it is pure additional saving for
+/// callers that already hold a contiguous buffer.
+fn bench_scoring_flat(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scoring_flat");
+    for spec in NETWORKS
+        .iter()
+        .filter(|s| s.label.starts_with("production"))
+    {
+        let net = build_network(spec, 0x5EED);
+        let stride = net.num_inputs();
+        let inputs: Vec<f32> = build_records(stride, PRODUCTION_SCORING_RECORDS)
+            .into_iter()
+            .flatten()
+            .collect();
+        let num_outputs = spec.num_outputs;
+        group.throughput(Throughput::Elements(PRODUCTION_SCORING_RECORDS as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(spec.label),
+            &inputs,
+            |b, inputs| {
+                b.iter(|| {
+                    let out = net.score_records_flat(
+                        black_box(inputs),
+                        black_box(stride),
+                        black_box(num_outputs),
+                    );
+                    black_box(out);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+/// Dataset-offload evaluation — `TrainingDataset::evaluate_mse` over a
+/// production-sized batch (Issue #386).
+///
+/// The WASM offload lane (Issue #298) already stores its inputs contiguously in
+/// SoA layout, so this group measures the cost of the whole
+/// bounds-check → forward-pass → MSE-accumulate call at
+/// [`PRODUCTION_SCORING_RECORDS`] volume — the per-generation unit of work the
+/// Memory64 lane performs. Sized identically to the `scoring` group so the two
+/// are directly comparable.
+fn bench_dataset_evaluate_mse(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dataset_evaluate_mse");
+    for spec in NETWORKS
+        .iter()
+        .filter(|s| s.label.starts_with("production"))
+    {
+        let mut net = build_network(spec, 0x5EED);
+        let inputs: Vec<f32> = build_records(spec.num_inputs, PRODUCTION_SCORING_RECORDS)
+            .into_iter()
+            .flatten()
+            .collect();
+        let targets = build_inputs(
+            PRODUCTION_SCORING_RECORDS * spec.num_outputs,
+            0x7A46_0E75_0000,
+        );
+        let dataset = TrainingDataset::from_soa(
+            inputs,
+            targets,
+            TrainingDataConfig::new(spec.num_inputs, spec.num_outputs),
+        )
+        .expect("dataset fixture should be well-formed");
+
+        group.throughput(Throughput::Elements(PRODUCTION_SCORING_RECORDS as u64));
+        group.bench_function(BenchmarkId::from_parameter(spec.label), |b| {
+            b.iter(|| {
+                let mse = dataset
+                    .evaluate_mse(&mut net, 0, black_box(PRODUCTION_SCORING_RECORDS))
+                    .expect("batch is in range");
+                black_box(mse);
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Representative spread of activation functions for the squash primitives.
 const SQUASH_SPREAD: [SquashType; 10] = [
     SquashType::Identity,
@@ -209,6 +328,141 @@ const SQUASH_SPREAD: [SquashType; 10] = [
     SquashType::Sine,
     SquashType::Gaussian,
 ];
+
+/// A deterministic sorted forward-only topology for the topology-ops group.
+///
+/// Emits exactly `num_synapses` synapses spread as evenly as possible over the
+/// non-input neurons, each drawing sources from strictly earlier neurons, so the
+/// `(from, to)` list comes out ascending-sorted exactly as `validate_topology`
+/// requires. Mirrors the production creature's shape at the neuron count the
+/// mutation-time scan actually sees.
+struct TopologySpec {
+    label: &'static str,
+    num_neurons: usize,
+    num_inputs: usize,
+    num_synapses: usize,
+}
+
+/// Topology shapes for `scan_available_connections` (Issue #387).
+///
+/// `n1666_21513` is the production anchor named in the issue: 1,666 neurons
+/// carrying 21,513 synapses — a fill factor under 0.8%, which is what made the
+/// old dense `n × n` matrix so wasteful.
+const TOPOLOGIES: [TopologySpec; 2] = [
+    TopologySpec {
+        label: "n1666_21513",
+        num_neurons: 1666,
+        num_inputs: 100,
+        num_synapses: 21_513,
+    },
+    TopologySpec {
+        label: "n4127_21513",
+        num_neurons: 4127,
+        num_inputs: 2461,
+        num_synapses: 21_513,
+    },
+];
+
+/// Build `(from_indices, to_indices, is_constant)` for a [`TopologySpec`].
+fn build_topology(spec: &TopologySpec) -> (Vec<u32>, Vec<u32>, Vec<u8>) {
+    let mut rng = Lcg::new(0x7061_7468);
+    let num_non_inputs = spec.num_neurons - spec.num_inputs;
+    // Per-target fan-in, distributed as evenly as the synapse budget allows.
+    let base = spec.num_synapses / num_non_inputs;
+    let remainder = spec.num_synapses % num_non_inputs;
+
+    let mut from_indices = Vec::with_capacity(spec.num_synapses);
+    let mut to_indices = Vec::with_capacity(spec.num_synapses);
+    // Collect per-`from` target lists so the emitted pairs come out sorted by
+    // `from` then `to`, matching the ordering contract the scan relies on.
+    let mut per_from: Vec<Vec<u32>> = vec![Vec::new(); spec.num_neurons];
+
+    for offset in 0..num_non_inputs {
+        let to = spec.num_inputs + offset;
+        let want = base + usize::from(offset < remainder);
+        let fan = want.min(to);
+        let mut drawn = 0usize;
+        let mut attempts = 0usize;
+        while drawn < fan && attempts < fan * 8 {
+            attempts += 1;
+            let from = rng.next_below(to);
+            if per_from[from].contains(&(to as u32)) {
+                continue;
+            }
+            per_from[from].push(to as u32);
+            drawn += 1;
+        }
+    }
+
+    for (from, targets) in per_from.iter_mut().enumerate() {
+        targets.sort_unstable();
+        for &to in targets.iter() {
+            from_indices.push(from as u32);
+            to_indices.push(to);
+        }
+    }
+
+    // A handful of constant neurons, matching the production mix.
+    let mut is_constant = vec![0u8; spec.num_neurons];
+    for i in 0..spec.num_neurons {
+        if i >= spec.num_inputs && i % 97 == 0 {
+            is_constant[i] = 1;
+        }
+    }
+
+    (from_indices, to_indices, is_constant)
+}
+
+/// Mutation-time topology ops — `scan_available_connections` (Issue #387).
+fn bench_topology_ops(c: &mut Criterion) {
+    let mut group = c.benchmark_group("topology_ops");
+    for spec in &TOPOLOGIES {
+        let (from_indices, to_indices, is_constant) = build_topology(spec);
+        let num_neurons = spec.num_neurons as u32;
+        let num_inputs = spec.num_inputs as u32;
+        // One element per candidate slot the scan has to consider.
+        group.throughput(Throughput::Elements(
+            (spec.num_neurons * spec.num_neurons) as u64,
+        ));
+        group.bench_function(
+            BenchmarkId::new("scan_available_connections", spec.label),
+            |b| {
+                b.iter(|| {
+                    let out = scan_available_connections(
+                        black_box(&from_indices),
+                        black_box(&to_indices),
+                        black_box(&is_constant),
+                        black_box(num_neurons),
+                        black_box(num_inputs),
+                    );
+                    black_box(out);
+                });
+            },
+        );
+
+        // Backprop-ordering setup — `compute_reverse_topological_order`
+        // (Issue #388). Runs once per creature per generation, so its
+        // per-neuron adjacency allocations sat on the hot path.
+        group.throughput(Throughput::Elements(
+            (spec.num_neurons + spec.num_synapses) as u64,
+        ));
+        group.bench_function(
+            BenchmarkId::new("compute_reverse_topological_order", spec.label),
+            |b| {
+                b.iter(|| {
+                    let out = compute_reverse_topological_order(
+                        black_box(&from_indices),
+                        black_box(&to_indices),
+                        black_box(num_neurons),
+                        black_box(num_inputs),
+                    );
+                    black_box(out);
+                });
+            },
+        );
+    }
+    group.finish();
+}
 
 /// Activation primitives — `weighted_sum_simd` family plus squash/unsquash.
 fn bench_activation_primitives(c: &mut Criterion) {
@@ -367,6 +621,106 @@ fn bench_activation_primitives(c: &mut Criterion) {
     squash4_group.finish();
 }
 
+/// Builds a deterministic, production-shaped predictive-coding topology:
+/// a wide input layer feeding several multi-fan-in hidden layers and an output
+/// layer. Fan-in > 1 across layers exercises the settling loop's per-edge
+/// derivative path (Issue #389).
+fn build_pc_engine(inference_steps: u32) -> PredictiveCodingEngine {
+    let mut lcg = Lcg::new(0x9C0D_E389);
+    let num_inputs = 32usize;
+    let hidden_layers = [96usize, 96, 48];
+    let num_outputs = 8usize;
+    let fan_in = 16usize;
+
+    let mut neurons: Vec<PcNeuron> = Vec::new();
+    let mut connections: Vec<PcConnection> = Vec::new();
+
+    // `prev` holds the full neuron indices of the previous layer; the first
+    // hidden layer draws from the input neurons.
+    let mut prev: Vec<usize> = (0..num_inputs).collect();
+    let mut next_full = num_inputs;
+
+    let mut layer_sizes: Vec<usize> = hidden_layers.to_vec();
+    layer_sizes.push(num_outputs);
+
+    for (li, &size) in layer_sizes.iter().enumerate() {
+        let is_hidden = li < hidden_layers.len();
+        let squash = if is_hidden {
+            SquashType::Tanh
+        } else {
+            SquashType::Identity
+        };
+        let mut this_layer: Vec<usize> = Vec::with_capacity(size);
+        for _ in 0..size {
+            let conn_start = connections.len();
+            let k = fan_in.min(prev.len());
+            for _ in 0..k {
+                let src = prev[lcg.next_below(prev.len())];
+                connections.push(PcConnection {
+                    from: src,
+                    weight: lcg.next_signed() * 0.5,
+                });
+            }
+            neurons.push(PcNeuron {
+                bias: lcg.next_signed() * 0.1,
+                squash_type: squash,
+                is_hidden,
+                conn_start,
+                conn_count: connections.len() - conn_start,
+            });
+            this_layer.push(next_full);
+            next_full += 1;
+        }
+        prev = this_layer;
+    }
+
+    // Threshold of 0 keeps the loop from converging early so the benchmark
+    // measures the full steps-exhausted settling cost.
+    PredictiveCodingEngine::new_from_parts(
+        num_inputs,
+        num_outputs,
+        neurons,
+        connections,
+        inference_steps,
+        0.05,
+        0.0,
+    )
+}
+
+/// Predictive-coding settling loop — `PredictiveCodingEngine::infer` and
+/// `infer_batch` on a production-shaped topology (Issue #389).
+fn bench_pc_inference(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pc_inference");
+    let engine = build_pc_engine(50);
+    let mut lcg = Lcg::new(0x1234_5678);
+    let input: Vec<f32> = (0..engine.num_inputs())
+        .map(|_| lcg.next_signed())
+        .collect();
+
+    group.bench_function("single_settle", |b| {
+        b.iter(|| {
+            let r = engine.infer(black_box(&input), None);
+            black_box(r);
+        });
+    });
+
+    let batch: Vec<Vec<f32>> = (0..32)
+        .map(|_| {
+            (0..engine.num_inputs())
+                .map(|_| lcg.next_signed())
+                .collect()
+        })
+        .collect();
+    let batch_refs: Vec<&[f32]> = batch.iter().map(|v| v.as_slice()).collect();
+    group.bench_function("batch_32", |b| {
+        b.iter(|| {
+            let r = engine.infer_batch(black_box(&batch_refs), None);
+            black_box(r);
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_forward_pass,
@@ -374,6 +728,10 @@ criterion_group!(
     bench_backprop,
     bench_reverse_topological_order,
     bench_scoring,
+    bench_scoring_flat,
+    bench_dataset_evaluate_mse,
     bench_activation_primitives,
+    bench_topology_ops,
+    bench_pc_inference,
 );
 criterion_main!(benches);

@@ -189,20 +189,58 @@ fn validate_config(config: &TrainingDataConfig) -> Result<(), TrainingDataError>
 
 /// Parse a byte buffer into f32 values using little-endian byte order.
 ///
-/// The buffer length must be an exact multiple of 4.
+/// The buffer length must be an exact multiple of 4. Retained for tests that
+/// assert little-endian decoding in isolation; the reader paths decode directly
+/// into their input/output buffers via [`parse_record_into`] (Issue #385).
+#[cfg(test)]
 fn parse_f32_values(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
+    bytes.chunks_exact(4).map(f32_from_le_chunk).collect()
+}
+
+/// Decode a single little-endian `f32` from a 4-byte chunk.
+#[inline]
+fn f32_from_le_chunk(chunk: &[u8]) -> f32 {
+    f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+}
+
+/// Split a record's bytes into its input and output byte sub-slices.
+#[inline]
+fn split_record_bytes<'a>(bytes: &'a [u8], config: &TrainingDataConfig) -> (&'a [u8], &'a [u8]) {
+    let split = config.num_inputs * std::mem::size_of::<f32>();
+    bytes.split_at(split)
 }
 
 /// Parse a byte buffer into a single `TrainingRecord`.
+///
+/// Decodes the little-endian `f32`s directly into two exactly-sized `Vec`s —
+/// no whole-record intermediate `Vec` and no discarded copy (Issue #385).
 fn parse_record(bytes: &[u8], config: &TrainingDataConfig) -> TrainingRecord {
-    let values = parse_f32_values(bytes);
-    let inputs = values[..config.num_inputs].to_vec();
-    let outputs = values[config.num_inputs..].to_vec();
+    let (input_bytes, output_bytes) = split_record_bytes(bytes, config);
+    let mut inputs = Vec::with_capacity(config.num_inputs);
+    inputs.extend(input_bytes.chunks_exact(4).map(f32_from_le_chunk));
+    let mut outputs = Vec::with_capacity(config.num_outputs);
+    outputs.extend(output_bytes.chunks_exact(4).map(f32_from_le_chunk));
     TrainingRecord { inputs, outputs }
+}
+
+/// Refill an existing `TrainingRecord`'s buffers in place from `bytes`.
+///
+/// Both buffers are `clear()`ed first so no stale tail survives when the record
+/// is reused across differently-shaped configs (the state-leak rule in
+/// `AGENTS.md`), then extended from the input/output byte sub-slices. Reuses the
+/// existing capacity, allocating only when a buffer must grow — so the streaming
+/// paths become allocation-free per record once the buffers reach record width
+/// (Issue #385).
+fn parse_record_into(bytes: &[u8], config: &TrainingDataConfig, record: &mut TrainingRecord) {
+    let (input_bytes, output_bytes) = split_record_bytes(bytes, config);
+    record.inputs.clear();
+    record
+        .inputs
+        .extend(input_bytes.chunks_exact(4).map(f32_from_le_chunk));
+    record.outputs.clear();
+    record
+        .outputs
+        .extend(output_bytes.chunks_exact(4).map(f32_from_le_chunk));
 }
 
 // ---------------------------------------------------------------------------
@@ -242,8 +280,18 @@ pub fn read_dir(
 ) -> Result<Vec<TrainingRecord>, TrainingDataError> {
     validate_config(config)?;
     let files = find_bin_files(dir)?;
-    let mut all_records: Vec<TrainingRecord> = Vec::new();
 
+    // Pre-size the aggregate vector from the per-file record counts so the
+    // per-file `extend` does not reallocate and memcpy the growing vector
+    // ~log2(N) times (Issue #385).
+    let record_size = config.bytes_per_record() as u64;
+    let mut total_records: usize = 0;
+    for path in &files {
+        let file_size = validate_file_size(path, config)?;
+        total_records += file_size.checked_div(record_size).unwrap_or(0) as usize;
+    }
+
+    let mut all_records: Vec<TrainingRecord> = Vec::with_capacity(total_records);
     for file_path in &files {
         let records = read_file(file_path, config)?;
         all_records.extend(records);
@@ -311,20 +359,47 @@ impl TrainingDataIterator {
         Ok(false)
     }
 
-    /// Read the next record, returning `None` when all files are exhausted.
-    pub fn next_record(&mut self) -> Result<Option<TrainingRecord>, TrainingDataError> {
+    /// Read the next record into the caller's buffers in place, returning
+    /// `false` when all files are exhausted.
+    ///
+    /// The record's `inputs`/`outputs` are refilled via `parse_record_into`,
+    /// reusing their capacity — so once the buffers reach record width this path
+    /// performs no per-record heap allocation (Issue #385). Prefer it in tight
+    /// streaming loops; [`next_record`](Self::next_record) is a thin allocating
+    /// wrapper for callers that want an owned record each time.
+    pub fn next_record_into(
+        &mut self,
+        record: &mut TrainingRecord,
+    ) -> Result<bool, TrainingDataError> {
         loop {
             if self.records_remaining > 0
                 && let Some(reader) = &mut self.current_reader
             {
                 reader.read_exact(&mut self.record_buffer)?;
                 self.records_remaining -= 1;
-                return Ok(Some(parse_record(&self.record_buffer, &self.config)));
+                parse_record_into(&self.record_buffer, &self.config, record);
+                return Ok(true);
             }
 
             if !self.open_next_file()? {
-                return Ok(None);
+                return Ok(false);
             }
+        }
+    }
+
+    /// Read the next record, returning `None` when all files are exhausted.
+    ///
+    /// Thin allocating wrapper over [`next_record_into`](Self::next_record_into)
+    /// that hands back a freshly-owned record each call.
+    pub fn next_record(&mut self) -> Result<Option<TrainingRecord>, TrainingDataError> {
+        let mut record = TrainingRecord {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        if self.next_record_into(&mut record)? {
+            Ok(Some(record))
+        } else {
+            Ok(None)
         }
     }
 
@@ -382,12 +457,35 @@ impl SeekingRecordReader {
         self.total_records
     }
 
-    /// Read a specific record by index (zero-based).
-    pub fn read_record(&mut self, index: u64) -> Result<TrainingRecord, TrainingDataError> {
+    /// Read a specific record by index (zero-based) into the caller's buffers
+    /// in place.
+    ///
+    /// Refills `record` via `parse_record_into`, reusing its capacity — no
+    /// per-record heap allocation once the buffers reach record width
+    /// (Issue #385).
+    pub fn read_record_into(
+        &mut self,
+        index: u64,
+        record: &mut TrainingRecord,
+    ) -> Result<(), TrainingDataError> {
         let offset = index * self.config.bytes_per_record() as u64;
         self.file.seek(SeekFrom::Start(offset))?;
         self.file.read_exact(&mut self.record_buffer)?;
-        Ok(parse_record(&self.record_buffer, &self.config))
+        parse_record_into(&self.record_buffer, &self.config, record);
+        Ok(())
+    }
+
+    /// Read a specific record by index (zero-based).
+    ///
+    /// Thin allocating wrapper over
+    /// [`read_record_into`](Self::read_record_into).
+    pub fn read_record(&mut self, index: u64) -> Result<TrainingRecord, TrainingDataError> {
+        let mut record = TrainingRecord {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        self.read_record_into(index, &mut record)?;
+        Ok(record)
     }
 }
 
@@ -810,6 +908,129 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].inputs, vec![1.5, -2.25]);
         assert_eq!(records[0].outputs, vec![0.125]);
+    }
+
+    // -- In-place streaming parity (Issue #385) -------------------------------
+
+    #[test]
+    fn next_record_into_matches_next_record_across_files() {
+        let config = TrainingDataConfig::new(2, 2);
+        let dir = create_test_dir(&[
+            ("0.bin", &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]),
+            ("1.bin", &[9.0, 10.0, 11.0, 12.0]),
+        ]);
+
+        // Reference sequence via the allocating `next_record`.
+        let mut iter_ref = TrainingDataIterator::new(dir.path(), config.clone()).unwrap();
+        let mut reference: Vec<TrainingRecord> = Vec::new();
+        while let Some(r) = iter_ref.next_record().unwrap() {
+            reference.push(r);
+        }
+
+        // Same sequence via `next_record_into` reusing one buffer.
+        let mut iter_into = TrainingDataIterator::new(dir.path(), config).unwrap();
+        let mut record = TrainingRecord {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        let mut got: Vec<TrainingRecord> = Vec::new();
+        while iter_into.next_record_into(&mut record).unwrap() {
+            got.push(record.clone());
+        }
+
+        assert_eq!(got, reference);
+    }
+
+    #[test]
+    fn next_record_into_skips_empty_files() {
+        let config = TrainingDataConfig::new(1, 1);
+        let dir = tempfile::tempdir().unwrap();
+        // Empty leading and trailing files with one record in the middle.
+        fs::write(dir.path().join("0.bin"), b"").unwrap();
+        write_f32_file(&dir.path().join("1.bin"), &[5.0, 50.0]);
+        fs::write(dir.path().join("2.bin"), b"").unwrap();
+
+        let mut iter = TrainingDataIterator::new(dir.path(), config).unwrap();
+        let mut record = TrainingRecord {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        assert!(iter.next_record_into(&mut record).unwrap());
+        assert_eq!(record.inputs, vec![5.0]);
+        assert_eq!(record.outputs, vec![50.0]);
+        assert!(!iter.next_record_into(&mut record).unwrap());
+    }
+
+    #[test]
+    fn next_record_into_partial_final_file() {
+        // Files of differing record counts: the final file holds a single
+        // trailing record, so the reused buffer is refilled from a partial tail.
+        let config = TrainingDataConfig::new(2, 1);
+        let dir = create_test_dir(&[
+            ("0.bin", &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
+            ("1.bin", &[7.0, 8.0, 9.0]),
+        ]);
+
+        let mut iter = TrainingDataIterator::new(dir.path(), config).unwrap();
+        let mut record = TrainingRecord {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+
+        assert!(iter.next_record_into(&mut record).unwrap());
+        assert_eq!(record.inputs, vec![1.0, 2.0]);
+        assert_eq!(record.outputs, vec![3.0]);
+        assert!(iter.next_record_into(&mut record).unwrap());
+        assert_eq!(record.inputs, vec![4.0, 5.0]);
+        assert_eq!(record.outputs, vec![6.0]);
+        assert!(iter.next_record_into(&mut record).unwrap());
+        assert_eq!(record.inputs, vec![7.0, 8.0]);
+        assert_eq!(record.outputs, vec![9.0]);
+        assert!(!iter.next_record_into(&mut record).unwrap());
+    }
+
+    #[test]
+    fn reused_record_across_configs_has_no_stale_tail() {
+        // A wide record followed by a narrower one, reusing the SAME buffer:
+        // the clear() in the in-place refill must leave no stale tail behind.
+        let config_wide = TrainingDataConfig::new(3, 2);
+        let dir_wide = create_test_dir(&[("0.bin", &[1.0, 2.0, 3.0, 4.0, 5.0])]);
+        let config_narrow = TrainingDataConfig::new(1, 1);
+        let dir_narrow = create_test_dir(&[("0.bin", &[7.0, 70.0])]);
+
+        let mut record = TrainingRecord {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+
+        let mut iter_wide = TrainingDataIterator::new(dir_wide.path(), config_wide).unwrap();
+        assert!(iter_wide.next_record_into(&mut record).unwrap());
+        assert_eq!(record.inputs, vec![1.0, 2.0, 3.0]);
+        assert_eq!(record.outputs, vec![4.0, 5.0]);
+
+        let mut iter_narrow = TrainingDataIterator::new(dir_narrow.path(), config_narrow).unwrap();
+        assert!(iter_narrow.next_record_into(&mut record).unwrap());
+        assert_eq!(record.inputs, vec![7.0]);
+        assert_eq!(record.outputs, vec![70.0]);
+    }
+
+    #[test]
+    fn seeking_read_record_into_matches_read_record() {
+        let config = TrainingDataConfig::new(2, 1);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.bin");
+        write_f32_file(&path, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+
+        let mut reader = SeekingRecordReader::open(&path, config).unwrap();
+        let mut record = TrainingRecord {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        for idx in [2u64, 0, 1] {
+            let expected = reader.read_record(idx).unwrap();
+            reader.read_record_into(idx, &mut record).unwrap();
+            assert_eq!(record, expected);
+        }
     }
 
     // -- Error display --------------------------------------------------------

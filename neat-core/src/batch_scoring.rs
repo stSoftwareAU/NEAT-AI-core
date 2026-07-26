@@ -54,6 +54,71 @@ use crate::synapse_type::SynapseType;
 /// Number of records processed per SIMD batch (one lane each).
 pub(crate) const SCORING_LANES: usize = 8;
 
+/// Input records for one scoring batch, in either supported layout (Issue #386).
+///
+/// The kernels below only ever need `&[f32]` per record, so both layouts feed
+/// the *same* forward pass and produce bit-identical results:
+///
+/// - [`RecordBatch::PerRecord`] — one owned `Vec<f32>` per record, the original
+///   layout kept for existing callers.
+/// - [`RecordBatch::Flat`] — a single contiguous buffer where record `i`
+///   occupies `inputs[i * stride .. i * stride + stride]`, mirroring the flat
+///   *output* contract from Issue #229 and the packed input layout the fused
+///   loss lane already takes ([`crate::loss::mse_sum_batch_packed`]). Callers
+///   that already hold a contiguous buffer — the WASM dataset offload path
+///   ([`crate::wasm_dataset::TrainingDataset`]) — pass it straight through with
+///   no per-record allocation and no re-marshalling.
+#[derive(Clone, Copy)]
+pub(crate) enum RecordBatch<'a> {
+    /// One owned vector per record.
+    PerRecord(&'a [Vec<f32>]),
+    /// Records packed contiguously at a fixed stride.
+    Flat {
+        /// Packed inputs — exactly `record_count * stride` values.
+        inputs: &'a [f32],
+        /// Values per record. Non-zero, and a divisor of `inputs.len()`.
+        stride: usize,
+    },
+}
+
+impl<'a> RecordBatch<'a> {
+    /// Build a flat-layout batch, failing loud (Issue #3234) on a stride that
+    /// cannot describe records at all or a buffer that is not a whole number of
+    /// records — either would silently mis-slice every record downstream.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stride` is zero or `inputs.len()` is not a multiple of it.
+    #[inline]
+    pub(crate) fn flat(inputs: &'a [f32], stride: usize) -> Self {
+        assert!(stride > 0, "flat record stride must be greater than zero");
+        assert!(
+            inputs.len().is_multiple_of(stride),
+            "flat record buffer of {} values is not a whole number of records at stride {stride}",
+            inputs.len()
+        );
+        Self::Flat { inputs, stride }
+    }
+
+    /// Number of records in the batch.
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::PerRecord(records) => records.len(),
+            Self::Flat { inputs, stride } => inputs.len() / stride,
+        }
+    }
+
+    /// Inputs for record `index`.
+    #[inline]
+    pub(crate) fn record(&self, index: usize) -> &'a [f32] {
+        match self {
+            Self::PerRecord(records) => &records[index],
+            Self::Flat { inputs, stride } => &inputs[index * stride..(index + 1) * stride],
+        }
+    }
+}
+
 /// Reusable per-worker scratch for the batched scoring forward pass.
 ///
 /// Owning the buffers here lets the sequential path allocate once for a whole
@@ -199,7 +264,11 @@ fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
 }
 
 impl CompiledNetwork {
-    /// Score a contiguous slice of records through the batched SIMD path.
+    /// Score a batch of records through the batched SIMD path.
+    ///
+    /// `records` may be in either input layout ([`RecordBatch`]) — per-record
+    /// `Vec`s or one contiguous flat buffer at a fixed stride. The kernels read
+    /// each record as `&[f32]`, so the two layouts are bit-identical.
     ///
     /// Record `i` (0-based within `records`) writes its outputs to
     /// `out[i * num_outputs .. (i + 1) * num_outputs]`; `out` must be exactly
@@ -220,7 +289,7 @@ impl CompiledNetwork {
     pub(crate) fn score_batch_into(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordBatch<'_>,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -234,7 +303,11 @@ impl CompiledNetwork {
     /// True when any non-constant neuron uses an aggregate squash whose exact
     /// kernel needs a contiguous per-lane activation slice (so the interleaved
     /// fast path does not apply). O(neurons); the scoring batch dwarfs it.
-    fn has_aggregate_squash(&self) -> bool {
+    ///
+    /// `pub(crate)` so the fused MSE loss lane can share the same dispatch
+    /// decision (Issue #384): standard-only networks route through the
+    /// interleaved gather, aggregate networks stay on their exact per-lane path.
+    pub(crate) fn has_aggregate_squash(&self) -> bool {
         self.neurons.iter().any(|neuron| {
             !neuron.is_constant
                 && matches!(
@@ -265,7 +338,7 @@ impl CompiledNetwork {
     fn score_batch_interleaved(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordBatch<'_>,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -286,7 +359,7 @@ impl CompiledNetwork {
         while base + L <= n {
             // Transpose L records into the interleaved buffer.
             for l in 0..L {
-                let rec = &records[base + l];
+                let rec = records.record(base + l);
                 let in_len = rec.len().min(num_inputs);
                 for i in 0..in_len {
                     inter[i * L + l] = rec[i];
@@ -296,38 +369,8 @@ impl CompiledNetwork {
                 }
             }
 
-            // Forward pass, all L lanes at once.
-            for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
-                let out_base = (num_inputs + neuron_idx) * L;
-
-                if neuron.is_constant {
-                    let v = apply_limit_range(SquashType::Identity, neuron.bias);
-                    for slot in inter[out_base..out_base + L].iter_mut() {
-                        *slot = v;
-                    }
-                    continue;
-                }
-
-                let squash = SquashType::from(neuron.squash_type);
-                let start = neuron.start_synapse as usize;
-                let end = start + neuron.num_synapses as usize;
-                let sums =
-                    weighted_sum_interleaved_8(&self.synapses, inter, start, end, neuron.bias);
-
-                // Vectorised squash across all 8 lanes for the covered types
-                // (Issue #243); scalar inline fallback otherwise.
-                let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
-                    let st = neuron.squash_type;
-                    sums.map(|s| inline_squash(st, squash, s))
-                });
-
-                // Resolve the output range once per neuron (Issue #245) and clamp
-                // all 8 lanes; the writes land in one contiguous cache line.
-                let (low, high) = apply_get_range(squash);
-                for l in 0..L {
-                    inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
-                }
-            }
+            // Forward pass, all L lanes at once, through the shared kernel.
+            self.interleaved_forward_8(inter);
 
             // Scatter each lane's outputs to the flat buffer.
             for l in 0..L {
@@ -344,7 +387,7 @@ impl CompiledNetwork {
         // Bit-identical to `activate`, so a lone or partial trailing group keeps
         // the strict single-record parity guarantee.
         while base < n {
-            load_record(tail_act, &records[base], num_inputs);
+            load_record(tail_act, records.record(base), num_inputs);
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
                 tail_act[actual_idx] = neuron_activation_scalar(&self.synapses, tail_act, neuron);
@@ -356,6 +399,57 @@ impl CompiledNetwork {
         }
     }
 
+    /// Shared record-interleaved forward pass over a loaded `inter` buffer
+    /// (Issue #287 kernel, factored out for reuse by the fused MSE loss lane in
+    /// Issue #384).
+    ///
+    /// The caller must have transposed the eight records' inputs into
+    /// `inter[i * 8 + l]` for every input neuron `i` and lane `l`. This fills
+    /// each non-input neuron's eight output lanes at
+    /// `inter[(num_inputs + neuron_idx) * 8 + l]`, gathering through
+    /// [`weighted_sum_interleaved_8`] so each synapse reads one cache line.
+    ///
+    /// Only valid when [`Self::has_aggregate_squash`] is false — every
+    /// non-constant neuron is treated as standard-squash (vectorised
+    /// `squash_x8` with the scalar inline fallback), so aggregate networks must
+    /// use the exact per-lane path instead. Bit-identical to the per-lane
+    /// 8-record path ([`weighted_sum_simd_8records`]) on the covered neurons.
+    pub(crate) fn interleaved_forward_8(&self, inter: &mut [f32]) {
+        const L: usize = SCORING_LANES;
+        let num_inputs = self.num_inputs;
+
+        for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
+            let out_base = (num_inputs + neuron_idx) * L;
+
+            if neuron.is_constant {
+                let v = apply_limit_range(SquashType::Identity, neuron.bias);
+                for slot in inter[out_base..out_base + L].iter_mut() {
+                    *slot = v;
+                }
+                continue;
+            }
+
+            let squash = SquashType::from(neuron.squash_type);
+            let start = neuron.start_synapse as usize;
+            let end = start + neuron.num_synapses as usize;
+            let sums = weighted_sum_interleaved_8(&self.synapses, inter, start, end, neuron.bias);
+
+            // Vectorised squash across all 8 lanes for the covered types
+            // (Issue #243); scalar inline fallback otherwise.
+            let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
+                let st = neuron.squash_type;
+                sums.map(|s| inline_squash(st, squash, s))
+            });
+
+            // Resolve the output range once per neuron (Issue #245) and clamp
+            // all 8 lanes; the writes land in one contiguous cache line.
+            let (low, high) = apply_get_range(squash);
+            for l in 0..L {
+                inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
+            }
+        }
+    }
+
     /// Per-lane fallback scoring path — the original eight-buffer layout, kept
     /// verbatim for networks containing aggregate squashes (Issue #287). Record
     /// `i` writes `out[i * num_outputs ..]`; records are grouped into 8s
@@ -364,7 +458,7 @@ impl CompiledNetwork {
     fn score_batch_per_lane(
         &self,
         scratch: &mut BatchScratch,
-        records: &[Vec<f32>],
+        records: RecordBatch<'_>,
         num_outputs: usize,
         out: &mut [f32],
     ) {
@@ -379,14 +473,14 @@ impl CompiledNetwork {
 
         // ---- 8-record batches ------------------------------------------------
         while base + 8 <= n {
-            load_record(act0, &records[base], num_inputs);
-            load_record(act1, &records[base + 1], num_inputs);
-            load_record(act2, &records[base + 2], num_inputs);
-            load_record(act3, &records[base + 3], num_inputs);
-            load_record(act4, &records[base + 4], num_inputs);
-            load_record(act5, &records[base + 5], num_inputs);
-            load_record(act6, &records[base + 6], num_inputs);
-            load_record(act7, &records[base + 7], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
+            load_record(act1, records.record(base + 1), num_inputs);
+            load_record(act2, records.record(base + 2), num_inputs);
+            load_record(act3, records.record(base + 3), num_inputs);
+            load_record(act4, records.record(base + 4), num_inputs);
+            load_record(act5, records.record(base + 5), num_inputs);
+            load_record(act6, records.record(base + 6), num_inputs);
+            load_record(act7, records.record(base + 7), num_inputs);
 
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
@@ -483,10 +577,10 @@ impl CompiledNetwork {
 
         // ---- 4-record batch (0 or 1 of them) ---------------------------------
         if base + 4 <= n {
-            load_record(act0, &records[base], num_inputs);
-            load_record(act1, &records[base + 1], num_inputs);
-            load_record(act2, &records[base + 2], num_inputs);
-            load_record(act3, &records[base + 3], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
+            load_record(act1, records.record(base + 1), num_inputs);
+            load_record(act2, records.record(base + 2), num_inputs);
+            load_record(act3, records.record(base + 3), num_inputs);
 
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
@@ -563,7 +657,7 @@ impl CompiledNetwork {
         // Exact single-record path so tail records are bit-identical to the
         // reference.
         while base < n {
-            load_record(act0, &records[base], num_inputs);
+            load_record(act0, records.record(base), num_inputs);
             for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
                 let actual_idx = num_inputs + neuron_idx;
                 act0[actual_idx] = neuron_activation_scalar(&self.synapses, act0, neuron);

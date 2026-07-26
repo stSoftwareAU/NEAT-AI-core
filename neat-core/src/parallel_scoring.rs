@@ -43,8 +43,19 @@
 //! `[i * num_outputs .. (i + 1) * num_outputs]`. This flat buffer is written
 //! through [`CompiledNetwork::activate_into`], so the batch performs a **single**
 //! output allocation instead of one heap allocation per record.
+//!
+//! # Input layout (Issue #386)
+//!
+//! The `_flat` entry points ([`CompiledNetwork::score_records_flat`],
+//! [`CompiledNetwork::score_records_flat_into`],
+//! [`CompiledNetwork::score_records_parallel_flat`]) take the **inputs** in the
+//! matching flat layout: record `i`'s inputs are
+//! `inputs[i * stride .. i * stride + stride]`. Callers that already hold a
+//! contiguous buffer skip the one-heap-allocation-per-record marshalling the
+//! `&[Vec<f32>]` signatures force. The `&[Vec<f32>]` entry points remain, and
+//! both layouts feed the identical kernel, so their results are bit-identical.
 
-use crate::batch_scoring::BatchScratch;
+use crate::batch_scoring::{BatchScratch, RecordBatch};
 use crate::network::CompiledNetwork;
 
 /// Records per rayon task on the parallel path. A multiple of 8 so every task's
@@ -74,9 +85,72 @@ impl CompiledNetwork {
     /// building for `wasm32`, and the reference path the parallel results must
     /// match exactly.
     pub fn score_records(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
-        let mut outputs = vec![0.0f32; records.len() * num_outputs];
+        self.score_batch_alloc(RecordBatch::PerRecord(records), num_outputs)
+    }
+
+    /// Score every record from one **flat** input buffer, returning a single flat
+    /// output buffer (Issue #386).
+    ///
+    /// Record `i`'s inputs are `inputs[i * stride .. i * stride + stride]` and
+    /// its outputs occupy `out[i * num_outputs .. (i + 1) * num_outputs]` — the
+    /// input layout mirrors the flat output contract from Issue #229 and the
+    /// packed buffer the fused loss lane already takes
+    /// ([`crate::loss::mse_sum_batch_packed`]). Callers that already hold a
+    /// contiguous buffer (the WASM dataset offload path) pass it straight
+    /// through: no heap allocation per record, no `Vec` header to pointer-chase
+    /// on each lane load, no re-marshalling.
+    ///
+    /// Results are **bit-identical** to [`CompiledNetwork::score_records`] on the
+    /// same data — both drive the same batched kernel, which only ever reads a
+    /// record as `&[f32]`. A `stride` shorter than the network's input arity
+    /// zero-fills the uncovered inputs, exactly as a short `Vec` does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `stride` is zero or `inputs.len()` is not a multiple of
+    /// `stride` — a malformed batch fails loud rather than mis-slicing every
+    /// record (Issue #3234).
+    pub fn score_records_flat(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+    ) -> Vec<f32> {
+        self.score_batch_alloc(RecordBatch::flat(inputs, stride), num_outputs)
+    }
+
+    /// [`CompiledNetwork::score_records_flat`] writing into a caller-supplied
+    /// output buffer instead of allocating one.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a malformed `inputs`/`stride` pair (see
+    /// [`CompiledNetwork::score_records_flat`]), or if `out` is not exactly
+    /// `record_count * num_outputs` long.
+    pub fn score_records_flat_into(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+        out: &mut [f32],
+    ) {
+        let batch = RecordBatch::flat(inputs, stride);
+        assert_eq!(
+            out.len(),
+            batch.len() * num_outputs,
+            "output buffer must hold exactly record_count * num_outputs values"
+        );
         let mut scratch = BatchScratch::new(self.num_neurons);
-        self.score_batch_into(&mut scratch, records, num_outputs, &mut outputs);
+        self.score_batch_into(&mut scratch, batch, num_outputs, out);
+    }
+
+    /// Allocate the flat output buffer and drive `batch` through the batched
+    /// forward pass — the single sequential implementation shared by the
+    /// per-record and flat-slice entry points.
+    fn score_batch_alloc(&self, batch: RecordBatch<'_>, num_outputs: usize) -> Vec<f32> {
+        let mut outputs = vec![0.0f32; batch.len() * num_outputs];
+        let mut scratch = BatchScratch::new(self.num_neurons);
+        self.score_batch_into(&mut scratch, batch, num_outputs, &mut outputs);
         outputs
     }
 
@@ -106,7 +180,12 @@ impl CompiledNetwork {
             .for_each_init(
                 || BatchScratch::new(self.num_neurons),
                 |scratch, (out_chunk, rec_chunk)| {
-                    self.score_batch_into(scratch, rec_chunk, num_outputs, out_chunk)
+                    self.score_batch_into(
+                        scratch,
+                        RecordBatch::PerRecord(rec_chunk),
+                        num_outputs,
+                        out_chunk,
+                    )
                 },
             );
         outputs
@@ -119,5 +198,67 @@ impl CompiledNetwork {
     #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
     pub fn score_records_parallel(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
         self.score_records(records, num_outputs)
+    }
+
+    /// Flat-input counterpart of [`CompiledNetwork::score_records_parallel`]
+    /// (Issue #386): record `i`'s inputs are
+    /// `inputs[i * stride .. i * stride + stride]`, scored across the `rayon`
+    /// thread pool into one flat output buffer in input order.
+    ///
+    /// Chunk boundaries are a multiple of the 8-record batch size and the
+    /// forward pass carries no cross-record state, so results are identical to
+    /// [`CompiledNetwork::score_records_flat`] regardless of thread count.
+    ///
+    /// Available with the `parallel` feature on native targets; elsewhere it
+    /// falls back to the sequential flat path.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a malformed `inputs`/`stride` pair (see
+    /// [`CompiledNetwork::score_records_flat`]).
+    #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+    pub fn score_records_parallel_flat(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+    ) -> Vec<f32> {
+        use rayon::prelude::*;
+        let record_count = RecordBatch::flat(inputs, stride).len();
+        let mut outputs = vec![0.0f32; record_count * num_outputs];
+        outputs
+            .par_chunks_mut(PARALLEL_CHUNK_RECORDS * num_outputs)
+            .zip(inputs.par_chunks(PARALLEL_CHUNK_RECORDS * stride))
+            .for_each_init(
+                || BatchScratch::new(self.num_neurons),
+                |scratch, (out_chunk, in_chunk)| {
+                    self.score_batch_into(
+                        scratch,
+                        RecordBatch::flat(in_chunk, stride),
+                        num_outputs,
+                        out_chunk,
+                    )
+                },
+            );
+        outputs
+    }
+
+    /// Sequential fallback for
+    /// [`CompiledNetwork::score_records_parallel_flat`] when the `parallel`
+    /// feature is disabled or building for `wasm32`. Same signature and
+    /// identical results — just single-threaded.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a malformed `inputs`/`stride` pair (see
+    /// [`CompiledNetwork::score_records_flat`]).
+    #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
+    pub fn score_records_parallel_flat(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+    ) -> Vec<f32> {
+        self.score_records_flat(inputs, stride, num_outputs)
     }
 }
