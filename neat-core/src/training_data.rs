@@ -362,7 +362,7 @@ impl TrainingDataIterator {
     /// Read the next record into the caller's buffers in place, returning
     /// `false` when all files are exhausted.
     ///
-    /// The record's `inputs`/`outputs` are refilled via [`parse_record_into`],
+    /// The record's `inputs`/`outputs` are refilled via `parse_record_into`,
     /// reusing their capacity — so once the buffers reach record width this path
     /// performs no per-record heap allocation (Issue #385). Prefer it in tight
     /// streaming loops; [`next_record`](Self::next_record) is a thin allocating
@@ -460,7 +460,7 @@ impl SeekingRecordReader {
     /// Read a specific record by index (zero-based) into the caller's buffers
     /// in place.
     ///
-    /// Refills `record` via [`parse_record_into`], reusing its capacity — no
+    /// Refills `record` via `parse_record_into`, reusing its capacity — no
     /// per-record heap allocation once the buffers reach record width
     /// (Issue #385).
     pub fn read_record_into(
