@@ -86,13 +86,7 @@ impl RecordInput<'_> {
     fn len(&self) -> usize {
         match self {
             RecordInput::Nested(records) => records.len(),
-            RecordInput::Flat { inputs, stride } => {
-                if *stride == 0 {
-                    0
-                } else {
-                    inputs.len() / *stride
-                }
-            }
+            RecordInput::Flat { inputs, stride } => inputs.len().checked_div(*stride).unwrap_or(0),
         }
     }
 

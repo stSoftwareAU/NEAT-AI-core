@@ -107,11 +107,7 @@ impl CompiledNetwork {
         stride: usize,
         num_outputs: usize,
     ) -> Vec<f32> {
-        let num_records = if stride == 0 {
-            0
-        } else {
-            inputs.len() / stride
-        };
+        let num_records = inputs.len().checked_div(stride).unwrap_or(0);
         let mut outputs = vec![0.0f32; num_records * num_outputs];
         self.score_records_flat_into(inputs, stride, num_outputs, &mut outputs);
         outputs
@@ -194,11 +190,7 @@ impl CompiledNetwork {
         num_outputs: usize,
     ) -> Vec<f32> {
         use rayon::prelude::*;
-        let num_records = if stride == 0 {
-            0
-        } else {
-            inputs.len() / stride
-        };
+        let num_records = inputs.len().checked_div(stride).unwrap_or(0);
         let mut outputs = vec![0.0f32; num_records * num_outputs];
         if stride == 0 {
             return outputs;
