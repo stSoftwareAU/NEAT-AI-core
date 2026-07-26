@@ -51,6 +51,12 @@ fi
 echo "🧾 Checking TypeScript sources (deno check)..."
 ./scripts/typescript-check.sh </dev/null
 
+# Mermaid gate (Issue #379) — repo-owned, always-on; mirrors the CI
+# markdown-lint job. Fails loud: a missing deno exits non-zero under `set -e`.
+echo "🧜 Validating Mermaid blocks..."
+deno test --allow-read --allow-write tests/check_mermaid_test.ts </dev/null
+deno run --allow-read scripts/check_mermaid.ts . </dev/null
+
 # Optional: codespell (CI runs this; install: pip install codespell)
 if command -v codespell &>/dev/null; then
     echo "📖 Running codespell..."

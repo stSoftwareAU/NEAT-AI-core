@@ -66,6 +66,56 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# PR #393 — an image can also reach `docker pull`/`docker run` through a
+# workflow/job `env:` var rather than a `container:` key (done there to control
+# the pull backoff, which the runner's job-init pull does not expose). Such a
+# ref is exactly as substitutable as a `container:` one, so the same digest pin
+# must hold; without this the gate above would pass vacuously for that
+# workflow.
+@test "every *_IMAGE env value used as an image ref is pinned to a sha256 digest" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import glob, os, re, sys, yaml
+
+workflows_dir = "$WORKFLOWS_DIR"
+digest_re = re.compile(r"^[A-Za-z0-9_.\-/:]+@sha256:[0-9a-f]{64}$")
+
+def env_blocks(data):
+    yield "workflow", data.get("env") or {}
+    for job_name, job in (data.get("jobs", {}) or {}).items():
+        if not isinstance(job, dict):
+            continue
+        yield f"job={job_name}", job.get("env") or {}
+        for i, step in enumerate(job.get("steps", []) or []):
+            if isinstance(step, dict):
+                yield f"job={job_name} step={i}", step.get("env") or {}
+
+failures = []
+checked = 0
+for path in sorted(glob.glob(os.path.join(workflows_dir, "*.yml"))):
+    with open(path) as fh:
+        data = yaml.safe_load(fh)
+    for where, env in env_blocks(data):
+        for key, value in env.items():
+            if not key.endswith("_IMAGE") or not isinstance(value, str):
+                continue
+            checked += 1
+            if not digest_re.match(value):
+                failures.append(
+                    f"{os.path.basename(path)} {where} {key}={value}"
+                )
+
+if failures:
+    sys.stderr.write("Unpinned image refs:\n  " + "\n  ".join(failures) + "\n")
+    sys.exit(1)
+# Guard against the check silently covering nothing.
+assert checked > 0, "no *_IMAGE env vars found — has the semgrep pin moved?"
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "every digest-pinned image carries a human-readable version comment" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"

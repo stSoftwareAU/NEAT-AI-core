@@ -56,7 +56,7 @@ sequenceDiagram
     Dev->>GA: push C (bot: version-increment)
     GA-->>GA: cancel run 2 (superseded)
     GA->>GA: run 3 in same group
-    Note over GA: 1 concurrent run; publishers keep every run
+    Note over GA: 1 concurrent run — publishers keep every run
 ```
 
 Local run of the new suite:
