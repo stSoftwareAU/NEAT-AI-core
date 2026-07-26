@@ -234,7 +234,11 @@ impl CompiledNetwork {
     /// True when any non-constant neuron uses an aggregate squash whose exact
     /// kernel needs a contiguous per-lane activation slice (so the interleaved
     /// fast path does not apply). O(neurons); the scoring batch dwarfs it.
-    fn has_aggregate_squash(&self) -> bool {
+    ///
+    /// `pub(crate)` so the fused MSE loss lane can share the same dispatch
+    /// decision (Issue #384): standard-only networks route through the
+    /// interleaved gather, aggregate networks stay on their exact per-lane path.
+    pub(crate) fn has_aggregate_squash(&self) -> bool {
         self.neurons.iter().any(|neuron| {
             !neuron.is_constant
                 && matches!(
@@ -296,38 +300,8 @@ impl CompiledNetwork {
                 }
             }
 
-            // Forward pass, all L lanes at once.
-            for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
-                let out_base = (num_inputs + neuron_idx) * L;
-
-                if neuron.is_constant {
-                    let v = apply_limit_range(SquashType::Identity, neuron.bias);
-                    for slot in inter[out_base..out_base + L].iter_mut() {
-                        *slot = v;
-                    }
-                    continue;
-                }
-
-                let squash = SquashType::from(neuron.squash_type);
-                let start = neuron.start_synapse as usize;
-                let end = start + neuron.num_synapses as usize;
-                let sums =
-                    weighted_sum_interleaved_8(&self.synapses, inter, start, end, neuron.bias);
-
-                // Vectorised squash across all 8 lanes for the covered types
-                // (Issue #243); scalar inline fallback otherwise.
-                let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
-                    let st = neuron.squash_type;
-                    sums.map(|s| inline_squash(st, squash, s))
-                });
-
-                // Resolve the output range once per neuron (Issue #245) and clamp
-                // all 8 lanes; the writes land in one contiguous cache line.
-                let (low, high) = apply_get_range(squash);
-                for l in 0..L {
-                    inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
-                }
-            }
+            // Forward pass, all L lanes at once, through the shared kernel.
+            self.interleaved_forward_8(inter);
 
             // Scatter each lane's outputs to the flat buffer.
             for l in 0..L {
@@ -353,6 +327,57 @@ impl CompiledNetwork {
             out[dst..dst + num_outputs]
                 .copy_from_slice(&tail_act[output_start..output_start + num_outputs]);
             base += 1;
+        }
+    }
+
+    /// Shared record-interleaved forward pass over a loaded `inter` buffer
+    /// (Issue #287 kernel, factored out for reuse by the fused MSE loss lane in
+    /// Issue #384).
+    ///
+    /// The caller must have transposed the eight records' inputs into
+    /// `inter[i * 8 + l]` for every input neuron `i` and lane `l`. This fills
+    /// each non-input neuron's eight output lanes at
+    /// `inter[(num_inputs + neuron_idx) * 8 + l]`, gathering through
+    /// [`weighted_sum_interleaved_8`] so each synapse reads one cache line.
+    ///
+    /// Only valid when [`Self::has_aggregate_squash`] is false — every
+    /// non-constant neuron is treated as standard-squash (vectorised
+    /// `squash_x8` with the scalar inline fallback), so aggregate networks must
+    /// use the exact per-lane path instead. Bit-identical to the per-lane
+    /// 8-record path ([`weighted_sum_simd_8records`]) on the covered neurons.
+    pub(crate) fn interleaved_forward_8(&self, inter: &mut [f32]) {
+        const L: usize = SCORING_LANES;
+        let num_inputs = self.num_inputs;
+
+        for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
+            let out_base = (num_inputs + neuron_idx) * L;
+
+            if neuron.is_constant {
+                let v = apply_limit_range(SquashType::Identity, neuron.bias);
+                for slot in inter[out_base..out_base + L].iter_mut() {
+                    *slot = v;
+                }
+                continue;
+            }
+
+            let squash = SquashType::from(neuron.squash_type);
+            let start = neuron.start_synapse as usize;
+            let end = start + neuron.num_synapses as usize;
+            let sums = weighted_sum_interleaved_8(&self.synapses, inter, start, end, neuron.bias);
+
+            // Vectorised squash across all 8 lanes for the covered types
+            // (Issue #243); scalar inline fallback otherwise.
+            let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
+                let st = neuron.squash_type;
+                sums.map(|s| inline_squash(st, squash, s))
+            });
+
+            // Resolve the output range once per neuron (Issue #245) and clamp
+            // all 8 lanes; the writes land in one contiguous cache line.
+            let (low, high) = apply_get_range(squash);
+            for l in 0..L {
+                inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
+            }
         }
     }
 

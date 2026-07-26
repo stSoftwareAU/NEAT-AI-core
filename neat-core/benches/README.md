@@ -19,7 +19,7 @@ There are two bench targets:
 | Group | Function(s) under test | Sizes |
 | --- | --- | --- |
 | `forward_pass` | `CompiledNetwork::activate` | small ~50, medium ~500, large ~5000, `production`, `production_2x` |
-| `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` | same five shapes |
+| `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` (all shapes), production-sized `mse_sum_batch_packed` (`mse_sum_production`, Issue #384) | 8-record: same five shapes; `mse_sum_production`: `production`, `production_2x`, `production_exact` |
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
 | `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
