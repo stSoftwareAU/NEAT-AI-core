@@ -24,6 +24,7 @@ use neat_core::simd::{
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
+use neat_core::topology_ops::compute_reverse_topological_order;
 use neat_core::unsquash::apply_unsquash;
 
 /// Deterministic network/backprop fixtures, shared with the `bench_fixtures`
@@ -130,6 +131,34 @@ fn bench_backprop(c: &mut Criterion) {
                 };
                 let out = propagate_topological_loop(black_box(&input));
                 black_box(out);
+            });
+        });
+    }
+    group.finish();
+}
+
+/// Backprop setup — `compute_reverse_topological_order` over a creature's full
+/// synapse list (Issue #388). This runs once per creature per generation to
+/// order the backprop walk, so its allocation behaviour is on the
+/// per-generation path.
+fn bench_reverse_topological_order(c: &mut Criterion) {
+    let mut group = c.benchmark_group("reverse_topological_order");
+    for spec in &NETWORKS {
+        let data = build_backprop_data(spec, 0x1357_9BDF);
+        let from: Vec<u32> = data.synapses.iter().map(|s| s.from).collect();
+        let to: Vec<u32> = data.synapses.iter().map(|s| s.to).collect();
+        let num_neurons = spec.num_neurons as u32;
+        let num_inputs = spec.num_inputs as u32;
+        group.throughput(Throughput::Elements(from.len() as u64));
+        group.bench_function(BenchmarkId::from_parameter(spec.label), |b| {
+            b.iter(|| {
+                let order = compute_reverse_topological_order(
+                    black_box(&from),
+                    black_box(&to),
+                    black_box(num_neurons),
+                    black_box(num_inputs),
+                );
+                black_box(order);
             });
         });
     }
@@ -343,6 +372,7 @@ criterion_group!(
     bench_forward_pass,
     bench_batched_scoring,
     bench_backprop,
+    bench_reverse_topological_order,
     bench_scoring,
     bench_activation_primitives,
 );
