@@ -1,39 +1,38 @@
-// learn_flags_wiring.ts — wasm64 lane (d) GRQ learn-invocation wiring model
-// (Issue #299).
+// learn_flags_wiring.ts — wasm64 lane (d) downstream-trainer learn-invocation
+// wiring model (Issue #299).
 //
-// Lane (a) (#296) attributed the GRQ#3508 learn OOME to the **V8 old-space heap**
-// (exit 133 / "Reached heap limit"), liftable by
-// `--v8-flags=--max-old-space-size=<N>`. Lane (d) is the GRQ-side wiring plus
-// end-to-end verification: GRQ's learn invocation must select that flag
-// **RAM-aware**, so a bigger heap on a roomy host never pushes a smaller host
-// past its limit, and a V8 old-space abort is never silently reported as
-// success.
+// Lane (a) (#296) attributed the production learn OOME to the **V8 old-space
+// heap** (exit 133 / "Reached heap limit"), liftable by
+// `--v8-flags=--max-old-space-size=<N>`. Lane (d) is the trainer-side wiring plus
+// end-to-end verification: the downstream trainer's learn invocation must select
+// that flag **RAM-aware**, so a bigger heap on a roomy host never pushes a
+// smaller host past its limit, and a V8 old-space abort is never silently
+// reported as success.
 //
-// The PRODUCTION selection lives in GRQ (stSoftwareAU/GRQ):
-//   * `worker/shared/memory_calc.sh` — `get_max_heap_size` / `get_heap_floor_mb`
-//     size the heap from currently-available RAM after a fixed FFI/OS headroom.
-//   * `worker/learn.sh` — injects `--v8-flags=--max-old-space-size=${MAX_HEAP_SIZE}`
-//     into the `deno run src/Learn.ts` argv (the BEGIN_LEARN_DENO_ARGV_2950 block).
-//   * `worker/shared/stage_fail_marker.sh` — the EXIT-trap emits a
-//     `[learn] FAIL:` marker on any non-zero exit (incl. 133), so node.sh cannot
-//     downgrade a marker-less OOM abort to success (GRQ#2391 / Issue #3234).
-// It is CI-guarded in GRQ by `test/worker/MemoryCalcHeapSize.ts` and
-// `test/worker/MemoryCalcHostFloor.ts`.
+// The production selection lives in the downstream trainer's launch scripts:
+//   * a memory-sizing helper (`get_max_heap_size` / `get_heap_floor_mb`) sizes
+//     the heap from currently-available RAM after a fixed FFI/OS headroom.
+//   * the learn launcher injects `--v8-flags=--max-old-space-size=${MAX_HEAP_SIZE}`
+//     into the `deno run src/Learn.ts` argv.
+//   * a stage-fail-marker EXIT trap emits a `[learn] FAIL:` marker on any
+//     non-zero exit (incl. 133), so a marker-less OOM abort is never downgraded
+//     to success (Issue #3234).
+// It is CI-guarded there by the trainer's own memory-sizing tests.
 //
 // This module is the **neat-core-side acceptance model** of that selection: a
 // pure re-derivation used to verify the milestone's headroom invariants from
 // this repo end-to-end (the "neat-core adoption verified end-to-end" tracked by
-// #299). It must stay in **lock-step** with `memory_calc.sh`; the constants
-// below mirror it exactly. A divergence between this model's numbers and GRQ's
-// is itself the regression signal. See
-// `docs/research/wasm64-lane-d-grq-learn-wiring-verification.md`.
+// #299). It must stay in **lock-step** with the production memory-sizing
+// formula; the constants below mirror it exactly. A divergence between this
+// model's numbers and the production formula's is itself the regression signal.
+// See `docs/research/wasm64-lane-d-learn-wiring-verification.md`.
 
 /** Fixed headroom (MB) reserved for Rust FFI + OS caches before apportioning to
  * V8 — `MEMORY_FFI_OS_HEADROOM_MB` in memory_calc.sh (#1768). */
 export const FFI_OS_HEADROOM_MB = 1536;
 /** Share of the post-headroom budget granted to V8 (`get_max_heap_size` default). */
 export const HEAP_PERCENTAGE = 65;
-/** Heap ceiling (MB): large hosts keep RAM for OS/non-heap (`GRQ_MAX_HEAP_CAP_MB`). */
+/** Heap ceiling (MB): large hosts keep RAM for OS/non-heap (the production heap-cap constant). */
 export const HEAP_CAP_MB = 24576;
 /** Global heap floor (MB) for hosts smaller than the 8 GB tier. */
 export const GLOBAL_HEAP_FLOOR_MB = 1536;
@@ -43,7 +42,7 @@ export const EIGHT_GB_HEAP_FLOOR_MB = 3072;
 export const SIXTEEN_GB_HEAP_FLOOR_MB = 4096;
 /** Minority share of *available* RAM the step-down floor may claim (`get_heap_floor_avail_pct`). */
 export const HEAP_FLOOR_AVAIL_PCT = 45;
-/** V8 fatal heap-limit abort code (SIGTRAP, 128 + 5) — GRQ#3508's signature. */
+/** V8 fatal heap-limit abort code (SIGTRAP, 128 + 5) — the production OOME's signature. */
 export const OOM_EXIT_CODE = 133;
 
 /** A host's memory picture, in MB. */
@@ -60,7 +59,7 @@ export interface HostMemory {
  * **down** on a constrained host (available-aware, #3342, always on for the
  * learn/teams victim): capped at a minority share (45%) of *available* RAM but
  * never below the 1536 MB global floor. >=16 GB hosts use a 4096 MB floor (the
- * available-aware step-down there is opt-in via `GRQ_HEAP_AVAILABLE_AWARE_FLOOR`
+ * available-aware step-down there is opt-in via the production available-aware-floor toggle
  * and off for the learn path, so the fixed floor is the learn-path value).
  */
 export function heapFloorMb(host: HostMemory): number {
@@ -79,7 +78,7 @@ export function heapFloorMb(host: HostMemory): number {
 
 /**
  * Mirror of `memory_calc.sh get_max_heap_size`: the `--max-old-space-size` value
- * (MB) GRQ's learn invocation selects for a host.
+ * (MB) the downstream trainer's learn invocation selects for a host.
  *
  *   heap = clamp((available - FFI_OS_HEADROOM) * 65%, floor(total) .. 24576)
  */
@@ -109,10 +108,11 @@ export function heapFitsHostBudget(host: HostMemory): boolean {
 }
 
 /**
- * Silent-failure guard (GRQ#2391 / Issue #3234). A V8 old-space OOM is a native
- * abort (exit 133): the crashed child cannot print its own marker, and node.sh
- * downgrades a marker-less non-zero exit to success. `learn.sh`'s EXIT trap must
- * therefore emit a `[learn] FAIL:` marker. Returns the marker line for a
+ * Silent-failure guard (Issue #3234). A V8 old-space OOM is a native
+ * abort (exit 133): the crashed child cannot print its own marker, and the
+ * launcher would otherwise downgrade a marker-less non-zero exit to success. The
+ * launch script's EXIT trap must therefore emit a `[learn] FAIL:` marker.
+ * Returns the marker line for a
  * marker-less non-zero exit, or `null` for a clean exit or one already marked.
  */
 export function learnFailMarkerForExit(

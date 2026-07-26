@@ -6,6 +6,11 @@
 # and learns the structure of a private production system. These tests pin the
 # docs at concept level: no private-repo name, no private issue link, and the
 # lane (d) filename no longer carries the private repo name.
+#
+# Issue #375 (BP-36e39327d964) extends the same guard to the acceptance-model
+# sources under `tests/perf/`, whose comments named the private repo, its
+# private issue numbers, its internal script paths and its `GRQ_`-prefixed
+# environment overrides.
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
@@ -14,6 +19,13 @@ setup() {
   LANE_D="${RESEARCH}/wasm64-lane-d-learn-wiring-verification.md"
   LANE_D_OLD="${RESEARCH}/wasm64-lane-d-grq-learn-wiring-verification.md"
   README="${REPO_ROOT}/README.md"
+  PERF="${REPO_ROOT}/tests/perf"
+  PERF_SOURCES=(
+    "${PERF}/learn_flags_wiring.ts"
+    "${PERF}/learn_flags_wiring_test.ts"
+    "${PERF}/learn_oome_repro.ts"
+    "${PERF}/learn_oome_repro_test.ts"
+  )
 }
 
 # --- Filename no longer carries the private repo name -----------------------
@@ -50,4 +62,25 @@ setup() {
   [ "$status" -eq 0 ]
   run grep -q 'wasm64-lane-d-grq-learn-wiring-verification.md' "$README"
   [ "$status" -ne 0 ]
+}
+
+# --- tests/perf acceptance models stay at concept level (Issue #375) ----------
+
+@test "perf acceptance models name no private repository" {
+  # Any GRQ occurrence — bare name, GRQ-logs, GRQ#NNNN, GRQ_ env override.
+  run grep -nE 'GRQ' "${PERF_SOURCES[@]}"
+  [ "$status" -ne 0 ]
+}
+
+@test "perf acceptance models reference no private internal script paths" {
+  run grep -nE 'worker/(learn|node)\.sh|memory_calc\.sh|stage_fail_marker\.sh|MemoryCalc[A-Za-z]*\.ts' \
+    "${PERF_SOURCES[@]}"
+  [ "$status" -ne 0 ]
+}
+
+@test "perf acceptance models link the renamed lane (d) doc, not the old name" {
+  run grep -n 'wasm64-lane-d-grq-learn-wiring-verification.md' "${PERF_SOURCES[@]}"
+  [ "$status" -ne 0 ]
+  run grep -q 'wasm64-lane-d-learn-wiring-verification.md' "${PERF}/learn_flags_wiring.ts"
+  [ "$status" -eq 0 ]
 }

@@ -21,8 +21,9 @@
 //   LEARN_OOME_REPRO=1 deno run --allow-env \
 //     --v8-flags=--max-old-space-size=256 tests/perf/learn_oome_repro.ts heap 2000
 //
-// On the crash path the harness prints a `[learn] FAIL:` marker so GRQ node.sh
-// does not downgrade a marker-less non-zero exit to success (GRQ#2391).
+// On the crash path the harness prints a `[learn] FAIL:` marker so the
+// downstream launcher does not downgrade a marker-less non-zero exit to success
+// (a marker-less non-zero exit must not be downgraded to success).
 
 /** Hard wasm32 linear-memory ceiling: 65536 pages x 64 KiB = exactly 4 GiB. */
 export const WASM32_MAX_PAGES = 65536;
@@ -152,7 +153,7 @@ export function growWasmToCeiling(
  * marker. `markerForExit` is the launcher-side rule that closes that gap: given
  * a child's exit code and captured output, it returns the marker line the
  * launcher must emit so a marker-less exit 133 is not downgraded to success by
- * GRQ node.sh (GRQ#2391). Returns null when the child already emitted a marker
+ * the downstream launcher. Returns null when the child already emitted a marker
  * or exited cleanly.
  */
 export function markerForExit(
@@ -243,8 +244,8 @@ function runWasmMode(targetGiB: number): number {
 /**
  * Launcher demonstrator: run the `heap` child under a chosen old-space cap and
  * synthesise the `[learn] FAIL:` marker if it aborts with exit 133 but printed
- * no marker of its own. This is the pattern GRQ node.sh / the learn wrapper
- * (lane (d), #299) must adopt so a V8 heap OOM is never seen as success.
+ * no marker of its own. This is the pattern the downstream launcher / the learn
+ * wrapper (lane (d), #299) must adopt so a V8 heap OOM is never seen as success.
  */
 async function runGuardMode(
   targetMiB: number,
