@@ -101,8 +101,17 @@ impl CompiledNetwork {
     /// same data — but takes zero-copy contiguous input, so a caller that already
     /// holds a packed buffer (e.g. [`crate::wasm_dataset::TrainingDataset`]) pays
     /// no per-record `Vec` allocation and no `Vec`-header pointer-chase.
-    pub fn score_records_flat(&self, inputs: &[f32], stride: usize, num_outputs: usize) -> Vec<f32> {
-        let num_records = if stride == 0 { 0 } else { inputs.len() / stride };
+    pub fn score_records_flat(
+        &self,
+        inputs: &[f32],
+        stride: usize,
+        num_outputs: usize,
+    ) -> Vec<f32> {
+        let num_records = if stride == 0 {
+            0
+        } else {
+            inputs.len() / stride
+        };
         let mut outputs = vec![0.0f32; num_records * num_outputs];
         self.score_records_flat_into(inputs, stride, num_outputs, &mut outputs);
         outputs
@@ -185,7 +194,11 @@ impl CompiledNetwork {
         num_outputs: usize,
     ) -> Vec<f32> {
         use rayon::prelude::*;
-        let num_records = if stride == 0 { 0 } else { inputs.len() / stride };
+        let num_records = if stride == 0 {
+            0
+        } else {
+            inputs.len() / stride
+        };
         let mut outputs = vec![0.0f32; num_records * num_outputs];
         if stride == 0 {
             return outputs;
