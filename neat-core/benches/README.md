@@ -21,6 +21,7 @@ There are two bench targets:
 | `forward_pass` | `CompiledNetwork::activate` | small ~50, medium ~500, large ~5000, `production`, `production_2x` |
 | `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` | same five shapes |
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
+| `reverse_topological_order` | `compute_reverse_topological_order` over a creature's full synapse list (Issue #388) | all six shapes |
 | `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
