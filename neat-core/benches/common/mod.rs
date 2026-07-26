@@ -57,7 +57,7 @@ pub enum FanIn {
     VariedAround(usize),
     /// Distribute *exactly* this many synapses across the non-input neurons, as
     /// evenly as possible. Used by the `production_exact` shape (Issue #286) so
-    /// the fixture reproduces the committed `GRQ-cluster/network.json` synapse
+    /// the fixture reproduces the committed production creature's synapse
     /// count to the synapse, not just its ~13 average. See
     /// [`FanIn::exact_schedule`].
     ExactTotal(usize),
@@ -141,8 +141,8 @@ impl NetSpec {
 /// a huge input layer, a modest neuron count and a sparse ~13 average fan-in,
 /// which is gather-bound in a way the dense shapes are not. `production_2x`
 /// doubles neurons and synapses to cover #175's "or larger creatures" clause.
-/// `production_exact` (Issue #286) pins the fixture to the committed
-/// `GRQ-cluster/network.json` topology — 1,666 non-input neurons, 21,513
+/// `production_exact` (Issue #286) pins the fixture to the committed production
+/// creature topology — 1,666 non-input neurons, 21,513
 /// synapses, 2,461 inputs — to the synapse, giving the Criterion baseline a
 /// reproducible production-topology anchor.
 pub const NETWORKS: [NetSpec; 6] = [
@@ -185,7 +185,7 @@ pub const NETWORKS: [NetSpec; 6] = [
     },
     NetSpec {
         label: "production_exact",
-        // Exact GRQ-cluster/network.json topology (Issue #286): 2461 inputs +
+        // Exact production creature topology (Issue #286): 2461 inputs +
         // 1666 non-input neurons = 4127 total, exactly 21,513 synapses. Unlike
         // `production`'s ~13-average VariedAround, ExactTotal pins the synapse
         // count to the committed production model so the baseline is anchored to
@@ -278,11 +278,11 @@ pub fn build_inputs(n: usize, seed: u64) -> Vec<f32> {
 }
 
 /// Production-representative record count for the scoring throughput benches
-/// (Issue #228), calibrated to the committed GRQ-cluster telemetry rather than
+/// (Issue #228), calibrated to committed production-run telemetry rather than
 /// an arbitrary token batch.
 ///
-/// Derivation (from `GRQ-cluster/performance.csv`, the 32-generation production
-/// run whose totals match `result.json`):
+/// Derivation (from the 32-generation production
+/// run whose totals match the run summary):
 ///
 /// - `training_data_size_bytes` = 22,097,375,712 across
 ///   `training_data_files` = 520 shards.
