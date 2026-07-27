@@ -17,8 +17,8 @@
 //! - the **`wasm32`** build is completely unaffected — it keeps the existing
 //!   single-thread behaviour even if the feature is requested.
 //!
-//! When the feature is off (or on wasm), [`CompiledNetwork::score_records_parallel`]
-//! transparently falls back to the sequential [`CompiledNetwork::score_records`].
+//! When the feature is off (or on wasm), [`CompiledNetwork::score_records_parallel_flat`]
+//! transparently falls back to the sequential [`CompiledNetwork::score_records_flat`].
 //!
 //! # Determinism
 //!
@@ -55,10 +55,10 @@
 //! `&[Vec<f32>]` signatures force. Both layouts feed the identical kernel, so
 //! their results are bit-identical.
 //!
-//! The per-record `&[Vec<f32>]` entry points ([`CompiledNetwork::score_records`]
-//! and [`CompiledNetwork::score_records_parallel`]) are **deprecated** since
-//! `0.2.28` (Issue #408) — every in-repo caller now uses the flat entry points.
-//! They still compile and behave identically; removal is tracked by Issue #409.
+//! The per-record `&[Vec<f32>]` entry points (`score_records` /
+//! `score_records_parallel`) were removed in Issue #409 once every in-repo
+//! caller had moved to the flat entry points; the flat slice is now the only
+//! record-input layout the scoring API accepts.
 
 use crate::batch_scoring::{BatchScratch, RecordBatch};
 use crate::network::CompiledNetwork;
@@ -71,39 +71,6 @@ use crate::network::CompiledNetwork;
 const PARALLEL_CHUNK_RECORDS: usize = 64;
 
 impl CompiledNetwork {
-    /// Score every record sequentially, returning a single flat output buffer.
-    ///
-    /// The result is one contiguous `Vec<f32>` of `records.len() * num_outputs`
-    /// elements: record `i`'s outputs occupy `[i * num_outputs .. (i + 1) *
-    /// num_outputs]`.
-    ///
-    /// The batch is driven through the across-records SIMD path (Issue #230):
-    /// records are grouped into 8s (then a 4-record group, then a scalar tail)
-    /// and forwarded through the batched `weighted_sum_simd_8records` /
-    /// `weighted_sum_simd_4records` kernels, loading each synapse weight once and
-    /// applying it across the lanes. The output layout and the single output
-    /// allocation (Issue #229) are unchanged; standard-squash results match the
-    /// per-record reference within a small `f32` tolerance (see
-    /// [`crate::batch_scoring`]).
-    ///
-    /// This is the fallback used when the `parallel` feature is off or when
-    /// building for `wasm32`, and the reference path the parallel results must
-    /// match exactly.
-    ///
-    /// # Deprecated
-    ///
-    /// Superseded by [`CompiledNetwork::score_records_flat`] (Issue #386), which
-    /// takes the same records as one contiguous buffer and so avoids the
-    /// one-heap-allocation-per-record marshalling this signature forces on the
-    /// caller. Removal is tracked by Issue #409.
-    #[deprecated(
-        since = "0.2.28",
-        note = "use score_records_flat / score_records_parallel_flat (Issue #386)"
-    )]
-    pub fn score_records(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
-        self.score_batch_alloc(RecordBatch::PerRecord(records), num_outputs)
-    }
-
     /// Score every record from one **flat** input buffer, returning a single flat
     /// output buffer (Issue #386).
     ///
@@ -116,9 +83,9 @@ impl CompiledNetwork {
     /// through: no heap allocation per record, no `Vec` header to pointer-chase
     /// on each lane load, no re-marshalling.
     ///
-    /// Results are **bit-identical** to [`CompiledNetwork::score_records`] on the
-    /// same data — both drive the same batched kernel, which only ever reads a
-    /// record as `&[f32]`. A `stride` shorter than the network's input arity
+    /// Both input layouts drive the same batched kernel, which only ever reads a
+    /// record as `&[f32]`, so the flat path is numerically the record-scoring
+    /// contract. A `stride` shorter than the network's input arity
     /// zero-fills the uncovered inputs, exactly as a short `Vec` does.
     ///
     /// # Panics
@@ -161,8 +128,8 @@ impl CompiledNetwork {
     }
 
     /// Allocate the flat output buffer and drive `batch` through the batched
-    /// forward pass — the single sequential implementation shared by the
-    /// per-record and flat-slice entry points.
+    /// forward pass — the shared sequential implementation behind the flat-slice
+    /// entry point.
     fn score_batch_alloc(&self, batch: RecordBatch<'_>, num_outputs: usize) -> Vec<f32> {
         let mut outputs = vec![0.0f32; batch.len() * num_outputs];
         let mut scratch = BatchScratch::new(self.num_neurons);
@@ -170,73 +137,7 @@ impl CompiledNetwork {
         outputs
     }
 
-    /// Score every record across the `rayon` thread pool, writing into a single
-    /// flat output buffer in input order.
-    ///
-    /// Layout matches [`CompiledNetwork::score_records`]: record `i`'s outputs
-    /// live in `[i * num_outputs .. (i + 1) * num_outputs]`. Records are split
-    /// into fixed-size chunks (`PARALLEL_CHUNK_RECORDS`) across the rayon pool;
-    /// each worker initialises its own [`BatchScratch`] via `for_each_init` and
-    /// drives its chunk through the same batched forward pass
-    /// ([`CompiledNetwork::score_batch_into`]) the sequential path uses, writing
-    /// only its own disjoint output slice. No `&mut self` is shared: immutable
-    /// weights are read through `&self` while every worker owns its lane
-    /// buffers. Because each chunk boundary is a multiple of the batch size and
-    /// the forward pass carries no cross-record state, results are identical to
-    /// the sequential path regardless of thread count.
-    ///
-    /// Available with the `parallel` feature on native targets.
-    ///
-    /// # Deprecated
-    ///
-    /// Superseded by [`CompiledNetwork::score_records_parallel_flat`] (Issue
-    /// #386). Removal is tracked by Issue #409.
-    #[deprecated(
-        since = "0.2.28",
-        note = "use score_records_flat / score_records_parallel_flat (Issue #386)"
-    )]
-    #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
-    pub fn score_records_parallel(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
-        use rayon::prelude::*;
-        let mut outputs = vec![0.0f32; records.len() * num_outputs];
-        outputs
-            .par_chunks_mut(PARALLEL_CHUNK_RECORDS * num_outputs)
-            .zip(records.par_chunks(PARALLEL_CHUNK_RECORDS))
-            .for_each_init(
-                || BatchScratch::new(self.num_neurons),
-                |scratch, (out_chunk, rec_chunk)| {
-                    self.score_batch_into(
-                        scratch,
-                        RecordBatch::PerRecord(rec_chunk),
-                        num_outputs,
-                        out_chunk,
-                    )
-                },
-            );
-        outputs
-    }
-
-    /// Sequential fallback for [`CompiledNetwork::score_records_parallel`] when
-    /// the `parallel` feature is disabled or building for `wasm32` (where
-    /// `rayon` is unavailable). Same signature and identical results to the
-    /// feature-on path — just single-threaded.
-    ///
-    /// # Deprecated
-    ///
-    /// Superseded by [`CompiledNetwork::score_records_parallel_flat`] (Issue
-    /// #386). Removal is tracked by Issue #409.
-    #[deprecated(
-        since = "0.2.28",
-        note = "use score_records_flat / score_records_parallel_flat (Issue #386)"
-    )]
-    #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
-    pub fn score_records_parallel(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
-        // Drives the shared sequential implementation directly rather than the
-        // deprecated `score_records`, so the fallback needs no `allow(deprecated)`.
-        self.score_batch_alloc(RecordBatch::PerRecord(records), num_outputs)
-    }
-
-    /// Flat-input counterpart of [`CompiledNetwork::score_records_parallel`]
+    /// Flat-input parallel scoring across the `rayon` thread pool
     /// (Issue #386): record `i`'s inputs are
     /// `inputs[i * stride .. i * stride + stride]`, scored across the `rayon`
     /// thread pool into one flat output buffer in input order.

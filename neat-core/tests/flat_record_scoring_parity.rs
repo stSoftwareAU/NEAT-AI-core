@@ -1,23 +1,22 @@
 //! Parity guard for the flat-slice record-**input** scoring path (Issue #386).
 //!
-//! `score_records` takes one owned `Vec<f32>` per record; `score_records_flat`
-//! takes a single contiguous buffer where record `i` occupies
-//! `inputs[i * stride .. i * stride + stride]` — mirroring the flat *output*
-//! contract Issue #229 established. Both must drive the identical batched
-//! kernel, so their results are **bit-identical**, not merely close.
+//! `score_records_flat` takes a single contiguous buffer where record `i`
+//! occupies `inputs[i * stride .. i * stride + stride]` — mirroring the flat
+//! *output* contract Issue #229 established. It is the entry point that ships,
+//! so it is checked against an **independent** per-record reference rather than
+//! the old batched per-record wrapper (removed in Issue #409): each record is
+//! scored on its own through the scalar single-record forward pass
+//! ([`CompiledNetwork::activate`]) and the flat batch output must match within
+//! the SIMD tolerance the batched kernel introduces (in the style of the
+//! reference in `score_squash_simd_parity.rs`).
 //!
-//! These are "what" tests: they score real networks through both public entry
-//! points and compare the returned buffers. Record counts straddle the
-//! 8-record SIMD group boundary (0, 1, 7, 8, 9, 12) plus a production-width
-//! shard, and both dispatch arms are covered — the record-interleaved fast path
-//! (all-standard squash) and the aggregate-squash per-lane fallback. A stride
-//! or offset slip shows up as wrong lane values at the 7/9/12 remainder counts.
-//!
-//! This file is the **one** place still calling the deprecated per-record
-//! entry points (Issue #408): comparing the two APIs is precisely its job, so
-//! the deprecation is silenced with `#[allow(deprecated)]` on the three call
-//! sites below. Converting the oracle to an independent reference belongs to
-//! the deletion issue, stSoftwareAU/NEAT-AI-core#409.
+//! These are "what" tests: they score real networks through the public entry
+//! point and compare the returned buffer against the reference. Record counts
+//! straddle the 8-record SIMD group boundary (0, 1, 7, 8, 9, 12) plus a
+//! production-width shard, and both dispatch arms are covered — the
+//! record-interleaved fast path (all-standard squash) and the aggregate-squash
+//! per-lane fallback. A stride or offset slip shows up as wrong lane values at
+//! the 7/9/12 remainder counts.
 
 use neat_core::squash::SquashType;
 use neat_core::{CompiledNetwork, NeuronData, SynapseData};
@@ -130,69 +129,111 @@ fn spec(label: &str) -> &'static NetSpec {
         .unwrap_or_else(|| panic!("no NetSpec labelled {label}"))
 }
 
-/// Assert the two entry points agree bit-for-bit across every boundary count.
-// Deliberate per-record oracle — see the module comment and Issue #409.
-#[allow(deprecated)]
-fn assert_flat_matches_per_record(net: &CompiledNetwork, width: usize, num_outputs: usize) {
+/// Independent per-record reference: score each record on its own through the
+/// scalar single-record forward pass ([`CompiledNetwork::activate`]) and flatten
+/// to the `[record * num_outputs]` layout `score_records_flat` returns.
+/// Deliberately separate from the batched scoring path so it is a genuine oracle
+/// (mirrors `score_squash_simd_parity.rs`). A record shorter than the network's
+/// input arity zero-fills the uncovered inputs, exactly as the flat path does:
+/// on a fresh clone the input activations start at zero and `activate` only
+/// overwrites the covered prefix.
+fn reference(net: &CompiledNetwork, recs: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
+    let mut scratch = net.clone();
+    recs.iter()
+        .flat_map(|r| scratch.activate(r, num_outputs))
+        .collect()
+}
+
+/// Per-element tolerance: the batched kernel re-associates the `f32` weighted
+/// sums and squashes across lanes, so its output matches the scalar reference
+/// within a small tolerance, not bit-for-bit (Issue #230). `1e-3` stays far
+/// below any scoring-decision threshold while a real lane/order bug (an O(1)
+/// error) still trips it.
+const TOL: f32 = 1e-3;
+
+/// Assert the flat entry point matches the independent per-record reference
+/// within tolerance across every boundary count.
+fn assert_flat_matches_reference(net: &CompiledNetwork, width: usize, num_outputs: usize) {
     for &count in &COUNTS {
         let recs = records(width, count);
         let flat = flatten(&recs);
         let from_flat = net.score_records_flat(&flat, width, num_outputs);
-        let from_vecs = net.score_records(&recs, num_outputs);
+        let expected = reference(net, &recs, num_outputs);
         assert_eq!(
             from_flat.len(),
             count * num_outputs,
             "count {count}: flat output length"
         );
-        assert_eq!(
-            from_flat, from_vecs,
-            "count {count}: flat-slice input must be bit-identical to per-record input"
-        );
+        assert_close(&from_flat, &expected, &format!("count {count}"));
     }
 }
 
-#[test]
-fn flat_input_matches_per_record_on_the_interleaved_arm() {
-    // All-Tanh network → no aggregate neurons → record-interleaved fast path.
-    let net = build_local_network(12, SquashType::Tanh);
-    assert_flat_matches_per_record(&net, 12, 1);
-}
-
-#[test]
-fn flat_input_matches_per_record_on_the_aggregate_squash_arm() {
-    // A Maximum network has aggregate neurons → per-lane fallback dispatch.
-    let net = build_local_network(12, SquashType::Maximum);
-    assert_flat_matches_per_record(&net, 12, 1);
-}
-
-#[test]
-// Deliberate per-record oracle — see the module comment and Issue #409.
-#[allow(deprecated)]
-fn flat_input_matches_per_record_at_production_shard_width() {
-    let s = spec("production");
-    let net = build_network(s, 0x5EED);
-    let recs = build_records(net.num_inputs(), SHARD_RECORDS);
-    let flat = flatten(&recs);
+/// Assert two output buffers agree elementwise within [`TOL`], reporting the
+/// worst offender on failure.
+fn assert_close(actual: &[f32], expected: &[f32], context: &str) {
     assert_eq!(
-        net.score_records_flat(&flat, net.num_inputs(), s.num_outputs),
-        net.score_records(&recs, s.num_outputs),
-        "production-width shard must be bit-identical across input layouts"
+        actual.len(),
+        expected.len(),
+        "{context}: length mismatch ({} vs {})",
+        actual.len(),
+        expected.len()
+    );
+    let mut worst = 0.0f32;
+    let mut worst_at = 0usize;
+    for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+        let diff = (a - e).abs();
+        if diff > worst {
+            worst = diff;
+            worst_at = i;
+        }
+    }
+    assert!(
+        worst <= TOL,
+        "{context}: max abs diff {worst} at {worst_at} exceeds {TOL} \
+         (actual={}, expected={})",
+        actual[worst_at],
+        expected[worst_at]
     );
 }
 
 #[test]
-// Deliberate per-record oracle — see the module comment and Issue #409.
-#[allow(deprecated)]
+fn flat_input_matches_reference_on_the_interleaved_arm() {
+    // All-Tanh network → no aggregate neurons → record-interleaved fast path.
+    let net = build_local_network(12, SquashType::Tanh);
+    assert_flat_matches_reference(&net, 12, 1);
+}
+
+#[test]
+fn flat_input_matches_reference_on_the_aggregate_squash_arm() {
+    // A Maximum network has aggregate neurons → per-lane fallback dispatch.
+    let net = build_local_network(12, SquashType::Maximum);
+    assert_flat_matches_reference(&net, 12, 1);
+}
+
+#[test]
+fn flat_input_matches_reference_at_production_shard_width() {
+    let s = spec("production");
+    let net = build_network(s, 0x5EED);
+    let recs = build_records(net.num_inputs(), SHARD_RECORDS);
+    let flat = flatten(&recs);
+    assert_close(
+        &net.score_records_flat(&flat, net.num_inputs(), s.num_outputs),
+        &reference(&net, &recs, s.num_outputs),
+        "production-width shard",
+    );
+}
+
+#[test]
 fn flat_input_zero_fills_a_stride_narrower_than_the_network() {
     // A record shorter than the network's input arity is zero-filled, exactly as
-    // the per-record path does for a short `Vec`.
+    // the scalar reference does for a short input slice.
     let net = build_local_network(12, SquashType::Tanh);
     let short = records(5, 9);
     let flat = flatten(&short);
-    assert_eq!(
-        net.score_records_flat(&flat, 5, 1),
-        net.score_records(&short, 1),
-        "a narrow stride must zero-fill the uncovered inputs"
+    assert_close(
+        &net.score_records_flat(&flat, 5, 1),
+        &reference(&net, &short, 1),
+        "narrow stride zero-fill",
     );
 }
 

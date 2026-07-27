@@ -54,31 +54,25 @@ use crate::synapse_type::SynapseType;
 /// Number of records processed per SIMD batch (one lane each).
 pub(crate) const SCORING_LANES: usize = 8;
 
-/// Input records for one scoring batch, in either supported layout (Issue #386).
+/// Input records for one scoring batch in the flat-slice layout (Issue #386).
 ///
-/// The kernels below only ever need `&[f32]` per record, so both layouts feed
-/// the *same* forward pass and produce bit-identical results:
+/// A single contiguous buffer where record `i` occupies
+/// `inputs[i * stride .. i * stride + stride]`, mirroring the flat *output*
+/// contract from Issue #229 and the packed input layout the fused loss lane
+/// already takes ([`crate::loss::mse_sum_batch_packed`]). Callers that already
+/// hold a contiguous buffer — the WASM dataset offload path
+/// ([`crate::wasm_dataset::TrainingDataset`]) — pass it straight through with no
+/// per-record allocation and no re-marshalling. The kernels below only ever need
+/// `&[f32]` per record.
 ///
-/// - [`RecordBatch::PerRecord`] — one owned `Vec<f32>` per record, the original
-///   layout kept for existing callers.
-/// - [`RecordBatch::Flat`] — a single contiguous buffer where record `i`
-///   occupies `inputs[i * stride .. i * stride + stride]`, mirroring the flat
-///   *output* contract from Issue #229 and the packed input layout the fused
-///   loss lane already takes ([`crate::loss::mse_sum_batch_packed`]). Callers
-///   that already hold a contiguous buffer — the WASM dataset offload path
-///   ([`crate::wasm_dataset::TrainingDataset`]) — pass it straight through with
-///   no per-record allocation and no re-marshalling.
+/// The per-record `&[Vec<f32>]` layout (`RecordBatch::PerRecord`) was removed in
+/// Issue #409 once every caller had moved to this flat layout.
 #[derive(Clone, Copy)]
-pub(crate) enum RecordBatch<'a> {
-    /// One owned vector per record.
-    PerRecord(&'a [Vec<f32>]),
-    /// Records packed contiguously at a fixed stride.
-    Flat {
-        /// Packed inputs — exactly `record_count * stride` values.
-        inputs: &'a [f32],
-        /// Values per record. Non-zero, and a divisor of `inputs.len()`.
-        stride: usize,
-    },
+pub(crate) struct RecordBatch<'a> {
+    /// Packed inputs — exactly `record_count * stride` values.
+    inputs: &'a [f32],
+    /// Values per record. Non-zero, and a divisor of `inputs.len()`.
+    stride: usize,
 }
 
 impl<'a> RecordBatch<'a> {
@@ -97,25 +91,19 @@ impl<'a> RecordBatch<'a> {
             "flat record buffer of {} values is not a whole number of records at stride {stride}",
             inputs.len()
         );
-        Self::Flat { inputs, stride }
+        Self { inputs, stride }
     }
 
     /// Number of records in the batch.
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        match self {
-            Self::PerRecord(records) => records.len(),
-            Self::Flat { inputs, stride } => inputs.len() / stride,
-        }
+        self.inputs.len() / self.stride
     }
 
     /// Inputs for record `index`.
     #[inline]
     pub(crate) fn record(&self, index: usize) -> &'a [f32] {
-        match self {
-            Self::PerRecord(records) => &records[index],
-            Self::Flat { inputs, stride } => &inputs[index * stride..(index + 1) * stride],
-        }
+        &self.inputs[index * self.stride..(index + 1) * self.stride]
     }
 }
 
@@ -266,9 +254,8 @@ fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
 impl CompiledNetwork {
     /// Score a batch of records through the batched SIMD path.
     ///
-    /// `records` may be in either input layout ([`RecordBatch`]) — per-record
-    /// `Vec`s or one contiguous flat buffer at a fixed stride. The kernels read
-    /// each record as `&[f32]`, so the two layouts are bit-identical.
+    /// `records` is a flat-slice [`RecordBatch`] — one contiguous buffer at a
+    /// fixed stride. The kernels read each record as `&[f32]`.
     ///
     /// Record `i` (0-based within `records`) writes its outputs to
     /// `out[i * num_outputs .. (i + 1) * num_outputs]`; `out` must be exactly
