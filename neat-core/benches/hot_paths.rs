@@ -200,47 +200,20 @@ fn bench_reverse_topological_order(c: &mut Criterion) {
 }
 
 /// Scoring throughput — a full production-shaped record batch pushed through
-/// one creature via `score_records` (Issue #228). Sized to
+/// one creature via `score_records_flat` (Issue #228, #386). Sized to
 /// [`PRODUCTION_SCORING_RECORDS`] so the single-core scoring figure in
 /// `hot_paths` is measured at production record volume, matching the
 /// `parallel_scoring` harness. Only the production shapes are gather-bound in
 /// the way real scoring is, so this group covers just `production` /
 /// `production_2x` and is reachable via `--bench hot_paths -- production`.
+///
+/// The records are flattened into the contiguous `record * stride` layout at
+/// fixture-construction time, outside the timed loop. Issue #408 retired the
+/// separate `scoring_flat` A/B group: with the per-record entry point
+/// deprecated there is no second input layout left to compare against, so
+/// `scoring` now *is* the flat measurement.
 fn bench_scoring(c: &mut Criterion) {
     let mut group = c.benchmark_group("scoring");
-    for spec in NETWORKS
-        .iter()
-        .filter(|s| s.label.starts_with("production"))
-    {
-        let net = build_network(spec, 0x5EED);
-        let records = build_records(net.num_inputs(), PRODUCTION_SCORING_RECORDS);
-        let num_outputs = spec.num_outputs;
-        group.throughput(Throughput::Elements(PRODUCTION_SCORING_RECORDS as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(spec.label),
-            &records,
-            |b, records| {
-                b.iter(|| {
-                    let out = net.score_records(black_box(records), black_box(num_outputs));
-                    black_box(out);
-                });
-            },
-        );
-    }
-    group.finish();
-}
-
-/// Flat-slice record **input** scoring — `score_records_flat` over the same
-/// production shard the `scoring` group scores as `&[Vec<f32>]` (Issue #386).
-///
-/// Same kernel, same records, same output layout; only the input layout differs,
-/// so the delta against `scoring` is the cost of the per-record `Vec` header
-/// pointer-chase on each lane load. The one-heap-allocation-per-record the
-/// `&[Vec<f32>]` signature forces on the *caller* is not measured here (both
-/// fixtures are built outside the timed loop) — it is pure additional saving for
-/// callers that already hold a contiguous buffer.
-fn bench_scoring_flat(c: &mut Criterion) {
-    let mut group = c.benchmark_group("scoring_flat");
     for spec in NETWORKS
         .iter()
         .filter(|s| s.label.starts_with("production"))
@@ -728,7 +701,6 @@ criterion_group!(
     bench_backprop,
     bench_reverse_topological_order,
     bench_scoring,
-    bench_scoring_flat,
     bench_dataset_evaluate_mse,
     bench_activation_primitives,
     bench_topology_ops,

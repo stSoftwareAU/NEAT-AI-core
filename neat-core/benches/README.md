@@ -22,18 +22,20 @@ There are two bench targets:
 | `batched_scoring` | `activate_and_trace_batch_4way`, 8-record `mse_sum_batch_packed` (all shapes), production-sized `mse_sum_batch_packed` (`mse_sum_production`, Issue #384) | 8-record: same five shapes; `mse_sum_production`: `production`, `production_2x`, `production_exact` |
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
 | `reverse_topological_order` | `compute_reverse_topological_order` over a creature's full synapse list (Issue #388) | all six shapes |
-| `scoring` | `CompiledNetwork::score_records` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
-| `scoring_flat` | `CompiledNetwork::score_records_flat` over the same batch in flat-slice input layout (Issue #386) | `production`, `production_2x`, `production_exact` |
+| `scoring` | `CompiledNetwork::score_records_flat` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
 | `dataset_evaluate_mse` | `TrainingDataset::evaluate_mse` over a production-sized batch (Issue #386) | `production`, `production_2x`, `production_exact` |
 | `topology_ops` | `scan_available_connections` — the mutation-time availability scan (Issue #387); `compute_reverse_topological_order` — the per-creature backprop-ordering setup (Issue #388) | `n1666_21513`, `n4127_21513` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
 
 The `scoring` group (Issue #228) pushes a full production-sized record batch
-through one creature via `score_records`, so `hot_paths` reports single-core
-scoring throughput at production record volume alongside the parallel harness.
-It covers only the gather-bound `production` shapes and is reachable with the
-`production` filter (`--bench hot_paths -- production`).
+through one creature via `score_records_flat`, so `hot_paths` reports
+single-core scoring throughput at production record volume alongside the
+parallel harness. It covers only the gather-bound `production` shapes and is
+reachable with the `production` filter (`--bench hot_paths -- production`).
+Issue #408 retired the separate `scoring_flat` A/B group: with the per-record
+entry point deprecated there is no second input layout left to compare against,
+so `scoring` now *is* the flat measurement.
 
 The `topology_ops` group (Issue #387) covers the mutation-time helpers, which
 are not per-record hot paths but are paid repeatedly across the population every
@@ -52,9 +54,7 @@ shows up as a throughput drop here. `cargo run --release --example
 reverse_topo_order_alloc_ab` measures the same function's allocation count
 directly against the pre-#388 shape.
 
-`scoring_flat` scores the *same* shard through the flat-slice input entry point
-(Issue #386), so the delta against `scoring` isolates the cost of the per-record
-`Vec` header indirection. `dataset_evaluate_mse` measures the WASM
+`dataset_evaluate_mse` measures the WASM
 dataset-offload evaluation call (Issue #298) end to end at the same record
 volume — bounds check, forward pass and MSE accumulation.
 

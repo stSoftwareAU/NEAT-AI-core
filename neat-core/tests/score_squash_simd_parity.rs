@@ -6,8 +6,8 @@
 //! inline squash for every other type.
 //!
 //! These are "what" tests: they build a real forward network, score a batch of
-//! distinct records through the public `score_records` entry point, and assert
-//! the result matches the scalar single-record `activate` reference within the
+//! distinct records through the public `score_records_flat` entry point, and
+//! assert the result matches the scalar `activate` reference within the
 //! documented SIMD tolerance. Distinct per-record inputs mean a lane
 //! transposition in the wiring would break the parity, so the tests double as a
 //! regression guard for the batching itself.
@@ -100,7 +100,7 @@ fn build_records(num_records: usize, num_inputs: usize) -> Vec<Vec<f32>> {
 
 /// Scalar single-record reference: score each record via `activate` (the scalar
 /// forward pass) and flatten to the `[record * num_outputs]` layout that
-/// `score_records` returns. Deliberately independent of `score_records`.
+/// `score_records_flat` returns. Deliberately independent of the scoring path.
 fn reference(net: &CompiledNetwork, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
     let mut scratch = net.clone();
     records
@@ -121,8 +121,11 @@ fn assert_parity(squash: SquashType, num_records: usize) {
     let net = build_network(num_inputs, squash);
     let records = build_records(num_records, num_inputs);
 
+    // Flat input layout (Issue #386): record `i` occupies
+    // `flat[i * num_inputs .. (i + 1) * num_inputs]`.
+    let flat: Vec<f32> = records.iter().flat_map(|r| r.iter().copied()).collect();
     let expected = reference(&net, &records, num_outputs);
-    let actual = net.score_records(&records, num_outputs);
+    let actual = net.score_records_flat(&flat, num_inputs, num_outputs);
 
     assert_eq!(
         actual.len(),

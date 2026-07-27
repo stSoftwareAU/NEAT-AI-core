@@ -4,8 +4,8 @@
 //! layout (fast path, taken when the network has no aggregate-squash neurons)
 //! and the original per-lane layout (fallback, taken when it does). These are
 //! "what" tests: they build real forward networks, score batches through the
-//! public `score_records` entry point, and assert the flat output matches the
-//! scalar single-record `activate` reference — so a lane transposition, a
+//! public `score_records_flat` entry point, and assert the flat output matches
+//! the scalar single-record `activate` reference — so a lane transposition, a
 //! dropped tail record, or a wrong dispatch would surface as a parity break.
 //!
 //! Record counts straddle the 8-record group boundary (1, 7, 8, 9, 16, 17) so
@@ -97,6 +97,12 @@ fn records(num_inputs: usize, count: usize) -> Vec<Vec<f32>> {
         .collect()
 }
 
+/// Pack per-record vectors into the flat `record * stride` layout the scoring
+/// entry point takes (Issue #386).
+fn flatten(recs: &[Vec<f32>]) -> Vec<f32> {
+    recs.iter().flat_map(|r| r.iter().copied()).collect()
+}
+
 /// Reference outputs from the scalar single-record `activate` path.
 fn reference(net: &CompiledNetwork, recs: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
     let mut scratch = net.clone();
@@ -119,7 +125,7 @@ fn interleaved_fast_path_matches_reference_across_boundaries() {
     let net = build_network(num_inputs, SquashType::Tanh);
     for &count in &COUNTS {
         let recs = records(num_inputs, count);
-        let got = net.score_records(&recs, 1);
+        let got = net.score_records_flat(&flatten(&recs), num_inputs, 1);
         let want = reference(&net, &recs, 1);
         assert_eq!(got.len(), want.len(), "count {count}: length mismatch");
         for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -137,7 +143,10 @@ fn interleaved_single_record_is_bit_identical_to_activate() {
     let num_inputs = 12;
     let net = build_network(num_inputs, SquashType::Tanh);
     let recs = records(num_inputs, 1);
-    assert_eq!(net.score_records(&recs, 1), reference(&net, &recs, 1));
+    assert_eq!(
+        net.score_records_flat(&flatten(&recs), num_inputs, 1),
+        reference(&net, &recs, 1)
+    );
 }
 
 #[test]
@@ -148,7 +157,7 @@ fn aggregate_fallback_path_matches_reference_across_boundaries() {
     let net = build_network(num_inputs, SquashType::Maximum);
     for &count in &COUNTS {
         let recs = records(num_inputs, count);
-        let got = net.score_records(&recs, 1);
+        let got = net.score_records_flat(&flatten(&recs), num_inputs, 1);
         let want = reference(&net, &recs, 1);
         assert_eq!(got, want, "count {count}: aggregate fallback must be exact");
     }

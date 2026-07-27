@@ -2,7 +2,8 @@
 //!
 //! These assert on observable outcomes — the returned output vectors — rather
 //! than on threading mechanics. They run in both feature modes: with the
-//! `parallel` feature off, `score_records_parallel` is the sequential fallback;
+//! `parallel` feature off, `score_records_parallel_flat` is the sequential
+//! fallback;
 //! with `--features parallel` (as `quality.sh` runs via `--all-features`), the
 //! same assertions exercise the rayon path.
 //!
@@ -69,10 +70,16 @@ fn build_records(net: &CompiledNetwork, count: usize) -> Vec<Vec<f32>> {
         .collect()
 }
 
+/// Pack per-record vectors into the flat `record * stride` layout the scoring
+/// entry points take (Issue #386).
+fn flatten(recs: &[Vec<f32>]) -> Vec<f32> {
+    recs.iter().flat_map(|r| r.iter().copied()).collect()
+}
+
 /// Independent sequential reference: a fresh scratch clone scored one record at
 /// a time via per-record `activate` (which still allocates its own output
 /// `Vec`), flattened to the flat `[record * num_outputs]` layout the scoring
-/// path now returns. Deliberately does not call `score_records`, so the parity
+/// path now returns. Deliberately does not call the scoring path, so the parity
 /// assertion does not assume the two share an implementation.
 fn reference(net: &CompiledNetwork, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
     let mut scratch = net.clone();
@@ -89,7 +96,8 @@ fn parallel_scoring_matches_sequential_on_production_fixture() {
     let records = build_records(&net, 257); // not a multiple of any core count
 
     let expected = reference(&net, &records, s.num_outputs);
-    let actual = net.score_records_parallel(&records, s.num_outputs);
+    let actual =
+        net.score_records_parallel_flat(&flatten(&records), net.num_inputs(), s.num_outputs);
 
     assert_eq!(actual.len(), records.len() * s.num_outputs);
     assert_close(&actual, &expected, "production fixture");
@@ -103,23 +111,24 @@ fn parallel_scoring_matches_sequential_across_shapes() {
         let records = build_records(&net, 128);
 
         let expected = reference(&net, &records, s.num_outputs);
-        let actual = net.score_records_parallel(&records, s.num_outputs);
+        let actual =
+            net.score_records_parallel_flat(&flatten(&records), net.num_inputs(), s.num_outputs);
 
         assert_close(&actual, &expected, &format!("shape {label}"));
     }
 }
 
 #[test]
-fn score_records_matches_reference() {
+fn sequential_scoring_matches_reference() {
     let s = spec("medium_500");
     let net = build_network(s, 0x1357);
     let records = build_records(&net, 64);
 
     let expected = reference(&net, &records, s.num_outputs);
     assert_close(
-        &net.score_records(&records, s.num_outputs),
+        &net.score_records_flat(&flatten(&records), net.num_inputs(), s.num_outputs),
         &expected,
-        "score_records medium_500",
+        "score_records_flat medium_500",
     );
 }
 
@@ -132,7 +141,8 @@ fn output_order_is_preserved() {
     // Each record is distinct, so a re-ordered result would not match the
     // index-aligned reference within tolerance (a swap is an O(1) error).
     let expected = reference(&net, &records, s.num_outputs);
-    let actual = net.score_records_parallel(&records, s.num_outputs);
+    let actual =
+        net.score_records_parallel_flat(&flatten(&records), net.num_inputs(), s.num_outputs);
     for (i, (a, e)) in actual
         .chunks_exact(s.num_outputs)
         .zip(expected.chunks_exact(s.num_outputs))
@@ -148,7 +158,7 @@ fn each_output_has_num_outputs_elements() {
     let net = build_network(s, 0x99);
     let records = build_records(&net, 16);
 
-    let out = net.score_records_parallel(&records, s.num_outputs);
+    let out = net.score_records_parallel_flat(&flatten(&records), net.num_inputs(), s.num_outputs);
     // Flat buffer: 16 records each contributing exactly num_outputs elements.
     assert_eq!(out.len(), 16 * s.num_outputs);
     assert_eq!(out.chunks_exact(s.num_outputs).count(), 16);
@@ -159,10 +169,16 @@ fn each_output_has_num_outputs_elements() {
 fn empty_records_yields_empty_output() {
     let s = spec("small_50");
     let net = build_network(s, 0x7);
-    let empty: Vec<Vec<f32>> = Vec::new();
+    let stride = net.num_inputs();
 
-    assert!(net.score_records_parallel(&empty, s.num_outputs).is_empty());
-    assert!(net.score_records(&empty, s.num_outputs).is_empty());
+    assert!(
+        net.score_records_parallel_flat(&[], stride, s.num_outputs)
+            .is_empty()
+    );
+    assert!(
+        net.score_records_flat(&[], stride, s.num_outputs)
+            .is_empty()
+    );
 }
 
 #[test]
@@ -173,7 +189,7 @@ fn single_record_matches_direct_activate() {
 
     let mut scratch = net.clone();
     let direct = scratch.activate(&record, s.num_outputs);
-    let via_parallel = net.score_records_parallel(std::slice::from_ref(&record), s.num_outputs);
+    let via_parallel = net.score_records_parallel_flat(&record, net.num_inputs(), s.num_outputs);
 
     // Single record: it runs the scalar tail, which is the exact single-record
     // path — so the flat buffer is bit-for-bit that record's outputs.
@@ -193,8 +209,9 @@ fn tail_boundary_record_counts_match_reference() {
         let records = build_records(&net, count);
         let expected = reference(&net, &records, s.num_outputs);
 
-        let seq = net.score_records(&records, s.num_outputs);
-        let par = net.score_records_parallel(&records, s.num_outputs);
+        let flat = flatten(&records);
+        let seq = net.score_records_flat(&flat, net.num_inputs(), s.num_outputs);
+        let par = net.score_records_parallel_flat(&flat, net.num_inputs(), s.num_outputs);
 
         assert_eq!(
             seq.len(),
@@ -206,11 +223,15 @@ fn tail_boundary_record_counts_match_reference() {
             count * s.num_outputs,
             "par length for count {count}"
         );
-        assert_close(&seq, &expected, &format!("score_records count {count}"));
+        assert_close(
+            &seq,
+            &expected,
+            &format!("score_records_flat count {count}"),
+        );
         assert_close(
             &par,
             &expected,
-            &format!("score_records_parallel count {count}"),
+            &format!("score_records_parallel_flat count {count}"),
         );
     }
 }
@@ -228,8 +249,9 @@ fn sequential_and_parallel_are_bit_identical() {
         let net = build_network(s, 0x5AFE_5EED);
         for &count in &[7usize, 8, 9, 65, 130, 257] {
             let records = build_records(&net, count);
-            let seq = net.score_records(&records, s.num_outputs);
-            let par = net.score_records_parallel(&records, s.num_outputs);
+            let flat = flatten(&records);
+            let seq = net.score_records_flat(&flat, net.num_inputs(), s.num_outputs);
+            let par = net.score_records_parallel_flat(&flat, net.num_inputs(), s.num_outputs);
             assert_eq!(
                 seq, par,
                 "seq vs parallel diverged for {label} count {count}"

@@ -12,6 +12,12 @@
 //! shard, and both dispatch arms are covered — the record-interleaved fast path
 //! (all-standard squash) and the aggregate-squash per-lane fallback. A stride
 //! or offset slip shows up as wrong lane values at the 7/9/12 remainder counts.
+//!
+//! This file is the **one** place still calling the deprecated per-record
+//! entry points (Issue #408): comparing the two APIs is precisely its job, so
+//! the deprecation is silenced with `#[allow(deprecated)]` on the three call
+//! sites below. Converting the oracle to an independent reference belongs to
+//! the deletion issue, stSoftwareAU/NEAT-AI-core#409.
 
 use neat_core::squash::SquashType;
 use neat_core::{CompiledNetwork, NeuronData, SynapseData};
@@ -125,6 +131,8 @@ fn spec(label: &str) -> &'static NetSpec {
 }
 
 /// Assert the two entry points agree bit-for-bit across every boundary count.
+// Deliberate per-record oracle — see the module comment and Issue #409.
+#[allow(deprecated)]
 fn assert_flat_matches_per_record(net: &CompiledNetwork, width: usize, num_outputs: usize) {
     for &count in &COUNTS {
         let recs = records(width, count);
@@ -158,6 +166,8 @@ fn flat_input_matches_per_record_on_the_aggregate_squash_arm() {
 }
 
 #[test]
+// Deliberate per-record oracle — see the module comment and Issue #409.
+#[allow(deprecated)]
 fn flat_input_matches_per_record_at_production_shard_width() {
     let s = spec("production");
     let net = build_network(s, 0x5EED);
@@ -171,6 +181,8 @@ fn flat_input_matches_per_record_at_production_shard_width() {
 }
 
 #[test]
+// Deliberate per-record oracle — see the module comment and Issue #409.
+#[allow(deprecated)]
 fn flat_input_zero_fills_a_stride_narrower_than_the_network() {
     // A record shorter than the network's input arity is zero-filled, exactly as
     // the per-record path does for a short `Vec`.

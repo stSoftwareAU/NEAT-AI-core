@@ -322,9 +322,12 @@ fn score_records_on_production_batch_yields_finite_ordered_outputs() {
     // exercising the exact fixture path the scoring benches time.
     let records = build_records(net.num_inputs(), 96);
 
-    // `score_records` returns a flat `[record * num_outputs]` buffer (Issue #229),
-    // so assert on the flat length and finiteness rather than per-record rows.
-    let out = net.score_records(&records, prod.num_outputs);
+    // `score_records_flat` takes the batch as one contiguous buffer (Issue #386)
+    // and returns a flat `[record * num_outputs]` buffer (Issue #229), so assert
+    // on the flat length and finiteness rather than per-record rows.
+    let stride = net.num_inputs();
+    let inputs: Vec<f32> = records.iter().flat_map(|r| r.iter().copied()).collect();
+    let out = net.score_records_flat(&inputs, stride, prod.num_outputs);
     assert_eq!(out.len(), records.len() * prod.num_outputs);
     assert!(
         out.iter().all(|v| v.is_finite()),
