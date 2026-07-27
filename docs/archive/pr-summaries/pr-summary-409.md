@@ -2,154 +2,159 @@
 
 ## Summary
 
-Phase 3 of the flat-slice migration started by #386 and prepared by #408.
-Deletes the deprecated per-record scoring entry points and the batch variant
-only they constructed, so the flat-slice layout is the single scoring contract.
-Closes #409.
+Phase 3 of the flat-slice migration (#386 → #408 → #409). The per-record
+`&[Vec<f32>]` scoring wrappers, deprecated since `0.2.28`, are deleted along with
+the batch variant only they constructed. Closes #409.
 
 Removed:
 
-- `CompiledNetwork::score_records`
-- `CompiledNetwork::score_records_parallel` — **both** `cfg` arms (the rayon
-  arm and the sequential / `wasm32` fallback)
-- `RecordBatch::PerRecord`, its doc bullet and its two match arms
+- `CompiledNetwork::score_records` (`neat-core/src/parallel_scoring.rs`).
+- `CompiledNetwork::score_records_parallel` — **both** `cfg` arms, the rayon one
+  and the sequential/`wasm32` fallback.
+- `RecordBatch::PerRecord`, its doc bullet and its two match arms.
 
-Kept: `score_batch_into` (`pub(crate)`) is untouched — it is the shared
+Simplified as a consequence:
+
+- `RecordBatch` is now a plain `struct { inputs, stride }`. With `PerRecord`
+  gone it was a one-variant enum whose `len()` / `record()` matched on a single
+  arm; the flat layout still needs the type, just not the enum.
+- `score_batch_alloc` is inlined into `score_records_flat`, its sole remaining
+  caller — it existed to be "shared by the per-record and flat-slice entry
+  points" and there is now only one.
+
+Deliberately **not** touched: `score_batch_into` (`pub(crate)`), the shared
 implementation the flat paths drive.
 
-Because `PerRecord` was the only other variant, `RecordBatch` collapses from a
-two-variant enum to a plain flat-layout struct (`inputs`, `stride`); `len()` and
-`record()` lose their matches. Every construction already went through
-`RecordBatch::flat`, so no call site changed.
-
-This is a **breaking change**: the workspace version is bumped `0.2.28 → 0.3.0`
-(pre-1.0 major-equivalent, per `RELEASING.md`), the commit carries a
-Conventional Commit `!` marker plus a `BREAKING CHANGE:` footer, and
-`RELEASING.md` gains a breaking-change log recording the removal and the
-migration path.
+Breaking change: the workspace version is bumped `0.2.28 → 0.3.0` (public-item
+removal, major-equivalent pre-1.0 per `RELEASING.md`) and the commit carries a
+Conventional Commit `!` marker plus a `BREAKING CHANGE:` footer. The removal is
+recorded in a new **Breaking-change log** table in `RELEASING.md` — the table the
+`v<version>` GitHub release notes point at — and in the README scoring section.
 
 ### Precondition check (task 1)
 
-| Check | Result |
-|-------|--------|
-| Wrappers carried `#[deprecated]` after #408 | ✅ yes |
-| In-repo callers outside `flat_record_scoring_parity.rs` | **0** |
-| `gh search code` hits in NEAT-AI-scorer, NEAT-AI, NEAT-AI-Discovery, NEAT-AI-Examples, NEAT-AI-Explore | **0 code hits** (two prose mentions in the scorer's own changelog / PR summary) |
-
-### Re-pointing the parity test (task 2)
-
-Deleting the per-record path deletes the oracle
-`flat_record_scoring_parity.rs` compared against, so the test is re-pointed
-rather than dropped — the flat path is the one that ships and it needs an
-independent check.
-
-The new `per_record_reference` scores each record on its own through the scalar
-`CompiledNetwork::activate` forward pass and flattens to the
-`[record * num_outputs]` layout, in the style of the existing independent
-reference in `score_squash_simd_parity.rs`. It shares no code with the batched
-path under test. Records shorter than the network's input arity are explicitly
-zero-padded, which is precisely the contract a narrow `stride` must honour.
-
-The comparison moves from bit-identical to a `1e-3` per-element tolerance —
-matching `score_squash_simd_parity.rs` — because the oracle is no longer the
-same kernel: the batched path re-associates its weighted sums across records
-(~1e-6) and evaluates the squash through approximations within
-`SQUASH_SIMD_MAX_ABS_ERR` (5e-6). `1e-3` sits far below any scoring-decision
-threshold while a real lane/stride/offset bug (an O(1) error) still trips it —
-verified by mutation, below.
-
-```mermaid
-flowchart LR
-    subgraph BEFORE["before — #408"]
-        A["score_records_flat"] --> K["score_batch_into<br/>(shared kernel)"]
-        B["score_records<br/>#deprecated"] --> K
-        T1["parity test"] -.->|"compares"| A
-        T1 -.->|"oracle"| B
-    end
-    subgraph AFTER["after — #409"]
-        A2["score_records_flat"] --> K2["score_batch_into"]
-        T2["parity test"] -.->|"compares"| A2
-        T2 -.->|"independent oracle"| R["activate<br/>scalar, per record"]
-    end
-    BEFORE ==>|"delete wrappers<br/>+ PerRecord"| AFTER
-```
+Confirmed before deleting: both wrappers carried `#[deprecated]` (landed by
+#408), `flat_record_scoring_parity.rs` was the only in-repo caller, and a code
+search across **NEAT-AI-scorer**, **NEAT-AI**, **NEAT-AI-Discovery**,
+**NEAT-AI-Examples** and **NEAT-AI-Explore** returned **zero** Rust-source hits
+for `score_records` (the two NEAT-AI-scorer hits are historical `CHANGELOG.md` /
+archived-PR-summary prose, not code).
 
 ## Evidence
 
-Backend-only change — no web interface to screenshot.
+Backend/library change with no web interface, so there is no screenshot to
+capture. Evidence is the test suite plus the three-configuration build.
 
-### Mutation check: the new oracle is not vacuous
+### Migrating the parity oracle
 
-`RecordBatch::record` was temporarily shifted by one record and the suite
-re-run; the oracle caught it in every parity case:
+`flat_record_scoring_parity.rs` compared `score_records_flat` against
+`score_records`, so deleting the per-record path deletes its oracle. It is
+re-pointed — not dropped — onto an independent per-record reference built in the
+test file, in the style of `score_squash_simd_parity.rs`.
 
+```mermaid
+flowchart LR
+    subgraph Before["Before — oracle is the API being deleted"]
+        R1[records] --> A1["score_records_flat"]
+        R1 --> B1["score_records<br/>#deprecated"]
+        A1 --> C1{"assert_eq!<br/>bit-identical"}
+        B1 --> C1
+        B1 -.->|"same score_batch_into kernel"| A1
+    end
+    subgraph After["After — independent oracle"]
+        R2[records] --> A2["score_records_flat<br/>batched SIMD"]
+        R2 --> P["zero-pad to input arity"] --> B2["activate<br/>scalar, per record"]
+        A2 --> C2{"element-wise<br/>within TOL 1e-3"}
+        B2 --> C2
+    end
 ```
-thread 'flat_input_matches_per_record_at_production_shard_width' panicked at
-neat-core/tests/flat_record_scoring_parity.rs:182:9:
-production shard: element 0 is 0.34136853, per-record reference is -0.37548274 (tolerance 0.001)
 
-failures:
-    flat_input_matches_per_record_at_production_shard_width
-    flat_input_matches_per_record_on_the_aggregate_squash_arm
-    flat_input_matches_per_record_on_the_interleaved_arm
-    flat_input_zero_fills_a_stride_narrower_than_the_network
-    parallel_flat_input_matches_the_sequential_flat_path
+The reference shares no code with the batched scoring path, so a lane, stride or
+offset slip in that path can no longer hide in the oracle. Two details matter:
 
-test result: FAILED. 3 passed; 5 failed
-```
+- **Zero-padding.** `activate` copies only `min(input.len(), num_inputs)` values
+  into its *reused* activation buffer, so a short record would inherit the
+  previous call's values in the uncovered slots. The reference pads each record
+  to the input arity first, which is exactly the flat path's documented
+  zero-fill contract — this is what keeps the short-record case (`stride` 5 on a
+  12-input network) a real test rather than a tautology.
+- **Tolerance.** The comparison moves from `assert_eq!` to element-wise within
+  `TOL = 1e-3`. The old assertion could be exact because both sides drove the
+  same kernel; against a scalar reference the batched path re-associates each
+  standard-squash weighted sum across records and evaluates the squash through
+  `squash_x8` / `squash_x4`, so it matches scalar within a small `f32` margin
+  (Issue #230). `1e-3` is the same budget `score_squash_simd_parity.rs` uses —
+  far below any scoring-decision threshold, while a real lane/stride bug (an
+  O(1) error) still trips it.
 
-The mutation was reverted before commit.
+All `#[allow(deprecated)]` attributes and their comments are gone; `grep` for
+`allow(deprecated)` across the tree returns nothing.
 
-### Acceptance criteria
+### Acceptance: green in all three configurations
 
-| Criterion | Result |
-|-----------|--------|
-| `./quality.sh` green | ✅ `All quality checks passed!` |
-| `parallel` feature **on** | ✅ `cargo check --workspace --all-targets --all-features` clean |
-| `parallel` feature **off** | ✅ `cargo check --workspace --all-targets` and `--no-default-features` clean |
-| `wasm32` target — both `cfg` arms gone | ✅ `cargo check -p neat-core --target wasm32-unknown-unknown --all-features` clean |
-| Parity test asserts flat batch vs a per-record reference | ✅ 8/8 pass, no reference to the deleted API |
-| No `#[allow(deprecated)]` left for these functions | ✅ zero `allow(deprecated)` in the tree |
-| Version gate | ✅ `check-version-bump.sh 0.2.28 0.3.0 true` → OK; `detect-breaking.sh` → `true` |
+Both `cfg` arms of the removed parallel wrapper are gone, not just the native
+one — verified by building for `wasm32`, where the deleted fallback arm was the
+one that compiled:
+
+| Configuration | Command | Result |
+|---|---|---|
+| `parallel` **on** (all features) | `./quality.sh` | ✅ all checks passed |
+| `parallel` **off** (default) | `RUSTFLAGS="-D warnings" cargo test -p neat-core --lib --tests` | ✅ 25 suites, 0 failed |
+| `wasm32` | `RUSTFLAGS="-D warnings" cargo check -p neat-core --target wasm32-unknown-unknown --features parallel` | ✅ clean |
+
+`./quality.sh` covers fmt, clippy `-D warnings` on `--all-targets --all-features`,
+`cargo deny`, the full test run, `RUSTDOCFLAGS="-D warnings" cargo doc` (which is
+what catches a doc link to a deleted item) and the release build.
+
+### Documentation kept honest
+
+`benches/BASELINE.md`'s wasm32 scoring anchor (Issue #288) is a
+copy-paste-to-reproduce harness that called `score_records`; it is updated to
+hold one flat buffer and call `score_records_flat`, so the recipe still compiles.
+The historical baseline prose and the `score_records/{label}` Criterion group
+name are left alone — renaming the group would orphan every committed baseline.
 
 ## Test Plan
 
-`neat-core/tests/flat_record_scoring_parity.rs` — re-pointed, all 8 tests pass:
+`neat-core/tests/flat_record_scoring_parity.rs` — re-pointed, not reduced. All 8
+tests pass:
 
 - `flat_input_matches_per_record_on_the_interleaved_arm` — all-Tanh network
-  (record-interleaved fast path) vs the scalar reference across record counts
-  0, 1, 7, 8, 9, 12.
-- `flat_input_matches_per_record_on_the_aggregate_squash_arm` — Maximum network
-  (aggregate per-lane fallback), same counts.
+  (record-interleaved fast path), counts `0, 1, 7, 8, 9, 12` straddling the
+  8-record SIMD group boundary, now vs the independent reference.
+- `flat_input_matches_per_record_on_the_aggregate_squash_arm` — same counts on a
+  `Maximum` network (per-lane fallback dispatch).
 - `flat_input_matches_per_record_at_production_shard_width` — 259 records at
-  production input width.
-- `flat_input_zero_fills_a_stride_narrower_than_the_network` — **coverage kept**:
-  stride 5 into a 12-input network now compared against explicitly zero-padded
-  records, a stronger statement of the documented contract than the old
-  wrapper-vs-wrapper comparison.
+  production width (2,461 inputs), spanning many full groups plus a scalar tail.
+- `flat_input_zero_fills_a_stride_narrower_than_the_network` — **coverage
+  retained**: `stride` 5 on a 12-input network, against the explicitly
+  zero-padded reference.
 - `flat_input_into_writes_the_same_buffer_as_the_allocating_entry_point` —
-  **coverage kept**, unchanged (both sides were already flat).
+  **coverage retained and strengthened**: still asserts `_into` equals the
+  allocating entry point, and now also checks both against the reference.
 - `parallel_flat_input_matches_the_sequential_flat_path`,
   `flat_input_rejects_a_zero_stride`, `flat_input_rejects_a_ragged_buffer` —
   unchanged.
 
-No existing test was removed or commented out. The one behavioural change to a
-test is the bit-identical → `1e-3` tolerance, documented above and forced by
-swapping a same-kernel oracle for an independent one.
+No test was commented out, weakened or removed. The oracle change is the
+documented business-logic change: `assert_eq!` against a same-kernel path becomes
+an element-wise `1e-3` comparison against an independent scalar path — a
+genuinely stronger check, since the previous assertion could not have failed on a
+bug common to both sides.
 
-Docs touched by the removal: `README.md`, `RELEASING.md` (breaking-change log),
-the `parallel_scoring.rs` / `batch_scoring.rs` module docs, the wasm32 scoring
-anchor recipe in `benches/BASELINE.md` (its snippet called the deleted method),
-and a stale prose reference in `tests/evaluate_mse_allocations.rs`.
+Regression linkage: the new reference was run against the **unmodified** tree
+first (all 8 tests green) before the wrappers were deleted, so the oracle swap is
+proven not to have moved the goalposts.
 
-## Pre-PR Security Self-Check
+The rest of the suite is unchanged and green, including
+`scoring_allocations.rs`, `evaluate_mse_allocations.rs` and
+`wasm_dataset_offload.rs`, which exercise `score_batch_into` through the flat
+paths.
 
-- **Input validation**: unchanged — `RecordBatch::flat` still asserts
-  `stride > 0` and a whole number of records, failing loud on a malformed batch.
-- **Secrets**: none staged; no hidden files touched.
-- **Injection surface / output encoding / auth**: not applicable — pure
-  in-process numeric code, no new SQL, shell, filesystem or HTTP calls.
-- **Error handling**: no errors swallowed; the panics remain the documented
-  fail-loud path.
-- **Dependencies**: no dependency added or changed (`Cargo.lock` moves only the
-  `neat-core` version string).
+### Security self-check
+
+Backend refactor that deletes public API and adds no new input surface. No new
+dependency, no new I/O, no secrets or hidden files staged. The `RecordBatch::flat`
+constructor keeps its fail-loud asserts on a zero or non-dividing `stride`
+(Issue #3234), covered by the two `should_panic` tests, so a malformed batch
+still panics rather than mis-slicing every record.
