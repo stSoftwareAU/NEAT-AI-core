@@ -3,7 +3,7 @@
 ## Summary
 
 Established a reproducible **Criterion baseline on the exact production
-topology** — the committed `GRQ-cluster/network.json` shape of **1,666 non-input
+topology** — the downstream production cluster's committed creature shape of **1,666 non-input
 neurons, 21,513 synapses, 2,461 inputs** — so every later perf change in this
 crate has a dated before/after anchor. Measurement only, no optimisation
 (optimisation lands in the lane sub-issues that gate on these numbers).

@@ -5,7 +5,8 @@
 Implements the neat-core half of milestone #295 lane (c): neat-core now **owns**
 the training dataset inside its own WASM linear memory, so the large numeric
 input/target arrays no longer sit on the V8 JS heap that lane (a) attributed the
-~4 GB Learn ceiling to (exit-133 / "Reached heap limit" = GRQ#3508). JS holds a
+~4 GB Learn ceiling to (exit-133 / "Reached heap limit" = the production OOME).
+JS holds a
 small `u32` **handle**, not the bytes, and per-generation evaluation reads
 batches **by index** from the WASM-owned buffers — the full dataset never
 re-crosses the JS↔WASM boundary after the initial load. Closes #298.

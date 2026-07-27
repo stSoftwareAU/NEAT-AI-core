@@ -1,9 +1,9 @@
 ## Summary
 
 Adds `bump-deps.sh` at the repo root, invoked by the Vibe Coder worker before
-`quality.sh` per the contract in stSoftwareAU/VibeCoding#1613. NEAT-AI-core is
-the root of the stSoftware dependency chain (no internal pins per
-stSoftwareAU/VibeCoding#1614), so the script focuses on the external
+`quality.sh` per the worker-orchestration contract. NEAT-AI-core is
+the root of the stSoftware dependency chain (no internal pins to refresh under
+that contract), so the script focuses on the external
 (crates.io) bump, the audit gate, and dual native/WASM build verification.
 
 The script:

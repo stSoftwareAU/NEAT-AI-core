@@ -51,7 +51,7 @@ measured on the native `production_exact` fixture the baseline anchors to. The
 
 Backend/CLI change with no web interface, so evidence is Criterion, not a
 screenshot. Fixture: `production_exact` (1,666 non-input neurons / 21,513
-synapses / 2,461 inputs), the exact committed GRQ-cluster topology.
+synapses / 2,461 inputs), the exact committed production-cluster topology.
 
 Separate `cargo bench` invocations drift on the laptop-class M4 Pro (the
 `BASELINE.md` thermal caveat), so the A/B was run as **alternating** old/new

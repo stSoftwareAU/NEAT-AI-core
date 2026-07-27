@@ -12,7 +12,8 @@ with a wasm32 fallback (`score_records_parallel`, sequential/wasm32 fallback via
 `cfg`) — already exists from #179 and is guarded by the parity suite; this issue
 proves it pays off at production scale and records the numbers. Cross-repo
 production wiring is out of scope here and tracked in NEAT-AI #3399 (WorkerPool
-idle-tail) and GRQ #3400 (flags), per the issue's one-root-cause-one-repo rule.
+idle-tail) and a downstream production-trainer issue (flags), per the issue's
+one-root-cause-one-repo rule.
 
 This is a benchmark + decision change (no Rust behaviour changed), so it follows
 the Performance Task Workflow: before (wasm32) / after (native) numbers are

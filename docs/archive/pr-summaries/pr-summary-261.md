@@ -10,8 +10,8 @@ Two learnings were absorbed:
    Criterion fixtures build every neuron as `SquashType::Tanh`
    (`neat-core/benches/common/mod.rs:168`). `BASELINE.md` documented
    host/toolchain/record-count but never this squash homogeneity, letting a
-   reader over-read the committed `scoring`/`production` numbers. Real GRQ
-   creatures also run `Gelu`/`Mish` (scalar `libm`), so on this fixture
+   reader over-read the committed `scoring`/`production` numbers. Real
+   production creatures also run `Gelu`/`Mish` (scalar `libm`), so on this fixture
    squash-vectorisation deltas are a **lower bound** and branch-prediction
    levers are **unmeasurable**.
 2. **Optimisation lever learned (negative result, PR #245).** The #245 6–8%
