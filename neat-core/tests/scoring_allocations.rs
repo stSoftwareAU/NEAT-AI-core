@@ -1,6 +1,6 @@
 //! Allocation-count regression for the record-scoring hot path (Issue #229, #230).
 //!
-//! `score_records` drives every record through the batched SIMD forward pass
+//! `score_records_flat` drives every record through the batched SIMD forward pass
 //! ([`CompiledNetwork::score_batch_into`], Issue #230), writing into one
 //! pre-sized flat buffer instead of allocating a fresh output `Vec` per record
 //! via `activate`'s `to_vec()`. This test proves the batch performs **no
@@ -53,17 +53,19 @@ fn spec(label: &str) -> &'static NetSpec {
         .unwrap_or_else(|| panic!("no NetSpec labelled {label}"))
 }
 
-fn build_records(net: &CompiledNetwork, count: usize) -> Vec<Vec<f32>> {
+/// Build `count` records already packed into the flat `record * stride` layout
+/// (Issue #386), so the flattening cost sits outside the measured region.
+fn build_flat_records(net: &CompiledNetwork, count: usize) -> Vec<f32> {
     (0..count)
-        .map(|i| build_inputs(net.num_inputs(), 0xA110_0000 + i as u64))
+        .flat_map(|i| build_inputs(net.num_inputs(), 0xA110_0000 + i as u64))
         .collect()
 }
 
-/// Allocation count consumed by scoring `records` (records/network built
+/// Allocation count consumed by scoring `inputs` (records/network built
 /// beforehand so only the scoring call is measured).
-fn allocs_for(net: &CompiledNetwork, records: &[Vec<f32>], num_outputs: usize) -> usize {
+fn allocs_for(net: &CompiledNetwork, inputs: &[f32], num_outputs: usize) -> usize {
     let before = ALLOC_COUNT.load(Ordering::Relaxed);
-    let out = net.score_records(records, num_outputs);
+    let out = net.score_records_flat(inputs, net.num_inputs(), num_outputs);
     // Keep the result alive across the measurement so its allocation is counted.
     std::hint::black_box(&out);
     let after = ALLOC_COUNT.load(Ordering::Relaxed);
@@ -75,11 +77,11 @@ fn score_records_has_no_per_record_output_allocation() {
     let s = spec("production");
     let net = build_network(s, 0x000A_110C);
 
-    let small = build_records(&net, 100);
-    let large = build_records(&net, 1000);
+    let small = build_flat_records(&net, 100);
+    let large = build_flat_records(&net, 1000);
 
     // Warm up any one-off lazy initialisation so it is not counted below.
-    std::hint::black_box(net.score_records(&small, s.num_outputs));
+    std::hint::black_box(net.score_records_flat(&small, net.num_inputs(), s.num_outputs));
 
     let small_allocs = allocs_for(&net, &small, s.num_outputs);
     let large_allocs = allocs_for(&net, &large, s.num_outputs);

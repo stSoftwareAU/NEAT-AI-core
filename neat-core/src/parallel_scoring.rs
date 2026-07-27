@@ -52,8 +52,13 @@
 //! matching flat layout: record `i`'s inputs are
 //! `inputs[i * stride .. i * stride + stride]`. Callers that already hold a
 //! contiguous buffer skip the one-heap-allocation-per-record marshalling the
-//! `&[Vec<f32>]` signatures force. The `&[Vec<f32>]` entry points remain, and
-//! both layouts feed the identical kernel, so their results are bit-identical.
+//! `&[Vec<f32>]` signatures force. Both layouts feed the identical kernel, so
+//! their results are bit-identical.
+//!
+//! The per-record `&[Vec<f32>]` entry points ([`CompiledNetwork::score_records`]
+//! and [`CompiledNetwork::score_records_parallel`]) are **deprecated** since
+//! `0.2.28` (Issue #408) — every in-repo caller now uses the flat entry points.
+//! They still compile and behave identically; removal is tracked by Issue #409.
 
 use crate::batch_scoring::{BatchScratch, RecordBatch};
 use crate::network::CompiledNetwork;
@@ -84,6 +89,17 @@ impl CompiledNetwork {
     /// This is the fallback used when the `parallel` feature is off or when
     /// building for `wasm32`, and the reference path the parallel results must
     /// match exactly.
+    ///
+    /// # Deprecated
+    ///
+    /// Superseded by [`CompiledNetwork::score_records_flat`] (Issue #386), which
+    /// takes the same records as one contiguous buffer and so avoids the
+    /// one-heap-allocation-per-record marshalling this signature forces on the
+    /// caller. Removal is tracked by Issue #409.
+    #[deprecated(
+        since = "0.2.28",
+        note = "use score_records_flat / score_records_parallel_flat (Issue #386)"
+    )]
     pub fn score_records(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
         self.score_batch_alloc(RecordBatch::PerRecord(records), num_outputs)
     }
@@ -170,6 +186,15 @@ impl CompiledNetwork {
     /// the sequential path regardless of thread count.
     ///
     /// Available with the `parallel` feature on native targets.
+    ///
+    /// # Deprecated
+    ///
+    /// Superseded by [`CompiledNetwork::score_records_parallel_flat`] (Issue
+    /// #386). Removal is tracked by Issue #409.
+    #[deprecated(
+        since = "0.2.28",
+        note = "use score_records_flat / score_records_parallel_flat (Issue #386)"
+    )]
     #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
     pub fn score_records_parallel(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
         use rayon::prelude::*;
@@ -195,9 +220,20 @@ impl CompiledNetwork {
     /// the `parallel` feature is disabled or building for `wasm32` (where
     /// `rayon` is unavailable). Same signature and identical results to the
     /// feature-on path — just single-threaded.
+    ///
+    /// # Deprecated
+    ///
+    /// Superseded by [`CompiledNetwork::score_records_parallel_flat`] (Issue
+    /// #386). Removal is tracked by Issue #409.
+    #[deprecated(
+        since = "0.2.28",
+        note = "use score_records_flat / score_records_parallel_flat (Issue #386)"
+    )]
     #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
     pub fn score_records_parallel(&self, records: &[Vec<f32>], num_outputs: usize) -> Vec<f32> {
-        self.score_records(records, num_outputs)
+        // Drives the shared sequential implementation directly rather than the
+        // deprecated `score_records`, so the fallback needs no `allow(deprecated)`.
+        self.score_batch_alloc(RecordBatch::PerRecord(records), num_outputs)
     }
 
     /// Flat-input counterpart of [`CompiledNetwork::score_records_parallel`]

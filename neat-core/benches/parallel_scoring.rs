@@ -37,12 +37,13 @@ mod bench {
             .unwrap_or_else(|| panic!("no NetSpec labelled {label}"))
     }
 
-    /// Score `records` inside a rayon pool of exactly `threads` workers, so the
-    /// 1-core and all-core measurements share one code path and differ only in
-    /// pool size.
+    /// Score a flat `record * stride` input buffer (Issue #386) inside a rayon
+    /// pool of exactly `threads` workers, so the 1-core and all-core
+    /// measurements share one code path and differ only in pool size.
     fn score_in_pool(
         net: &CompiledNetwork,
-        records: &[Vec<f32>],
+        inputs: &[f32],
+        stride: usize,
         num_outputs: usize,
         threads: usize,
     ) -> Vec<f32> {
@@ -50,7 +51,7 @@ mod bench {
             .num_threads(threads)
             .build()
             .expect("failed to build rayon pool");
-        pool.install(|| net.score_records_parallel(records, num_outputs))
+        pool.install(|| net.score_records_parallel_flat(inputs, stride, num_outputs))
     }
 
     pub fn bench_parallel_scoring(c: &mut Criterion) {
@@ -61,21 +62,35 @@ mod bench {
         for label in ["production", "production_2x", "production_exact"] {
             let s = spec(label);
             let net = build_network(s, 0x5EED);
-            let records = build_records(net.num_inputs(), NUM_RECORDS);
+            let stride = net.num_inputs();
+            // Flattened at fixture-construction time, outside the timed loop.
+            let inputs: Vec<f32> = build_records(stride, NUM_RECORDS)
+                .into_iter()
+                .flatten()
+                .collect();
             let num_outputs = s.num_outputs;
 
             let mut group = c.benchmark_group(format!("score_records/{label}"));
             group.throughput(Throughput::Elements(NUM_RECORDS as u64));
 
             group.bench_function("1_core", |b| {
-                b.iter(|| black_box(score_in_pool(&net, black_box(&records), num_outputs, 1)))
+                b.iter(|| {
+                    black_box(score_in_pool(
+                        &net,
+                        black_box(&inputs),
+                        stride,
+                        num_outputs,
+                        1,
+                    ))
+                })
             });
 
             group.bench_function(format!("{all_cores}_cores"), |b| {
                 b.iter(|| {
                     black_box(score_in_pool(
                         &net,
-                        black_box(&records),
+                        black_box(&inputs),
+                        stride,
                         num_outputs,
                         all_cores,
                     ))
