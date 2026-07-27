@@ -35,7 +35,7 @@ and keep bit-identical scalar numerics.
 
 ### Benchmarks (performance gate)
 
-**Host:** Apple Silicon (GRQ-23, GRQ class), quiet machine, interleaved A/B via
+**Host:** Apple Silicon (Apple M4 Pro class), quiet machine, interleaved A/B via
 Criterion `--save-baseline before` / `--baseline before`.
 
 ```bash

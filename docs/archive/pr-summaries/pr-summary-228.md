@@ -11,9 +11,9 @@ change — no library behaviour is touched — that does three things:
 
 1. **Calibrates the scoring record count to production volume.**
    `parallel_scoring.rs` scored an uncalibrated 2048-record token batch. It now
-   scores `PRODUCTION_SCORING_RECORDS = 4096` records — one GRQ-cluster training
-   shard's worth — with the derivation from committed telemetry
-   (`GRQ-cluster/performance.csv` / `result.json`) documented in `BASELINE.md`
+   scores `PRODUCTION_SCORING_RECORDS = 4096` records — one production-cluster
+   training shard's worth — with the derivation from committed production-run
+   telemetry documented in `BASELINE.md`
    and `benches/common/mod.rs`.
 2. **Adds a `scoring` group to `hot_paths.rs`** measuring single-core
    `score_records` throughput at production record volume for `production` /
@@ -71,7 +71,7 @@ drive the same sequential `score_records` path.
 
 ```mermaid
 flowchart LR
-    T["GRQ-cluster telemetry<br/>performance.csv / result.json"] --> D["Derive record count<br/>corpus / 520 shards ≈ 4.3k"]
+    T["production-cluster telemetry<br/>(32-generation production run)"] --> D["Derive record count<br/>corpus / 520 shards ≈ 4.3k"]
     D --> C["PRODUCTION_SCORING_RECORDS = 4096<br/>(common/mod.rs)"]
     C --> H["hot_paths: scoring group"]
     C --> P["parallel_scoring: 1 vs all cores"]

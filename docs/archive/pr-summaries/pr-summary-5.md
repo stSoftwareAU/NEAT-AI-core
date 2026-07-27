@@ -4,7 +4,7 @@ Completed the Cargo Security Audit workflow by adding the `rustsec/audit-check@v
 ## Evidence
 Backend/CI-only change — no UI. The workflow change was verified by diff review:
 
-- The three detection patterns called out by VibeCoding workflow sync are now all present in `.github/workflows/security.yml`:
+- The three detection patterns called out by the worker-orchestration workflow sync are now all present in `.github/workflows/security.yml`:
   - `cargo audit` — fallback step and comment references
   - `cargo-audit` — `taiki-e/install-action` `tool:` entry plus the step name
   - `rustsec/audit-check` — new `uses: rustsec/audit-check@v2` step

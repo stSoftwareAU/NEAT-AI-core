@@ -2,7 +2,7 @@
 
 ## Summary
 
-The production GRQ scoring hot path `mse_sum_batch_packed` still applied the
+The downstream production scoring hot path `mse_sum_batch_packed` still applied the
 per-neuron squash **scalarly** in its batched loops (`mse_sum_batch_8way` /
 `mse_sum_batch_4way`), inlining only IDENTITY / ReLU / LOGISTIC / TANH and
 sending every other type (Gelu / Mish / …) to `libm`. Issue #180 already shipped
@@ -71,8 +71,8 @@ synthetic fixture uses Tanh throughout, so this already replaces scalar `libm`
 Gelu / Mish, which previously hit `libm` unconditionally and gain at least as
 much.
 
-> Note: the official production creature (`GRQ-cluster/network.json` /
-> `.trainData-binary_115`) is not available on this build host, so the A/B uses
+> Note: the official production creature (the downstream cluster's committed
+> `network.json` / binary training data) is not available on this build host, so the A/B uses
 > the in-repo production-shaped Criterion fixture. Re-run
 > `./scripts/run-benches.sh -- production_` against the pinned creature to
 > confirm on the real topology.

@@ -10,7 +10,8 @@ written finding backed by captured crash signatures and peak-memory numbers.
 `Closes #296`.
 
 **Finding (evidence-based):** the currently observed production ceiling is the
-**V8 JS heap**. GRQ#3508's captured signature is exit 133 / `Reached heap limit`
+**V8 JS heap**. The downstream production trainer's captured OOME signature is
+exit 133 / `Reached heap limit`
 — the V8 old-space abort, reproduced here byte-for-byte — **not** a
 `WebAssembly.Memory` RangeError or out-of-bounds trap. Raising
 `--v8-flags=--max-old-space-size` demonstrably lets a previously-OOMing
@@ -18,8 +19,8 @@ old-space job complete. On this evidence lanes (b)/(c) are **not needed yet**,
 but are **not closed**: they proceed if the dual-probe on the real Learn.ts job
 attributes the peak to WASM linear memory, or if raising old-space merely walks
 the job toward the hard **wasm32 4 GiB wall** (65536 pages × 64 KiB, verified
-RAM-independent). The production re-run (acceptance step 3) needs an 8 GB GRQ
-host and is owned by lane (d) (#299); the finding hands it off explicitly rather
+RAM-independent). The production re-run (acceptance step 3) needs an 8 GB
+production host and is owned by lane (d) (#299); the finding hands it off explicitly rather
 than shipping an unverified "heap cap suffices" conclusion.
 
 Full write-up:
@@ -29,10 +30,10 @@ Full write-up:
 
 | Ceiling | Signature captured | `--max-old-space-size` lifts it? |
 | --- | --- | --- |
-| V8 old-space | `Fatal JavaScript out of memory: Reached heap limit`, **exit 133** (= GRQ#3508) | **Yes** — 2000 MiB job OOMs at cap 256, completes at cap 3072 |
+| V8 old-space | `Fatal JavaScript out of memory: Reached heap limit`, **exit 133** (= the production OOME) | **Yes** — 2000 MiB job OOMs at cap 256, completes at cap 3072 |
 | WASM linear memory (wasm32) | `RangeError: WebAssembly.Memory.grow(): Maximum memory size exceeded` at **3.938 GiB → 4 GiB hard cap** | **No** — architectural, RAM-independent |
 
-### Silent-failure guard (GRQ#2391)
+### Silent-failure guard (the fail-loud rule, Issue #3234)
 
 A V8 old-space OOM is a **native abort** — the crashing child cannot print its
 own `[learn] FAIL:` marker, and node.sh downgrades marker-less non-zero exits to

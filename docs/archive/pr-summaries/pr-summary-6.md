@@ -1,6 +1,6 @@
 ## Summary
 
-Completed the ShellCheck Lint workflow configuration in `.github/workflows/ci.yml` so it satisfies all expected detection patterns for the VibeCoding workflow sync. The existing `scripts-and-spelling` job already installed and ran `shellcheck`, but the file did not reference the upstream `koalaman/shellcheck` project. Added explanatory comments and step names that reference `koalaman/shellcheck` (the upstream source of the `shellcheck` apt package). No behavioural change — the job still installs `shellcheck` via apt and scans every `*.sh` file outside `target/` and `.git/`, mirroring the local `quality.sh` gate. Closes #6.
+Completed the ShellCheck Lint workflow configuration in `.github/workflows/ci.yml` so it satisfies all expected detection patterns for the worker-orchestration workflow sync. The existing `scripts-and-spelling` job already installed and ran `shellcheck`, but the file did not reference the upstream `koalaman/shellcheck` project. Added explanatory comments and step names that reference `koalaman/shellcheck` (the upstream source of the `shellcheck` apt package). No behavioural change — the job still installs `shellcheck` via apt and scans every `*.sh` file outside `target/` and `.git/`, mirroring the local `quality.sh` gate. Closes #6.
 
 ## Evidence
 
