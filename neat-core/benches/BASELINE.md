@@ -512,8 +512,9 @@ cargo bench -p neat-core --bench hot_paths -- --baseline before
 
 Criterion is native-only, so the wasm32 row in the native-vs-wasm32 decision is
 measured with a throwaway `wasm-pack` harness that reuses the committed
-`benches/common` fixtures and calls the identical `CompiledNetwork::score_records`.
-`score_records` is a plain `pub` method (not feature- or target-gated), so the
+`benches/common` fixtures and calls the identical
+`CompiledNetwork::score_records_flat`. `score_records_flat` is a plain `pub`
+method (not feature- or target-gated), so the
 wasm32 build scores the same production topology through the same code path,
 compiled with `simd128` + `relaxed-simd` and `wasm-opt`-optimised — the
 production `wasm_activation` bundle's codegen. Create a scratch crate outside the
@@ -545,7 +546,8 @@ mod common;
 use common::{NETWORKS, PRODUCTION_SCORING_RECORDS, build_network, build_records};
 use neat_core::network::CompiledNetwork;
 thread_local! {
-    static ST: RefCell<Option<(CompiledNetwork, Vec<Vec<f32>>, usize)>> =
+    // Flat input layout (Issue #386): records * stride, contiguous.
+    static ST: RefCell<Option<(CompiledNetwork, Vec<f32>, usize, usize)>> =
         const { RefCell::new(None) };
 }
 #[wasm_bindgen]
@@ -554,14 +556,16 @@ pub fn setup(code: u32) {
     let s = NETWORKS.iter().find(|s| s.label == label).unwrap();
     let net = build_network(s, 0x5EED);
     let recs = build_records(net.num_inputs(), PRODUCTION_SCORING_RECORDS);
-    ST.with(|c| *c.borrow_mut() = Some((net, recs, s.num_outputs)));
+    let stride = net.num_inputs();
+    let flat: Vec<f32> = recs.iter().flat_map(|r| r.iter().copied()).collect();
+    ST.with(|c| *c.borrow_mut() = Some((net, flat, stride, s.num_outputs)));
 }
 #[wasm_bindgen]
 pub fn score_once() -> f32 {
     ST.with(|c| {
         let b = c.borrow();
-        let (net, recs, no) = b.as_ref().unwrap();
-        net.score_records(recs, *no).iter().sum()
+        let (net, flat, stride, no) = b.as_ref().unwrap();
+        net.score_records_flat(flat, *stride, *no).iter().sum()
     })
 }
 ```

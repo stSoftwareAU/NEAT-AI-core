@@ -2,8 +2,8 @@
 //!
 //! `TrainingDataset::evaluate_mse` used to score **one record at a time** via
 //! `CompiledNetwork::activate`, whose `to_vec()` allocates a fresh output `Vec`
-//! per record — exactly the per-record allocation Issue #229 removed from
-//! `score_records`, reintroduced on the >4 GB Memory64 offload lane. It now
+//! per record — exactly the per-record allocation Issue #229 removed from the
+//! batch scoring path, reintroduced on the >4 GB Memory64 offload lane. It now
 //! drives the flat batched path instead, so its allocation count is **constant**
 //! in the record count.
 //!

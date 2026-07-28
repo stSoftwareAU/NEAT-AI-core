@@ -14,6 +14,7 @@
 //! hundreds more times and fail the delta assertions loudly.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use neat_core::pc_inference::{PcConnection, PcNeuron, PredictiveCodingEngine};
@@ -40,6 +41,14 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// `ALLOC_COUNT` is a *process-global* counter incremented by every thread.
+/// Under `cargo test --test-threads=2` the two measuring tests in this binary
+/// would otherwise run concurrently, so the sibling test's allocations would
+/// leak into each measured delta and make the assertions flaky (observed on CI
+/// as a spurious delta of 47). Holding this lock across the whole measured
+/// region serialises the two tests so each count reflects only its own work.
+static MEASURE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 2 inputs → 2 hidden (multi-fan-in) → 1 output. `energy_threshold` of 0 keeps
 /// the loop from converging early so it always runs `inference_steps` steps.
@@ -114,6 +123,11 @@ fn allocs_for_batch(steps: u32, inputs: &[&[f32]]) -> usize {
 
 #[test]
 fn infer_allocation_is_constant_in_steps() {
+    // Serialise against the sibling test so the process-global allocation
+    // counter is not contaminated by concurrent allocations. Recover from
+    // poisoning: a panic in the other test must not mask this one.
+    let _guard = MEASURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let input = [1.0f32, 0.5];
 
     // Warm up any one-off lazy initialisation so it is not counted below.
@@ -142,6 +156,9 @@ fn infer_batch_allocation_is_constant_in_steps() {
     let c = [0.0f32, -0.7];
     let d = [3.0f32, -2.0];
     let inputs: Vec<&[f32]> = vec![&a, &b, &c, &d];
+
+    // Serialise against the sibling test — see `infer_allocation_is_constant_in_steps`.
+    let _guard = MEASURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     std::hint::black_box(engine(10).infer_batch(&inputs, None));
 

@@ -209,8 +209,8 @@ fn bench_reverse_topological_order(c: &mut Criterion) {
 ///
 /// The records are flattened into the contiguous `record * stride` layout at
 /// fixture-construction time, outside the timed loop. Issue #408 retired the
-/// separate `scoring_flat` A/B group: with the per-record entry point
-/// deprecated there is no second input layout left to compare against, so
+/// separate `scoring_flat` A/B group and Issue #409 removed the per-record entry
+/// point outright: there is no second input layout left to compare against, so
 /// `scoring` now *is* the flat measurement.
 fn bench_scoring(c: &mut Criterion) {
     let mut group = c.benchmark_group("scoring");

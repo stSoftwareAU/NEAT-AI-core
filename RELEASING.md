@@ -88,6 +88,35 @@ idempotent and **decoupled from the per-commit `wasm-bundle-<sha>` artifacts**:
 - `v<version>` releases address **versions** so consumers can pin and compare
   semver and react to breaking bumps.
 
+## Breaking-change log
+
+Each major-equivalent bump is recorded here so downstream consumers can see what
+changed without diffing the API. The generated `v<version>` GitHub release notes
+point back at this file.
+
+### `0.3.0` — per-record scoring entry points removed (Issue #409)
+
+`CompiledNetwork::score_records` and `CompiledNetwork::score_records_parallel`
+(both `cfg` arms) are **deleted**, along with the internal
+`RecordBatch::PerRecord` variant only they constructed. They were deprecated in
+`0.2.28` by Issue #408.
+
+**Migration** — pack the records into one contiguous buffer and call the `_flat`
+entry points (Issue #386); only the input layout changes, the output layout and
+the numerics are unchanged:
+
+```rust
+// Before (0.2.x)
+let outputs = net.score_records(&records, num_outputs);
+let outputs = net.score_records_parallel(&records, num_outputs);
+
+// After (0.3.0)
+let stride = net.num_inputs();
+let inputs: Vec<f32> = records.iter().flat_map(|r| r.iter().copied()).collect();
+let outputs = net.score_records_flat(&inputs, stride, num_outputs);
+let outputs = net.score_records_parallel_flat(&inputs, stride, num_outputs);
+```
+
 ## Retroactive decision for #177
 
 neat-core #177 (`SynapseData::from_index` `u32 → u16`) was breaking but shipped on

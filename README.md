@@ -166,12 +166,13 @@ net.score_records_flat_into(&inputs, stride, num_outputs, &mut out);
 let outputs = net.score_records_parallel_flat(&inputs, stride, num_outputs);
 ```
 
-The per-record `&[Vec<f32>]` entry points (`score_records`,
-`score_records_parallel`) are **deprecated** since `0.2.28` (Issue #408) and
-scheduled for removal (Issue #409); every in-repo caller now uses the flat ones.
-They still drive the identical kernel, so the two layouts are
-**bit-identical** — asserted across the 8-record group boundary and both
-dispatch arms by
+The flat layout is the **only** one supported. The per-record `&[Vec<f32>]`
+wrappers (`score_records`, `score_records_parallel`), deprecated in `0.2.28` by
+Issue #408, were **removed** in `0.3.0` (Issue #409) — a breaking change; pack
+your records into one contiguous buffer and call the `_flat` entry points.
+Scoring is asserted against an independent per-record reference (each record
+scored on its own through `activate`) across the 8-record group boundary and
+both dispatch arms by
 [`tests/flat_record_scoring_parity.rs`](neat-core/tests/flat_record_scoring_parity.rs).
 A malformed batch (zero `stride`, or a buffer that is not a whole number of
 records) **panics** rather than silently mis-slicing every record.
