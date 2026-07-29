@@ -59,7 +59,7 @@ pub use accumulate::{
     accumulate_bias_batch_4way, accumulate_bias_batch_8way, accumulate_weight_batch_4way,
     accumulate_weight_batch_8way, calculate_bias, calculate_weight,
 };
-pub use derivative::{apply_derivative, apply_derivative_simd_4way};
+pub use derivative::apply_derivative;
 pub use elastic_distribution::distribute_elastic_error;
 pub use error::{apply_calculate_error, apply_calculate_error_batch_4way};
 pub use fused_error::apply_fused_error_distribution;
