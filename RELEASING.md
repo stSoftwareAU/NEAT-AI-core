@@ -94,6 +94,84 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.8.0` — `get_training_state_num_neurons` / `get_training_state_num_synapses` removed (Issue #424)
+
+The public `neat_core::get_training_state_num_neurons` and
+`neat_core::get_training_state_num_synapses` — and the WASM exports of the same
+names — are **removed**. A dead-code audit (Issue #416, from #413) found no
+caller in NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples or
+NEAT-AI-Explore; `WasmModuleLoader.ts` never bound either export. Both accessors
+survive inside `training_state.rs` as `#[cfg(test)]` helpers, so the
+init-and-free assertions on the recorded counts are unchanged.
+
+**Migration** — track the sizes you passed to `init_training_state` yourself, or
+derive them from the state readers:
+
+```rust
+// Before (0.7.x)
+let num_synapses = get_training_state_num_synapses();
+let num_neurons = get_training_state_num_neurons();
+
+// After (0.8.0) — the caller already owns these values
+init_training_state(num_synapses, num_neurons);
+```
+
+The rest of `training_state.rs` is untouched: `init_training_state`,
+`free_training_state`, `reset_training_state`, the `read_*_state` readers and
+the `accumulate_*_persistent_*way` exports are all live.
+
+### `0.7.0` — `apply_calculate_error_batch_4way` / `calculate_error_batch_4way` removed (Issue #423)
+
+The public `neat_core::apply_calculate_error_batch_4way` (both the `wasm32` SIMD
+arm and the scalar fallback) and the `calculate_error_batch_4way` WASM export
+that wrapped it are **deleted**. A dead-code audit (Issue #416, from #413) found
+no caller in NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples or
+NEAT-AI-Explore — `WasmModuleLoader.ts` never bound the export.
+
+**Migration** — call the scalar `apply_calculate_error` per lane; the numerics
+are identical (the scalar fallback arm was exactly this, and the SIMD arm's
+non-trivial squash types already delegated to it):
+
+```rust
+// Before (0.6.x)
+let (e0, e1, e2, e3) =
+    apply_calculate_error_batch_4way(squash_type, &curr_acts, &tgt_acts, &curr_vals);
+
+// After (0.7.0)
+let e0 = apply_calculate_error(squash_type, curr_acts[0], tgt_acts[0], curr_vals[0]);
+let e1 = apply_calculate_error(squash_type, curr_acts[1], tgt_acts[1], curr_vals[1]);
+let e2 = apply_calculate_error(squash_type, curr_acts[2], tgt_acts[2], curr_vals[2]);
+let e3 = apply_calculate_error(squash_type, curr_acts[3], tgt_acts[3], curr_vals[3]);
+```
+
+The sibling `accumulate_*_batch_4way` and `calculate_{weight,bias}_batch_4way`
+exports are live and unchanged.
+
+### `0.6.0` — `apply_derivative_simd_4way` / `derivative_batch_4way` removed (Issue #422)
+
+The public `neat_core::apply_derivative_simd_4way` (both the `wasm32` SIMD arm
+and the scalar fallback) and the `derivative_batch_4way` WASM export that
+wrapped it are **deleted**. A dead-code audit (Issue #416, from #413) found no
+caller in NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples or
+NEAT-AI-Explore — `WasmModuleLoader.ts` never bound the export.
+
+**Migration** — call the scalar `apply_derivative` per lane; the numerics are
+identical (the SIMD arm's non-trivial squash types already delegated to it):
+
+```rust
+// Before (0.5.x)
+let (d0, d1, d2, d3) = apply_derivative_simd_4way(squash_type, x0, x1, x2, x3);
+
+// After (0.6.0)
+let d0 = apply_derivative(squash_type, x0);
+let d1 = apply_derivative(squash_type, x1);
+let d2 = apply_derivative(squash_type, x2);
+let d3 = apply_derivative(squash_type, x3);
+```
+
+The sibling `calculate_error_batch_4way`, `accumulate_*_batch_4way` and
+`calculate_{weight,bias}_batch_4way` exports are live and unchanged.
+
 ### `0.3.0` — per-record scoring entry points removed (Issue #409)
 
 `CompiledNetwork::score_records` and `CompiledNetwork::score_records_parallel`

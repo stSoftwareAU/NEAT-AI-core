@@ -18,8 +18,8 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::derivative::{apply_derivative, apply_derivative_simd_4way};
-use crate::error::{apply_calculate_error, apply_calculate_error_batch_4way};
+use crate::derivative::apply_derivative;
+use crate::error::apply_calculate_error;
 use crate::fused_error::apply_fused_error_distribution;
 use crate::propagate_codec::{decode_propagate_buffer, encode_propagate_output};
 use crate::range::{apply_get_range, apply_limit_range, apply_validate_range};
@@ -51,14 +51,6 @@ pub fn wasm_derivative(squash_type: u8, value: f32) -> f32 {
     apply_derivative(SquashType::from(squash_type), value)
 }
 
-/// JS `derivative_batch_4way(squash_type, x0, x1, x2, x3) -> Float32Array`.
-#[wasm_bindgen(js_name = derivative_batch_4way)]
-pub fn wasm_derivative_batch_4way(squash_type: u8, x0: f32, x1: f32, x2: f32, x3: f32) -> Vec<f32> {
-    let (d0, d1, d2, d3) =
-        apply_derivative_simd_4way(SquashType::from(squash_type), x0, x1, x2, x3);
-    vec![d0, d1, d2, d3]
-}
-
 /// JS `calculate_error(squash_type, current_activation, target_activation, current_value)`.
 #[wasm_bindgen(js_name = calculate_error)]
 pub fn wasm_calculate_error(
@@ -73,32 +65,6 @@ pub fn wasm_calculate_error(
         target_activation,
         current_value,
     )
-}
-
-/// JS `calculate_error_batch_4way(squash_type, current_activations, target_activations, current_values)`.
-///
-/// Inputs must each have length 4; the function reads the first 4 lanes.
-#[wasm_bindgen(js_name = calculate_error_batch_4way)]
-pub fn wasm_calculate_error_batch_4way(
-    squash_type: u8,
-    current_activations: &[f32],
-    target_activations: &[f32],
-    current_values: &[f32],
-) -> Vec<f32> {
-    fn first_four(s: &[f32]) -> [f32; 4] {
-        [
-            *s.first().unwrap_or(&0.0),
-            *s.get(1).unwrap_or(&0.0),
-            *s.get(2).unwrap_or(&0.0),
-            *s.get(3).unwrap_or(&0.0),
-        ]
-    }
-    let curr = first_four(current_activations);
-    let tgt = first_four(target_activations);
-    let vals = first_four(current_values);
-    let (e0, e1, e2, e3) =
-        apply_calculate_error_batch_4way(SquashType::from(squash_type), &curr, &tgt, &vals);
-    vec![e0, e1, e2, e3]
 }
 
 /// JS `safe_zone_adjustment(squash_type, raw_input, error, weight)`.

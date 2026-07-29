@@ -59,9 +59,9 @@ pub use accumulate::{
     accumulate_bias_batch_4way, accumulate_bias_batch_8way, accumulate_weight_batch_4way,
     accumulate_weight_batch_8way, calculate_bias, calculate_weight,
 };
-pub use derivative::{apply_derivative, apply_derivative_simd_4way};
+pub use derivative::apply_derivative;
 pub use elastic_distribution::distribute_elastic_error;
-pub use error::{apply_calculate_error, apply_calculate_error_batch_4way};
+pub use error::apply_calculate_error;
 pub use fused_error::apply_fused_error_distribution;
 pub use loss::{
     categorical_error_sum_batch_packed, cross_entropy_sum_batch_packed, hinge_sum_batch_packed,
@@ -92,8 +92,7 @@ pub use topology_ops::{
 pub use training_state::{
     accumulate_bias_persistent_4way, accumulate_bias_persistent_8way,
     accumulate_weight_persistent_4way, accumulate_weight_persistent_8way, free_training_state,
-    get_training_state_num_neurons, get_training_state_num_synapses, init_training_state,
-    read_all_neuron_state, read_all_synapse_state, read_neuron_state, read_synapse_state,
-    reset_training_state,
+    init_training_state, read_all_neuron_state, read_all_synapse_state, read_neuron_state,
+    read_synapse_state, reset_training_state,
 };
 pub use unsquash::apply_unsquash;

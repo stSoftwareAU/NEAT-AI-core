@@ -339,15 +339,21 @@ pub fn accumulate_bias_persistent_8way(
     });
 }
 
-/// Get the number of synapses in the current training state.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn get_training_state_num_synapses() -> usize {
+/// Number of synapses recorded in the current training state.
+///
+/// Test-only (Issue #424): no consumer bound the former WASM export, so it is
+/// no longer exported or re-exported — it survives purely so the tests can
+/// assert what `init_training_state` / `free_training_state` record.
+#[cfg(test)]
+fn get_training_state_num_synapses() -> usize {
     NUM_SYNAPSES.with(|n| *n.borrow())
 }
 
-/// Get the number of neurons in the current training state.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
-pub fn get_training_state_num_neurons() -> usize {
+/// Number of neurons recorded in the current training state.
+///
+/// Test-only — see [`get_training_state_num_synapses`].
+#[cfg(test)]
+fn get_training_state_num_neurons() -> usize {
     NUM_NEURONS.with(|n| *n.borrow())
 }
 
