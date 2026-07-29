@@ -19,7 +19,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::derivative::apply_derivative;
-use crate::error::{apply_calculate_error, apply_calculate_error_batch_4way};
+use crate::error::apply_calculate_error;
 use crate::fused_error::apply_fused_error_distribution;
 use crate::propagate_codec::{decode_propagate_buffer, encode_propagate_output};
 use crate::range::{apply_get_range, apply_limit_range, apply_validate_range};
@@ -65,32 +65,6 @@ pub fn wasm_calculate_error(
         target_activation,
         current_value,
     )
-}
-
-/// JS `calculate_error_batch_4way(squash_type, current_activations, target_activations, current_values)`.
-///
-/// Inputs must each have length 4; the function reads the first 4 lanes.
-#[wasm_bindgen(js_name = calculate_error_batch_4way)]
-pub fn wasm_calculate_error_batch_4way(
-    squash_type: u8,
-    current_activations: &[f32],
-    target_activations: &[f32],
-    current_values: &[f32],
-) -> Vec<f32> {
-    fn first_four(s: &[f32]) -> [f32; 4] {
-        [
-            *s.first().unwrap_or(&0.0),
-            *s.get(1).unwrap_or(&0.0),
-            *s.get(2).unwrap_or(&0.0),
-            *s.get(3).unwrap_or(&0.0),
-        ]
-    }
-    let curr = first_four(current_activations);
-    let tgt = first_four(target_activations);
-    let vals = first_four(current_values);
-    let (e0, e1, e2, e3) =
-        apply_calculate_error_batch_4way(SquashType::from(squash_type), &curr, &tgt, &vals);
-    vec![e0, e1, e2, e3]
 }
 
 /// JS `safe_zone_adjustment(squash_type, raw_input, error, weight)`.
