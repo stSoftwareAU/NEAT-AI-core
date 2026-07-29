@@ -23,7 +23,6 @@ There are two bench targets:
 | `backprop` | one `propagate_topological_loop` step | same five shapes |
 | `reverse_topological_order` | `compute_reverse_topological_order` over a creature's full synapse list (Issue #388) | all six shapes |
 | `scoring` | `CompiledNetwork::score_records_flat` over a production-sized record batch | `production`, `production_2x`, `production_exact` |
-| `dataset_evaluate_mse` | `TrainingDataset::evaluate_mse` over a production-sized batch (Issue #386) | `production`, `production_2x`, `production_exact` |
 | `topology_ops` | `scan_available_connections` — the mutation-time availability scan (Issue #387); `compute_reverse_topological_order` — the per-creature backprop-ordering setup (Issue #388) | `n1666_21513`, `n4127_21513` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
@@ -53,10 +52,6 @@ per-neuron `Vec<Vec<u32>>` — n + 1 allocations and a pointer chase per neuron 
 shows up as a throughput drop here. `cargo run --release --example
 reverse_topo_order_alloc_ab` measures the same function's allocation count
 directly against the pre-#388 shape.
-
-`dataset_evaluate_mse` measures the WASM
-dataset-offload evaluation call (Issue #298) end to end at the same record
-volume — bounds check, forward pass and MSE accumulation.
 
 Networks and inputs are built **once** outside the timed closure from a
 fixed-seed PRNG with fixed topologies, and `criterion::black_box` guards inputs
