@@ -18,8 +18,6 @@ pub mod fused_error;
 pub mod loss;
 pub mod network;
 pub mod parallel_scoring;
-pub mod pc_inference;
-pub mod pc_learning;
 pub mod propagate_codec;
 pub mod range;
 pub mod safe_zone;
@@ -50,7 +48,6 @@ pub use creature::{
     squash_name_from, synapse_type_name_from,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData};
-pub use pc_inference::{PcEngineError, PredictiveCodingEngine};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{

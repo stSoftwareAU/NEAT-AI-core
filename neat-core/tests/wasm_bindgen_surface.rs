@@ -1,18 +1,15 @@
 //! Issue #36 — verifies the `#[wasm_bindgen]` annotations on
-//! `CompiledNetwork`, `PredictiveCodingEngine`, and supporting types do not
-//! regress the native API.
+//! `CompiledNetwork` and supporting types do not regress the native API.
 //!
 //! These tests run on native targets (the bindgen attributes are gated to
 //! `cfg(target_arch = "wasm32")`). They guard the contract that:
 //!
-//! - public fields on `CompiledNetwork` and `PredictiveCodingEngine` remain
-//!   accessible to native consumers (`rust_scorer`, CLI tools);
+//! - public fields on `CompiledNetwork` remain accessible to native consumers
+//!   (`rust_scorer`, CLI tools);
 //! - `activate_view` matches `activate` semantics on native;
 //! - the constructors and getters still behave as plain Rust methods.
 
 use neat_core::network::CompiledNetwork;
-use neat_core::pc_inference::{PcConnection, PcNeuron, PredictiveCodingEngine};
-use neat_core::squash::SquashType;
 
 /// Minimal serialised network: 1 input, 1 identity output, weight 1.0, bias 0.5.
 fn minimal_network_bytes() -> Vec<u8> {
@@ -115,79 +112,4 @@ fn reset_state_clears_non_input_activations() {
     assert!(net.activations[1].abs() > 0.0);
     net.reset_state();
     assert_eq!(net.activations[1], 0.0);
-}
-
-#[test]
-fn pc_engine_constructor_and_getters() {
-    // Build a minimal serialised PC engine: 1 input, 1 output, no hidden.
-    let mut data = Vec::new();
-    data.extend_from_slice(&1u32.to_le_bytes()); // num_inputs
-    data.extend_from_slice(&1u32.to_le_bytes()); // num_outputs
-    data.extend_from_slice(&2u32.to_le_bytes()); // num_neurons_total
-    data.extend_from_slice(&1u32.to_le_bytes()); // inference_steps
-    data.extend_from_slice(&0.1_f32.to_le_bytes()); // inference_rate
-    data.extend_from_slice(&1e-3_f32.to_le_bytes()); // energy_threshold
-    // Output neuron: bias=0.0, squash=IDENTITY, is_hidden=0, num_conn=1
-    data.extend_from_slice(&0.0_f32.to_le_bytes());
-    data.push(0); // squash IDENTITY
-    data.push(0); // is_hidden false
-    data.extend_from_slice(&1u16.to_le_bytes());
-    // Connection: from=0, weight=1.0
-    data.extend_from_slice(&0u16.to_le_bytes());
-    data.extend_from_slice(&1.0_f32.to_le_bytes());
-
-    let engine = PredictiveCodingEngine::new(&data).expect("parse");
-    assert_eq!(engine.num_neurons(), 2);
-    assert_eq!(engine.num_inputs(), 1);
-    assert_eq!(engine.num_outputs(), 1);
-}
-
-#[test]
-fn pc_engine_public_fields_remain_accessible() {
-    // Build directly via `new_from_parts` to dodge the byte format.
-    let neuron = PcNeuron {
-        bias: 0.0,
-        squash_type: SquashType::Identity,
-        is_hidden: false,
-        conn_start: 0,
-        conn_count: 1,
-    };
-    let conn = PcConnection {
-        from: 0,
-        weight: 1.0,
-    };
-    let engine =
-        PredictiveCodingEngine::new_from_parts(1, 1, vec![neuron], vec![conn], 1, 0.1, 1e-3);
-
-    // Public-field access must still compile (rust_scorer relies on this).
-    let _: usize = engine.num_neurons;
-    let _: usize = engine.num_inputs;
-    let _: usize = engine.num_outputs;
-    let _: &Vec<_> = &engine.neurons;
-    let _: &Vec<_> = &engine.connections;
-}
-
-#[test]
-fn pc_engine_infer_wasm_packs_header_and_body() {
-    let neuron = PcNeuron {
-        bias: 0.0,
-        squash_type: SquashType::Identity,
-        is_hidden: false,
-        conn_start: 0,
-        conn_count: 1,
-    };
-    let conn = PcConnection {
-        from: 0,
-        weight: 1.0,
-    };
-    let engine =
-        PredictiveCodingEngine::new_from_parts(1, 1, vec![neuron], vec![conn], 1, 0.1, 1e-3);
-
-    let packed = engine.infer_wasm(&[0.5], None);
-    // Header is 6 floats; we then carry latents (num_neurons=2),
-    // predictions (1), errors (1), and energy history (>=1).
-    assert!(packed.len() > 6 + 2 + 1 + 1);
-    // Header[3] is num_neurons, Header[4] is num_non_inputs.
-    assert_eq!(packed[3], 2.0);
-    assert_eq!(packed[4], 1.0);
 }

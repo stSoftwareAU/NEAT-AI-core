@@ -8,9 +8,8 @@
 use std::error::Error;
 
 use neat_core::{
-    CompiledNetwork, CreatureError, NetworkError, PcEngineError, PredictiveCodingEngine,
-    compile_creature, creature_to_json, creature_to_json_pretty, parse_creature_json,
-    parse_squash_name,
+    CompiledNetwork, CreatureError, NetworkError, compile_creature, creature_to_json,
+    creature_to_json_pretty, parse_creature_json, parse_squash_name,
 };
 
 /// A valid minimal creature: 1 input, 1 output, single synapse.
@@ -123,17 +122,5 @@ fn compiled_network_new_truncated_returns_typed_error() {
     // Display preserves a human-readable description.
     assert!(err.to_string().contains("too short"));
     // Implements std::error::Error.
-    let _as_err: &dyn Error = &err;
-}
-
-#[test]
-fn pc_engine_new_truncated_returns_typed_error() {
-    // Buffer too short for the 24-byte PC header. `PredictiveCodingEngine` is
-    // not `Debug`, so extract the error via `.err()`.
-    let err: PcEngineError = PredictiveCodingEngine::new(&[0u8; 8])
-        .err()
-        .expect("should fail");
-    assert!(matches!(err, PcEngineError::TruncatedData { .. }));
-    assert!(err.to_string().contains("too short"));
     let _as_err: &dyn Error = &err;
 }
