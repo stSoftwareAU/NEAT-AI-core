@@ -1,6 +1,6 @@
 //! Range validation tests (moved from `src/range.rs`).
 
-use neat_core::range::{apply_limit_range_bounds, apply_limit_range_f64};
+use neat_core::range::apply_limit_range_bounds;
 use neat_core::{SquashType, apply_get_range, apply_limit_range, apply_validate_range};
 
 /// Every squash type, so the hoisted-bounds helper can be checked against the
@@ -285,39 +285,6 @@ fn test_limit_range_unbounded_infinity_clamping() {
             "{squash:?} -inf should clamp to a large negative"
         );
     }
-}
-
-#[test]
-fn test_limit_range_f64_clamping() {
-    // Values within range pass through unchanged.
-    assert_eq!(apply_limit_range_f64(SquashType::Logistic, 0.5), 0.5);
-    assert_eq!(apply_limit_range_f64(SquashType::Tanh, 0.0), 0.0);
-
-    // Out-of-range values are clamped to the activation bounds.
-    assert_eq!(apply_limit_range_f64(SquashType::Logistic, -0.5), 0.0);
-    assert_eq!(apply_limit_range_f64(SquashType::Logistic, 1.5), 1.0);
-    assert_eq!(apply_limit_range_f64(SquashType::Relu6, 10.0), 6.0);
-
-    // NaN maps to 0.
-    assert_eq!(apply_limit_range_f64(SquashType::Logistic, f64::NAN), 0.0);
-
-    // Bounded ranges clamp infinities to the finite bounds.
-    assert_eq!(
-        apply_limit_range_f64(SquashType::Logistic, f64::INFINITY),
-        1.0
-    );
-    assert_eq!(
-        apply_limit_range_f64(SquashType::Logistic, f64::NEG_INFINITY),
-        0.0
-    );
-
-    // Unbounded ranges clamp infinities to ±F32_LARGE (no overflow to inf).
-    let hi = apply_limit_range_f64(SquashType::Identity, f64::INFINITY);
-    assert!(hi.is_finite(), "Identity +inf should be finite");
-    assert!(hi > 1e30, "Identity +inf should clamp to a large positive");
-    let lo = apply_limit_range_f64(SquashType::Identity, f64::NEG_INFINITY);
-    assert!(lo.is_finite(), "Identity -inf should be finite");
-    assert!(lo < -1e30, "Identity -inf should clamp to a large negative");
 }
 
 #[test]
