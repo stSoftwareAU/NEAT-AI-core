@@ -61,7 +61,7 @@ pub use accumulate::{
 };
 pub use derivative::apply_derivative;
 pub use elastic_distribution::distribute_elastic_error;
-pub use error::{apply_calculate_error, apply_calculate_error_batch_4way};
+pub use error::apply_calculate_error;
 pub use fused_error::apply_fused_error_distribution;
 pub use loss::{
     categorical_error_sum_batch_packed, cross_entropy_sum_batch_packed, hinge_sum_batch_packed,
