@@ -219,9 +219,15 @@ Vibe Coder hook (`bump-deps.sh` runs before `quality.sh` on every PR).
 
 - On every push to `Develop`, [`.github/workflows/wasm-bundle.yml`](.github/workflows/wasm-bundle.yml)
   builds `wasm_activation-pkg.tar.gz` and publishes a per-commit GitHub
-  Release tagged `wasm-bundle-<SHA>`.
+  Release tagged `wasm-bundle-<SHA>`. Each Release carries three assets: the
+  tarball, its `wasm_activation-pkg.tar.gz.sha256` sidecar, and the CycloneDX
+  SBOM `wasm_activation-pkg.cdx.json`.
 - NEAT-AI's `bump-deps.sh` invokes `./build.sh`, which downloads the matching
-  bundle and updates `deno.json`'s `neatCore.rev` field in lock-step.
+  bundle, verifies it against the `.sha256` sidecar, and updates `deno.json`'s
+  `neatCore.rev` field in lock-step. The sidecar is the per-revision hash
+  anchor: it ships with the revision it describes, so a `neatCore.rev` bump
+  has a trustworthy hash for the *new* bundle rather than only the pin
+  recorded for the old one.
 - A fresh PR in NEAT-AI is therefore sufficient to pick up the latest
   `Develop` of NEAT-AI-core.
 - The published bundle (and its CycloneDX SBOM) carries a Sigstore-backed
@@ -261,9 +267,11 @@ sequenceDiagram
     Dev->>Core: merge enhancement
     Core->>CI: push to Develop
     CI->>CI: attest build provenance (Sigstore, keyless)
-    CI->>Rel: build & publish wasm_activation-pkg.tar.gz
+    CI->>Rel: build & publish wasm_activation-pkg.tar.gz + .sha256 + SBOM
+    CI->>Rel: re-download & sha256sum -c (fails job on mismatch)
     Dev->>Main: open PR
     Main->>Rel: bump-deps.sh -> build.sh download
+    Main->>Rel: verify tarball against .sha256 sidecar
     Main->>Rel: gh attestation verify (origin proof)
     Note over Main: deno.json neatCore.rev advances
     Dev->>Scorer: open PR
