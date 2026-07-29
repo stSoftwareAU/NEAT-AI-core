@@ -70,6 +70,19 @@ jobs:
             --rev "${GITHUB_SHA}" \
             --out wasm_activation-pkg.tar.gz
 
+      # Issue #438 — publish a per-revision SHA-256 anchor next to the tarball.
+      # NEAT-AI's build.sh verifies the downloaded bundle against this sidecar;
+      # without it the only hash a consumer holds for a *new* revision is the
+      # deno.json pin recorded for the *old* one, so every neatCore.rev bump
+      # fails closed (stSoftwareAU/NEAT-AI#3504). Standard `shasum -a 256`
+      # format (<64-hex><two spaces><filename>) is what build.sh parses.
+      - name: Generate tarball SHA-256 sidecar
+        run: |
+          set -euo pipefail
+          sha256sum wasm_activation-pkg.tar.gz > wasm_activation-pkg.tar.gz.sha256
+          sha256sum -c wasm_activation-pkg.tar.gz.sha256
+          cat wasm_activation-pkg.tar.gz.sha256
+
       # Issue #125 — emit a CycloneDX SBOM from the locked dependency graph and
       # publish it next to the bundle. Because downstream consumers pin
       # wasm_activation by SHA they otherwise receive an opaque blob; an SBOM
@@ -107,6 +120,7 @@ jobs:
         with:
           subject-path: |
             wasm_activation-pkg.tar.gz
+            wasm_activation-pkg.tar.gz.sha256
             wasm_activation-pkg.cdx.json
 
       - name: Publish per-commit Release
@@ -116,10 +130,11 @@ jobs:
           tag="wasm-bundle-${GITHUB_SHA}"
           gh release create "$tag" \
             wasm_activation-pkg.tar.gz \
+            wasm_activation-pkg.tar.gz.sha256 \
             wasm_activation-pkg.cdx.json \
             --target "$GITHUB_SHA" \
             --title "wasm_activation bundle for ${GITHUB_SHA::7}" \
-            --notes "Auto-built wasm_activation/pkg for commit ${GITHUB_SHA}. CycloneDX SBOM attached as wasm_activation-pkg.cdx.json."
+            --notes "Auto-built wasm_activation/pkg for commit ${GITHUB_SHA}. SHA-256 sidecar attached as wasm_activation-pkg.tar.gz.sha256. CycloneDX SBOM attached as wasm_activation-pkg.cdx.json."
 
       # Issue #48 — re-download the asset we just published and prove it
       # extracts cleanly with all four files NEAT-AI's build.sh checks for
@@ -130,11 +145,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           tag="wasm-bundle-${GITHUB_SHA}"
           verify_dir="$(mktemp -d)"
+          # The glob pulls down both the tarball and its .sha256 sidecar; the
+          # CycloneDX SBOM does not match it.
           gh release download "$tag" \
-            --pattern 'wasm_activation-pkg.tar.gz' \
+            --pattern 'wasm_activation-pkg.tar.gz*' \
             --dir "$verify_dir"
+          # Issue #438 — a missing or mismatched sidecar must fail this job on
+          # the commit that produced the bundle, not a downstream NEAT-AI bump.
+          if [[ ! -s "$verify_dir/wasm_activation-pkg.tar.gz.sha256" ]]; then
+            echo "ERROR: release $tag is missing wasm_activation-pkg.tar.gz.sha256" >&2
+            exit 1
+          fi
+          ( cd "$verify_dir" && sha256sum -c wasm_activation-pkg.tar.gz.sha256 )
           chmod +x scripts/verify-wasm-bundle.sh
           ./scripts/verify-wasm-bundle.sh \
             --archive "$verify_dir/wasm_activation-pkg.tar.gz" \
