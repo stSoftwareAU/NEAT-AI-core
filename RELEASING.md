@@ -94,6 +94,31 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.6.0` — `apply_derivative_simd_4way` / `derivative_batch_4way` removed (Issue #422)
+
+The public `neat_core::apply_derivative_simd_4way` (both the `wasm32` SIMD arm
+and the scalar fallback) and the `derivative_batch_4way` WASM export that
+wrapped it are **deleted**. A dead-code audit (Issue #416, from #413) found no
+caller in NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples or
+NEAT-AI-Explore — `WasmModuleLoader.ts` never bound the export.
+
+**Migration** — call the scalar `apply_derivative` per lane; the numerics are
+identical (the SIMD arm's non-trivial squash types already delegated to it):
+
+```rust
+// Before (0.5.x)
+let (d0, d1, d2, d3) = apply_derivative_simd_4way(squash_type, x0, x1, x2, x3);
+
+// After (0.6.0)
+let d0 = apply_derivative(squash_type, x0);
+let d1 = apply_derivative(squash_type, x1);
+let d2 = apply_derivative(squash_type, x2);
+let d3 = apply_derivative(squash_type, x3);
+```
+
+The sibling `calculate_error_batch_4way`, `accumulate_*_batch_4way` and
+`calculate_{weight,bias}_batch_4way` exports are live and unchanged.
+
 ### `0.3.0` — per-record scoring entry points removed (Issue #409)
 
 `CompiledNetwork::score_records` and `CompiledNetwork::score_records_parallel`

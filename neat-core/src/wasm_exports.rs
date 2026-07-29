@@ -18,7 +18,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::derivative::{apply_derivative, apply_derivative_simd_4way};
+use crate::derivative::apply_derivative;
 use crate::error::{apply_calculate_error, apply_calculate_error_batch_4way};
 use crate::fused_error::apply_fused_error_distribution;
 use crate::propagate_codec::{decode_propagate_buffer, encode_propagate_output};
@@ -49,14 +49,6 @@ pub fn wasm_unsquash(squash_type: u8, activation: f32, hint: f32) -> f32 {
 #[wasm_bindgen(js_name = derivative)]
 pub fn wasm_derivative(squash_type: u8, value: f32) -> f32 {
     apply_derivative(SquashType::from(squash_type), value)
-}
-
-/// JS `derivative_batch_4way(squash_type, x0, x1, x2, x3) -> Float32Array`.
-#[wasm_bindgen(js_name = derivative_batch_4way)]
-pub fn wasm_derivative_batch_4way(squash_type: u8, x0: f32, x1: f32, x2: f32, x3: f32) -> Vec<f32> {
-    let (d0, d1, d2, d3) =
-        apply_derivative_simd_4way(SquashType::from(squash_type), x0, x1, x2, x3);
-    vec![d0, d1, d2, d3]
 }
 
 /// JS `calculate_error(squash_type, current_activation, target_activation, current_value)`.
