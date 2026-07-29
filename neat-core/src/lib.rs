@@ -92,8 +92,7 @@ pub use topology_ops::{
 pub use training_state::{
     accumulate_bias_persistent_4way, accumulate_bias_persistent_8way,
     accumulate_weight_persistent_4way, accumulate_weight_persistent_8way, free_training_state,
-    get_training_state_num_neurons, get_training_state_num_synapses, init_training_state,
-    read_all_neuron_state, read_all_synapse_state, read_neuron_state, read_synapse_state,
-    reset_training_state,
+    init_training_state, read_all_neuron_state, read_all_synapse_state, read_neuron_state,
+    read_synapse_state, reset_training_state,
 };
 pub use unsquash::apply_unsquash;

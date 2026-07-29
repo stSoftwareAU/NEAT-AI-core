@@ -94,6 +94,32 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.8.0` — `get_training_state_num_neurons` / `get_training_state_num_synapses` removed (Issue #424)
+
+The public `neat_core::get_training_state_num_neurons` and
+`neat_core::get_training_state_num_synapses` — and the WASM exports of the same
+names — are **removed**. A dead-code audit (Issue #416, from #413) found no
+caller in NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples or
+NEAT-AI-Explore; `WasmModuleLoader.ts` never bound either export. Both accessors
+survive inside `training_state.rs` as `#[cfg(test)]` helpers, so the
+init-and-free assertions on the recorded counts are unchanged.
+
+**Migration** — track the sizes you passed to `init_training_state` yourself, or
+derive them from the state readers:
+
+```rust
+// Before (0.7.x)
+let num_synapses = get_training_state_num_synapses();
+let num_neurons = get_training_state_num_neurons();
+
+// After (0.8.0) — the caller already owns these values
+init_training_state(num_synapses, num_neurons);
+```
+
+The rest of `training_state.rs` is untouched: `init_training_state`,
+`free_training_state`, `reset_training_state`, the `read_*_state` readers and
+the `accumulate_*_persistent_*way` exports are all live.
+
 ### `0.7.0` — `apply_calculate_error_batch_4way` / `calculate_error_batch_4way` removed (Issue #423)
 
 The public `neat_core::apply_calculate_error_batch_4way` (both the `wasm32` SIMD
