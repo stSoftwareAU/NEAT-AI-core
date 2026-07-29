@@ -260,6 +260,34 @@ fn test_limit_range_clamping() {
 }
 
 #[test]
+fn test_limit_range_unbounded_infinity_clamping() {
+    // Unbounded ranges clamp infinities to ±F32_LARGE (no overflow to inf).
+    for squash in [
+        SquashType::Identity,
+        SquashType::Cube,
+        SquashType::LeakyRelu,
+        SquashType::Tan,
+        SquashType::BentIdentity,
+        SquashType::Complement,
+        SquashType::StdInverse,
+    ] {
+        let hi = apply_limit_range(squash, f32::INFINITY);
+        assert!(hi.is_finite(), "{squash:?} +inf should be finite");
+        assert!(
+            hi > 1e30,
+            "{squash:?} +inf should clamp to a large positive"
+        );
+
+        let lo = apply_limit_range(squash, f32::NEG_INFINITY);
+        assert!(lo.is_finite(), "{squash:?} -inf should be finite");
+        assert!(
+            lo < -1e30,
+            "{squash:?} -inf should clamp to a large negative"
+        );
+    }
+}
+
+#[test]
 fn test_limit_range_f64_clamping() {
     // Values within range pass through unchanged.
     assert_eq!(apply_limit_range_f64(SquashType::Logistic, 0.5), 0.5);
