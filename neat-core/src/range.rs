@@ -143,29 +143,3 @@ pub fn apply_limit_range(squash_type: SquashType, value: f32) -> f32 {
     let (low, high) = apply_get_range(squash_type);
     apply_limit_range_bounds(low, high, value)
 }
-
-/// Clamp an `f64` value to the valid output range of `squash_type`.
-///
-/// `NaN` maps to `0.0`. Infinities are clamped to the activation's finite
-/// bounds, themselves capped at `±F32_LARGE` so the result never overflows
-/// back to infinity. The `f32` counterpart is [`apply_limit_range`].
-#[allow(dead_code)]
-#[inline(always)]
-pub fn apply_limit_range_f64(squash_type: SquashType, value: f64) -> f64 {
-    if value.is_nan() {
-        return 0.0;
-    }
-
-    let (low_f32, high_f32) = apply_get_range(squash_type);
-    let low = low_f32 as f64;
-    let high = high_f32 as f64;
-
-    if value == f64::INFINITY {
-        return high.min(F32_LARGE as f64);
-    }
-    if value == f64::NEG_INFINITY {
-        return low.max(-(F32_LARGE as f64));
-    }
-
-    value.max(low).min(high)
-}
