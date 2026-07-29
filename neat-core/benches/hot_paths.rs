@@ -25,9 +25,7 @@ use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
 use neat_core::topology_ops::{compute_reverse_topological_order, scan_available_connections};
-use neat_core::training_data::TrainingDataConfig;
 use neat_core::unsquash::apply_unsquash;
-use neat_core::wasm_dataset::TrainingDataset;
 
 /// Deterministic network/backprop fixtures, shared with the `bench_fixtures`
 /// integration test (Issue #176) so the production-scale builders are exercised
@@ -239,50 +237,6 @@ fn bench_scoring(c: &mut Criterion) {
                 });
             },
         );
-    }
-    group.finish();
-}
-
-/// Dataset-offload evaluation — `TrainingDataset::evaluate_mse` over a
-/// production-sized batch (Issue #386).
-///
-/// The WASM offload lane (Issue #298) already stores its inputs contiguously in
-/// SoA layout, so this group measures the cost of the whole
-/// bounds-check → forward-pass → MSE-accumulate call at
-/// [`PRODUCTION_SCORING_RECORDS`] volume — the per-generation unit of work the
-/// Memory64 lane performs. Sized identically to the `scoring` group so the two
-/// are directly comparable.
-fn bench_dataset_evaluate_mse(c: &mut Criterion) {
-    let mut group = c.benchmark_group("dataset_evaluate_mse");
-    for spec in NETWORKS
-        .iter()
-        .filter(|s| s.label.starts_with("production"))
-    {
-        let mut net = build_network(spec, 0x5EED);
-        let inputs: Vec<f32> = build_records(spec.num_inputs, PRODUCTION_SCORING_RECORDS)
-            .into_iter()
-            .flatten()
-            .collect();
-        let targets = build_inputs(
-            PRODUCTION_SCORING_RECORDS * spec.num_outputs,
-            0x7A46_0E75_0000,
-        );
-        let dataset = TrainingDataset::from_soa(
-            inputs,
-            targets,
-            TrainingDataConfig::new(spec.num_inputs, spec.num_outputs),
-        )
-        .expect("dataset fixture should be well-formed");
-
-        group.throughput(Throughput::Elements(PRODUCTION_SCORING_RECORDS as u64));
-        group.bench_function(BenchmarkId::from_parameter(spec.label), |b| {
-            b.iter(|| {
-                let mse = dataset
-                    .evaluate_mse(&mut net, 0, black_box(PRODUCTION_SCORING_RECORDS))
-                    .expect("batch is in range");
-                black_box(mse);
-            });
-        });
     }
     group.finish();
 }
@@ -600,7 +554,6 @@ criterion_group!(
     bench_backprop,
     bench_reverse_topological_order,
     bench_scoring,
-    bench_dataset_evaluate_mse,
     bench_activation_primitives,
     bench_topology_ops,
 );

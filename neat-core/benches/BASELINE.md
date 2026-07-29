@@ -293,7 +293,10 @@ captured alongside as a drift control.
 rustc 1.97.0, `--release`, Criterion
 `--sample-size 10 --measurement-time 5 --warm-up-time 1`.
 
-`dataset_evaluate_mse` (4096 records/iteration), mean of the alternating rounds:
+`dataset_evaluate_mse` (4096 records/iteration), mean of the alternating rounds.
+The group and the `wasm_dataset` module it measured were removed as unconsumed
+dead code in Issue #415; the numbers below are retained as the historical record
+of the #386 flat-batch change:
 
 | benchmark (mean of rounds) | old | new | change |
 | --- | --- | --- | --- |

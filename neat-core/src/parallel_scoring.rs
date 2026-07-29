@@ -79,9 +79,9 @@ impl CompiledNetwork {
     /// input layout mirrors the flat output contract from Issue #229 and the
     /// packed buffer the fused loss lane already takes
     /// ([`crate::loss::mse_sum_batch_packed`]). Callers that already hold a
-    /// contiguous buffer (the WASM dataset offload path) pass it straight
-    /// through: no heap allocation per record, no `Vec` header to pointer-chase
-    /// on each lane load, no re-marshalling.
+    /// contiguous buffer pass it straight through: no heap allocation per
+    /// record, no `Vec` header to pointer-chase on each lane load, no
+    /// re-marshalling.
     ///
     /// Both input layouts drive the same batched kernel, which only ever reads a
     /// record as `&[f32]`, so the flat path is numerically the record-scoring

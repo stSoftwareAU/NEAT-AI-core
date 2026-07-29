@@ -60,10 +60,9 @@ pub(crate) const SCORING_LANES: usize = 8;
 /// `inputs[i * stride .. i * stride + stride]`, mirroring the flat *output*
 /// contract from Issue #229 and the packed input layout the fused loss lane
 /// already takes ([`crate::loss::mse_sum_batch_packed`]). Callers that already
-/// hold a contiguous buffer — the WASM dataset offload path
-/// ([`crate::wasm_dataset::TrainingDataset`]) — pass it straight through with no
-/// per-record allocation and no re-marshalling. The kernels below only ever need
-/// `&[f32]` per record.
+/// hold a contiguous buffer pass it straight through with no per-record
+/// allocation and no re-marshalling. The kernels below only ever need `&[f32]`
+/// per record.
 ///
 /// The per-record `&[Vec<f32>]` layout (`RecordBatch::PerRecord`) was removed in
 /// Issue #409 once every caller had moved to this flat layout.

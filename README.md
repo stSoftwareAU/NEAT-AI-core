@@ -21,31 +21,22 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 
 **`wasm_activation`** and **`pkg/`** remain in the **NEAT-AI** repo on `Develop` — not in this repository.
 
-## Training-data offload (WASM linear memory)
+## Training-data offload (WASM linear memory) — removed, Issue #415
 
-wasm64 milestone #295, lane (c) — Issue #298. Lane (a) attributed the ~4 GB
-Learn ceiling to the **V8 JS heap** (exit-133 / "Reached heap limit"), not WASM
-linear memory. `wasm_dataset` moves the large numeric training arrays **off the
-JS heap**: neat-core owns the dataset inside its own linear memory, JS holds only
-a `u32` **handle**, and per-generation evaluation reads batches **by index** —
-the full dataset never re-crosses the JS↔WASM boundary after the initial load.
+wasm64 milestone #295, lane (c) — Issue #298 — shipped a `wasm_dataset` module
+that held the large numeric training arrays in neat-core's own linear memory,
+handing JS a `u32` handle instead of the bytes. The `Learn.ts` adoption that
+would have consumed it was never done: the milestone and its upstream adoption
+issue both closed with the seven `training_data_*` exports unbound, so the module
+was **removed as dead code in Issue #415**. Nothing in NEAT-AI or
+NEAT-AI-scorer referenced it.
 
-- [`TrainingDataset`](neat-core/src/wasm_dataset.rs) de-interleaves the packed
-  `.bin` record stream into contiguous structure-of-arrays input/target buffers
-  once, at load time.
-- [`DatasetRegistry`](neat-core/src/wasm_dataset.rs) is the handle table:
-  `load` → handle, `free` → release. It tracks live and peak byte footprint so a
-  lifecycle leak (bytes retained past `free`) is observable — the high-water mark
-  stays flat across load → evaluate → free cycles.
-- WASM shims (`training_data_load` / `_evaluate_mse` / `_free` / `_byte_len` /
-  `_peak_bytes`) carry byte counts and record indices as `u64` (JS `BigInt`), so
-  the surface is Memory64-ready for the >4 GB jobs the milestone targets.
-- `TrainingDataset::evaluate_mse` bounds-checks the batch **once** and hands the
-  contiguous SoA input slice straight to the flat batched scoring path
-  (Issue #386) — no per-record `Vec`, no per-record bounds check, full 8-record
-  interleaved SIMD. That is a **~4–5×** speed-up over the previous
-  one-record-at-a-time `activate` loop at production shard volume; see
-  [`neat-core/benches/BASELINE.md`](neat-core/benches/BASELINE.md).
+The performance work it carried lives on independently: the flat batched scoring
+path (Issue #386, [below](#flat-record-input-issue-386)) is the contract any
+future offload lane would drive, and lane (a)'s finding stands — the ~4 GB Learn
+ceiling is the **V8 JS heap** (exit-133 / "Reached heap limit"), not WASM linear
+memory. Re-adopting the offload means re-landing the module against a live
+consumer, not resurrecting an unbound export surface.
 
 Lane (d) — Issue #299 — verifies the downstream adoption end-to-end: the
 production trainer's launch script injects a **RAM-aware**
@@ -56,21 +47,6 @@ The neat-core acceptance model
 that selection lock-step with the production selector and pins the budget-fit /
 safe-fall-back invariants; see
 [`docs/research/wasm64-lane-d-learn-wiring-verification.md`](docs/research/wasm64-lane-d-learn-wiring-verification.md).
-
-```mermaid
-sequenceDiagram
-    participant JS as NEAT-AI Learn.ts
-    participant WASM as neat-core (linear memory)
-    JS->>WASM: training_data_load(bytes, num_inputs, num_outputs)
-    WASM-->>JS: handle (u32) — bytes now WASM-owned
-    loop each generation
-        JS->>WASM: evaluate_mse(handle, network, start, count)
-        Note over WASM: reads batch by index from<br/>owned buffers — no dataset copy
-        WASM-->>JS: mean squared error (f32)
-    end
-    JS->>WASM: training_data_free(handle)
-    Note over WASM: live_bytes → baseline,<br/>peak_bytes stays flat
-```
 
 ## Layout
 
@@ -150,8 +126,8 @@ let outputs = net.score_records_parallel_flat(&inputs, stride, num_outputs);
 Both the input and the output of a scoring batch have a flat, contiguous
 contract. Record `i`'s inputs are `inputs[i * stride .. i * stride + stride]`
 and its outputs are `out[i * num_outputs .. (i + 1) * num_outputs]`. Callers
-that already hold a contiguous buffer — the `TrainingDataset` offload lane
-above, or anything reading a packed `.bin` shard — pass it straight through,
+that already hold a contiguous buffer — anything reading a packed `.bin` shard,
+for instance — pass it straight through,
 skipping the one-heap-allocation-per-record the `&[Vec<f32>]` signature forces
 (4,096 allocations for a ~40 MiB production shard). A `stride` narrower than the
 network's input arity zero-fills the uncovered inputs, exactly as a short `Vec`
