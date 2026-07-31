@@ -5,8 +5,10 @@
 //!
 //! ## Optimisation strategies
 //!
-//! - **Dual accumulator**: Uses two independent SIMD accumulators to hide FMA latency
-//!   by allowing out-of-order execution of independent multiply-add chains.
+//! - **Dual accumulator**: [`weighted_sum_simd`] uses two independent SIMD
+//!   accumulators to hide FMA latency by allowing out-of-order execution of
+//!   independent multiply-add chains. The other three single-record kernels run
+//!   a single accumulator in chunks of four.
 //! - **FMA (fused multiply-add)**: Uses `f32x4_relaxed_madd` from relaxed-simd to
 //!   perform multiply and add in a single instruction with better precision.
 //! - **Multi-record batching**: Processes the same neuron across 4 or 8 input records
@@ -18,6 +20,9 @@
 //! - **ISA-neutral scalar layer**: the reference scalar kernels and the
 //!   small-count guard live once in [`scalar`] (Issue #447) and are shared by
 //!   the wasm and native paths.
+//! - **Shared chunk-walk scaffold**: the wasm kernels gather, reduce and finish
+//!   their remainder through one set of helpers (Issue #448) so an improvement
+//!   to the walk cannot land on one kernel only.
 
 // Issue #447 - the ISA-neutral scalar layer: reference kernels, the saturating
 // count guard, and the seed-taking tail helpers, shared by the wasm kernels
@@ -33,7 +38,82 @@ use crate::network::SynapseData;
 // SIMD intrinsics for vectorised synapse weight summation
 // Issue #1197 - Added f32x4_relaxed_madd for FMA optimisation
 #[cfg(target_arch = "wasm32")]
-use core::arch::wasm32::{f32x4, f32x4_add, f32x4_extract_lane, f32x4_relaxed_madd, f32x4_splat};
+use core::arch::wasm32::{
+    f32x4, f32x4_add, f32x4_extract_lane, f32x4_mul, f32x4_relaxed_madd, f32x4_splat, v128,
+};
+
+// ============================================================================
+// Chunk-walk scaffold (Issue #448)
+//
+// One home for *how* a wasm kernel walks a synapse span: gather four synapses
+// into `f32x4` lanes, reduce the lanes back to a scalar, then finish the 0..3
+// remainder through the seed-taking tail helpers in [`scalar`]. Every
+// single-record kernel below calls these, so an improvement to the walk cannot
+// land on one copy only — which is exactly how the Issue #1197 dual-accumulator
+// rework came to sit on `weighted_sum_simd` alone.
+//
+// The *fold* deliberately stays in each kernel: these are calls, not a
+// parameterised super-helper. Unifying the four folds would need a mode flag,
+// and a flag is what makes a shared helper drift back apart.
+//
+// Every helper here touches `v128`/`f32x4_*`, so each repeats the
+// `#[target_feature]` attributes — without them the intrinsics do not compile
+// and the vector arguments do not inline into the caller.
+//
+// Index precondition (Issue #207): the 0..3 remainder runs through the
+// `scalar::tail_*` helpers, which index `activations` with `get_unchecked`, so
+// every `from_index` in `start..end` must be a valid index into `activations`.
+// `CompiledNetwork::new` enforces exactly that at load time
+// (`NetworkError::InvalidSynapseIndex`), which is why the native kernels have
+// always carried this contract — the wasm kernels now share it rather than
+// re-inlining a checked copy of the same loop.
+// ============================================================================
+
+/// Gather the four synapses at `base..base + 4` into `(weights, activations)`
+/// lanes.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128, v128) {
+    let s0 = &synapses[base];
+    let s1 = &synapses[base + 1];
+    let s2 = &synapses[base + 2];
+    let s3 = &synapses[base + 3];
+
+    (
+        f32x4(s0.weight, s1.weight, s2.weight, s3.weight),
+        f32x4(
+            activations[s0.from_index as usize],
+            activations[s1.from_index as usize],
+            activations[s2.from_index as usize],
+            activations[s3.from_index as usize],
+        ),
+    )
+}
+
+/// Lane-wise `activation[from] * weight` for the four synapses at
+/// `base..base + 4`.
+///
+/// Bit-identical to computing each product scalar-wise and packing the lanes:
+/// `f32x4_mul` is a plain IEEE-754 multiply per lane, not a relaxed operation.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+fn gather4_products(synapses: &[SynapseData], activations: &[f32], base: usize) -> v128 {
+    let (weights, acts) = gather4(synapses, activations, base);
+    f32x4_mul(weights, acts)
+}
+
+/// Horizontal sum of the four lanes, in lane order.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+fn reduce4(acc: v128) -> f32 {
+    f32x4_extract_lane::<0>(acc)
+        + f32x4_extract_lane::<1>(acc)
+        + f32x4_extract_lane::<2>(acc)
+        + f32x4_extract_lane::<3>(acc)
+}
 
 /// Issue #1178 - SIMD-optimised weighted sum for standard activations
 /// Issue #1197 - Uses FMA (fused multiply-add) via relaxed-simd for better performance
@@ -41,6 +121,15 @@ use core::arch::wasm32::{f32x4, f32x4_add, f32x4_extract_lane, f32x4_relaxed_mad
 /// Uses a dual-accumulator approach: processes 8 synapses per iteration with two
 /// independent f32x4 accumulators to hide FMA latency via instruction-level
 /// parallelism. Falls back to 4-wide for counts 4..7 and scalar for < 4.
+///
+/// Walks the span through the shared chunk-walk scaffold ([`gather4`],
+/// [`reduce4`], the seed-taking tail in [`scalar`]) — Issue #448.
+///
+/// Issue #207 - the 0..3 tail delegates to a `get_unchecked` helper, so every
+/// `synapse.from_index` in `start..end` must be a valid index into
+/// `activations`. `CompiledNetwork::new` enforces this at load time
+/// (`NetworkError::InvalidSynapseIndex`), so callers holding a loaded network
+/// already satisfy the precondition.
 ///
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -70,76 +159,42 @@ pub fn weighted_sum_simd(
 
     for _ in 0..chunks_of_8 {
         // First group of 4 -> acc0
-        let s0 = &synapses[i];
-        let s1 = &synapses[i + 1];
-        let s2 = &synapses[i + 2];
-        let s3 = &synapses[i + 3];
-        let weights0 = f32x4(s0.weight, s1.weight, s2.weight, s3.weight);
-        let acts0 = f32x4(
-            activations[s0.from_index as usize],
-            activations[s1.from_index as usize],
-            activations[s2.from_index as usize],
-            activations[s3.from_index as usize],
-        );
+        let (weights0, acts0) = gather4(synapses, activations, i);
         acc0 = f32x4_relaxed_madd(weights0, acts0, acc0);
 
         // Second group of 4 -> acc1 (independent chain)
-        let s4 = &synapses[i + 4];
-        let s5 = &synapses[i + 5];
-        let s6 = &synapses[i + 6];
-        let s7 = &synapses[i + 7];
-        let weights1 = f32x4(s4.weight, s5.weight, s6.weight, s7.weight);
-        let acts1 = f32x4(
-            activations[s4.from_index as usize],
-            activations[s5.from_index as usize],
-            activations[s6.from_index as usize],
-            activations[s7.from_index as usize],
-        );
+        let (weights1, acts1) = gather4(synapses, activations, i + 4);
         acc1 = f32x4_relaxed_madd(weights1, acts1, acc1);
 
         i += 8;
     }
 
     // Handle remaining chunk of 4 if present
-    let remaining = end - i;
-    if remaining >= 4 {
-        let s0 = &synapses[i];
-        let s1 = &synapses[i + 1];
-        let s2 = &synapses[i + 2];
-        let s3 = &synapses[i + 3];
-        let weights = f32x4(s0.weight, s1.weight, s2.weight, s3.weight);
-        let acts = f32x4(
-            activations[s0.from_index as usize],
-            activations[s1.from_index as usize],
-            activations[s2.from_index as usize],
-            activations[s3.from_index as usize],
-        );
+    if scalar::synapse_count(i, end) >= 4 {
+        let (weights, acts) = gather4(synapses, activations, i);
         acc0 = f32x4_relaxed_madd(weights, acts, acc0);
         i += 4;
     }
 
-    // Merge accumulators
-    let merged = f32x4_add(acc0, acc1);
+    // Merge accumulators, then reduce the lanes
+    scalar_sum += reduce4(f32x4_add(acc0, acc1));
 
-    // Horizontal sum of merged SIMD accumulator
-    scalar_sum += f32x4_extract_lane::<0>(merged)
-        + f32x4_extract_lane::<1>(merged)
-        + f32x4_extract_lane::<2>(merged)
-        + f32x4_extract_lane::<3>(merged);
-
-    // Handle scalar remainder (0-3 synapses)
-    for idx in i..end {
-        let synapse = &synapses[idx];
-        scalar_sum += activations[synapse.from_index as usize] * synapse.weight;
-    }
-
-    scalar_sum
+    // SAFETY: `end <= synapses.len()` (the caller's range indexes the chunk
+    // loop above), and every `from_index` in `i..end` indexes `activations` —
+    // load-time validation in `CompiledNetwork::new` (`AGENTS.md`,
+    // "Unsafe & SIMD invariants") is `tail_sum`'s stated precondition.
+    unsafe { scalar::tail_sum(synapses, activations, i, end, scalar_sum) }
 }
 
 /// Issue #1178 - SIMD-optimised sum of squared weighted activations for Hypotenuse.
 ///
-/// Computes sum((activation[from] * weight)^2) using SIMD with dual accumulators.
+/// Computes sum((activation[from] * weight)^2) using SIMD.
 /// Used by the Hypotenuse squash function: sqrt(sum_sq) + bias.
+///
+/// Shares the chunk-walk scaffold ([`gather4_products`], [`reduce4`], the
+/// seed-taking tail) with the other single-record kernels, and runs a single
+/// accumulator over chunks of four. Same index precondition as
+/// [`weighted_sum_simd`].
 ///
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -156,48 +211,32 @@ pub fn weighted_sum_of_squares_simd(
     }
 
     let mut acc = f32x4_splat(0.0);
-    let mut scalar_sum = 0.0f32;
     let chunks = count / 4;
 
     for chunk in 0..chunks {
-        let base = start + chunk * 4;
-        let s0 = &synapses[base];
-        let s1 = &synapses[base + 1];
-        let s2 = &synapses[base + 2];
-        let s3 = &synapses[base + 3];
-
-        // Compute weighted activations
-        let products = f32x4(
-            activations[s0.from_index as usize] * s0.weight,
-            activations[s1.from_index as usize] * s1.weight,
-            activations[s2.from_index as usize] * s2.weight,
-            activations[s3.from_index as usize] * s3.weight,
-        );
-
         // Square and accumulate: acc += products * products
+        let products = gather4_products(synapses, activations, start + chunk * 4);
         acc = f32x4_relaxed_madd(products, products, acc);
     }
 
-    scalar_sum += f32x4_extract_lane::<0>(acc)
-        + f32x4_extract_lane::<1>(acc)
-        + f32x4_extract_lane::<2>(acc)
-        + f32x4_extract_lane::<3>(acc);
-
+    let scalar_sum = reduce4(acc);
     let remainder_start = start + chunks * 4;
-    for i in remainder_start..end {
-        let synapse = &synapses[i];
-        let val = activations[synapse.from_index as usize] * synapse.weight;
-        scalar_sum += val * val;
-    }
 
-    scalar_sum
+    // SAFETY: same contract as `weighted_sum_simd`'s tail — load-time index
+    // validation in `CompiledNetwork::new`.
+    unsafe { scalar::tail_sum_of_squares(synapses, activations, remainder_start, end, scalar_sum) }
 }
 
 /// Issue #1178 - SIMD-optimised weighted sum for Mean activation.
 ///
 /// Computes the plain weighted sum (without bias) using SIMD, intended for
-/// the Mean squash: sum / n + bias. Shares the dual-accumulator approach
-/// with `weighted_sum_simd` but omits the bias to keep the division clean.
+/// the Mean squash: sum / n + bias. Omits the bias to keep the division clean.
+///
+/// Shares the chunk-walk scaffold ([`gather4`], [`reduce4`], the seed-taking
+/// tail) with the other single-record kernels, but runs a **single**
+/// accumulator over chunks of four — the Issue #1197 dual-accumulator form is
+/// on [`weighted_sum_simd`] only. Same index precondition as
+/// [`weighted_sum_simd`].
 ///
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -214,44 +253,30 @@ pub fn weighted_sum_no_bias_simd(
     }
 
     let mut acc = f32x4_splat(0.0);
-    let mut scalar_sum = 0.0f32;
     let chunks = count / 4;
 
     for chunk in 0..chunks {
-        let base = start + chunk * 4;
-        let s0 = &synapses[base];
-        let s1 = &synapses[base + 1];
-        let s2 = &synapses[base + 2];
-        let s3 = &synapses[base + 3];
-
-        let weights = f32x4(s0.weight, s1.weight, s2.weight, s3.weight);
-        let acts = f32x4(
-            activations[s0.from_index as usize],
-            activations[s1.from_index as usize],
-            activations[s2.from_index as usize],
-            activations[s3.from_index as usize],
-        );
+        let (weights, acts) = gather4(synapses, activations, start + chunk * 4);
         acc = f32x4_relaxed_madd(weights, acts, acc);
     }
 
-    scalar_sum += f32x4_extract_lane::<0>(acc)
-        + f32x4_extract_lane::<1>(acc)
-        + f32x4_extract_lane::<2>(acc)
-        + f32x4_extract_lane::<3>(acc);
-
+    let scalar_sum = reduce4(acc);
     let remainder_start = start + chunks * 4;
-    for i in remainder_start..end {
-        let synapse = &synapses[i];
-        scalar_sum += activations[synapse.from_index as usize] * synapse.weight;
-    }
 
-    scalar_sum
+    // SAFETY: same contract as `weighted_sum_simd`'s tail — load-time index
+    // validation in `CompiledNetwork::new`.
+    unsafe { scalar::tail_sum(synapses, activations, remainder_start, end, scalar_sum) }
 }
 
 /// Issue #1178 - SIMD-optimised sum of squared (bias + weighted activation) for HypotenuseV2.
 ///
 /// Computes sum((bias + activation[from] * weight)^2) using SIMD.
 /// Used by the HypotenuseV2 squash function: sqrt(sum_sq).
+///
+/// Shares the chunk-walk scaffold ([`gather4_products`], [`reduce4`], the
+/// seed-taking tail) with the other single-record kernels, and runs a single
+/// accumulator over chunks of four. Same index precondition as
+/// [`weighted_sum_simd`].
 ///
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -270,42 +295,30 @@ pub fn weighted_sum_of_squares_v2_simd(
 
     let bias_vec = f32x4_splat(bias);
     let mut acc = f32x4_splat(0.0);
-    let mut scalar_sum = 0.0f32;
     let chunks = count / 4;
 
     for chunk in 0..chunks {
-        let base = start + chunk * 4;
-        let s0 = &synapses[base];
-        let s1 = &synapses[base + 1];
-        let s2 = &synapses[base + 2];
-        let s3 = &synapses[base + 3];
-
-        // Compute bias + activation * weight
-        let weighted = f32x4(
-            activations[s0.from_index as usize] * s0.weight,
-            activations[s1.from_index as usize] * s1.weight,
-            activations[s2.from_index as usize] * s2.weight,
-            activations[s3.from_index as usize] * s3.weight,
-        );
+        // Compute bias + activation * weight, then square and accumulate
+        let weighted = gather4_products(synapses, activations, start + chunk * 4);
         let vals = f32x4_add(bias_vec, weighted);
-
-        // Square and accumulate: acc += vals * vals
         acc = f32x4_relaxed_madd(vals, vals, acc);
     }
 
-    scalar_sum += f32x4_extract_lane::<0>(acc)
-        + f32x4_extract_lane::<1>(acc)
-        + f32x4_extract_lane::<2>(acc)
-        + f32x4_extract_lane::<3>(acc);
-
+    let scalar_sum = reduce4(acc);
     let remainder_start = start + chunks * 4;
-    for i in remainder_start..end {
-        let synapse = &synapses[i];
-        let val = bias + activations[synapse.from_index as usize] * synapse.weight;
-        scalar_sum += val * val;
-    }
 
-    scalar_sum
+    // SAFETY: same contract as `weighted_sum_simd`'s tail — load-time index
+    // validation in `CompiledNetwork::new`.
+    unsafe {
+        scalar::tail_sum_of_squares_v2(
+            synapses,
+            activations,
+            remainder_start,
+            end,
+            scalar_sum,
+            bias,
+        )
+    }
 }
 
 /// Issue #1202 - SIMD-optimised weighted sum for 4 records simultaneously.

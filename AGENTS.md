@@ -240,6 +240,51 @@ flowchart LR
     S --> T["seed-taking tail helpers"]
 ```
 
+## One chunk-walk scaffold for the wasm weighted-sum kernels (Issue #448)
+
+The scaffold helpers at the top of `neat-core/src/simd.rs` — `gather4`,
+`gather4_products`, `reduce4` — are the single home of the rule that says *how a
+`wasm32` kernel walks a synapse span*: chunk into fours, gather weights and
+activations into `f32x4` lanes, fold, reduce the lanes, then finish the 0..3
+remainder from the **running** accumulator through the `scalar::tail_*` helpers
+(Issue #447). All four single-record kernels — `weighted_sum_simd`,
+`weighted_sum_of_squares_simd`, `weighted_sum_no_bias_simd`,
+`weighted_sum_of_squares_v2_simd` — call them, so a change to the walk lands on
+every kernel at once. It previously did not: the Issue #1197 dual-accumulator
+rework reached `weighted_sum_simd` alone and the doc on
+`weighted_sum_no_bias_simd` claimed otherwise for four releases.
+
+Two constraints on anyone editing the scaffold:
+
+- **Every helper touching `v128`/`f32x4_*` must repeat
+  `#[target_feature(enable = "simd128", enable = "relaxed-simd")]`** — without it
+  the intrinsics do not compile and the vector arguments do not inline into the
+  caller.
+- **The fold stays in each kernel.** These are calls, not a parameterised
+  super-helper: plain FMA, square-the-product, and square-the-biased-product are
+  genuinely different folds, and unifying them would need a mode flag. If a
+  future kernel only fits behind a flag, leave it out of the scaffold instead.
+
+The dual-accumulator form (two chains, chunks of eight) is still on
+`weighted_sum_simd` only, and the docs now say so; promoting the other three is
+a fold-level edit on top of the shared walk.
+
+`neat-core/tests/simd_chunk_walk_scaffold.rs` pins the rule: every kernel
+reproduces its `simd::scalar` reference from **any** offset (not just
+`start == 0`), the remainder continues the span rather than restarting it, and a
+reversed span yields the kernel's seed.
+
+```mermaid
+flowchart LR
+    K1["weighted_sum_simd"] --> G["gather4 / gather4_products"]
+    K2["weighted_sum_of_squares_simd"] --> G
+    K3["weighted_sum_no_bias_simd"] --> G
+    K4["weighted_sum_of_squares_v2_simd"] --> G
+    G --> F["fold — stays in each kernel"]
+    F --> R["reduce4"]
+    R --> T["scalar::tail_* — seed-taking remainder"]
+```
+
 ## CI / secrets
 
 - PR pipeline: version bump + **`cargo upgrade --incompatible`**, **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (PAT with **contents:write**).
