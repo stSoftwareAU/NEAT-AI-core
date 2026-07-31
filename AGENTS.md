@@ -136,6 +136,43 @@ callers, where it genuinely differs (MSE falls back through the 8-way *and*
 switch the driver's behaviour, leave that entry point out rather than growing a
 flag. `neat-core/tests/packed_record_scan.rs` pins the rule across all eight.
 
+## One batched record-scan skeleton for every loss kind (Issue #445)
+
+`batch_8way_activation!` (`neat-core/src/loss.rs`) is the single home of the
+rule that walks a packed record buffer: records are grouped **8 → 4 → 1**, each
+group's inputs are loaded into per-lane activation buffers, and the per-record
+errors accumulate into one `f64` sum. All six loss kinds — MSE included, via
+`mse_sum_batch_scattered` — invoke it with a closure carrying **only** their
+per-record reduction (`(records, target_base, act, output_start, num_outputs) ->
+f64`). Changing the grouping (a 16-lane tier, a different remainder strategy) is
+an edit **there and nowhere else**; do not re-inline the skeleton.
+
+The record-**interleaved** 8-group path (`mse_sum_batch_8way_interleaved`,
+Issue #384) is a genuinely different memory layout and stays separate — its
+`< 8` remainder still runs the same per-lane kernels, so the two are
+bit-identical.
+
+`load_record` (`neat-core/src/batch_scoring.rs`) owns the loading sub-rule:
+copy `min(record.len(), num_inputs)` values and **zero** every input slot the
+record does not cover, exactly as `CompiledNetwork::activate_into` does. Every
+per-lane loader in the batched scoring and fused loss kernels calls it, so a
+record scored in a SIMD group, in the 4-record remainder, or in the scalar tail
+sees the same inputs. `neat-core/tests/batch_record_skeleton.rs` pins the rule
+across every packed loss entry point.
+
+```mermaid
+flowchart LR
+    A["packed records"] --> B{"num_records"}
+    B -- "&ge; 8" --> C["8-record group<br/>load_record x8"]
+    B -- "4..7" --> D["4-record group<br/>load_record x4"]
+    B -- "&lt; 4" --> E["scalar tail<br/>load_record"]
+    C --> D --> E
+    C --> F["$error_fn per record"]
+    D --> F
+    E --> F
+    F --> G["f64 sum_error"]
+```
+
 ## CI / secrets
 
 - PR pipeline: version bump + **`cargo upgrade --incompatible`**, **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (PAT with **contents:write**).

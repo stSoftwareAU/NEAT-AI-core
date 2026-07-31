@@ -1,5 +1,5 @@
 //! Parity guard for the SIMD squash wiring in the MSE batched loss paths
-//! (Issue #246). `mse_sum_batch_8way` / `mse_sum_batch_4way` now feed their
+//! (Issue #246). The batched MSE kernels feed their
 //! per-lane sums through the vectorised `squash_x8` / `squash_x4`
 //! approximations (shipped by #180) for the hot transcendental squashes,
 //! falling back to the scalar inline squash for every other type.
@@ -168,7 +168,8 @@ fn mse_8way_with_remainder_matches_scalar() {
     }
 }
 
-/// 5–7 records route through `mse_sum_batch_4way`, driving the 4-way SIMD block.
+/// 5–7 records fall to the shared skeleton's 4-record group, driving the 4-way
+/// SIMD block.
 #[test]
 fn mse_4way_matches_scalar_for_vectorised_squashes() {
     for squash in [
