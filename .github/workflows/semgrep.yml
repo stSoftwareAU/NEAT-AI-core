@@ -26,6 +26,9 @@ env:
   # semgrep/semgrep:1.170.1 — `:latest` as of 2026-07. Refresh with
   # `docker buildx imagetools inspect semgrep/semgrep:latest`.
   SEMGREP_IMAGE: semgrep/semgrep@sha256:98c2572fced2474539fd27cab3207ebd8e95e4e7aab4c3b381fdc5e2641d9941
+  # PR #468 — fallback path when Docker Hub itself is unreachable. Must track
+  # the version the digest above pins, so both paths scan with the same semgrep.
+  SEMGREP_VERSION: 1.170.1
 
 jobs:
   semgrep:
@@ -44,13 +47,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Pull semgrep image
+      # PR #468 — retries alone cannot survive a Docker Hub outage: all five
+      # attempts hit `Get "https://registry-1.docker.io/v2/": context deadline
+      # exceeded` and the job failed without semgrep ever running. Docker Hub is
+      # a single point of failure for this gate, so fall back to the PyPI
+      # release (different infrastructure) at the same version. The container
+      # remains the primary, digest-pinned path; the fallback is version-pinned
+      # and only reachable once the pinned image is provably unavailable.
+      - name: Obtain semgrep
+        id: obtain
         run: |
           set -euo pipefail
           attempts=5
           for attempt in $(seq 1 "$attempts"); do
             if docker pull "$SEMGREP_IMAGE"; then
               echo "Pulled $SEMGREP_IMAGE on attempt $attempt."
+              echo "mode=docker" >> "$GITHUB_OUTPUT"
               exit 0
             fi
             if [ "$attempt" -lt "$attempts" ]; then
@@ -59,18 +71,28 @@ jobs:
               sleep "$backoff"
             fi
           done
-          # Fail loud — never let an unpullable scanner image look like a pass.
-          echo "::error::Could not pull $SEMGREP_IMAGE after $attempts attempts; the registry is unreachable, so no SAST scan ran."
-          exit 1
+          echo "::warning::Could not pull $SEMGREP_IMAGE after $attempts attempts; falling back to semgrep $SEMGREP_VERSION from PyPI."
+          # Fail loud — if neither source yields a scanner, the job fails rather
+          # than reporting a pass for a scan that never ran.
+          if ! pipx install "semgrep==${SEMGREP_VERSION}"; then
+            echo "::error::Neither the pinned container nor PyPI provided semgrep, so no SAST scan ran."
+            exit 1
+          fi
+          echo "mode=pypi" >> "$GITHUB_OUTPUT"
 
       - name: Semgrep scan
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+          SEMGREP_MODE: ${{ steps.obtain.outputs.mode }}
         run: |
           set -euo pipefail
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE:/src" \
-            -w /src \
-            -e SEMGREP_APP_TOKEN \
-            "$SEMGREP_IMAGE" \
-            sh -c 'git config --global --add safe.directory /src && semgrep ci --config p/default'
+          if [ "$SEMGREP_MODE" = "docker" ]; then
+            docker run --rm \
+              -v "$GITHUB_WORKSPACE:/src" \
+              -w /src \
+              -e SEMGREP_APP_TOKEN \
+              "$SEMGREP_IMAGE" \
+              sh -c 'git config --global --add safe.directory /src && semgrep ci --config p/default'
+          else
+            semgrep ci --config p/default
+          fi

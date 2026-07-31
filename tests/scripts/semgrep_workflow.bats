@@ -104,10 +104,12 @@ sys.exit(1)
 PY
 }
 
-# Stubs `docker` (fails the first $1 invocations, then succeeds) and `sleep`
-# (returns immediately so backoff does not slow the suite), on PATH.
+# Stubs `docker` (fails the first $1 invocations, then succeeds), `pipx` (exits
+# with $2, default 0) and `sleep` (returns immediately so backoff does not slow
+# the suite), on PATH.
 make_stubs() {
   local fail_count="$1"
+  local pipx_status="${2:-0}"
   mkdir -p "${BATS_TEST_TMPDIR}/bin"
   echo 0 >"${BATS_TEST_TMPDIR}/calls"
   cat >"${BATS_TEST_TMPDIR}/bin/docker" <<STUB
@@ -122,47 +124,98 @@ if [ "\$calls" -le "${fail_count}" ]; then
 fi
 exit 0
 STUB
+  cat >"${BATS_TEST_TMPDIR}/bin/pipx" <<STUB
+#!/usr/bin/env bash
+echo "pipx \$*" >>"${BATS_TEST_TMPDIR}/pipx_args"
+exit ${pipx_status}
+STUB
   cat >"${BATS_TEST_TMPDIR}/bin/sleep" <<'STUB'
 #!/usr/bin/env bash
 exit 0
 STUB
-  chmod +x "${BATS_TEST_TMPDIR}/bin/docker" "${BATS_TEST_TMPDIR}/bin/sleep"
+  chmod +x "${BATS_TEST_TMPDIR}/bin/docker" "${BATS_TEST_TMPDIR}/bin/pipx" \
+    "${BATS_TEST_TMPDIR}/bin/sleep"
   PATH="${BATS_TEST_TMPDIR}/bin:$PATH"
   export PATH
+  # The step records which acquisition path it took via $GITHUB_OUTPUT.
+  GITHUB_OUTPUT="${BATS_TEST_TMPDIR}/github_output"
+  : >"$GITHUB_OUTPUT"
+  export GITHUB_OUTPUT
+}
+
+# Sets up the "Obtain semgrep" script at $BATS_TEST_TMPDIR/pull.sh and the
+# environment the step reads. $1 = docker failures before success, $2 = pipx
+# exit status.
+setup_obtain_step() {
+  export WF
+  extract_step_script "${BATS_TEST_TMPDIR}/pull.sh" "Obtain semgrep"
+  make_stubs "$1" "${2:-0}"
+  export SEMGREP_IMAGE="semgrep/semgrep@sha256:$(printf 'a%.0s' {1..64})"
+  export SEMGREP_VERSION="1.170.1"
 }
 
 @test "pull step retries a failing registry and succeeds once the pull works" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  export WF
-  run extract_step_script "${BATS_TEST_TMPDIR}/pull.sh" "Pull semgrep image"
-  [ "$status" -eq 0 ]
+  setup_obtain_step 2 # two registry timeouts, then a good pull
 
-  make_stubs 2 # two registry timeouts, then a good pull
-  export SEMGREP_IMAGE="semgrep/semgrep@sha256:$(printf 'a%.0s' {1..64})"
   run bash "${BATS_TEST_TMPDIR}/pull.sh"
   [ "$status" -eq 0 ]
   # Three attempts total: the runner's own 3-attempt job-init pull is what
   # failed here, so a single retry would not have been enough.
   [ "$(cat "${BATS_TEST_TMPDIR}/calls")" -eq 3 ]
+  # The container is the primary path; no fallback install should have run.
+  [ ! -f "${BATS_TEST_TMPDIR}/pipx_args" ]
+  grep -q '^mode=docker$' "$GITHUB_OUTPUT"
 }
 
-@test "pull step fails loud when the registry stays unreachable" {
+# PR #468 — a Docker Hub outage exhausted all five attempts and the job failed
+# without semgrep ever running. The scan now falls back to the PyPI release.
+
+@test "pull step falls back to the pinned PyPI release when the registry stays unreachable" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  export WF
-  run extract_step_script "${BATS_TEST_TMPDIR}/pull.sh" "Pull semgrep image"
-  [ "$status" -eq 0 ]
+  setup_obtain_step 99 0 # registry never recovers, PyPI works
 
-  make_stubs 99 # registry never recovers
-  export SEMGREP_IMAGE="semgrep/semgrep@sha256:$(printf 'a%.0s' {1..64})"
   run bash "${BATS_TEST_TMPDIR}/pull.sh"
-  # An unpullable scanner must never be reported as a clean scan.
+  [ "$status" -eq 0 ]
+  [ "$(cat "${BATS_TEST_TMPDIR}/calls")" -eq 5 ]
+  # The fallback must pin the same version the digest pins — never floating.
+  grep -q 'semgrep==1.170.1' "${BATS_TEST_TMPDIR}/pipx_args"
+  grep -q '^mode=pypi$' "$GITHUB_OUTPUT"
+}
+
+@test "pull step fails loud when neither the registry nor PyPI yields a scanner" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  setup_obtain_step 99 1 # registry never recovers and the PyPI install fails
+
+  run bash "${BATS_TEST_TMPDIR}/pull.sh"
+  # An unobtainable scanner must never be reported as a clean scan.
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Could not pull"* ]]
   [[ "$output" == *"no SAST scan ran"* ]]
+  ! grep -q '^mode=' "$GITHUB_OUTPUT"
+}
+
+@test "the PyPI fallback version tracks the digest-pinned image version" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import re, yaml
+env = yaml.safe_load(open("$WF")).get("env") or {}
+version = str(env.get("SEMGREP_VERSION", ""))
+assert re.fullmatch(r"\d+\.\d+\.\d+", version), version
+# The image pin carries the version in a comment; both must name the same one.
+text = open("$WF").read()
+assert f"semgrep/semgrep:{version}" in text, (
+    f"SEMGREP_VERSION {version} does not match the digest pin's version comment"
+)
+PY
+  [ "$status" -eq 0 ]
 }
 
 @test "semgrep.yml has no job-level container, so the pull backoff is ours" {
