@@ -5,6 +5,56 @@
 
 use crate::squash::SquashType;
 
+/// Gradient-flow factor for a squash whose safe band is `[safe_min, safe_max]`
+/// and which fades linearly to zero over `fade` either side of it.
+///
+/// The rule: no gradient when the raw input is already outside the band and the
+/// error pushes it further out; no gradient when the raw input is inside the
+/// band but the weight sits outside `[1e-3, 1e3]` and the error is already
+/// correcting it (let the weight recover first); full gradient inside the band;
+/// otherwise a linear fade to zero across `fade` past each edge.
+#[inline(always)]
+fn bounded_safe_zone(
+    raw_input: f32,
+    error: f32,
+    weight: f32,
+    safe_min: f32,
+    safe_max: f32,
+    fade: f32,
+) -> f32 {
+    const MIN_WEIGHT: f32 = 1e-3;
+    const MAX_WEIGHT: f32 = 1e3;
+
+    let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
+    let raw_getting_worse =
+        (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
+
+    let abs_weight = weight.abs();
+    let weight_too_small = abs_weight < MIN_WEIGHT;
+    let weight_too_large = abs_weight > MAX_WEIGHT;
+    let weight_improving =
+        (weight_too_small && weight * error > 0.0) || (weight_too_large && weight * error < 0.0);
+
+    if !in_safe_range && raw_getting_worse {
+        return 0.0;
+    }
+    if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
+        return 0.0;
+    }
+
+    if in_safe_range {
+        return 1.0;
+    }
+    if raw_input > safe_max && raw_input <= safe_max + fade {
+        return 1.0 - (raw_input - safe_max) / fade;
+    }
+    if raw_input < safe_min && raw_input >= safe_min - fade {
+        return 1.0 - (safe_min - raw_input) / fade;
+    }
+
+    0.0
+}
+
 /// Apply safe zone adjustment for a given activation function
 /// Issue #1140 - WASM Migration Phase 8: Implement safeZoneAdjustment() in Rust/WASM
 ///
@@ -81,118 +131,13 @@ pub fn apply_safe_zone_adjustment(
         }
 
         // LeakyReLU: Never fully saturates, but has weight-based logic
-        SquashType::LeakyRelu => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -50.0;
-            let safe_max = 50.0;
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 20.0 {
-                return 1.0 - (raw_input - safe_max) / 20.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 20.0 {
-                return 1.0 - (safe_min - raw_input) / 20.0;
-            }
-
-            0.0
-        }
+        SquashType::LeakyRelu => bounded_safe_zone(raw_input, error, weight, -50.0, 50.0, 20.0),
 
         // SELU: Similar to ELU but with specific safe zones
-        SquashType::Selu => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -10.0;
-            let safe_max = 10.0;
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Selu => bounded_safe_zone(raw_input, error, weight, -10.0, 10.0, 10.0),
 
         // ELU: Similar pattern to SELU
-        SquashType::Elu => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -10.0;
-            let safe_max = 10.0;
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Elu => bounded_safe_zone(raw_input, error, weight, -10.0, 10.0, 10.0),
 
         // LOGISTIC (Sigmoid): Classic sigmoid saturation
         SquashType::Logistic => {
@@ -289,192 +234,19 @@ pub fn apply_safe_zone_adjustment(
         }
 
         // Softsign: Slow saturation
-        SquashType::Softsign => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -10.0;
-            let safe_max = 10.0;
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-
-            // Soft fade near edge zones
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Softsign => bounded_safe_zone(raw_input, error, weight, -10.0, 10.0, 10.0),
 
         // Softplus: One-sided saturation
-        SquashType::Softplus => {
-            let safe_min = -10.0;
-            let safe_max = 20.0;
-            let in_safe_raw = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improves = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_raw && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_raw && (weight_too_small || weight_too_large) && weight_improves {
-                return 0.0;
-            }
-
-            if in_safe_raw {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Softplus => bounded_safe_zone(raw_input, error, weight, -10.0, 20.0, 10.0),
 
         // Swish: Similar to tanh in behaviour
-        SquashType::Swish => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -10.0;
-            let safe_max = 10.0;
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Swish => bounded_safe_zone(raw_input, error, weight, -10.0, 10.0, 10.0),
 
         // Mish: Similar to Swish
-        SquashType::Mish => {
-            let safe_min = -10.0;
-            let safe_max = 10.0;
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let in_safe_raw = raw_input >= safe_min && raw_input <= safe_max;
-            let raw_worsening =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_raw && raw_worsening {
-                return 0.0;
-            }
-            if in_safe_raw && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_raw {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Mish => bounded_safe_zone(raw_input, error, weight, -10.0, 10.0, 10.0),
 
         // GELU: Similar to ReLU but smoother
-        SquashType::Gelu => {
-            let safe_min = -6.0;
-            let safe_max = 6.0;
-            let in_safe_raw = raw_input >= safe_min && raw_input <= safe_max;
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improves = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_raw && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_raw && (weight_too_small || weight_too_large) && weight_improves {
-                return 0.0;
-            }
-
-            if in_safe_raw {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Gelu => bounded_safe_zone(raw_input, error, weight, -6.0, 6.0, 10.0),
 
         // SINE: Periodic, always varying
         SquashType::Sine => {
@@ -803,168 +575,16 @@ pub fn apply_safe_zone_adjustment(
         }
 
         // StdInverse: Sensitive around zero
-        SquashType::StdInverse => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -10.0;
-            let safe_max = 10.0;
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::StdInverse => bounded_safe_zone(raw_input, error, weight, -10.0, 10.0, 10.0),
 
         // Exponential: Grows rapidly
-        SquashType::Exponential => {
-            // Safe zone for Exponential raw input
-            let safe_min = -10.0;
-            let safe_max = 30.0;
-            let in_safe_raw = raw_input >= safe_min && raw_input <= safe_max;
-
-            // Check if pushing raw input would make it worse
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            // Safe weight bounds
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-
-            // Is weight improvement in direction of error?
-            let weight_improves = (weight_too_small && weight * error > 0.0)
-                || // growing small weight
-                (weight_too_large && weight * error < 0.0); // shrinking big weight
-
-            // Fallback to weight adjustment
-            if !in_safe_raw && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_raw && (weight_too_small || weight_too_large) && weight_improves {
-                return 0.0;
-            }
-
-            // Default logic (fade outside the soft safe zone)
-            if in_safe_raw {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Exponential => bounded_safe_zone(raw_input, error, weight, -10.0, 30.0, 10.0),
 
         // LogSigmoid: Flattens sharply for large negative inputs
-        SquashType::LogSigmoid => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -20.0;
-            let safe_max = 20.0;
-            let fade_min = -30.0;
-            let fade_max = 30.0;
-
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            // Prefer not to propagate if the raw input is very bad and the weight would help
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-
-            // Soft fade zones
-            if raw_input > safe_max && raw_input <= fade_max {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= fade_min {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::LogSigmoid => bounded_safe_zone(raw_input, error, weight, -20.0, 20.0, 10.0),
 
         // ISRU: Saturates at large |x|
-        SquashType::Isru => {
-            let abs_weight = weight.abs();
-            let min_weight = 1e-3;
-            let max_weight = 1e3;
-
-            let safe_min = -10.0;
-            let safe_max = 10.0;
-            let in_safe_range = raw_input >= safe_min && raw_input <= safe_max;
-
-            let raw_getting_worse =
-                (raw_input < safe_min && error < 0.0) || (raw_input > safe_max && error > 0.0);
-
-            let weight_too_small = abs_weight < min_weight;
-            let weight_too_large = abs_weight > max_weight;
-            let weight_improving = (weight_too_small && weight * error > 0.0)
-                || (weight_too_large && weight * error < 0.0);
-
-            if !in_safe_range && raw_getting_worse {
-                return 0.0;
-            }
-            if in_safe_range && (weight_too_small || weight_too_large) && weight_improving {
-                return 0.0;
-            }
-
-            if in_safe_range {
-                return 1.0;
-            }
-            if raw_input > safe_max && raw_input <= safe_max + 10.0 {
-                return 1.0 - (raw_input - safe_max) / 10.0;
-            }
-            if raw_input < safe_min && raw_input >= safe_min - 10.0 {
-                return 1.0 - (safe_min - raw_input) / 10.0;
-            }
-
-            0.0
-        }
+        SquashType::Isru => bounded_safe_zone(raw_input, error, weight, -10.0, 10.0, 10.0),
 
         // Aggregate functions - not differentiable, always return 0
         SquashType::Minimum | SquashType::Maximum | SquashType::If => 0.0,
