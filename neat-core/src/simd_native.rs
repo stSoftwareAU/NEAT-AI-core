@@ -10,8 +10,13 @@
 //! gathering 4 indexed activations per step, FMA-accumulating, then horizontally
 //! reducing — with FMA+SSE on `x86_64`, NEON on `aarch64`, and scalar elsewhere and
 //! for the 0..3 synapse tail.
+//!
+//! The ISA-neutral scalar layer — the reference kernels, the saturating count
+//! guard, and the seed-taking tail helpers — lives once in
+//! [`crate::simd::scalar`] (Issue #447) and is shared with the wasm kernels.
 
 use crate::network::SynapseData;
+use crate::simd::scalar;
 
 #[inline]
 fn weighted_sum_simd_8records_scalar(
@@ -106,7 +111,7 @@ fn weighted_sum_interleaved_8_scalar(
 
 #[cfg(target_arch = "x86_64")]
 mod x86 {
-    use super::SynapseData;
+    use super::{SynapseData, scalar};
     use core::arch::x86_64::*;
 
     /// # Safety
@@ -260,7 +265,7 @@ mod x86 {
         bias: f32,
     ) -> f32 {
         let mut acc = _mm_setzero_ps();
-        let chunk_end = start + ((end - start) / 4) * 4;
+        let chunk_end = start + (scalar::synapse_count(start, end) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
             let s0 = unsafe { synapses.get_unchecked(i) };
@@ -281,13 +286,10 @@ mod x86 {
         }
         let mut out = [0.0_f32; 4];
         unsafe { _mm_storeu_ps(out.as_mut_ptr(), acc) };
-        let mut sum = bias + out[0] + out[1] + out[2] + out[3];
-        while i < end {
-            let s = unsafe { synapses.get_unchecked(i) };
-            sum += unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
-            i += 1;
-        }
-        sum
+        let sum = bias + out[0] + out[1] + out[2] + out[3];
+        // SAFETY: this fn's own index precondition (documented above) is exactly
+        // `tail_sum`'s contract — load-time validation in `CompiledNetwork::new`.
+        unsafe { scalar::tail_sum(synapses, activations, i, end, sum) }
     }
 
     /// # Safety
@@ -305,7 +307,7 @@ mod x86 {
         end: usize,
     ) -> f32 {
         let mut acc = _mm_setzero_ps();
-        let chunk_end = start + ((end - start) / 4) * 4;
+        let chunk_end = start + (scalar::synapse_count(start, end) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
             let s0 = unsafe { synapses.get_unchecked(i) };
@@ -327,14 +329,10 @@ mod x86 {
         }
         let mut out = [0.0_f32; 4];
         unsafe { _mm_storeu_ps(out.as_mut_ptr(), acc) };
-        let mut sum = out[0] + out[1] + out[2] + out[3];
-        while i < end {
-            let s = unsafe { synapses.get_unchecked(i) };
-            let val = unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
-            sum += val * val;
-            i += 1;
-        }
-        sum
+        let sum = out[0] + out[1] + out[2] + out[3];
+        // SAFETY: this fn's own index precondition (documented above) is exactly
+        // `tail_sum_of_squares`'s contract — load-time validation.
+        unsafe { scalar::tail_sum_of_squares(synapses, activations, i, end, sum) }
     }
 
     /// # Safety
@@ -354,7 +352,7 @@ mod x86 {
     ) -> f32 {
         let bias_vec = _mm_set1_ps(bias);
         let mut acc = _mm_setzero_ps();
-        let chunk_end = start + ((end - start) / 4) * 4;
+        let chunk_end = start + (scalar::synapse_count(start, end) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
             let s0 = unsafe { synapses.get_unchecked(i) };
@@ -376,21 +374,16 @@ mod x86 {
         }
         let mut out = [0.0_f32; 4];
         unsafe { _mm_storeu_ps(out.as_mut_ptr(), acc) };
-        let mut sum = out[0] + out[1] + out[2] + out[3];
-        while i < end {
-            let s = unsafe { synapses.get_unchecked(i) };
-            let val =
-                bias + unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
-            sum += val * val;
-            i += 1;
-        }
-        sum
+        let sum = out[0] + out[1] + out[2] + out[3];
+        // SAFETY: this fn's own index precondition (documented above) is exactly
+        // `tail_sum_of_squares_v2`'s contract — load-time validation.
+        unsafe { scalar::tail_sum_of_squares_v2(synapses, activations, i, end, sum, bias) }
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 mod aarch64 {
-    use super::SynapseData;
+    use super::{SynapseData, scalar};
     use core::arch::aarch64::*;
 
     /// # Safety
@@ -553,7 +546,7 @@ mod aarch64 {
         let mut acc = vdupq_n_f32(0.0);
         let mut wl = [0.0_f32; 4];
         let mut al = [0.0_f32; 4];
-        let chunk_end = start + ((end - start) / 4) * 4;
+        let chunk_end = start + (scalar::synapse_count(start, end) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
             let s0 = unsafe { synapses.get_unchecked(i) };
@@ -575,13 +568,10 @@ mod aarch64 {
             acc = vfmaq_f32(acc, weights, acts);
             i += 4;
         }
-        let mut sum = bias + vaddvq_f32(acc);
-        while i < end {
-            let s = unsafe { synapses.get_unchecked(i) };
-            sum += unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
-            i += 1;
-        }
-        sum
+        let sum = bias + vaddvq_f32(acc);
+        // SAFETY: this fn's own index precondition (documented above) is exactly
+        // `tail_sum`'s contract — load-time validation in `CompiledNetwork::new`.
+        unsafe { scalar::tail_sum(synapses, activations, i, end, sum) }
     }
 
     /// # Safety
@@ -601,7 +591,7 @@ mod aarch64 {
         let mut acc = vdupq_n_f32(0.0);
         let mut wl = [0.0_f32; 4];
         let mut al = [0.0_f32; 4];
-        let chunk_end = start + ((end - start) / 4) * 4;
+        let chunk_end = start + (scalar::synapse_count(start, end) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
             let s0 = unsafe { synapses.get_unchecked(i) };
@@ -624,14 +614,10 @@ mod aarch64 {
             acc = vfmaq_f32(acc, products, products);
             i += 4;
         }
-        let mut sum = vaddvq_f32(acc);
-        while i < end {
-            let s = unsafe { synapses.get_unchecked(i) };
-            let val = unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
-            sum += val * val;
-            i += 1;
-        }
-        sum
+        let sum = vaddvq_f32(acc);
+        // SAFETY: this fn's own index precondition (documented above) is exactly
+        // `tail_sum_of_squares`'s contract — load-time validation.
+        unsafe { scalar::tail_sum_of_squares(synapses, activations, i, end, sum) }
     }
 
     /// # Safety
@@ -653,7 +639,7 @@ mod aarch64 {
         let mut acc = vdupq_n_f32(0.0);
         let mut wl = [0.0_f32; 4];
         let mut al = [0.0_f32; 4];
-        let chunk_end = start + ((end - start) / 4) * 4;
+        let chunk_end = start + (scalar::synapse_count(start, end) / 4) * 4;
         let mut i = start;
         while i < chunk_end {
             let s0 = unsafe { synapses.get_unchecked(i) };
@@ -676,15 +662,10 @@ mod aarch64 {
             acc = vfmaq_f32(acc, vals, vals);
             i += 4;
         }
-        let mut sum = vaddvq_f32(acc);
-        while i < end {
-            let s = unsafe { synapses.get_unchecked(i) };
-            let val =
-                bias + unsafe { *activations.get_unchecked(s.from_index as usize) } * s.weight;
-            sum += val * val;
-            i += 1;
-        }
-        sum
+        let sum = vaddvq_f32(acc);
+        // SAFETY: this fn's own index precondition (documented above) is exactly
+        // `tail_sum_of_squares_v2`'s contract — load-time validation.
+        unsafe { scalar::tail_sum_of_squares_v2(synapses, activations, i, end, sum, bias) }
     }
 }
 
@@ -705,8 +686,7 @@ pub fn weighted_sum_simd_8records(
     end: usize,
     bias: f32,
 ) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    let count = end.saturating_sub(start);
-    if count == 0 {
+    if scalar::synapse_count(start, end) == 0 {
         return (bias, bias, bias, bias, bias, bias, bias, bias);
     }
 
@@ -755,7 +735,7 @@ pub fn weighted_sum_interleaved_8(
     end: usize,
     bias: f32,
 ) -> [f32; 8] {
-    if end <= start {
+    if scalar::synapse_count(start, end) == 0 {
         return [bias; 8];
     }
 
@@ -799,8 +779,7 @@ pub fn weighted_sum_simd_4records(
     end: usize,
     bias: f32,
 ) -> (f32, f32, f32, f32) {
-    let count = end.saturating_sub(start);
-    if count == 0 {
+    if scalar::synapse_count(start, end) == 0 {
         return (bias, bias, bias, bias);
     }
 
@@ -844,73 +823,8 @@ pub fn weighted_sum_simd_4records(
 // fall back to the scalar loop elsewhere and for the 0..3 synapse tail.
 // ============================================================================
 
-/// Scalar fallback: bias + sum(activation[from] * weight).
-#[inline]
-fn weighted_sum_scalar(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> f32 {
-    let mut sum = bias;
-    for synapse in synapses.iter().take(end).skip(start) {
-        sum += activations[synapse.from_index as usize] * synapse.weight;
-    }
-    sum
-}
-
-/// Scalar fallback: sum((activation[from] * weight)^2).
-#[inline]
-fn weighted_sum_of_squares_scalar(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-) -> f32 {
-    let mut sum_sq = 0.0f32;
-    for synapse in synapses.iter().take(end).skip(start) {
-        let val = activations[synapse.from_index as usize] * synapse.weight;
-        sum_sq += val * val;
-    }
-    sum_sq
-}
-
-/// Scalar fallback: sum(activation[from] * weight), no bias.
-#[inline]
-fn weighted_sum_no_bias_scalar(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-) -> f32 {
-    let mut sum = 0.0f32;
-    for synapse in synapses.iter().take(end).skip(start) {
-        sum += activations[synapse.from_index as usize] * synapse.weight;
-    }
-    sum
-}
-
-/// Scalar fallback: sum((bias + activation[from] * weight)^2).
-#[inline]
-fn weighted_sum_of_squares_v2_scalar(
-    synapses: &[SynapseData],
-    activations: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> f32 {
-    let mut sum_sq = 0.0f32;
-    for synapse in synapses.iter().take(end).skip(start) {
-        let val = bias + activations[synapse.from_index as usize] * synapse.weight;
-        sum_sq += val * val;
-    }
-    sum_sq
-}
-
-// SIMD setup (lane gather, horizontal reduce) only pays off once there is at
-// least one full 4-wide chunk; below that the scalar loop wins.
-const SINGLE_RECORD_SIMD_MIN: usize = 4;
+// The scalar fallbacks and the `SINGLE_RECORD_SIMD_MIN` threshold live in
+// `crate::simd::scalar` (Issue #447), shared with the wasm kernels.
 
 /// Single-record weighted sum: `bias + sum(activation[from] * weight)`.
 ///
@@ -930,7 +844,7 @@ pub fn weighted_sum_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+    if scalar::synapse_count(start, end) >= scalar::SINGLE_RECORD_SIMD_MIN {
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("fma") {
@@ -952,7 +866,7 @@ pub fn weighted_sum_simd(
             }
         }
     }
-    weighted_sum_scalar(synapses, activations, start, end, bias)
+    scalar::weighted_sum(synapses, activations, start, end, bias)
 }
 
 /// Single-record sum of squared weighted activations (Hypotenuse): `sum((a*w)^2)`.
@@ -966,7 +880,7 @@ pub fn weighted_sum_of_squares_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+    if scalar::synapse_count(start, end) >= scalar::SINGLE_RECORD_SIMD_MIN {
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("fma") {
@@ -988,7 +902,7 @@ pub fn weighted_sum_of_squares_simd(
             }
         }
     }
-    weighted_sum_of_squares_scalar(synapses, activations, start, end)
+    scalar::weighted_sum_of_squares(synapses, activations, start, end)
 }
 
 /// Single-record weighted sum without bias (Mean): `sum(activation[from] * weight)`.
@@ -1002,7 +916,7 @@ pub fn weighted_sum_no_bias_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+    if scalar::synapse_count(start, end) >= scalar::SINGLE_RECORD_SIMD_MIN {
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("fma") {
@@ -1022,7 +936,7 @@ pub fn weighted_sum_no_bias_simd(
             }
         }
     }
-    weighted_sum_no_bias_scalar(synapses, activations, start, end)
+    scalar::weighted_sum_no_bias(synapses, activations, start, end)
 }
 
 /// Single-record sum of squared (bias + weighted activation) (HypotenuseV2):
@@ -1038,7 +952,7 @@ pub fn weighted_sum_of_squares_v2_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    if end.saturating_sub(start) >= SINGLE_RECORD_SIMD_MIN {
+    if scalar::synapse_count(start, end) >= scalar::SINGLE_RECORD_SIMD_MIN {
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("fma") {
@@ -1066,7 +980,7 @@ pub fn weighted_sum_of_squares_v2_simd(
             }
         }
     }
-    weighted_sum_of_squares_v2_scalar(synapses, activations, start, end, bias)
+    scalar::weighted_sum_of_squares_v2(synapses, activations, start, end, bias)
 }
 
 #[cfg(test)]
@@ -1149,7 +1063,7 @@ mod tests {
     #[test]
     fn weighted_sum_simd_matches_scalar() {
         let (syn, acts) = six_synapses();
-        let s = weighted_sum_scalar(&syn, &acts, 0, 6, 0.25);
+        let s = scalar::weighted_sum(&syn, &acts, 0, 6, 0.25);
         let n = weighted_sum_simd(&syn, &acts, 0, 6, 0.25);
         close(n, s);
     }
@@ -1157,7 +1071,7 @@ mod tests {
     #[test]
     fn weighted_sum_no_bias_simd_matches_scalar() {
         let (syn, acts) = six_synapses();
-        let s = weighted_sum_no_bias_scalar(&syn, &acts, 0, 6);
+        let s = scalar::weighted_sum_no_bias(&syn, &acts, 0, 6);
         let n = weighted_sum_no_bias_simd(&syn, &acts, 0, 6);
         close(n, s);
     }
@@ -1165,7 +1079,7 @@ mod tests {
     #[test]
     fn weighted_sum_of_squares_simd_matches_scalar() {
         let (syn, acts) = six_synapses();
-        let s = weighted_sum_of_squares_scalar(&syn, &acts, 0, 6);
+        let s = scalar::weighted_sum_of_squares(&syn, &acts, 0, 6);
         let n = weighted_sum_of_squares_simd(&syn, &acts, 0, 6);
         close(n, s);
     }
@@ -1173,7 +1087,7 @@ mod tests {
     #[test]
     fn weighted_sum_of_squares_v2_simd_matches_scalar() {
         let (syn, acts) = six_synapses();
-        let s = weighted_sum_of_squares_v2_scalar(&syn, &acts, 0, 6, -0.5);
+        let s = scalar::weighted_sum_of_squares_v2(&syn, &acts, 0, 6, -0.5);
         let n = weighted_sum_of_squares_v2_simd(&syn, &acts, 0, 6, -0.5);
         close(n, s);
     }

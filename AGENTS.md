@@ -195,6 +195,51 @@ flowchart LR
     F --> G["f64 sum_error"]
 ```
 
+## One ISA-neutral scalar layer for every weighted-sum kernel (Issue #447)
+
+`neat-core/src/simd/scalar.rs` is the single home of the rule that says what a
+weighted-sum kernel *means*: the reference scalar semantics of each kernel and
+the small-count guard in front of it — the thing every SIMD path must agree with
+bit-for-bit. It carries no intrinsics and no `cfg`, so the `wasm32` kernels in
+`simd.rs` and the x86/aarch64 kernels in `simd_native.rs` share one copy.
+
+Two layers, deliberately distinct:
+
+- **Reference kernels** (`weighted_sum`, `weighted_sum_of_squares`,
+  `weighted_sum_no_bias`, `weighted_sum_of_squares_v2`) seed their own
+  accumulator and index safely. Every target's below-threshold count
+  (`synapse_count(start, end) < SINGLE_RECORD_SIMD_MIN`) falls back to them.
+- **Seed-taking tail helpers** (`tail_sum`, `tail_sum_of_squares`,
+  `tail_sum_of_squares_v2`) take the caller's **running** accumulator, so a SIMD
+  kernel's 0..3 remainder continues the reference f32 rounding order instead of
+  starting a second sum. They cannot be replaced by the reference kernels — that
+  would reseed and break the bit-parity the tests rely on. They index with
+  `get_unchecked` under the load-time index-validation invariant above, so they
+  are `unsafe fn` with a `# Safety` contract; calling them from a
+  `#[target_feature]` fn is sound and inlinable because no vector types cross the
+  boundary.
+
+`synapse_count` is the count prologue: **saturating**, so a reversed range
+(`end < start`) counts as zero instead of underflowing. Every kernel prologue on
+both sides uses it — no raw `end - start`, no hard-coded `4`.
+
+Changing the accumulation order, the guard, or the threshold is an edit **there
+and nowhere else**; do not re-inline a scalar loop into an ISA module.
+`neat-core/tests/simd_scalar_layer.rs` pins the rule: splitting a range at any
+point and continuing through a tail helper reproduces the reference result
+exactly, and below the threshold the public kernels are bit-identical to the
+reference.
+
+```mermaid
+flowchart LR
+    W["simd.rs (wasm32)"] --> S["simd::scalar"]
+    N["simd_native.rs — x86"] --> S
+    A["simd_native.rs — NEON"] --> S
+    S --> G["synapse_count / SINGLE_RECORD_SIMD_MIN"]
+    S --> R["reference kernels"]
+    S --> T["seed-taking tail helpers"]
+```
+
 ## CI / secrets
 
 - PR pipeline: version bump + **`cargo upgrade --incompatible`**, **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (PAT with **contents:write**).
