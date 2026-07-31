@@ -152,11 +152,27 @@ fn inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
     }
 }
 
-/// Single-record activation for one neuron, byte-for-byte identical to the body
-/// of [`CompiledNetwork::activate_into`]. Reused for constant neurons, aggregate
-/// squashes and the scalar tail so those results exactly match the reference.
+/// Single-record activation for one neuron — the shared home of the rule that
+/// turns a neuron's inbound synapse range into an activation (Issue #441).
+/// Covers constant neurons, the six aggregate squashes
+/// (Minimum/Maximum/If/Hypotenuse/HypotenuseV2/Mean), the standard weighted-sum
+/// fall-through and the closing range clamp, byte-for-byte as
+/// [`CompiledNetwork::activate_into`] computes them.
+///
+/// Every batched scoring kernel that has to drop to one record at a time — the
+/// per-lane aggregate loops and the scalar tails here and in [`crate::loss`] —
+/// calls this, so a record's activation does not depend on whether it landed in
+/// a full SIMD group or in the remainder.
+///
+/// `activate` / `activate_into` keep their own inlined copy: routing them
+/// through this helper measured ~30–46% slower on the `forward_pass` benchmark
+/// (Issue #441), and neither had diverged.
 #[inline]
-fn neuron_activation_scalar(synapses: &[SynapseData], act: &[f32], neuron: &NeuronData) -> f32 {
+pub(crate) fn neuron_activation_scalar(
+    synapses: &[SynapseData],
+    act: &[f32],
+    neuron: &NeuronData,
+) -> f32 {
     if neuron.is_constant {
         return apply_limit_range(SquashType::Identity, neuron.bias);
     }
