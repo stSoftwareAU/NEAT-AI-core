@@ -6,13 +6,12 @@
 //!
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
-use crate::batch_scoring::SCORING_LANES;
+use crate::batch_scoring::{SCORING_LANES, neuron_activation_scalar};
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
 use crate::squash::{SquashType, apply_squash};
 use crate::squash_simd::{squash_x4, squash_x8};
-use crate::synapse_type::SynapseType;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -86,109 +85,13 @@ macro_rules! batch_8way_activation {
                         | SquashType::Hypotenuse
                         | SquashType::HypotenuseV2
                         | SquashType::Mean => {
-                            for (r, act) in [
-                                (0, &mut act0),
-                                (1, &mut act1),
-                                (2, &mut act2),
-                                (3, &mut act3),
-                                (4, &mut act4),
-                                (5, &mut act5),
-                                (6, &mut act6),
-                                (7, &mut act7),
+                            for act in [
+                                &mut act0, &mut act1, &mut act2, &mut act3, &mut act4, &mut act5,
+                                &mut act6, &mut act7,
                             ] {
-                                let _ = r;
-                                let activation = match squash {
-                                    SquashType::Minimum => {
-                                        let mut min_val = f32::INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val < min_val {
-                                                min_val = val;
-                                            }
-                                        }
-                                        if min_val == f32::INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            min_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::Maximum => {
-                                        let mut max_val = f32::NEG_INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val > max_val {
-                                                max_val = val;
-                                            }
-                                        }
-                                        if max_val == f32::NEG_INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            max_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::If => {
-                                        let mut condition_sum = 0.0f32;
-                                        let mut positive_sum = 0.0f32;
-                                        let mut negative_sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            match SynapseType::from(synapse.synapse_type) {
-                                                SynapseType::Condition => condition_sum += val,
-                                                SynapseType::Negative => negative_sum += val,
-                                                SynapseType::Positive | SynapseType::Standard => {
-                                                    positive_sum += val
-                                                }
-                                            }
-                                        }
-                                        if condition_sum > 0.0 {
-                                            positive_sum + neuron.bias
-                                        } else {
-                                            negative_sum + neuron.bias
-                                        }
-                                    }
-                                    SquashType::Hypotenuse => {
-                                        let mut sum_sq = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            sum_sq += val * val;
-                                        }
-                                        sum_sq.sqrt() + neuron.bias
-                                    }
-                                    SquashType::HypotenuseV2 => {
-                                        let mut sum_sq = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val = neuron.bias
-                                                + act[synapse.from_index as usize] * synapse.weight;
-                                            sum_sq += val * val;
-                                        }
-                                        sum_sq.sqrt()
-                                    }
-                                    SquashType::Mean => {
-                                        let n = (end_synapse - start_synapse) as f32;
-                                        if n <= 0.0 {
-                                            neuron.bias
-                                        } else {
-                                            let mut sum = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                sum += act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                            }
-                                            sum / n + neuron.bias
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                };
-                                act[actual_idx] = apply_limit_range(squash, activation);
+                                let value =
+                                    neuron_activation_scalar(&$network.synapses, act, neuron);
+                                act[actual_idx] = value;
                             }
                         }
                         _ => {
@@ -306,105 +209,10 @@ macro_rules! batch_8way_activation {
                             | SquashType::Hypotenuse
                             | SquashType::HypotenuseV2
                             | SquashType::Mean => {
-                                for (r, act) in [
-                                    (0, &mut act0),
-                                    (1, &mut act1),
-                                    (2, &mut act2),
-                                    (3, &mut act3),
-                                ] {
-                                    let _ = r;
-                                    let activation = match squash {
-                                        SquashType::Minimum => {
-                                            let mut min_val = f32::INFINITY;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                if val < min_val {
-                                                    min_val = val;
-                                                }
-                                            }
-                                            if min_val == f32::INFINITY {
-                                                neuron.bias
-                                            } else {
-                                                min_val + neuron.bias
-                                            }
-                                        }
-                                        SquashType::Maximum => {
-                                            let mut max_val = f32::NEG_INFINITY;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                if val > max_val {
-                                                    max_val = val;
-                                                }
-                                            }
-                                            if max_val == f32::NEG_INFINITY {
-                                                neuron.bias
-                                            } else {
-                                                max_val + neuron.bias
-                                            }
-                                        }
-                                        SquashType::If => {
-                                            let mut condition_sum = 0.0f32;
-                                            let mut positive_sum = 0.0f32;
-                                            let mut negative_sum = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                match SynapseType::from(synapse.synapse_type) {
-                                                    SynapseType::Condition => condition_sum += val,
-                                                    SynapseType::Negative => negative_sum += val,
-                                                    SynapseType::Positive
-                                                    | SynapseType::Standard => positive_sum += val,
-                                                }
-                                            }
-                                            if condition_sum > 0.0 {
-                                                positive_sum + neuron.bias
-                                            } else {
-                                                negative_sum + neuron.bias
-                                            }
-                                        }
-                                        SquashType::Hypotenuse => {
-                                            let mut sum_sq = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                sum_sq += val * val;
-                                            }
-                                            sum_sq.sqrt() + neuron.bias
-                                        }
-                                        SquashType::HypotenuseV2 => {
-                                            let mut sum_sq = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = neuron.bias
-                                                    + act[synapse.from_index as usize]
-                                                        * synapse.weight;
-                                                sum_sq += val * val;
-                                            }
-                                            sum_sq.sqrt()
-                                        }
-                                        SquashType::Mean => {
-                                            let n = (end_synapse - start_synapse) as f32;
-                                            if n <= 0.0 {
-                                                neuron.bias
-                                            } else {
-                                                let mut sum = 0.0f32;
-                                                for synapse_idx in start_synapse..end_synapse {
-                                                    let synapse = &$network.synapses[synapse_idx];
-                                                    sum += act[synapse.from_index as usize]
-                                                        * synapse.weight;
-                                                }
-                                                sum / n + neuron.bias
-                                            }
-                                        }
-                                        _ => unreachable!(),
-                                    };
-                                    act[actual_idx] = apply_limit_range(squash, activation);
+                                for act in [&mut act0, &mut act1, &mut act2, &mut act3] {
+                                    let value =
+                                        neuron_activation_scalar(&$network.synapses, act, neuron);
+                                    act[actual_idx] = value;
                                 }
                             }
                             _ => {
@@ -477,84 +285,8 @@ macro_rules! batch_8way_activation {
             }
 
             for (neuron_idx, neuron) in $network.neurons.iter().enumerate() {
-                let actual_idx = num_inputs + neuron_idx;
-
-                if neuron.is_constant {
-                    act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-                } else {
-                    let squash = SquashType::from(neuron.squash_type);
-                    let start_synapse = neuron.start_synapse as usize;
-                    let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                    let activation = match squash {
-                        SquashType::Minimum => {
-                            let mut min_val = f32::INFINITY;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                let val = act0[synapse.from_index as usize] * synapse.weight;
-                                if val < min_val {
-                                    min_val = val;
-                                }
-                            }
-                            if min_val == f32::INFINITY {
-                                neuron.bias
-                            } else {
-                                min_val + neuron.bias
-                            }
-                        }
-                        SquashType::Maximum => {
-                            let mut max_val = f32::NEG_INFINITY;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                let val = act0[synapse.from_index as usize] * synapse.weight;
-                                if val > max_val {
-                                    max_val = val;
-                                }
-                            }
-                            if max_val == f32::NEG_INFINITY {
-                                neuron.bias
-                            } else {
-                                max_val + neuron.bias
-                            }
-                        }
-                        SquashType::If => {
-                            let mut condition_sum = 0.0f32;
-                            let mut positive_sum = 0.0f32;
-                            let mut negative_sum = 0.0f32;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                let val = act0[synapse.from_index as usize] * synapse.weight;
-                                match SynapseType::from(synapse.synapse_type) {
-                                    SynapseType::Condition => condition_sum += val,
-                                    SynapseType::Negative => negative_sum += val,
-                                    SynapseType::Positive | SynapseType::Standard => {
-                                        positive_sum += val
-                                    }
-                                }
-                            }
-                            if condition_sum > 0.0 {
-                                positive_sum + neuron.bias
-                            } else {
-                                negative_sum + neuron.bias
-                            }
-                        }
-                        _ => {
-                            let mut sum = neuron.bias;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                sum += act0[synapse.from_index as usize] * synapse.weight;
-                            }
-                            match neuron.squash_type {
-                                0 => sum,
-                                1 => sum.max(0.0),
-                                6 => 1.0 / (1.0 + (-sum).exp()),
-                                7 => sum.tanh(),
-                                _ => apply_squash(squash, sum),
-                            }
-                        }
-                    };
-                    act0[actual_idx] = apply_limit_range(squash, activation);
-                }
+                let value = neuron_activation_scalar(&$network.synapses, &act0, neuron);
+                act0[num_inputs + neuron_idx] = value;
             }
 
             sum_error += $error_fn($records, target_base, &act0, output_start, $num_outputs);
@@ -729,102 +461,12 @@ fn mse_sum_batch_4way(
                     | SquashType::Hypotenuse
                     | SquashType::HypotenuseV2
                     | SquashType::Mean => {
-                        // Fall back to scalar for special squash functions
-                        for (r, act) in [
-                            (0, &mut act0),
-                            (1, &mut act1),
-                            (2, &mut act2),
-                            (3, &mut act3),
-                        ] {
-                            let _ = r;
-                            let activation = match squash {
-                                SquashType::Minimum => {
-                                    let mut min_val = f32::INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val < min_val {
-                                            min_val = val;
-                                        }
-                                    }
-                                    if min_val == f32::INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        min_val + neuron.bias
-                                    }
-                                }
-                                SquashType::Maximum => {
-                                    let mut max_val = f32::NEG_INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val > max_val {
-                                            max_val = val;
-                                        }
-                                    }
-                                    if max_val == f32::NEG_INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        max_val + neuron.bias
-                                    }
-                                }
-                                SquashType::If => {
-                                    let mut condition_sum = 0.0f32;
-                                    let mut positive_sum = 0.0f32;
-                                    let mut negative_sum = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        match SynapseType::from(synapse.synapse_type) {
-                                            SynapseType::Condition => condition_sum += val,
-                                            SynapseType::Negative => negative_sum += val,
-                                            SynapseType::Positive | SynapseType::Standard => {
-                                                positive_sum += val
-                                            }
-                                        }
-                                    }
-                                    if condition_sum > 0.0 {
-                                        positive_sum + neuron.bias
-                                    } else {
-                                        negative_sum + neuron.bias
-                                    }
-                                }
-                                SquashType::Hypotenuse => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt() + neuron.bias
-                                }
-                                SquashType::HypotenuseV2 => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = neuron.bias
-                                            + act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt()
-                                }
-                                SquashType::Mean => {
-                                    let n = (end_synapse - start_synapse) as f32;
-                                    if n <= 0.0 {
-                                        neuron.bias
-                                    } else {
-                                        let mut sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            sum +=
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                        }
-                                        sum / n + neuron.bias
-                                    }
-                                }
-                                _ => unreachable!(),
-                            };
-                            act[actual_idx] = apply_limit_range(squash, activation);
+                        // One shared activation rule (Issue #441): the scalar
+                        // helper covers every aggregate squash exactly as the
+                        // single-record reference does.
+                        for act in [&mut act0, &mut act1, &mut act2, &mut act3] {
+                            let value = neuron_activation_scalar(&network.synapses, act, neuron);
+                            act[actual_idx] = value;
                         }
                     }
                     _ => {
@@ -907,86 +549,11 @@ fn mse_sum_batch_4way(
             *activation = 0.0;
         }
 
-        // Process each neuron
+        // Process each neuron through the one shared activation rule
+        // (Issue #441) so the tail record matches the reference exactly.
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                let activation = match squash {
-                    SquashType::Minimum => {
-                        let mut min_val = f32::INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val < min_val {
-                                min_val = val;
-                            }
-                        }
-                        if min_val == f32::INFINITY {
-                            neuron.bias
-                        } else {
-                            min_val + neuron.bias
-                        }
-                    }
-                    SquashType::Maximum => {
-                        let mut max_val = f32::NEG_INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val > max_val {
-                                max_val = val;
-                            }
-                        }
-                        if max_val == f32::NEG_INFINITY {
-                            neuron.bias
-                        } else {
-                            max_val + neuron.bias
-                        }
-                    }
-                    SquashType::If => {
-                        let mut condition_sum = 0.0f32;
-                        let mut positive_sum = 0.0f32;
-                        let mut negative_sum = 0.0f32;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            match SynapseType::from(synapse.synapse_type) {
-                                SynapseType::Condition => condition_sum += val,
-                                SynapseType::Negative => negative_sum += val,
-                                SynapseType::Positive | SynapseType::Standard => {
-                                    positive_sum += val
-                                }
-                            }
-                        }
-                        if condition_sum > 0.0 {
-                            positive_sum + neuron.bias
-                        } else {
-                            negative_sum + neuron.bias
-                        }
-                    }
-                    _ => {
-                        let mut sum = neuron.bias;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            sum += act0[synapse.from_index as usize] * synapse.weight;
-                        }
-                        match neuron.squash_type {
-                            0 => sum,
-                            1 => sum.max(0.0),
-                            6 => 1.0 / (1.0 + (-sum).exp()),
-                            7 => sum.tanh(),
-                            _ => apply_squash(squash, sum),
-                        }
-                    }
-                };
-                act0[actual_idx] = apply_limit_range(squash, activation);
-            }
+            let value = neuron_activation_scalar(&network.synapses, &act0, neuron);
+            act0[num_inputs + neuron_idx] = value;
         }
 
         // Calculate MSE
@@ -1205,25 +772,8 @@ fn mse_sum_batch_8way_interleaved(
             *activation = 0.0;
         }
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-            if neuron.is_constant {
-                act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-                continue;
-            }
-            let squash = SquashType::from(neuron.squash_type);
-            let start_synapse = neuron.start_synapse as usize;
-            let end_synapse = start_synapse + neuron.num_synapses as usize;
-            let mut sum = neuron.bias;
-            for synapse in network
-                .synapses
-                .iter()
-                .take(end_synapse)
-                .skip(start_synapse)
-            {
-                sum += act0[synapse.from_index as usize] * synapse.weight;
-            }
-            let activation = inline_squash_scalar(neuron.squash_type, squash, sum);
-            act0[actual_idx] = apply_limit_range(squash, activation);
+            let value = neuron_activation_scalar(&network.synapses, &act0, neuron);
+            act0[num_inputs + neuron_idx] = value;
         }
         let mut sq_sum: f64 = 0.0;
         for j in 0..num_outputs {
@@ -1346,106 +896,15 @@ fn mse_sum_batch_8way_scattered(
                     | SquashType::Hypotenuse
                     | SquashType::HypotenuseV2
                     | SquashType::Mean => {
-                        // Fall back to scalar for special squash functions
-                        for (r, act) in [
-                            (0, &mut act0),
-                            (1, &mut act1),
-                            (2, &mut act2),
-                            (3, &mut act3),
-                            (4, &mut act4),
-                            (5, &mut act5),
-                            (6, &mut act6),
-                            (7, &mut act7),
+                        // One shared activation rule (Issue #441): the scalar
+                        // helper covers every aggregate squash exactly as the
+                        // single-record reference does.
+                        for act in [
+                            &mut act0, &mut act1, &mut act2, &mut act3, &mut act4, &mut act5,
+                            &mut act6, &mut act7,
                         ] {
-                            let _ = r;
-                            let activation = match squash {
-                                SquashType::Minimum => {
-                                    let mut min_val = f32::INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val < min_val {
-                                            min_val = val;
-                                        }
-                                    }
-                                    if min_val == f32::INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        min_val + neuron.bias
-                                    }
-                                }
-                                SquashType::Maximum => {
-                                    let mut max_val = f32::NEG_INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val > max_val {
-                                            max_val = val;
-                                        }
-                                    }
-                                    if max_val == f32::NEG_INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        max_val + neuron.bias
-                                    }
-                                }
-                                SquashType::If => {
-                                    let mut condition_sum = 0.0f32;
-                                    let mut positive_sum = 0.0f32;
-                                    let mut negative_sum = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        match SynapseType::from(synapse.synapse_type) {
-                                            SynapseType::Condition => condition_sum += val,
-                                            SynapseType::Negative => negative_sum += val,
-                                            SynapseType::Positive | SynapseType::Standard => {
-                                                positive_sum += val
-                                            }
-                                        }
-                                    }
-                                    if condition_sum > 0.0 {
-                                        positive_sum + neuron.bias
-                                    } else {
-                                        negative_sum + neuron.bias
-                                    }
-                                }
-                                SquashType::Hypotenuse => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt() + neuron.bias
-                                }
-                                SquashType::HypotenuseV2 => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = neuron.bias
-                                            + act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt()
-                                }
-                                SquashType::Mean => {
-                                    let n = (end_synapse - start_synapse) as f32;
-                                    if n <= 0.0 {
-                                        neuron.bias
-                                    } else {
-                                        let mut sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            sum +=
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                        }
-                                        sum / n + neuron.bias
-                                    }
-                                }
-                                _ => unreachable!(),
-                            };
-                            act[actual_idx] = apply_limit_range(squash, activation);
+                            let value = neuron_activation_scalar(&network.synapses, act, neuron);
+                            act[actual_idx] = value;
                         }
                     }
                     _ => {
@@ -1573,71 +1032,11 @@ fn mse_sum_batch_8way_scattered(
                         | SquashType::Hypotenuse
                         | SquashType::HypotenuseV2
                         | SquashType::Mean => {
-                            for (r, act) in [
-                                (0, &mut act0),
-                                (1, &mut act1),
-                                (2, &mut act2),
-                                (3, &mut act3),
-                            ] {
-                                let _ = r;
-                                let activation = match squash {
-                                    SquashType::Minimum => {
-                                        let mut min_val = f32::INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val < min_val {
-                                                min_val = val;
-                                            }
-                                        }
-                                        if min_val == f32::INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            min_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::Maximum => {
-                                        let mut max_val = f32::NEG_INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val > max_val {
-                                                max_val = val;
-                                            }
-                                        }
-                                        if max_val == f32::NEG_INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            max_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::If => {
-                                        let mut condition_sum = 0.0f32;
-                                        let mut positive_sum = 0.0f32;
-                                        let mut negative_sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            match SynapseType::from(synapse.synapse_type) {
-                                                SynapseType::Condition => condition_sum += val,
-                                                SynapseType::Negative => negative_sum += val,
-                                                SynapseType::Positive | SynapseType::Standard => {
-                                                    positive_sum += val
-                                                }
-                                            }
-                                        }
-                                        if condition_sum > 0.0 {
-                                            positive_sum + neuron.bias
-                                        } else {
-                                            negative_sum + neuron.bias
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                };
-                                act[actual_idx] = apply_limit_range(squash, activation);
+                            // One shared activation rule (Issue #441).
+                            for act in [&mut act0, &mut act1, &mut act2, &mut act3] {
+                                let value =
+                                    neuron_activation_scalar(&network.synapses, act, neuron);
+                                act[actual_idx] = value;
                             }
                         }
                         _ => {
@@ -1719,86 +1118,11 @@ fn mse_sum_batch_8way_scattered(
             *activation = 0.0;
         }
 
-        // Process each neuron
+        // Process each neuron through the one shared activation rule
+        // (Issue #441) so the tail record matches the reference exactly.
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                let activation = match squash {
-                    SquashType::Minimum => {
-                        let mut min_val = f32::INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val < min_val {
-                                min_val = val;
-                            }
-                        }
-                        if min_val == f32::INFINITY {
-                            neuron.bias
-                        } else {
-                            min_val + neuron.bias
-                        }
-                    }
-                    SquashType::Maximum => {
-                        let mut max_val = f32::NEG_INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val > max_val {
-                                max_val = val;
-                            }
-                        }
-                        if max_val == f32::NEG_INFINITY {
-                            neuron.bias
-                        } else {
-                            max_val + neuron.bias
-                        }
-                    }
-                    SquashType::If => {
-                        let mut condition_sum = 0.0f32;
-                        let mut positive_sum = 0.0f32;
-                        let mut negative_sum = 0.0f32;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            match SynapseType::from(synapse.synapse_type) {
-                                SynapseType::Condition => condition_sum += val,
-                                SynapseType::Negative => negative_sum += val,
-                                SynapseType::Positive | SynapseType::Standard => {
-                                    positive_sum += val
-                                }
-                            }
-                        }
-                        if condition_sum > 0.0 {
-                            positive_sum + neuron.bias
-                        } else {
-                            negative_sum + neuron.bias
-                        }
-                    }
-                    _ => {
-                        let mut sum = neuron.bias;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            sum += act0[synapse.from_index as usize] * synapse.weight;
-                        }
-                        match neuron.squash_type {
-                            0 => sum,
-                            1 => sum.max(0.0),
-                            6 => 1.0 / (1.0 + (-sum).exp()),
-                            7 => sum.tanh(),
-                            _ => apply_squash(squash, sum),
-                        }
-                    }
-                };
-                act0[actual_idx] = apply_limit_range(squash, activation);
-            }
+            let value = neuron_activation_scalar(&network.synapses, &act0, neuron);
+            act0[num_inputs + neuron_idx] = value;
         }
 
         // Calculate MSE

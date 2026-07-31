@@ -83,6 +83,22 @@ this you **must**:
 - **Add a state-leak regression test** asserting the reused-buffer path is
   byte-identical to the fresh-allocation path across differently-sized inputs.
 
+## One activation rule for single-record work (Issue #441)
+
+`neuron_activation_scalar` (`neat-core/src/batch_scoring.rs`) is the single home
+of the rule that turns a neuron's synapse range into an activation — constants,
+the six aggregate squashes (Minimum/Maximum/If/Hypotenuse/HypotenuseV2/Mean),
+the standard weighted-sum fall-through, then `apply_limit_range`. **Every**
+batched kernel that drops to one record at a time (the per-lane aggregate loops
+and the scalar tails in `loss.rs`) calls it, so a record's activation never
+depends on whether it landed in a full SIMD group or in the remainder. Adding a
+squash type means editing that helper only — do not re-inline the match.
+
+`CompiledNetwork::activate` / `activate_into` deliberately keep their own copy:
+routing them through the helper measured ~30–46% slower on the `forward_pass`
+benchmark. Change the helper and those two together, and re-run
+`cargo bench --bench hot_paths -- forward_pass` if you touch them.
+
 ## CI / secrets
 
 - PR pipeline: version bump + **`cargo upgrade --incompatible`**, **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (PAT with **contents:write**).
