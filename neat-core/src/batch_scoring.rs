@@ -28,8 +28,8 @@
 //!   SIMD tolerance the batched weighted sums already introduce (Issue #230).
 //!   Every other type keeps the scalar inline branch (Identity / ReLU /
 //!   Logistic / Tanh, else `apply_squash`), so its squash stays bit-identical.
-//! - **Aggregate** squashes (Minimum, Maximum, If, Hypotenuse, HypotenuseV2,
-//!   Mean) and the **scalar tail** (`records.len() % 8` after the 4-way step)
+//! - **Aggregate** squashes ([`SquashType::is_aggregate`]) and the **scalar
+//!   tail** (`records.len() % 8` after the 4-way step)
 //!   run the exact single-record path via `neuron_activation_scalar`, so those
 //!   neurons and those records are bit-identical to the reference.
 //!
@@ -139,10 +139,20 @@ impl BatchScratch {
     }
 }
 
-/// Inline squash matching [`CompiledNetwork::activate_into`] exactly: the four
-/// hot types are branched directly, everything else defers to [`apply_squash`].
+/// The single home of the hot-squash dispatch rule (Issue #443): which squash
+/// types are hot enough to branch inline, and the exact scalar formula each of
+/// them uses. The four hot types are branched directly; everything else defers
+/// to [`apply_squash`].
+///
+/// **Every** site that squashes a standard weighted sum calls this — the
+/// single-record forward passes ([`CompiledNetwork::activate`] /
+/// `activate_into` / `activate_and_trace`), the 4-way traced batch, and the
+/// scalar `None`-fallback branch of every batched loss and scoring kernel — so
+/// the SIMD-batched and scalar-tail paths agree bit-for-bit. Promoting a fifth
+/// type to the inline set, or reformulating one of the four, is an edit here
+/// and nowhere else.
 #[inline]
-fn inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
+pub(crate) fn inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
     match squash_type {
         0 => sum,                        // IDENTITY
         1 => sum.max(0.0),               // ReLU
@@ -152,11 +162,27 @@ fn inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
     }
 }
 
-/// Single-record activation for one neuron, byte-for-byte identical to the body
-/// of [`CompiledNetwork::activate_into`]. Reused for constant neurons, aggregate
-/// squashes and the scalar tail so those results exactly match the reference.
+/// Single-record activation for one neuron — the shared home of the rule that
+/// turns a neuron's inbound synapse range into an activation (Issue #441).
+/// Covers constant neurons, the six aggregate squashes
+/// (Minimum/Maximum/If/Hypotenuse/HypotenuseV2/Mean), the standard weighted-sum
+/// fall-through and the closing range clamp, byte-for-byte as
+/// [`CompiledNetwork::activate_into`] computes them.
+///
+/// Every batched scoring kernel that has to drop to one record at a time — the
+/// per-lane aggregate loops and the scalar tails here and in [`crate::loss`] —
+/// calls this, so a record's activation does not depend on whether it landed in
+/// a full SIMD group or in the remainder.
+///
+/// `activate` / `activate_into` keep their own inlined copy: routing them
+/// through this helper measured ~30–46% slower on the `forward_pass` benchmark
+/// (Issue #441), and neither had diverged.
 #[inline]
-fn neuron_activation_scalar(synapses: &[SynapseData], act: &[f32], neuron: &NeuronData) -> f32 {
+pub(crate) fn neuron_activation_scalar(
+    synapses: &[SynapseData],
+    act: &[f32],
+    neuron: &NeuronData,
+) -> f32 {
     if neuron.is_constant {
         return apply_limit_range(SquashType::Identity, neuron.bias);
     }
@@ -243,8 +269,13 @@ fn neuron_activation_scalar(synapses: &[SynapseData], act: &[f32], neuron: &Neur
 /// does not cover is zeroed so each record is scored statelessly — buffers are
 /// reused across batches, and every non-input neuron is overwritten during the
 /// forward pass, so no further reset is required.
+///
+/// The single home of the clamp-and-zero loading rule (Issue #445): every
+/// per-lane loader in the batched scoring and fused loss kernels calls this, so
+/// a record's inputs land the same way whether it was scored in a SIMD group or
+/// in the scalar tail.
 #[inline]
-fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
+pub(crate) fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
     let in_len = record.len().min(num_inputs);
     act[..in_len].copy_from_slice(&record[..in_len]);
     act[in_len..num_inputs].fill(0.0);
@@ -267,8 +298,8 @@ impl CompiledNetwork {
     ///   all-standard-squash production topology. Records are transposed so each
     ///   synapse gather reads one cache line.
     /// - **Per-lane fallback** ([`Self::score_batch_per_lane`]) otherwise, which
-    ///   keeps aggregate squashes (Minimum/Maximum/If/Hypotenuse/HypotenuseV2/
-    ///   Mean) on the exact single-record kernels.
+    ///   keeps aggregate squashes ([`SquashType::is_aggregate`]) on the exact
+    ///   single-record kernels.
     ///
     /// Both group records into 8s then a 4-record group then a scalar tail, and
     /// both are bit-identical on the covered standard-squash neurons.
@@ -286,25 +317,18 @@ impl CompiledNetwork {
         }
     }
 
-    /// True when any non-constant neuron uses an aggregate squash whose exact
-    /// kernel needs a contiguous per-lane activation slice (so the interleaved
-    /// fast path does not apply). O(neurons); the scoring batch dwarfs it.
+    /// True when any non-constant neuron uses an aggregate squash
+    /// ([`SquashType::is_aggregate`], the single home of that membership rule)
+    /// whose exact kernel needs a contiguous per-lane activation slice, so the
+    /// interleaved fast path does not apply. O(neurons); the scoring batch
+    /// dwarfs it.
     ///
     /// `pub(crate)` so the fused MSE loss lane can share the same dispatch
     /// decision (Issue #384): standard-only networks route through the
     /// interleaved gather, aggregate networks stay on their exact per-lane path.
     pub(crate) fn has_aggregate_squash(&self) -> bool {
         self.neurons.iter().any(|neuron| {
-            !neuron.is_constant
-                && matches!(
-                    SquashType::from(neuron.squash_type),
-                    SquashType::Minimum
-                        | SquashType::Maximum
-                        | SquashType::If
-                        | SquashType::Hypotenuse
-                        | SquashType::HypotenuseV2
-                        | SquashType::Mean
-                )
+            !neuron.is_constant && SquashType::from(neuron.squash_type).is_aggregate()
         })
     }
 
@@ -486,12 +510,7 @@ impl CompiledNetwork {
 
                 let squash = SquashType::from(neuron.squash_type);
                 match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
+                    s if s.is_aggregate() => {
                         // Aggregate squashes stay on the exact single-record path.
                         act0[actual_idx] = neuron_activation_scalar(&self.synapses, act0, neuron);
                         act1[actual_idx] = neuron_activation_scalar(&self.synapses, act1, neuron);
@@ -582,12 +601,8 @@ impl CompiledNetwork {
 
                 let squash = SquashType::from(neuron.squash_type);
                 match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
+                    s if s.is_aggregate() => {
+                        // Aggregate squashes stay on the exact single-record path.
                         act0[actual_idx] = neuron_activation_scalar(&self.synapses, act0, neuron);
                         act1[actual_idx] = neuron_activation_scalar(&self.synapses, act1, neuron);
                         act2[actual_idx] = neuron_activation_scalar(&self.synapses, act2, neuron);

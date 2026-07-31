@@ -8,12 +8,13 @@
 //! NEAT-AI consumes. Public fields are skipped from the bindgen surface (they
 //! remain accessible to native Rust callers); the JS API is the public methods.
 
+use crate::batch_scoring::inline_squash;
 use crate::range::apply_limit_range;
 use crate::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
     weighted_sum_simd, weighted_sum_simd_4records,
 };
-use crate::squash::{SquashType, apply_squash};
+use crate::squash::SquashType;
 use crate::squash_simd::squash_x4;
 use crate::synapse_type::SynapseType;
 
@@ -497,13 +498,7 @@ impl CompiledNetwork {
                         );
                         // Issue #1177 - Inline common squash functions for performance
                         // These 4 functions cover ~80% of typical networks
-                        match neuron.squash_type {
-                            0 => sum,                        // IDENTITY
-                            1 => sum.max(0.0),               // ReLU
-                            6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-                            7 => sum.tanh(),                 // TANH
-                            _ => apply_squash(squash, sum),  // Other (fallback)
-                        }
+                        inline_squash(neuron.squash_type, squash, sum)
                     }
                 };
 
@@ -662,13 +657,7 @@ impl CompiledNetwork {
                         );
                         // Issue #1177 - Inline common squash functions for performance
                         // These 4 functions cover ~80% of typical networks
-                        match neuron.squash_type {
-                            0 => sum,                        // IDENTITY
-                            1 => sum.max(0.0),               // ReLU
-                            6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-                            7 => sum.tanh(),                 // TANH
-                            _ => apply_squash(squash, sum),  // Other (fallback)
-                        }
+                        inline_squash(neuron.squash_type, squash, sum)
                     }
                 };
 
@@ -909,13 +898,7 @@ impl CompiledNetwork {
                             neuron.bias,
                         );
                         // Issue #1177 - Inline common squash functions for performance
-                        let squashed = match neuron.squash_type {
-                            0 => sum,                        // IDENTITY
-                            1 => sum.max(0.0),               // ReLU
-                            6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-                            7 => sum.tanh(),                 // TANH
-                            _ => apply_squash(squash, sum),  // Other (fallback)
-                        };
+                        let squashed = inline_squash(neuron.squash_type, squash, sum);
                         // For standard squash, hintValue is the pre-squash value (sum)
                         (squashed, sum)
                     }
@@ -929,14 +912,10 @@ impl CompiledNetwork {
 
                 // hintValues: for aggregate functions we expect hint==activation.
                 // For standard squashes keep the pre-squash value.
-                self.hint_values_buffer[neuron_idx] = match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => activation_limited,
-                    _ => hint_value,
+                self.hint_values_buffer[neuron_idx] = if squash.is_aggregate() {
+                    activation_limited
+                } else {
+                    hint_value
                 };
             }
         }
@@ -1181,10 +1160,10 @@ impl CompiledNetwork {
                         let [sq0, sq1, sq2, sq3] = match squash_x4(squash, [s0, s1, s2, s3]) {
                             Some(vec) => vec,
                             None => [
-                                Self::apply_inline_squash(neuron.squash_type, squash, s0),
-                                Self::apply_inline_squash(neuron.squash_type, squash, s1),
-                                Self::apply_inline_squash(neuron.squash_type, squash, s2),
-                                Self::apply_inline_squash(neuron.squash_type, squash, s3),
+                                inline_squash(neuron.squash_type, squash, s0),
+                                inline_squash(neuron.squash_type, squash, s1),
+                                inline_squash(neuron.squash_type, squash, s2),
+                                inline_squash(neuron.squash_type, squash, s3),
                             ],
                         };
 
@@ -1262,18 +1241,6 @@ impl CompiledNetwork {
 
 /// Issue #1212 - Helper methods for batch activate_and_trace processing
 impl CompiledNetwork {
-    /// Apply inline squash optimisation for common activation functions
-    #[inline]
-    fn apply_inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
-        match squash_type {
-            0 => sum,                        // IDENTITY
-            1 => sum.max(0.0),               // ReLU
-            6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-            7 => sum.tanh(),                 // TANH
-            _ => apply_squash(squash, sum),  // Other (fallback)
-        }
-    }
-
     /// Process MINIMUM aggregate for 4 records
     #[allow(clippy::too_many_arguments)]
     fn process_minimum_4way(

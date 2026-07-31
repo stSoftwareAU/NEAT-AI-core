@@ -6,13 +6,12 @@
 //!
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
-use crate::batch_scoring::SCORING_LANES;
+use crate::batch_scoring::{SCORING_LANES, inline_squash, load_record, neuron_activation_scalar};
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
-use crate::squash::{SquashType, apply_squash};
+use crate::squash::SquashType;
 use crate::squash_simd::{squash_x4, squash_x8};
-use crate::synapse_type::SynapseType;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -21,6 +20,13 @@ use wasm_bindgen::prelude::*;
 ///
 /// This macro generates the neuron activation loop for 8 records in parallel,
 /// then calls a provided error calculation closure for each record.
+///
+/// The single home of the batched record-scan skeleton (Issue #445): records are
+/// grouped 8 → 4 → 1, each group's inputs are loaded through the shared
+/// [`load_record`] loader, and the per-record errors accumulate into one `f64`
+/// sum. `$error_fn` carries **only** the per-record reduction
+/// (`(records, target_base, act, output_start, num_outputs) -> f64`), so every
+/// loss kind — MSE included — shares one iteration rule.
 macro_rules! batch_8way_activation {
     ($network:expr_2021, $records:expr_2021, $values_per_record:expr_2021, $input_size:expr_2021, $num_outputs:expr_2021, $num_records:expr_2021, $error_fn:expr_2021) => {{
         let num_neurons = $network.num_neurons;
@@ -57,7 +63,7 @@ macro_rules! batch_8way_activation {
                     6 => &mut act6,
                     _ => &mut act7,
                 };
-                act[..$input_size].copy_from_slice(inputs);
+                load_record(act, inputs, num_inputs);
             }
 
             // Process each neuron for all 8 records
@@ -80,115 +86,15 @@ macro_rules! batch_8way_activation {
                     let end_synapse = start_synapse + neuron.num_synapses as usize;
 
                     match squash {
-                        SquashType::Minimum
-                        | SquashType::Maximum
-                        | SquashType::If
-                        | SquashType::Hypotenuse
-                        | SquashType::HypotenuseV2
-                        | SquashType::Mean => {
-                            for (r, act) in [
-                                (0, &mut act0),
-                                (1, &mut act1),
-                                (2, &mut act2),
-                                (3, &mut act3),
-                                (4, &mut act4),
-                                (5, &mut act5),
-                                (6, &mut act6),
-                                (7, &mut act7),
+                        // Aggregate squashes stay on the exact single-record path.
+                        s if s.is_aggregate() => {
+                            for act in [
+                                &mut act0, &mut act1, &mut act2, &mut act3, &mut act4, &mut act5,
+                                &mut act6, &mut act7,
                             ] {
-                                let _ = r;
-                                let activation = match squash {
-                                    SquashType::Minimum => {
-                                        let mut min_val = f32::INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val < min_val {
-                                                min_val = val;
-                                            }
-                                        }
-                                        if min_val == f32::INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            min_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::Maximum => {
-                                        let mut max_val = f32::NEG_INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val > max_val {
-                                                max_val = val;
-                                            }
-                                        }
-                                        if max_val == f32::NEG_INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            max_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::If => {
-                                        let mut condition_sum = 0.0f32;
-                                        let mut positive_sum = 0.0f32;
-                                        let mut negative_sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            match SynapseType::from(synapse.synapse_type) {
-                                                SynapseType::Condition => condition_sum += val,
-                                                SynapseType::Negative => negative_sum += val,
-                                                SynapseType::Positive | SynapseType::Standard => {
-                                                    positive_sum += val
-                                                }
-                                            }
-                                        }
-                                        if condition_sum > 0.0 {
-                                            positive_sum + neuron.bias
-                                        } else {
-                                            negative_sum + neuron.bias
-                                        }
-                                    }
-                                    SquashType::Hypotenuse => {
-                                        let mut sum_sq = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            sum_sq += val * val;
-                                        }
-                                        sum_sq.sqrt() + neuron.bias
-                                    }
-                                    SquashType::HypotenuseV2 => {
-                                        let mut sum_sq = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &$network.synapses[synapse_idx];
-                                            let val = neuron.bias
-                                                + act[synapse.from_index as usize] * synapse.weight;
-                                            sum_sq += val * val;
-                                        }
-                                        sum_sq.sqrt()
-                                    }
-                                    SquashType::Mean => {
-                                        let n = (end_synapse - start_synapse) as f32;
-                                        if n <= 0.0 {
-                                            neuron.bias
-                                        } else {
-                                            let mut sum = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                sum += act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                            }
-                                            sum / n + neuron.bias
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                };
-                                act[actual_idx] = apply_limit_range(squash, activation);
+                                let value =
+                                    neuron_activation_scalar(&$network.synapses, act, neuron);
+                                act[actual_idx] = value;
                             }
                         }
                         _ => {
@@ -216,16 +122,7 @@ macro_rules! batch_8way_activation {
                             let squashed = match squash_x8(squash, sums) {
                                 Some(vec) => vec,
                                 None => {
-                                    let apply_squash_inline = |sum: f32| -> f32 {
-                                        match neuron.squash_type {
-                                            0 => sum,
-                                            1 => sum.max(0.0),
-                                            6 => 1.0 / (1.0 + (-sum).exp()),
-                                            7 => sum.tanh(),
-                                            _ => apply_squash(squash, sum),
-                                        }
-                                    };
-                                    sums.map(apply_squash_inline)
+                                    sums.map(|sum| inline_squash(neuron.squash_type, squash, sum))
                                 }
                             };
 
@@ -282,7 +179,7 @@ macro_rules! batch_8way_activation {
                         2 => &mut act2,
                         _ => &mut act3,
                     };
-                    act[..$input_size].copy_from_slice(inputs);
+                    load_record(act, inputs, num_inputs);
                 }
 
                 for (neuron_idx, neuron) in $network.neurons.iter().enumerate() {
@@ -300,111 +197,12 @@ macro_rules! batch_8way_activation {
                         let end_synapse = start_synapse + neuron.num_synapses as usize;
 
                         match squash {
-                            SquashType::Minimum
-                            | SquashType::Maximum
-                            | SquashType::If
-                            | SquashType::Hypotenuse
-                            | SquashType::HypotenuseV2
-                            | SquashType::Mean => {
-                                for (r, act) in [
-                                    (0, &mut act0),
-                                    (1, &mut act1),
-                                    (2, &mut act2),
-                                    (3, &mut act3),
-                                ] {
-                                    let _ = r;
-                                    let activation = match squash {
-                                        SquashType::Minimum => {
-                                            let mut min_val = f32::INFINITY;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                if val < min_val {
-                                                    min_val = val;
-                                                }
-                                            }
-                                            if min_val == f32::INFINITY {
-                                                neuron.bias
-                                            } else {
-                                                min_val + neuron.bias
-                                            }
-                                        }
-                                        SquashType::Maximum => {
-                                            let mut max_val = f32::NEG_INFINITY;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                if val > max_val {
-                                                    max_val = val;
-                                                }
-                                            }
-                                            if max_val == f32::NEG_INFINITY {
-                                                neuron.bias
-                                            } else {
-                                                max_val + neuron.bias
-                                            }
-                                        }
-                                        SquashType::If => {
-                                            let mut condition_sum = 0.0f32;
-                                            let mut positive_sum = 0.0f32;
-                                            let mut negative_sum = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                match SynapseType::from(synapse.synapse_type) {
-                                                    SynapseType::Condition => condition_sum += val,
-                                                    SynapseType::Negative => negative_sum += val,
-                                                    SynapseType::Positive
-                                                    | SynapseType::Standard => positive_sum += val,
-                                                }
-                                            }
-                                            if condition_sum > 0.0 {
-                                                positive_sum + neuron.bias
-                                            } else {
-                                                negative_sum + neuron.bias
-                                            }
-                                        }
-                                        SquashType::Hypotenuse => {
-                                            let mut sum_sq = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = act[synapse.from_index as usize]
-                                                    * synapse.weight;
-                                                sum_sq += val * val;
-                                            }
-                                            sum_sq.sqrt() + neuron.bias
-                                        }
-                                        SquashType::HypotenuseV2 => {
-                                            let mut sum_sq = 0.0f32;
-                                            for synapse_idx in start_synapse..end_synapse {
-                                                let synapse = &$network.synapses[synapse_idx];
-                                                let val = neuron.bias
-                                                    + act[synapse.from_index as usize]
-                                                        * synapse.weight;
-                                                sum_sq += val * val;
-                                            }
-                                            sum_sq.sqrt()
-                                        }
-                                        SquashType::Mean => {
-                                            let n = (end_synapse - start_synapse) as f32;
-                                            if n <= 0.0 {
-                                                neuron.bias
-                                            } else {
-                                                let mut sum = 0.0f32;
-                                                for synapse_idx in start_synapse..end_synapse {
-                                                    let synapse = &$network.synapses[synapse_idx];
-                                                    sum += act[synapse.from_index as usize]
-                                                        * synapse.weight;
-                                                }
-                                                sum / n + neuron.bias
-                                            }
-                                        }
-                                        _ => unreachable!(),
-                                    };
-                                    act[actual_idx] = apply_limit_range(squash, activation);
+                            // Aggregate squashes stay on the exact single-record path.
+                            s if s.is_aggregate() => {
+                                for act in [&mut act0, &mut act1, &mut act2, &mut act3] {
+                                    let value =
+                                        neuron_activation_scalar(&$network.synapses, act, neuron);
+                                    act[actual_idx] = value;
                                 }
                             }
                             _ => {
@@ -424,18 +222,8 @@ macro_rules! batch_8way_activation {
                                 let sums = [sum0, sum1, sum2, sum3];
                                 let squashed = match squash_x4(squash, sums) {
                                     Some(vec) => vec,
-                                    None => {
-                                        let apply_squash_inline = |sum: f32| -> f32 {
-                                            match neuron.squash_type {
-                                                0 => sum,
-                                                1 => sum.max(0.0),
-                                                6 => 1.0 / (1.0 + (-sum).exp()),
-                                                7 => sum.tanh(),
-                                                _ => apply_squash(squash, sum),
-                                            }
-                                        };
-                                        sums.map(apply_squash_inline)
-                                    }
+                                    None => sums
+                                        .map(|sum| inline_squash(neuron.squash_type, squash, sum)),
                                 };
 
                                 // Issue #245: resolve the range once per neuron.
@@ -470,91 +258,15 @@ macro_rules! batch_8way_activation {
             let inputs = &$records[base..base + $input_size];
             let target_base = base + $input_size;
 
-            act0[..$input_size].copy_from_slice(inputs);
+            load_record(&mut act0, inputs, num_inputs);
 
             for i in num_inputs..num_neurons {
                 act0[i] = 0.0;
             }
 
             for (neuron_idx, neuron) in $network.neurons.iter().enumerate() {
-                let actual_idx = num_inputs + neuron_idx;
-
-                if neuron.is_constant {
-                    act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-                } else {
-                    let squash = SquashType::from(neuron.squash_type);
-                    let start_synapse = neuron.start_synapse as usize;
-                    let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                    let activation = match squash {
-                        SquashType::Minimum => {
-                            let mut min_val = f32::INFINITY;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                let val = act0[synapse.from_index as usize] * synapse.weight;
-                                if val < min_val {
-                                    min_val = val;
-                                }
-                            }
-                            if min_val == f32::INFINITY {
-                                neuron.bias
-                            } else {
-                                min_val + neuron.bias
-                            }
-                        }
-                        SquashType::Maximum => {
-                            let mut max_val = f32::NEG_INFINITY;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                let val = act0[synapse.from_index as usize] * synapse.weight;
-                                if val > max_val {
-                                    max_val = val;
-                                }
-                            }
-                            if max_val == f32::NEG_INFINITY {
-                                neuron.bias
-                            } else {
-                                max_val + neuron.bias
-                            }
-                        }
-                        SquashType::If => {
-                            let mut condition_sum = 0.0f32;
-                            let mut positive_sum = 0.0f32;
-                            let mut negative_sum = 0.0f32;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                let val = act0[synapse.from_index as usize] * synapse.weight;
-                                match SynapseType::from(synapse.synapse_type) {
-                                    SynapseType::Condition => condition_sum += val,
-                                    SynapseType::Negative => negative_sum += val,
-                                    SynapseType::Positive | SynapseType::Standard => {
-                                        positive_sum += val
-                                    }
-                                }
-                            }
-                            if condition_sum > 0.0 {
-                                positive_sum + neuron.bias
-                            } else {
-                                negative_sum + neuron.bias
-                            }
-                        }
-                        _ => {
-                            let mut sum = neuron.bias;
-                            for synapse_idx in start_synapse..end_synapse {
-                                let synapse = &$network.synapses[synapse_idx];
-                                sum += act0[synapse.from_index as usize] * synapse.weight;
-                            }
-                            match neuron.squash_type {
-                                0 => sum,
-                                1 => sum.max(0.0),
-                                6 => 1.0 / (1.0 + (-sum).exp()),
-                                7 => sum.tanh(),
-                                _ => apply_squash(squash, sum),
-                            }
-                        }
-                    };
-                    act0[actual_idx] = apply_limit_range(squash, activation);
-                }
+                let value = neuron_activation_scalar(&$network.synapses, &act0, neuron);
+                act0[num_inputs + neuron_idx] = value;
             }
 
             sum_error += $error_fn($records, target_base, &act0, output_start, $num_outputs);
@@ -562,6 +274,88 @@ macro_rules! batch_8way_activation {
 
         sum_error
     }};
+}
+
+/// How a packed `[inputs…, targets…]` buffer is carved into records.
+///
+/// Issue #444 — the single home of the packed-record layout rule.
+struct PackedLayout {
+    /// Stride between successive records: `input_size + num_outputs`.
+    values_per_record: usize,
+    /// Whole records the buffer holds; a trailing partial record is ignored.
+    num_records: usize,
+}
+
+/// Carve a packed buffer into records, or `None` when it holds no whole record
+/// (a zero-width record, or fewer values than one full record needs).
+fn packed_layout(
+    records_len: usize,
+    input_size: usize,
+    num_outputs: usize,
+) -> Option<PackedLayout> {
+    let values_per_record = input_size + num_outputs;
+    if values_per_record == 0 {
+        return None;
+    }
+    let num_records = records_len / values_per_record;
+    if num_records == 0 {
+        return None;
+    }
+    Some(PackedLayout {
+        values_per_record,
+        num_records,
+    })
+}
+
+/// Drive a packed `[inputs…, targets…]` buffer record by record, returning the
+/// sum of `reduce(targets, outputs)` over every whole record. Returns `0.0`
+/// when the buffer holds no whole records.
+///
+/// `reduce` receives the record's target slice and the network's output slice,
+/// both `num_outputs` long. Any per-record averaging belongs inside `reduce` —
+/// MSLE and hinge deliberately do not average.
+///
+/// When `forward_only` is false the network's hidden state is cleared before
+/// each record, preserving stateless (`feedbackLoop = false`) semantics; when
+/// it is true the reset is skipped, which v4+ forward-only creatures allow.
+///
+/// Issue #444 — the single home of the per-record scan; SIMD dispatch stays at
+/// the callers, where it genuinely differs.
+fn packed_record_scan(
+    network: &mut CompiledNetwork,
+    records: &[f32],
+    input_size: usize,
+    num_outputs: usize,
+    forward_only: bool,
+    reduce: impl Fn(&[f32], &[f32]) -> f64,
+) -> f64 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+        return 0.0;
+    };
+
+    // Reuse a small output buffer to avoid per-record allocation.
+    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
+    let mut sum_error: f64 = 0.0;
+
+    for record_idx in 0..layout.num_records {
+        if !forward_only {
+            // Ensure stateless behaviour for networks that may read stale activations.
+            network.reset_state();
+        }
+
+        let base = record_idx * layout.values_per_record;
+        let input_end = base + input_size;
+        let target_start = input_end;
+        // Activate into the reusable output buffer.
+        network.activate_into(&records[base..input_end], &mut outputs[..]);
+
+        sum_error += reduce(
+            &records[target_start..target_start + num_outputs],
+            &outputs[..],
+        );
+    }
+
+    sum_error
 }
 
 /// Fused activate + MSE (Mean Squared Error) calculation for batch scoring.
@@ -588,37 +382,34 @@ pub fn mse_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
     // Falls back to 4-way for remainder handling, then single-record
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return mse_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
-    // Issue #1202 - Use batched 4-record SIMD path for forward-only networks
-    if forward_only && num_records >= 4 {
-        return mse_sum_batch_4way(
+    // Issue #1202 - Use batched 4-record SIMD path for forward-only networks.
+    // The shared skeleton's remainder handling is the 4-way path (Issue #445):
+    // with 4..7 records it runs one 4-record group then the scalar tail.
+    if forward_only && layout.num_records >= 4 {
+        return mse_sum_batch_scattered(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -628,377 +419,22 @@ pub fn mse_sum_batch_packed(
         0.0
     };
 
-    // Reuse a small output buffer to avoid per-record allocation.
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-
-    let mut sum_error: f64 = 0.0;
-    for record_idx in 0..num_records {
-        if !forward_only {
-            // Ensure stateless behaviour for networks that may read stale activations.
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-        // Activate into the reusable output buffer.
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MSE = mean((target - output)^2)
-        let mut sq_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_start + j] - outputs[j]) as f64;
-            sq_sum += diff * diff;
-        }
-        sum_error += sq_sum * inv_outputs;
-    }
-
-    sum_error
-}
-
-/// Issue #1202 - Batched MSE with 4-record SIMD parallelism.
-///
-/// Processes 4 records simultaneously using SIMD across records.
-/// This is an internal helper that only works for forward-only networks
-/// with standard squash functions. Falls back to single-record for edge cases.
-fn mse_sum_batch_4way(
-    network: &CompiledNetwork,
-    records: &[f32],
-    values_per_record: usize,
-    input_size: usize,
-    num_outputs: usize,
-    num_records: usize,
-) -> f64 {
-    let inv_outputs: f64 = if num_outputs > 0 {
-        1.0 / (num_outputs as f64)
-    } else {
-        return 0.0;
-    };
-
-    // Allocate 4 activation buffers
-    let num_neurons = network.num_neurons;
-    let num_inputs = network.num_inputs;
-    let mut act0: Vec<f32> = vec![0.0; num_neurons];
-    let mut act1: Vec<f32> = vec![0.0; num_neurons];
-    let mut act2: Vec<f32> = vec![0.0; num_neurons];
-    let mut act3: Vec<f32> = vec![0.0; num_neurons];
-
-    let mut sum_error: f64 = 0.0;
-    let output_start = num_neurons - num_outputs;
-
-    // Process in batches of 4
-    let full_batches = num_records / 4;
-    for batch in 0..full_batches {
-        let base_idx = batch * 4;
-
-        // Load inputs for all 4 records
-        for r in 0..4 {
-            let record_idx = base_idx + r;
-            let base = record_idx * values_per_record;
-            let inputs = &records[base..base + input_size];
-            let act = match r {
-                0 => &mut act0,
-                1 => &mut act1,
-                2 => &mut act2,
-                _ => &mut act3,
-            };
-            act[..input_size].copy_from_slice(inputs);
-        }
-
-        // Process each neuron for all 4 records
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                let val = apply_limit_range(SquashType::Identity, neuron.bias);
-                act0[actual_idx] = val;
-                act1[actual_idx] = val;
-                act2[actual_idx] = val;
-                act3[actual_idx] = val;
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                // Only use batched path for standard squash functions
-                match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
-                        // Fall back to scalar for special squash functions
-                        for (r, act) in [
-                            (0, &mut act0),
-                            (1, &mut act1),
-                            (2, &mut act2),
-                            (3, &mut act3),
-                        ] {
-                            let _ = r;
-                            let activation = match squash {
-                                SquashType::Minimum => {
-                                    let mut min_val = f32::INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val < min_val {
-                                            min_val = val;
-                                        }
-                                    }
-                                    if min_val == f32::INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        min_val + neuron.bias
-                                    }
-                                }
-                                SquashType::Maximum => {
-                                    let mut max_val = f32::NEG_INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val > max_val {
-                                            max_val = val;
-                                        }
-                                    }
-                                    if max_val == f32::NEG_INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        max_val + neuron.bias
-                                    }
-                                }
-                                SquashType::If => {
-                                    let mut condition_sum = 0.0f32;
-                                    let mut positive_sum = 0.0f32;
-                                    let mut negative_sum = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        match SynapseType::from(synapse.synapse_type) {
-                                            SynapseType::Condition => condition_sum += val,
-                                            SynapseType::Negative => negative_sum += val,
-                                            SynapseType::Positive | SynapseType::Standard => {
-                                                positive_sum += val
-                                            }
-                                        }
-                                    }
-                                    if condition_sum > 0.0 {
-                                        positive_sum + neuron.bias
-                                    } else {
-                                        negative_sum + neuron.bias
-                                    }
-                                }
-                                SquashType::Hypotenuse => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt() + neuron.bias
-                                }
-                                SquashType::HypotenuseV2 => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = neuron.bias
-                                            + act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt()
-                                }
-                                SquashType::Mean => {
-                                    let n = (end_synapse - start_synapse) as f32;
-                                    if n <= 0.0 {
-                                        neuron.bias
-                                    } else {
-                                        let mut sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            sum +=
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                        }
-                                        sum / n + neuron.bias
-                                    }
-                                }
-                                _ => unreachable!(),
-                            };
-                            act[actual_idx] = apply_limit_range(squash, activation);
-                        }
-                    }
-                    _ => {
-                        // Use SIMD for standard squash functions
-                        let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
-                            &network.synapses,
-                            &act0,
-                            &act1,
-                            &act2,
-                            &act3,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
-
-                        // Vectorised squash for the hot transcendental types
-                        // (Issue #180 approximations, wired into MSE by #246);
-                        // scalar inline fallback otherwise so numerics are
-                        // unchanged for the non-vectorised squashes.
-                        let sums = [sum0, sum1, sum2, sum3];
-                        let squashed = match squash_x4(squash, sums) {
-                            Some(vec) => vec,
-                            None => {
-                                let apply_squash_inline = |sum: f32| -> f32 {
-                                    match neuron.squash_type {
-                                        0 => sum,                        // IDENTITY
-                                        1 => sum.max(0.0),               // ReLU
-                                        6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-                                        7 => sum.tanh(),                 // TANH
-                                        _ => apply_squash(squash, sum),  // Other
-                                    }
-                                };
-                                sums.map(apply_squash_inline)
-                            }
-                        };
-
-                        // Issue #245: resolve the output range once per neuron.
-                        let (low, high) = apply_get_range(squash);
-                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
-                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
-                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
-                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
-                    }
-                }
-            }
-        }
-
-        // Calculate MSE for all 4 records
-        for r in 0..4 {
-            let record_idx = base_idx + r;
-            let target_base = record_idx * values_per_record + input_size;
-            let act = match r {
-                0 => &act0,
-                1 => &act1,
-                2 => &act2,
-                _ => &act3,
-            };
-
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MSE = mean((target - output)^2)
             let mut sq_sum: f64 = 0.0;
-            for j in 0..num_outputs {
-                let diff = (records[target_base + j] - act[output_start + j]) as f64;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let diff = (*t - *o) as f64;
                 sq_sum += diff * diff;
             }
-            sum_error += sq_sum * inv_outputs;
-        }
-    }
-
-    // Handle remainder with single-record processing
-    let remainder_start = full_batches * 4;
-    for record_idx in remainder_start..num_records {
-        let base = record_idx * values_per_record;
-        let inputs = &records[base..base + input_size];
-        let target_base = base + input_size;
-
-        // Reuse act0 for single record
-        act0[..input_size].copy_from_slice(inputs);
-
-        // Reset non-input activations
-        for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
-            *activation = 0.0;
-        }
-
-        // Process each neuron
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                let activation = match squash {
-                    SquashType::Minimum => {
-                        let mut min_val = f32::INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val < min_val {
-                                min_val = val;
-                            }
-                        }
-                        if min_val == f32::INFINITY {
-                            neuron.bias
-                        } else {
-                            min_val + neuron.bias
-                        }
-                    }
-                    SquashType::Maximum => {
-                        let mut max_val = f32::NEG_INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val > max_val {
-                                max_val = val;
-                            }
-                        }
-                        if max_val == f32::NEG_INFINITY {
-                            neuron.bias
-                        } else {
-                            max_val + neuron.bias
-                        }
-                    }
-                    SquashType::If => {
-                        let mut condition_sum = 0.0f32;
-                        let mut positive_sum = 0.0f32;
-                        let mut negative_sum = 0.0f32;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            match SynapseType::from(synapse.synapse_type) {
-                                SynapseType::Condition => condition_sum += val,
-                                SynapseType::Negative => negative_sum += val,
-                                SynapseType::Positive | SynapseType::Standard => {
-                                    positive_sum += val
-                                }
-                            }
-                        }
-                        if condition_sum > 0.0 {
-                            positive_sum + neuron.bias
-                        } else {
-                            negative_sum + neuron.bias
-                        }
-                    }
-                    _ => {
-                        let mut sum = neuron.bias;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            sum += act0[synapse.from_index as usize] * synapse.weight;
-                        }
-                        match neuron.squash_type {
-                            0 => sum,
-                            1 => sum.max(0.0),
-                            6 => 1.0 / (1.0 + (-sum).exp()),
-                            7 => sum.tanh(),
-                            _ => apply_squash(squash, sum),
-                        }
-                    }
-                };
-                act0[actual_idx] = apply_limit_range(squash, activation);
-            }
-        }
-
-        // Calculate MSE
-        let mut sq_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_base + j] - act0[output_start + j]) as f64;
-            sq_sum += diff * diff;
-        }
-        sum_error += sq_sum * inv_outputs;
-    }
-
-    sum_error
+            sq_sum * inv_outputs
+        },
+    )
 }
 
 /// Issue #1209 - Batched MSE with 8-record SIMD parallelism.
@@ -1014,7 +450,7 @@ fn mse_sum_batch_4way(
 /// ([`mse_sum_batch_8way_interleaved`]), so each synapse reads one cache line
 /// instead of eight scattered per-lane buffers; networks containing an
 /// aggregate squash keep the exact per-lane scattered path
-/// ([`mse_sum_batch_8way_scattered`]) unchanged. Both are bit-identical to the
+/// ([`mse_sum_batch_scattered`]) unchanged. Both are bit-identical to the
 /// pre-#384 result.
 fn mse_sum_batch_8way(
     network: &CompiledNetwork,
@@ -1025,7 +461,7 @@ fn mse_sum_batch_8way(
     num_records: usize,
 ) -> f64 {
     if network.has_aggregate_squash() {
-        return mse_sum_batch_8way_scattered(
+        return mse_sum_batch_scattered(
             network,
             records,
             values_per_record,
@@ -1126,28 +562,13 @@ fn mse_sum_batch_8way_interleaved(
 
     if remaining >= 4 {
         let base_idx = remainder_start;
-        load_batch_input(&mut act0, records, base_idx, values_per_record, input_size);
-        load_batch_input(
-            &mut act1,
-            records,
-            base_idx + 1,
-            values_per_record,
-            input_size,
-        );
-        load_batch_input(
-            &mut act2,
-            records,
-            base_idx + 2,
-            values_per_record,
-            input_size,
-        );
-        load_batch_input(
-            &mut act3,
-            records,
-            base_idx + 3,
-            values_per_record,
-            input_size,
-        );
+        for (r, act) in [&mut act0, &mut act1, &mut act2, &mut act3]
+            .into_iter()
+            .enumerate()
+        {
+            let base = (base_idx + r) * values_per_record;
+            load_record(act, &records[base..base + input_size], num_inputs);
+        }
 
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
             let actual_idx = num_inputs + neuron_idx;
@@ -1175,7 +596,7 @@ fn mse_sum_batch_8way_interleaved(
             let sums = [sum0, sum1, sum2, sum3];
             let squashed = match squash_x4(squash, sums) {
                 Some(vec) => vec,
-                None => sums.map(|sum| inline_squash_scalar(neuron.squash_type, squash, sum)),
+                None => sums.map(|sum| inline_squash(neuron.squash_type, squash, sum)),
             };
             let (low, high) = apply_get_range(squash);
             act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
@@ -1200,30 +621,13 @@ fn mse_sum_batch_8way_interleaved(
     for record_idx in final_remainder_start..num_records {
         let base = record_idx * values_per_record;
         let target_base = base + input_size;
-        act0[..input_size].copy_from_slice(&records[base..base + input_size]);
+        load_record(&mut act0, &records[base..base + input_size], num_inputs);
         for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
             *activation = 0.0;
         }
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-            if neuron.is_constant {
-                act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-                continue;
-            }
-            let squash = SquashType::from(neuron.squash_type);
-            let start_synapse = neuron.start_synapse as usize;
-            let end_synapse = start_synapse + neuron.num_synapses as usize;
-            let mut sum = neuron.bias;
-            for synapse in network
-                .synapses
-                .iter()
-                .take(end_synapse)
-                .skip(start_synapse)
-            {
-                sum += act0[synapse.from_index as usize] * synapse.weight;
-            }
-            let activation = inline_squash_scalar(neuron.squash_type, squash, sum);
-            act0[actual_idx] = apply_limit_range(squash, activation);
+            let value = neuron_activation_scalar(&network.synapses, &act0, neuron);
+            act0[num_inputs + neuron_idx] = value;
         }
         let mut sq_sum: f64 = 0.0;
         for j in 0..num_outputs {
@@ -1236,38 +640,16 @@ fn mse_sum_batch_8way_interleaved(
     sum_error
 }
 
-/// Scalar inline squash for the four hot standard types, matching the batched
-/// SIMD `None`-fallback branches (and `CompiledNetwork::activate_into`) exactly.
-#[inline]
-fn inline_squash_scalar(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
-    match squash_type {
-        0 => sum,                        // IDENTITY
-        1 => sum.max(0.0),               // ReLU
-        6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-        7 => sum.tanh(),                 // TANH
-        _ => apply_squash(squash, sum),  // Other
-    }
-}
-
-/// Copy one record's `input_size` inputs into a per-lane activation buffer and
-/// zero the remaining non-input slots, matching the scattered 8-way loader.
-#[inline]
-fn load_batch_input(
-    act: &mut [f32],
-    records: &[f32],
-    record_idx: usize,
-    values_per_record: usize,
-    input_size: usize,
-) {
-    let base = record_idx * values_per_record;
-    act[..input_size].copy_from_slice(&records[base..base + input_size]);
-}
-
-/// Scattered per-lane fused activate + MSE (Issue #1209), retained unchanged for
-/// networks containing an aggregate squash (Issue #384). Processes 8 records via
-/// two SIMD vectors across records, falling back to 4-way for remainder < 8,
-/// then single-record for remainder < 4.
-fn mse_sum_batch_8way_scattered(
+/// Scattered per-lane fused activate + MSE (Issue #1209), used for networks
+/// containing an aggregate squash (Issue #384) and for the 4..7-record
+/// remainder of any forward-only batch.
+///
+/// Issue #445 — MSE runs the shared [`batch_8way_activation`] skeleton like
+/// every other loss kind: 8-record groups, then a 4-record group, then a scalar
+/// tail, with only the per-record squared-error reduction supplied here. The
+/// numerics are unchanged — the same kernels in the same order as the
+/// hand-inlined 8-way and 4-way copies this replaces.
+fn mse_sum_batch_scattered(
     network: &CompiledNetwork,
     records: &[f32],
     values_per_record: usize,
@@ -1281,536 +663,30 @@ fn mse_sum_batch_8way_scattered(
         return 0.0;
     };
 
-    // Allocate 8 activation buffers
-    let num_neurons = network.num_neurons;
-    let num_inputs = network.num_inputs;
-    let mut act0: Vec<f32> = vec![0.0; num_neurons];
-    let mut act1: Vec<f32> = vec![0.0; num_neurons];
-    let mut act2: Vec<f32> = vec![0.0; num_neurons];
-    let mut act3: Vec<f32> = vec![0.0; num_neurons];
-    let mut act4: Vec<f32> = vec![0.0; num_neurons];
-    let mut act5: Vec<f32> = vec![0.0; num_neurons];
-    let mut act6: Vec<f32> = vec![0.0; num_neurons];
-    let mut act7: Vec<f32> = vec![0.0; num_neurons];
-
-    let mut sum_error: f64 = 0.0;
-    let output_start = num_neurons - num_outputs;
-
-    // Process in batches of 8
-    let full_batches = num_records / 8;
-    for batch in 0..full_batches {
-        let base_idx = batch * 8;
-
-        // Load inputs for all 8 records
-        for r in 0..8 {
-            let record_idx = base_idx + r;
-            let base = record_idx * values_per_record;
-            let inputs = &records[base..base + input_size];
-            let act = match r {
-                0 => &mut act0,
-                1 => &mut act1,
-                2 => &mut act2,
-                3 => &mut act3,
-                4 => &mut act4,
-                5 => &mut act5,
-                6 => &mut act6,
-                _ => &mut act7,
-            };
-            act[..input_size].copy_from_slice(inputs);
-        }
-
-        // Process each neuron for all 8 records
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                let val = apply_limit_range(SquashType::Identity, neuron.bias);
-                act0[actual_idx] = val;
-                act1[actual_idx] = val;
-                act2[actual_idx] = val;
-                act3[actual_idx] = val;
-                act4[actual_idx] = val;
-                act5[actual_idx] = val;
-                act6[actual_idx] = val;
-                act7[actual_idx] = val;
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                // Only use batched path for standard squash functions
-                match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
-                        // Fall back to scalar for special squash functions
-                        for (r, act) in [
-                            (0, &mut act0),
-                            (1, &mut act1),
-                            (2, &mut act2),
-                            (3, &mut act3),
-                            (4, &mut act4),
-                            (5, &mut act5),
-                            (6, &mut act6),
-                            (7, &mut act7),
-                        ] {
-                            let _ = r;
-                            let activation = match squash {
-                                SquashType::Minimum => {
-                                    let mut min_val = f32::INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val < min_val {
-                                            min_val = val;
-                                        }
-                                    }
-                                    if min_val == f32::INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        min_val + neuron.bias
-                                    }
-                                }
-                                SquashType::Maximum => {
-                                    let mut max_val = f32::NEG_INFINITY;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        if val > max_val {
-                                            max_val = val;
-                                        }
-                                    }
-                                    if max_val == f32::NEG_INFINITY {
-                                        neuron.bias
-                                    } else {
-                                        max_val + neuron.bias
-                                    }
-                                }
-                                SquashType::If => {
-                                    let mut condition_sum = 0.0f32;
-                                    let mut positive_sum = 0.0f32;
-                                    let mut negative_sum = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        match SynapseType::from(synapse.synapse_type) {
-                                            SynapseType::Condition => condition_sum += val,
-                                            SynapseType::Negative => negative_sum += val,
-                                            SynapseType::Positive | SynapseType::Standard => {
-                                                positive_sum += val
-                                            }
-                                        }
-                                    }
-                                    if condition_sum > 0.0 {
-                                        positive_sum + neuron.bias
-                                    } else {
-                                        negative_sum + neuron.bias
-                                    }
-                                }
-                                SquashType::Hypotenuse => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt() + neuron.bias
-                                }
-                                SquashType::HypotenuseV2 => {
-                                    let mut sum_sq = 0.0f32;
-                                    for synapse_idx in start_synapse..end_synapse {
-                                        let synapse = &network.synapses[synapse_idx];
-                                        let val = neuron.bias
-                                            + act[synapse.from_index as usize] * synapse.weight;
-                                        sum_sq += val * val;
-                                    }
-                                    sum_sq.sqrt()
-                                }
-                                SquashType::Mean => {
-                                    let n = (end_synapse - start_synapse) as f32;
-                                    if n <= 0.0 {
-                                        neuron.bias
-                                    } else {
-                                        let mut sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            sum +=
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                        }
-                                        sum / n + neuron.bias
-                                    }
-                                }
-                                _ => unreachable!(),
-                            };
-                            act[actual_idx] = apply_limit_range(squash, activation);
-                        }
-                    }
-                    _ => {
-                        // Use SIMD for standard squash functions
-                        let (sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7) =
-                            weighted_sum_simd_8records(
-                                &network.synapses,
-                                &act0,
-                                &act1,
-                                &act2,
-                                &act3,
-                                &act4,
-                                &act5,
-                                &act6,
-                                &act7,
-                                start_synapse,
-                                end_synapse,
-                                neuron.bias,
-                            );
-
-                        // Vectorised squash for the hot transcendental types
-                        // (Issue #180 approximations, wired into MSE by #246);
-                        // scalar inline fallback otherwise so numerics are
-                        // unchanged for the non-vectorised squashes.
-                        let sums = [sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7];
-                        let squashed = match squash_x8(squash, sums) {
-                            Some(vec) => vec,
-                            None => {
-                                let apply_squash_inline = |sum: f32| -> f32 {
-                                    match neuron.squash_type {
-                                        0 => sum,                        // IDENTITY
-                                        1 => sum.max(0.0),               // ReLU
-                                        6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-                                        7 => sum.tanh(),                 // TANH
-                                        _ => apply_squash(squash, sum),  // Other
-                                    }
-                                };
-                                sums.map(apply_squash_inline)
-                            }
-                        };
-
-                        // Issue #245: resolve the output range once per neuron
-                        // and clamp all 8 lanes through the bounds.
-                        let (low, high) = apply_get_range(squash);
-                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
-                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
-                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
-                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
-                        act4[actual_idx] = apply_limit_range_bounds(low, high, squashed[4]);
-                        act5[actual_idx] = apply_limit_range_bounds(low, high, squashed[5]);
-                        act6[actual_idx] = apply_limit_range_bounds(low, high, squashed[6]);
-                        act7[actual_idx] = apply_limit_range_bounds(low, high, squashed[7]);
-                    }
-                }
-            }
-        }
-
-        // Calculate MSE for all 8 records
-        for r in 0..8 {
-            let record_idx = base_idx + r;
-            let target_base = record_idx * values_per_record + input_size;
-            let act = match r {
-                0 => &act0,
-                1 => &act1,
-                2 => &act2,
-                3 => &act3,
-                4 => &act4,
-                5 => &act5,
-                6 => &act6,
-                _ => &act7,
-            };
-
-            let mut sq_sum: f64 = 0.0;
-            for j in 0..num_outputs {
-                let diff = (records[target_base + j] - act[output_start + j]) as f64;
-                sq_sum += diff * diff;
-            }
-            sum_error += sq_sum * inv_outputs;
-        }
-    }
-
-    // Handle remainder: use 4-way for 4-7 remaining records
-    let remainder_start = full_batches * 8;
-    let remaining = num_records - remainder_start;
-
-    if remaining >= 4 {
-        // Process 4 records at a time
-        let four_way_batches = remaining / 4;
-        for batch in 0..four_way_batches {
-            let base_idx = remainder_start + batch * 4;
-
-            // Load inputs for 4 records
-            for r in 0..4 {
-                let record_idx = base_idx + r;
-                let base = record_idx * values_per_record;
-                let inputs = &records[base..base + input_size];
-                let act = match r {
-                    0 => &mut act0,
-                    1 => &mut act1,
-                    2 => &mut act2,
-                    _ => &mut act3,
-                };
-                act[..input_size].copy_from_slice(inputs);
-            }
-
-            // Process each neuron for all 4 records
-            for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-                let actual_idx = num_inputs + neuron_idx;
-
-                if neuron.is_constant {
-                    let val = apply_limit_range(SquashType::Identity, neuron.bias);
-                    act0[actual_idx] = val;
-                    act1[actual_idx] = val;
-                    act2[actual_idx] = val;
-                    act3[actual_idx] = val;
-                } else {
-                    let squash = SquashType::from(neuron.squash_type);
-                    let start_synapse = neuron.start_synapse as usize;
-                    let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                    match squash {
-                        SquashType::Minimum
-                        | SquashType::Maximum
-                        | SquashType::If
-                        | SquashType::Hypotenuse
-                        | SquashType::HypotenuseV2
-                        | SquashType::Mean => {
-                            for (r, act) in [
-                                (0, &mut act0),
-                                (1, &mut act1),
-                                (2, &mut act2),
-                                (3, &mut act3),
-                            ] {
-                                let _ = r;
-                                let activation = match squash {
-                                    SquashType::Minimum => {
-                                        let mut min_val = f32::INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val < min_val {
-                                                min_val = val;
-                                            }
-                                        }
-                                        if min_val == f32::INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            min_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::Maximum => {
-                                        let mut max_val = f32::NEG_INFINITY;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            if val > max_val {
-                                                max_val = val;
-                                            }
-                                        }
-                                        if max_val == f32::NEG_INFINITY {
-                                            neuron.bias
-                                        } else {
-                                            max_val + neuron.bias
-                                        }
-                                    }
-                                    SquashType::If => {
-                                        let mut condition_sum = 0.0f32;
-                                        let mut positive_sum = 0.0f32;
-                                        let mut negative_sum = 0.0f32;
-                                        for synapse_idx in start_synapse..end_synapse {
-                                            let synapse = &network.synapses[synapse_idx];
-                                            let val =
-                                                act[synapse.from_index as usize] * synapse.weight;
-                                            match SynapseType::from(synapse.synapse_type) {
-                                                SynapseType::Condition => condition_sum += val,
-                                                SynapseType::Negative => negative_sum += val,
-                                                SynapseType::Positive | SynapseType::Standard => {
-                                                    positive_sum += val
-                                                }
-                                            }
-                                        }
-                                        if condition_sum > 0.0 {
-                                            positive_sum + neuron.bias
-                                        } else {
-                                            negative_sum + neuron.bias
-                                        }
-                                    }
-                                    _ => unreachable!(),
-                                };
-                                act[actual_idx] = apply_limit_range(squash, activation);
-                            }
-                        }
-                        _ => {
-                            let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
-                                &network.synapses,
-                                &act0,
-                                &act1,
-                                &act2,
-                                &act3,
-                                start_synapse,
-                                end_synapse,
-                                neuron.bias,
-                            );
-
-                            // Vectorised squash for the hot transcendental
-                            // types (Issue #180 approximations, wired into MSE
-                            // by #246); scalar inline fallback otherwise.
-                            let sums = [sum0, sum1, sum2, sum3];
-                            let squashed = match squash_x4(squash, sums) {
-                                Some(vec) => vec,
-                                None => {
-                                    let apply_squash_inline = |sum: f32| -> f32 {
-                                        match neuron.squash_type {
-                                            0 => sum,
-                                            1 => sum.max(0.0),
-                                            6 => 1.0 / (1.0 + (-sum).exp()),
-                                            7 => sum.tanh(),
-                                            _ => apply_squash(squash, sum),
-                                        }
-                                    };
-                                    sums.map(apply_squash_inline)
-                                }
-                            };
-
-                            // Issue #245: resolve the range once per neuron.
-                            let (low, high) = apply_get_range(squash);
-                            act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
-                            act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
-                            act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
-                            act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
-                        }
-                    }
-                }
-            }
-
-            // Calculate MSE for 4 records
-            for r in 0..4 {
-                let record_idx = base_idx + r;
-                let target_base = record_idx * values_per_record + input_size;
-                let act = match r {
-                    0 => &act0,
-                    1 => &act1,
-                    2 => &act2,
-                    _ => &act3,
-                };
-
-                let mut sq_sum: f64 = 0.0;
-                for j in 0..num_outputs {
-                    let diff = (records[target_base + j] - act[output_start + j]) as f64;
-                    sq_sum += diff * diff;
-                }
-                sum_error += sq_sum * inv_outputs;
-            }
-        }
-    }
-
-    // Handle final remainder with single-record processing
-    let final_remainder_start = remainder_start + (remaining / 4) * 4;
-    for record_idx in final_remainder_start..num_records {
-        let base = record_idx * values_per_record;
-        let inputs = &records[base..base + input_size];
-        let target_base = base + input_size;
-
-        // Reuse act0 for single record
-        act0[..input_size].copy_from_slice(inputs);
-
-        // Reset non-input activations
-        for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
-            *activation = 0.0;
-        }
-
-        // Process each neuron
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                act0[actual_idx] = apply_limit_range(SquashType::Identity, neuron.bias);
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                let activation = match squash {
-                    SquashType::Minimum => {
-                        let mut min_val = f32::INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val < min_val {
-                                min_val = val;
-                            }
-                        }
-                        if min_val == f32::INFINITY {
-                            neuron.bias
-                        } else {
-                            min_val + neuron.bias
-                        }
-                    }
-                    SquashType::Maximum => {
-                        let mut max_val = f32::NEG_INFINITY;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            if val > max_val {
-                                max_val = val;
-                            }
-                        }
-                        if max_val == f32::NEG_INFINITY {
-                            neuron.bias
-                        } else {
-                            max_val + neuron.bias
-                        }
-                    }
-                    SquashType::If => {
-                        let mut condition_sum = 0.0f32;
-                        let mut positive_sum = 0.0f32;
-                        let mut negative_sum = 0.0f32;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            let val = act0[synapse.from_index as usize] * synapse.weight;
-                            match SynapseType::from(synapse.synapse_type) {
-                                SynapseType::Condition => condition_sum += val,
-                                SynapseType::Negative => negative_sum += val,
-                                SynapseType::Positive | SynapseType::Standard => {
-                                    positive_sum += val
-                                }
-                            }
-                        }
-                        if condition_sum > 0.0 {
-                            positive_sum + neuron.bias
-                        } else {
-                            negative_sum + neuron.bias
-                        }
-                    }
-                    _ => {
-                        let mut sum = neuron.bias;
-                        for synapse_idx in start_synapse..end_synapse {
-                            let synapse = &network.synapses[synapse_idx];
-                            sum += act0[synapse.from_index as usize] * synapse.weight;
-                        }
-                        match neuron.squash_type {
-                            0 => sum,
-                            1 => sum.max(0.0),
-                            6 => 1.0 / (1.0 + (-sum).exp()),
-                            7 => sum.tanh(),
-                            _ => apply_squash(squash, sum),
-                        }
-                    }
-                };
-                act0[actual_idx] = apply_limit_range(squash, activation);
-            }
-        }
-
-        // Calculate MSE
+    // MSE error calculation: mean((target - output)^2)
+    let mse_error = |records: &[f32],
+                     target_base: usize,
+                     act: &[f32],
+                     output_start: usize,
+                     num_outputs: usize|
+     -> f64 {
         let mut sq_sum: f64 = 0.0;
         for j in 0..num_outputs {
-            let diff = (records[target_base + j] - act0[output_start + j]) as f64;
+            let diff = (records[target_base + j] - act[output_start + j]) as f64;
             sq_sum += diff * diff;
         }
-        sum_error += sq_sum * inv_outputs;
-    }
+        sq_sum * inv_outputs
+    };
 
-    sum_error
+    batch_8way_activation!(
+        network,
+        records,
+        values_per_record,
+        input_size,
+        num_outputs,
+        num_records,
+        mse_error
+    )
 }
 
 /// Issue #1209 - Batched MAE with 8-record SIMD parallelism.
@@ -2051,24 +927,19 @@ pub fn mae_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return mae_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -2078,31 +949,21 @@ pub fn mae_sum_batch_packed(
         0.0
     };
 
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
-
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MAE = mean(|target - output|)
-        let mut abs_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_start + j] - outputs[j]) as f64;
-            abs_sum += diff.abs();
-        }
-        sum_error += abs_sum * inv_outputs;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MAE = mean(|target - output|)
+            let mut abs_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                abs_sum += ((*t - *o) as f64).abs();
+            }
+            abs_sum * inv_outputs
+        },
+    )
 }
 
 /// Fused activate + Cross Entropy calculation for batch scoring.
@@ -2127,24 +988,19 @@ pub fn cross_entropy_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return cross_entropy_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -2155,34 +1011,25 @@ pub fn cross_entropy_sum_batch_packed(
     };
 
     const EPSILON: f64 = 1e-15;
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
 
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record Cross Entropy = -(1/n) * Σ(t * log(o) + (1-t) * log(1-o))
-        let mut ce_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = records[target_start + j] as f64;
-            let o_raw = outputs[j] as f64;
-            // Clamp to [epsilon, 1-epsilon] to prevent log(0)
-            let o = o_raw.clamp(EPSILON, 1.0 - EPSILON);
-            ce_sum -= t * o.ln() + (1.0 - t) * (1.0 - o).ln();
-        }
-        sum_error += ce_sum * inv_outputs;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record Cross Entropy = -(1/n) * Σ(t * log(o) + (1-t) * log(1-o))
+            let mut ce_sum: f64 = 0.0;
+            for (t, o_raw) in targets.iter().zip(outputs.iter()) {
+                let t = *t as f64;
+                // Clamp to [epsilon, 1-epsilon] to prevent log(0)
+                let o = (*o_raw as f64).clamp(EPSILON, 1.0 - EPSILON);
+                ce_sum -= t * o.ln() + (1.0 - t) * (1.0 - o).ln();
+            }
+            ce_sum * inv_outputs
+        },
+    )
 }
 
 /// Fused activate + MAPE (Mean Absolute Percentage Error) calculation for batch scoring.
@@ -2206,24 +1053,19 @@ pub fn mape_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return mape_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -2234,32 +1076,23 @@ pub fn mape_sum_batch_packed(
     };
 
     const EPSILON: f64 = 1e-15;
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
 
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MAPE = (1/n) * Σ|(output - target) / max(target, ε)|
-        let mut mape_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = (records[target_start + j] as f64).max(EPSILON);
-            let o = outputs[j] as f64;
-            mape_sum += ((o - t) / t).abs();
-        }
-        sum_error += mape_sum * inv_outputs;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MAPE = (1/n) * Σ|(output - target) / max(target, ε)|
+            let mut mape_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let t = (*t as f64).max(EPSILON);
+                mape_sum += ((*o as f64 - t) / t).abs();
+            }
+            mape_sum * inv_outputs
+        },
+    )
 }
 
 /// Fused activate + MSLE (Mean Squared Logarithmic Error) calculation for batch scoring.
@@ -2284,55 +1117,42 @@ pub fn msle_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return msle_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
     const EPSILON: f64 = 1e-15;
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
 
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MSLE = Σ(log(max(target, ε)) - log(max(output, ε)))
-        // Note: No averaging per record to match JS implementation
-        let mut msle_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = (records[target_start + j] as f64).max(EPSILON);
-            let o = (outputs[j] as f64).max(EPSILON);
-            msle_sum += t.ln() - o.ln();
-        }
-        sum_error += msle_sum;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MSLE = Σ(log(max(target, ε)) - log(max(output, ε)))
+            // Note: No averaging per record to match JS implementation
+            let mut msle_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let t = (*t as f64).max(EPSILON);
+                let o = (*o as f64).max(EPSILON);
+                msle_sum += t.ln() - o.ln();
+            }
+            msle_sum
+        },
+    )
 }
 
 /// Fused activate + Hinge Loss calculation for batch scoring.
@@ -2357,54 +1177,38 @@ pub fn hinge_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return hinge_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
-
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record Hinge = Σmax(0, 1 - target * output)
-        // Note: No averaging per record to match JS implementation
-        let mut hinge_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = records[target_start + j] as f64;
-            let o = outputs[j] as f64;
-            hinge_sum += (1.0 - t * o).max(0.0);
-        }
-        sum_error += hinge_sum;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record Hinge = Σmax(0, 1 - target * output)
+            // Note: No averaging per record to match JS implementation
+            let mut hinge_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                hinge_sum += (1.0 - (*t as f64) * (*o as f64)).max(0.0);
+            }
+            hinge_sum
+        },
+    )
 }
 
 /// Fused activate + Categorical Error (argmax misclassification) for batch scoring.
@@ -2445,58 +1249,40 @@ pub fn categorical_error_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
-        return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 || num_outputs == 0 {
+    // A record with no outputs has no class to predict — guard before the scan,
+    // whose closure indexes the first target and output.
+    if num_outputs == 0 {
         return 0.0;
     }
 
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut misclassified: f64 = 0.0;
-
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Argmax with first-index tie-breaking — matches the TS reference
-        // (`a > b` so equal values keep the earlier index).
-        let mut target_argmax: usize = 0;
-        let mut target_best: f32 = records[target_start];
-        for j in 1..num_outputs {
-            let v = records[target_start + j];
-            if v > target_best {
-                target_best = v;
-                target_argmax = j;
+    /// Argmax with first-index tie-breaking — matches the TS reference
+    /// (`a > b` so equal values keep the earlier index).
+    fn argmax(values: &[f32]) -> usize {
+        let mut best_idx: usize = 0;
+        let mut best: f32 = values[0];
+        for (idx, v) in values.iter().enumerate().skip(1) {
+            if *v > best {
+                best = *v;
+                best_idx = idx;
             }
         }
-
-        let mut output_argmax: usize = 0;
-        let mut output_best: f32 = outputs[0];
-        for j in 1..num_outputs {
-            let v = outputs[j];
-            if v > output_best {
-                output_best = v;
-                output_argmax = j;
-            }
-        }
-
-        if target_argmax != output_argmax {
-            misclassified += 1.0;
-        }
+        best_idx
     }
 
-    misclassified
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            if argmax(targets) != argmax(outputs) {
+                1.0
+            } else {
+                0.0
+            }
+        },
+    )
 }
 
 /// Non-fused recurrent-path MSE for `forwardOnly: false` networks.
@@ -2529,14 +1315,9 @@ pub fn mse_mean_record(
     input_size: usize,
     num_outputs: usize,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     let inv_outputs: f64 = if num_outputs > 0 {
         1.0 / (num_outputs as f64)
@@ -2544,31 +1325,26 @@ pub fn mse_mean_record(
         0.0
     };
 
-    // Reuse a small output buffer to avoid per-record allocation.
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
+    // Non-fused recurrent path: `forward_only = false` clears hidden state
+    // between records so the previous record's activations cannot leak in.
+    let sum_error = packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        false,
+        |targets, outputs| {
+            // Per-record MSE = mean over outputs of (target - output)^2.
+            let mut sq_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let diff = (*t - *o) as f64;
+                sq_sum += diff * diff;
+            }
+            sq_sum * inv_outputs
+        },
+    );
 
-    for record_idx in 0..num_records {
-        // Non-fused recurrent path: clear hidden state between records so the
-        // previous record's activations cannot leak into this activation.
-        network.reset_state();
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MSE = mean over outputs of (target - output)^2.
-        let mut sq_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_start + j] - outputs[j]) as f64;
-            sq_sum += diff * diff;
-        }
-        sum_error += sq_sum * inv_outputs;
-    }
-
-    sum_error / (num_records as f64)
+    sum_error / (layout.num_records as f64)
 }
 
 #[cfg(test)]
@@ -2824,7 +1600,7 @@ mod interleaved_mse_parity {
     //!
     //! `mse_sum_batch_8way` now dispatches standard-squash networks to
     //! [`mse_sum_batch_8way_interleaved`] and aggregate networks to the
-    //! unchanged [`mse_sum_batch_8way_scattered`]. These "what" tests assert the
+    //! unchanged [`mse_sum_batch_scattered`]. These "what" tests assert the
     //! interleaved result is **bit-identical** (`f64::to_bits`) to the scattered
     //! path it replaces across the record counts that straddle the 8-record
     //! group boundary, so a lane-transpose bug, a changed `f64` accumulation
@@ -2939,7 +1715,7 @@ mod interleaved_mse_parity {
             1,
             num_records,
         );
-        let scattered = mse_sum_batch_8way_scattered(
+        let scattered = mse_sum_batch_scattered(
             &net,
             &records,
             values_per_record,
@@ -2978,7 +1754,7 @@ mod interleaved_mse_parity {
     /// scattered kernel — never the interleaved gather (whose standard-only
     /// `squash_x8` fallback would mis-evaluate an aggregate neuron). Asserting
     /// the public `mse_sum_batch_8way` dispatcher is bit-identical to
-    /// `mse_sum_batch_8way_scattered` proves the routing, and keeps aggregate
+    /// `mse_sum_batch_scattered` proves the routing, and keeps aggregate
     /// networks bit-identical to their pre-#384 result.
     #[test]
     fn aggregate_dispatch_stays_on_scattered_path() {
@@ -3005,14 +1781,8 @@ mod interleaved_mse_parity {
                 let records = build_records(n, input_size);
                 let dispatched =
                     mse_sum_batch_8way(&net, &records, values_per_record, input_size, 1, n);
-                let scattered = mse_sum_batch_8way_scattered(
-                    &net,
-                    &records,
-                    values_per_record,
-                    input_size,
-                    1,
-                    n,
-                );
+                let scattered =
+                    mse_sum_batch_scattered(&net, &records, values_per_record, input_size, 1, n);
                 assert_eq!(
                     dispatched.to_bits(),
                     scattered.to_bits(),

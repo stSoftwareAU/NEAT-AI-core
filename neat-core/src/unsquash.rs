@@ -5,7 +5,8 @@
 //! Issue #1139 - WASM Migration Phase 7.
 
 use crate::squash::{
-    GELU_COEFF, LEAKY_RELU_ALPHA, SELU_ALPHA, SELU_LAMBDA, SQRT_2_OVER_PI, SquashType, apply_squash,
+    GELU_COEFF, LEAKY_RELU_ALPHA, SELU_ALPHA, SELU_LAMBDA, SQRT_2_OVER_PI, SquashType,
+    aggregate_squash_patterns, apply_squash,
 };
 
 /// Apply an inverse squash (unsquash) function to a value
@@ -617,13 +618,10 @@ pub fn apply_unsquash(squash_type: SquashType, activation: f32, hint: f32) -> f3
             safe / (1.0 - safe * safe).sqrt()
         }
 
-        // Aggregate functions - return hint or activation
-        SquashType::Minimum
-        | SquashType::Maximum
-        | SquashType::If
-        | SquashType::Hypotenuse
-        | SquashType::HypotenuseV2
-        | SquashType::Mean => {
+        // Aggregate functions (see `SquashType::is_aggregate`) - not
+        // invertible, so return the hint or fall back to the activation. The
+        // pattern form keeps this match exhaustive over `SquashType`.
+        aggregate_squash_patterns!() => {
             if hint.is_finite() {
                 hint
             } else {
