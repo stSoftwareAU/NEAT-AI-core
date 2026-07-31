@@ -277,6 +277,88 @@ macro_rules! batch_8way_activation {
     }};
 }
 
+/// How a packed `[inputs…, targets…]` buffer is carved into records.
+///
+/// Issue #444 — the single home of the packed-record layout rule.
+struct PackedLayout {
+    /// Stride between successive records: `input_size + num_outputs`.
+    values_per_record: usize,
+    /// Whole records the buffer holds; a trailing partial record is ignored.
+    num_records: usize,
+}
+
+/// Carve a packed buffer into records, or `None` when it holds no whole record
+/// (a zero-width record, or fewer values than one full record needs).
+fn packed_layout(
+    records_len: usize,
+    input_size: usize,
+    num_outputs: usize,
+) -> Option<PackedLayout> {
+    let values_per_record = input_size + num_outputs;
+    if values_per_record == 0 {
+        return None;
+    }
+    let num_records = records_len / values_per_record;
+    if num_records == 0 {
+        return None;
+    }
+    Some(PackedLayout {
+        values_per_record,
+        num_records,
+    })
+}
+
+/// Drive a packed `[inputs…, targets…]` buffer record by record, returning the
+/// sum of `reduce(targets, outputs)` over every whole record. Returns `0.0`
+/// when the buffer holds no whole records.
+///
+/// `reduce` receives the record's target slice and the network's output slice,
+/// both `num_outputs` long. Any per-record averaging belongs inside `reduce` —
+/// MSLE and hinge deliberately do not average.
+///
+/// When `forward_only` is false the network's hidden state is cleared before
+/// each record, preserving stateless (`feedbackLoop = false`) semantics; when
+/// it is true the reset is skipped, which v4+ forward-only creatures allow.
+///
+/// Issue #444 — the single home of the per-record scan; SIMD dispatch stays at
+/// the callers, where it genuinely differs.
+fn packed_record_scan(
+    network: &mut CompiledNetwork,
+    records: &[f32],
+    input_size: usize,
+    num_outputs: usize,
+    forward_only: bool,
+    reduce: impl Fn(&[f32], &[f32]) -> f64,
+) -> f64 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+        return 0.0;
+    };
+
+    // Reuse a small output buffer to avoid per-record allocation.
+    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
+    let mut sum_error: f64 = 0.0;
+
+    for record_idx in 0..layout.num_records {
+        if !forward_only {
+            // Ensure stateless behaviour for networks that may read stale activations.
+            network.reset_state();
+        }
+
+        let base = record_idx * layout.values_per_record;
+        let input_end = base + input_size;
+        let target_start = input_end;
+        // Activate into the reusable output buffer.
+        network.activate_into(&records[base..input_end], &mut outputs[..]);
+
+        sum_error += reduce(
+            &records[target_start..target_start + num_outputs],
+            &outputs[..],
+        );
+    }
+
+    sum_error
+}
+
 /// Fused activate + MSE (Mean Squared Error) calculation for batch scoring.
 ///
 /// This is a scoring fast-path designed to minimise JS/WASM boundary crossings:
@@ -301,37 +383,32 @@ pub fn mse_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
     // Falls back to 4-way for remainder handling, then single-record
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return mse_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
     // Issue #1202 - Use batched 4-record SIMD path for forward-only networks
-    if forward_only && num_records >= 4 {
+    if forward_only && layout.num_records >= 4 {
         return mse_sum_batch_4way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -341,33 +418,22 @@ pub fn mse_sum_batch_packed(
         0.0
     };
 
-    // Reuse a small output buffer to avoid per-record allocation.
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-
-    let mut sum_error: f64 = 0.0;
-    for record_idx in 0..num_records {
-        if !forward_only {
-            // Ensure stateless behaviour for networks that may read stale activations.
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-        // Activate into the reusable output buffer.
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MSE = mean((target - output)^2)
-        let mut sq_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_start + j] - outputs[j]) as f64;
-            sq_sum += diff * diff;
-        }
-        sum_error += sq_sum * inv_outputs;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MSE = mean((target - output)^2)
+            let mut sq_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let diff = (*t - *o) as f64;
+                sq_sum += diff * diff;
+            }
+            sq_sum * inv_outputs
+        },
+    )
 }
 
 /// Issue #1202 - Batched MSE with 4-record SIMD parallelism.
@@ -1312,24 +1378,19 @@ pub fn mae_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return mae_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -1339,31 +1400,21 @@ pub fn mae_sum_batch_packed(
         0.0
     };
 
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
-
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MAE = mean(|target - output|)
-        let mut abs_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_start + j] - outputs[j]) as f64;
-            abs_sum += diff.abs();
-        }
-        sum_error += abs_sum * inv_outputs;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MAE = mean(|target - output|)
+            let mut abs_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                abs_sum += ((*t - *o) as f64).abs();
+            }
+            abs_sum * inv_outputs
+        },
+    )
 }
 
 /// Fused activate + Cross Entropy calculation for batch scoring.
@@ -1388,24 +1439,19 @@ pub fn cross_entropy_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return cross_entropy_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -1416,34 +1462,25 @@ pub fn cross_entropy_sum_batch_packed(
     };
 
     const EPSILON: f64 = 1e-15;
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
 
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record Cross Entropy = -(1/n) * Σ(t * log(o) + (1-t) * log(1-o))
-        let mut ce_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = records[target_start + j] as f64;
-            let o_raw = outputs[j] as f64;
-            // Clamp to [epsilon, 1-epsilon] to prevent log(0)
-            let o = o_raw.clamp(EPSILON, 1.0 - EPSILON);
-            ce_sum -= t * o.ln() + (1.0 - t) * (1.0 - o).ln();
-        }
-        sum_error += ce_sum * inv_outputs;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record Cross Entropy = -(1/n) * Σ(t * log(o) + (1-t) * log(1-o))
+            let mut ce_sum: f64 = 0.0;
+            for (t, o_raw) in targets.iter().zip(outputs.iter()) {
+                let t = *t as f64;
+                // Clamp to [epsilon, 1-epsilon] to prevent log(0)
+                let o = (*o_raw as f64).clamp(EPSILON, 1.0 - EPSILON);
+                ce_sum -= t * o.ln() + (1.0 - t) * (1.0 - o).ln();
+            }
+            ce_sum * inv_outputs
+        },
+    )
 }
 
 /// Fused activate + MAPE (Mean Absolute Percentage Error) calculation for batch scoring.
@@ -1467,24 +1504,19 @@ pub fn mape_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return mape_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
@@ -1495,32 +1527,23 @@ pub fn mape_sum_batch_packed(
     };
 
     const EPSILON: f64 = 1e-15;
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
 
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MAPE = (1/n) * Σ|(output - target) / max(target, ε)|
-        let mut mape_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = (records[target_start + j] as f64).max(EPSILON);
-            let o = outputs[j] as f64;
-            mape_sum += ((o - t) / t).abs();
-        }
-        sum_error += mape_sum * inv_outputs;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MAPE = (1/n) * Σ|(output - target) / max(target, ε)|
+            let mut mape_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let t = (*t as f64).max(EPSILON);
+                mape_sum += ((*o as f64 - t) / t).abs();
+            }
+            mape_sum * inv_outputs
+        },
+    )
 }
 
 /// Fused activate + MSLE (Mean Squared Logarithmic Error) calculation for batch scoring.
@@ -1545,55 +1568,42 @@ pub fn msle_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return msle_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
     const EPSILON: f64 = 1e-15;
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
 
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MSLE = Σ(log(max(target, ε)) - log(max(output, ε)))
-        // Note: No averaging per record to match JS implementation
-        let mut msle_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = (records[target_start + j] as f64).max(EPSILON);
-            let o = (outputs[j] as f64).max(EPSILON);
-            msle_sum += t.ln() - o.ln();
-        }
-        sum_error += msle_sum;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record MSLE = Σ(log(max(target, ε)) - log(max(output, ε)))
+            // Note: No averaging per record to match JS implementation
+            let mut msle_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let t = (*t as f64).max(EPSILON);
+                let o = (*o as f64).max(EPSILON);
+                msle_sum += t.ln() - o.ln();
+            }
+            msle_sum
+        },
+    )
 }
 
 /// Fused activate + Hinge Loss calculation for batch scoring.
@@ -1618,54 +1628,38 @@ pub fn hinge_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     // Issue #1209 - Use batched 8-record SIMD path for forward-only networks
-    if forward_only && num_records >= 8 {
+    if forward_only && layout.num_records >= 8 {
         return hinge_sum_batch_8way(
             network,
             records,
-            values_per_record,
+            layout.values_per_record,
             input_size,
             num_outputs,
-            num_records,
+            layout.num_records,
         );
     }
 
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
-
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record Hinge = Σmax(0, 1 - target * output)
-        // Note: No averaging per record to match JS implementation
-        let mut hinge_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let t = records[target_start + j] as f64;
-            let o = outputs[j] as f64;
-            hinge_sum += (1.0 - t * o).max(0.0);
-        }
-        sum_error += hinge_sum;
-    }
-
-    sum_error
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            // Per-record Hinge = Σmax(0, 1 - target * output)
+            // Note: No averaging per record to match JS implementation
+            let mut hinge_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                hinge_sum += (1.0 - (*t as f64) * (*o as f64)).max(0.0);
+            }
+            hinge_sum
+        },
+    )
 }
 
 /// Fused activate + Categorical Error (argmax misclassification) for batch scoring.
@@ -1706,58 +1700,40 @@ pub fn categorical_error_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
-        return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 || num_outputs == 0 {
+    // A record with no outputs has no class to predict — guard before the scan,
+    // whose closure indexes the first target and output.
+    if num_outputs == 0 {
         return 0.0;
     }
 
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut misclassified: f64 = 0.0;
-
-    for record_idx in 0..num_records {
-        if !forward_only {
-            network.reset_state();
-        }
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Argmax with first-index tie-breaking — matches the TS reference
-        // (`a > b` so equal values keep the earlier index).
-        let mut target_argmax: usize = 0;
-        let mut target_best: f32 = records[target_start];
-        for j in 1..num_outputs {
-            let v = records[target_start + j];
-            if v > target_best {
-                target_best = v;
-                target_argmax = j;
+    /// Argmax with first-index tie-breaking — matches the TS reference
+    /// (`a > b` so equal values keep the earlier index).
+    fn argmax(values: &[f32]) -> usize {
+        let mut best_idx: usize = 0;
+        let mut best: f32 = values[0];
+        for (idx, v) in values.iter().enumerate().skip(1) {
+            if *v > best {
+                best = *v;
+                best_idx = idx;
             }
         }
-
-        let mut output_argmax: usize = 0;
-        let mut output_best: f32 = outputs[0];
-        for j in 1..num_outputs {
-            let v = outputs[j];
-            if v > output_best {
-                output_best = v;
-                output_argmax = j;
-            }
-        }
-
-        if target_argmax != output_argmax {
-            misclassified += 1.0;
-        }
+        best_idx
     }
 
-    misclassified
+    packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+        |targets, outputs| {
+            if argmax(targets) != argmax(outputs) {
+                1.0
+            } else {
+                0.0
+            }
+        },
+    )
 }
 
 /// Non-fused recurrent-path MSE for `forwardOnly: false` networks.
@@ -1790,14 +1766,9 @@ pub fn mse_mean_record(
     input_size: usize,
     num_outputs: usize,
 ) -> f64 {
-    let values_per_record = input_size + num_outputs;
-    if values_per_record == 0 {
+    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
         return 0.0;
-    }
-    let num_records = records.len() / values_per_record;
-    if num_records == 0 {
-        return 0.0;
-    }
+    };
 
     let inv_outputs: f64 = if num_outputs > 0 {
         1.0 / (num_outputs as f64)
@@ -1805,31 +1776,26 @@ pub fn mse_mean_record(
         0.0
     };
 
-    // Reuse a small output buffer to avoid per-record allocation.
-    let mut outputs: Vec<f32> = vec![0.0; num_outputs];
-    let mut sum_error: f64 = 0.0;
+    // Non-fused recurrent path: `forward_only = false` clears hidden state
+    // between records so the previous record's activations cannot leak in.
+    let sum_error = packed_record_scan(
+        network,
+        records,
+        input_size,
+        num_outputs,
+        false,
+        |targets, outputs| {
+            // Per-record MSE = mean over outputs of (target - output)^2.
+            let mut sq_sum: f64 = 0.0;
+            for (t, o) in targets.iter().zip(outputs.iter()) {
+                let diff = (*t - *o) as f64;
+                sq_sum += diff * diff;
+            }
+            sq_sum * inv_outputs
+        },
+    );
 
-    for record_idx in 0..num_records {
-        // Non-fused recurrent path: clear hidden state between records so the
-        // previous record's activations cannot leak into this activation.
-        network.reset_state();
-
-        let base = record_idx * values_per_record;
-        let input_start = base;
-        let input_end = base + input_size;
-        let target_start = input_end;
-        network.activate_into(&records[input_start..input_end], &mut outputs[..]);
-
-        // Per-record MSE = mean over outputs of (target - output)^2.
-        let mut sq_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_start + j] - outputs[j]) as f64;
-            sq_sum += diff * diff;
-        }
-        sum_error += sq_sum * inv_outputs;
-    }
-
-    sum_error / (num_records as f64)
+    sum_error / (layout.num_records as f64)
 }
 
 #[cfg(test)]

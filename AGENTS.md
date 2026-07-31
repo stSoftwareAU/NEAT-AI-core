@@ -117,6 +117,25 @@ The *vectorised* `squash_x4` / `squash_x8` approximations
 (`neat-core/src/squash_simd.rs`) are a different rule and stay where they are —
 only their scalar fallback goes through `inline_squash`.
 
+## One packed-record scan for every loss entry point (Issue #444)
+
+`packed_record_scan` (`neat-core/src/loss.rs`) is the single home of the rule
+that carves a packed `[inputs…, targets…]` buffer into records: the stride is
+`input_size + num_outputs` (`packed_layout`), only whole records count, a
+record's targets start immediately after its inputs, and each record is
+activated statelessly unless the caller declares the network forward-only. All
+eight entry points — the seven `*_sum_batch_packed` kernels and `mse_mean_record`
+— call it with a closure carrying **only** their per-output reduction, so the
+per-record `1/num_outputs` factor lives in the closure (which is what keeps MSLE
+and hinge deliberately un-averaged).
+
+The driver takes a closure and **no mode flags**: SIMD dispatch stays at the
+callers, where it genuinely differs (MSE falls back through the 8-way *and*
+4-way paths; `categorical_error_sum_batch_packed` uses neither and keeps its own
+`num_outputs == 0` guard). If unifying a future entry point needs a boolean to
+switch the driver's behaviour, leave that entry point out rather than growing a
+flag. `neat-core/tests/packed_record_scan.rs` pins the rule across all eight.
+
 ## CI / secrets
 
 - PR pipeline: version bump + **`cargo upgrade --incompatible`**, **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (PAT with **contents:write**).
