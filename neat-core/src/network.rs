@@ -912,14 +912,10 @@ impl CompiledNetwork {
 
                 // hintValues: for aggregate functions we expect hint==activation.
                 // For standard squashes keep the pre-squash value.
-                self.hint_values_buffer[neuron_idx] = match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => activation_limited,
-                    _ => hint_value,
+                self.hint_values_buffer[neuron_idx] = if squash.is_aggregate() {
+                    activation_limited
+                } else {
+                    hint_value
                 };
             }
         }
