@@ -86,12 +86,8 @@ macro_rules! batch_8way_activation {
                     let end_synapse = start_synapse + neuron.num_synapses as usize;
 
                     match squash {
-                        SquashType::Minimum
-                        | SquashType::Maximum
-                        | SquashType::If
-                        | SquashType::Hypotenuse
-                        | SquashType::HypotenuseV2
-                        | SquashType::Mean => {
+                        // Aggregate squashes stay on the exact single-record path.
+                        s if s.is_aggregate() => {
                             for act in [
                                 &mut act0, &mut act1, &mut act2, &mut act3, &mut act4, &mut act5,
                                 &mut act6, &mut act7,
@@ -201,12 +197,8 @@ macro_rules! batch_8way_activation {
                         let end_synapse = start_synapse + neuron.num_synapses as usize;
 
                         match squash {
-                            SquashType::Minimum
-                            | SquashType::Maximum
-                            | SquashType::If
-                            | SquashType::Hypotenuse
-                            | SquashType::HypotenuseV2
-                            | SquashType::Mean => {
+                            // Aggregate squashes stay on the exact single-record path.
+                            s if s.is_aggregate() => {
                                 for act in [&mut act0, &mut act1, &mut act2, &mut act3] {
                                     let value =
                                         neuron_activation_scalar(&$network.synapses, act, neuron);

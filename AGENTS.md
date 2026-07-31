@@ -117,6 +117,28 @@ The *vectorised* `squash_x4` / `squash_x8` approximations
 (`neat-core/src/squash_simd.rs`) are a different rule and stay where they are —
 only their scalar fallback goes through `inline_squash`.
 
+## One aggregate-squash set for dispatch and hints (Issue #446)
+
+`SquashType::is_aggregate` (`neat-core/src/squash.rs`) is the single home of the
+rule that says *which squash types are aggregates* — Minimum, Maximum, If,
+Hypotenuse, HypotenuseV2, Mean: the six that cannot be lane-vectorised and must
+take the exact single-record kernel. That one predicate drives both dispatch
+(`has_aggregate_squash`, the 8-record and 4-record group loops in
+`batch_scoring.rs`, and the same two tiers inside `batch_8way_activation!`) and
+hint semantics (`activate_and_trace` reports the activation itself as the hint;
+`apply_unsquash` prefers the caller's hint). Adding a seventh aggregate type is
+an edit **there and nowhere else** — do not restate the membership list at a
+call site, because a missed site fails **silently**: the new type would be
+routed down the lane-vectorised weighted-sum path and produce numbers that
+differ from `activate()` with no panic to flag it.
+
+`apply_unsquash` is the one site that needs the set as a *pattern* rather than a
+predicate — a guard arm would forfeit the compiler's exhaustiveness check over
+`SquashType`. It uses `aggregate_squash_patterns!()`, the `pub(crate)` macro the
+predicate itself is built from, so there is still exactly one list.
+`neat-core/tests/aggregate_squash_set.rs` pins the rule: membership, batched-vs-
+single-record parity for every squash type, and both hint semantics.
+
 ## One packed-record scan for every loss entry point (Issue #444)
 
 `packed_record_scan` (`neat-core/src/loss.rs`) is the single home of the rule

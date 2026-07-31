@@ -116,6 +116,48 @@ pub enum SquashType {
     Mean = 37, // MEAN: (sum of weighted_inputs) / n + bias
 }
 
+/// The aggregate squash variants as an or-pattern — the single home of the
+/// membership list behind [`SquashType::is_aggregate`] (Issue #446).
+///
+/// Prefer `is_aggregate()`; reach for this macro only where an exhaustive
+/// `match` over `SquashType` needs the set as a *pattern* (a guard arm would
+/// forfeit the compiler's exhaustiveness check).
+macro_rules! aggregate_squash_patterns {
+    () => {
+        $crate::squash::SquashType::Minimum
+            | $crate::squash::SquashType::Maximum
+            | $crate::squash::SquashType::If
+            | $crate::squash::SquashType::Hypotenuse
+            | $crate::squash::SquashType::HypotenuseV2
+            | $crate::squash::SquashType::Mean
+    };
+}
+pub(crate) use aggregate_squash_patterns;
+
+impl SquashType {
+    /// True for the six **aggregate** squashes — `Minimum`, `Maximum`, `If`,
+    /// `Hypotenuse`, `HypotenuseV2` and `Mean` (Issue #446).
+    ///
+    /// These reduce a neuron's whole synapse range at once rather than
+    /// squashing a weighted sum, so they cannot be lane-vectorised: every
+    /// batched kernel routes them to the exact single-record kernel, and
+    /// tracing reports the activation itself as the hint. This predicate is
+    /// the single home of that membership rule — a site that restated the list
+    /// and missed a type would silently route it down the weighted-sum path.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use neat_core::squash::SquashType;
+    /// assert!(SquashType::Mean.is_aggregate());
+    /// assert!(!SquashType::Relu.is_aggregate());
+    /// ```
+    #[must_use]
+    pub const fn is_aggregate(self) -> bool {
+        matches!(self, aggregate_squash_patterns!())
+    }
+}
+
 impl From<u8> for SquashType {
     fn from(v: u8) -> Self {
         match v {

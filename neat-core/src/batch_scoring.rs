@@ -28,8 +28,8 @@
 //!   SIMD tolerance the batched weighted sums already introduce (Issue #230).
 //!   Every other type keeps the scalar inline branch (Identity / ReLU /
 //!   Logistic / Tanh, else `apply_squash`), so its squash stays bit-identical.
-//! - **Aggregate** squashes (Minimum, Maximum, If, Hypotenuse, HypotenuseV2,
-//!   Mean) and the **scalar tail** (`records.len() % 8` after the 4-way step)
+//! - **Aggregate** squashes ([`SquashType::is_aggregate`]) and the **scalar
+//!   tail** (`records.len() % 8` after the 4-way step)
 //!   run the exact single-record path via `neuron_activation_scalar`, so those
 //!   neurons and those records are bit-identical to the reference.
 //!
@@ -298,8 +298,8 @@ impl CompiledNetwork {
     ///   all-standard-squash production topology. Records are transposed so each
     ///   synapse gather reads one cache line.
     /// - **Per-lane fallback** ([`Self::score_batch_per_lane`]) otherwise, which
-    ///   keeps aggregate squashes (Minimum/Maximum/If/Hypotenuse/HypotenuseV2/
-    ///   Mean) on the exact single-record kernels.
+    ///   keeps aggregate squashes ([`SquashType::is_aggregate`]) on the exact
+    ///   single-record kernels.
     ///
     /// Both group records into 8s then a 4-record group then a scalar tail, and
     /// both are bit-identical on the covered standard-squash neurons.
@@ -317,25 +317,18 @@ impl CompiledNetwork {
         }
     }
 
-    /// True when any non-constant neuron uses an aggregate squash whose exact
-    /// kernel needs a contiguous per-lane activation slice (so the interleaved
-    /// fast path does not apply). O(neurons); the scoring batch dwarfs it.
+    /// True when any non-constant neuron uses an aggregate squash
+    /// ([`SquashType::is_aggregate`], the single home of that membership rule)
+    /// whose exact kernel needs a contiguous per-lane activation slice, so the
+    /// interleaved fast path does not apply. O(neurons); the scoring batch
+    /// dwarfs it.
     ///
     /// `pub(crate)` so the fused MSE loss lane can share the same dispatch
     /// decision (Issue #384): standard-only networks route through the
     /// interleaved gather, aggregate networks stay on their exact per-lane path.
     pub(crate) fn has_aggregate_squash(&self) -> bool {
         self.neurons.iter().any(|neuron| {
-            !neuron.is_constant
-                && matches!(
-                    SquashType::from(neuron.squash_type),
-                    SquashType::Minimum
-                        | SquashType::Maximum
-                        | SquashType::If
-                        | SquashType::Hypotenuse
-                        | SquashType::HypotenuseV2
-                        | SquashType::Mean
-                )
+            !neuron.is_constant && SquashType::from(neuron.squash_type).is_aggregate()
         })
     }
 
@@ -517,12 +510,7 @@ impl CompiledNetwork {
 
                 let squash = SquashType::from(neuron.squash_type);
                 match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
+                    s if s.is_aggregate() => {
                         // Aggregate squashes stay on the exact single-record path.
                         act0[actual_idx] = neuron_activation_scalar(&self.synapses, act0, neuron);
                         act1[actual_idx] = neuron_activation_scalar(&self.synapses, act1, neuron);
@@ -613,12 +601,8 @@ impl CompiledNetwork {
 
                 let squash = SquashType::from(neuron.squash_type);
                 match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
+                    s if s.is_aggregate() => {
+                        // Aggregate squashes stay on the exact single-record path.
                         act0[actual_idx] = neuron_activation_scalar(&self.synapses, act0, neuron);
                         act1[actual_idx] = neuron_activation_scalar(&self.synapses, act1, neuron);
                         act2[actual_idx] = neuron_activation_scalar(&self.synapses, act2, neuron);
