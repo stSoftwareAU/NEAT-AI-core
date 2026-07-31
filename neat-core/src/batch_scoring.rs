@@ -139,10 +139,20 @@ impl BatchScratch {
     }
 }
 
-/// Inline squash matching [`CompiledNetwork::activate_into`] exactly: the four
-/// hot types are branched directly, everything else defers to [`apply_squash`].
+/// The single home of the hot-squash dispatch rule (Issue #443): which squash
+/// types are hot enough to branch inline, and the exact scalar formula each of
+/// them uses. The four hot types are branched directly; everything else defers
+/// to [`apply_squash`].
+///
+/// **Every** site that squashes a standard weighted sum calls this — the
+/// single-record forward passes ([`CompiledNetwork::activate`] /
+/// `activate_into` / `activate_and_trace`), the 4-way traced batch, and the
+/// scalar `None`-fallback branch of every batched loss and scoring kernel — so
+/// the SIMD-batched and scalar-tail paths agree bit-for-bit. Promoting a fifth
+/// type to the inline set, or reformulating one of the four, is an edit here
+/// and nowhere else.
 #[inline]
-fn inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
+pub(crate) fn inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
     match squash_type {
         0 => sum,                        // IDENTITY
         1 => sum.max(0.0),               // ReLU

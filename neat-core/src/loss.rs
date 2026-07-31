@@ -6,11 +6,11 @@
 //!
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
-use crate::batch_scoring::{SCORING_LANES, neuron_activation_scalar};
+use crate::batch_scoring::{SCORING_LANES, inline_squash, neuron_activation_scalar};
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
-use crate::squash::{SquashType, apply_squash};
+use crate::squash::SquashType;
 use crate::squash_simd::{squash_x4, squash_x8};
 
 #[cfg(target_arch = "wasm32")]
@@ -119,16 +119,7 @@ macro_rules! batch_8way_activation {
                             let squashed = match squash_x8(squash, sums) {
                                 Some(vec) => vec,
                                 None => {
-                                    let apply_squash_inline = |sum: f32| -> f32 {
-                                        match neuron.squash_type {
-                                            0 => sum,
-                                            1 => sum.max(0.0),
-                                            6 => 1.0 / (1.0 + (-sum).exp()),
-                                            7 => sum.tanh(),
-                                            _ => apply_squash(squash, sum),
-                                        }
-                                    };
-                                    sums.map(apply_squash_inline)
+                                    sums.map(|sum| inline_squash(neuron.squash_type, squash, sum))
                                 }
                             };
 
@@ -232,18 +223,8 @@ macro_rules! batch_8way_activation {
                                 let sums = [sum0, sum1, sum2, sum3];
                                 let squashed = match squash_x4(squash, sums) {
                                     Some(vec) => vec,
-                                    None => {
-                                        let apply_squash_inline = |sum: f32| -> f32 {
-                                            match neuron.squash_type {
-                                                0 => sum,
-                                                1 => sum.max(0.0),
-                                                6 => 1.0 / (1.0 + (-sum).exp()),
-                                                7 => sum.tanh(),
-                                                _ => apply_squash(squash, sum),
-                                            }
-                                        };
-                                        sums.map(apply_squash_inline)
-                                    }
+                                    None => sums
+                                        .map(|sum| inline_squash(neuron.squash_type, squash, sum)),
                                 };
 
                                 // Issue #245: resolve the range once per neuron.
@@ -489,18 +470,7 @@ fn mse_sum_batch_4way(
                         let sums = [sum0, sum1, sum2, sum3];
                         let squashed = match squash_x4(squash, sums) {
                             Some(vec) => vec,
-                            None => {
-                                let apply_squash_inline = |sum: f32| -> f32 {
-                                    match neuron.squash_type {
-                                        0 => sum,                        // IDENTITY
-                                        1 => sum.max(0.0),               // ReLU
-                                        6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-                                        7 => sum.tanh(),                 // TANH
-                                        _ => apply_squash(squash, sum),  // Other
-                                    }
-                                };
-                                sums.map(apply_squash_inline)
-                            }
+                            None => sums.map(|sum| inline_squash(neuron.squash_type, squash, sum)),
                         };
 
                         // Issue #245: resolve the output range once per neuron.
@@ -742,7 +712,7 @@ fn mse_sum_batch_8way_interleaved(
             let sums = [sum0, sum1, sum2, sum3];
             let squashed = match squash_x4(squash, sums) {
                 Some(vec) => vec,
-                None => sums.map(|sum| inline_squash_scalar(neuron.squash_type, squash, sum)),
+                None => sums.map(|sum| inline_squash(neuron.squash_type, squash, sum)),
             };
             let (low, high) = apply_get_range(squash);
             act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
@@ -784,19 +754,6 @@ fn mse_sum_batch_8way_interleaved(
     }
 
     sum_error
-}
-
-/// Scalar inline squash for the four hot standard types, matching the batched
-/// SIMD `None`-fallback branches (and `CompiledNetwork::activate_into`) exactly.
-#[inline]
-fn inline_squash_scalar(squash_type: u8, squash: SquashType, sum: f32) -> f32 {
-    match squash_type {
-        0 => sum,                        // IDENTITY
-        1 => sum.max(0.0),               // ReLU
-        6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-        7 => sum.tanh(),                 // TANH
-        _ => apply_squash(squash, sum),  // Other
-    }
 }
 
 /// Copy one record's `input_size` inputs into a per-lane activation buffer and
@@ -932,18 +889,7 @@ fn mse_sum_batch_8way_scattered(
                         let sums = [sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7];
                         let squashed = match squash_x8(squash, sums) {
                             Some(vec) => vec,
-                            None => {
-                                let apply_squash_inline = |sum: f32| -> f32 {
-                                    match neuron.squash_type {
-                                        0 => sum,                        // IDENTITY
-                                        1 => sum.max(0.0),               // ReLU
-                                        6 => 1.0 / (1.0 + (-sum).exp()), // LOGISTIC
-                                        7 => sum.tanh(),                 // TANH
-                                        _ => apply_squash(squash, sum),  // Other
-                                    }
-                                };
-                                sums.map(apply_squash_inline)
-                            }
+                            None => sums.map(|sum| inline_squash(neuron.squash_type, squash, sum)),
                         };
 
                         // Issue #245: resolve the output range once per neuron
@@ -1058,16 +1004,7 @@ fn mse_sum_batch_8way_scattered(
                             let squashed = match squash_x4(squash, sums) {
                                 Some(vec) => vec,
                                 None => {
-                                    let apply_squash_inline = |sum: f32| -> f32 {
-                                        match neuron.squash_type {
-                                            0 => sum,
-                                            1 => sum.max(0.0),
-                                            6 => 1.0 / (1.0 + (-sum).exp()),
-                                            7 => sum.tanh(),
-                                            _ => apply_squash(squash, sum),
-                                        }
-                                    };
-                                    sums.map(apply_squash_inline)
+                                    sums.map(|sum| inline_squash(neuron.squash_type, squash, sum))
                                 }
                             };
 

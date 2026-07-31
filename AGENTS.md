@@ -99,6 +99,24 @@ routing them through the helper measured ~30–46% slower on the `forward_pass`
 benchmark. Change the helper and those two together, and re-run
 `cargo bench --bench hot_paths -- forward_pass` if you touch them.
 
+## One hot-squash dispatch for standard neurons (Issue #443)
+
+`inline_squash` (`neat-core/src/batch_scoring.rs`) is the single home of the
+*other* half of that rule: which squash types are hot enough to branch inline
+(`0` Identity, `1` ReLU, `6` Logistic, `7` Tanh) and the exact scalar formula
+each uses, with everything else deferring to `apply_squash`. Every site that
+squashes a standard weighted sum calls it — the three single-record forward
+passes in `network.rs`, the 4-way traced batch, and the scalar `None`-fallback
+branch of every batched loss and scoring kernel — so the SIMD-batched and
+scalar-tail paths agree bit-for-bit. Promoting a fifth type to the inline set,
+or reformulating one of the four, is an edit **there and nowhere else**; do not
+re-inline the match. `neat-core/tests/inline_squash_dispatch.rs` pins the rule
+across every public activation path.
+
+The *vectorised* `squash_x4` / `squash_x8` approximations
+(`neat-core/src/squash_simd.rs`) are a different rule and stay where they are —
+only their scalar fallback goes through `inline_squash`.
+
 ## CI / secrets
 
 - PR pipeline: version bump + **`cargo upgrade --incompatible`**, **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (PAT with **contents:write**).
