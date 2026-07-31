@@ -15,6 +15,14 @@
 //!   on `x86_64`, **NEON** on `aarch64`; otherwise scalar (same numerics as the old fallback).
 //! - **SIMD aggregate helpers**: `weighted_sum_of_squares_simd` for Hypotenuse
 //!   and `weighted_sum_for_mean_simd` for Mean activation functions.
+//! - **ISA-neutral scalar layer**: the reference scalar kernels and the
+//!   small-count guard live once in [`scalar`] (Issue #447) and are shared by
+//!   the wasm and native paths.
+
+// Issue #447 - the ISA-neutral scalar layer: reference kernels, the saturating
+// count guard, and the seed-taking tail helpers, shared by the wasm kernels
+// below and the native kernels in `simd_native.rs`.
+pub mod scalar;
 
 // Native single-record/multi-record kernels live in `simd_native.rs`; only the
 // wasm32 implementations below reference `SynapseData` directly.
@@ -44,19 +52,10 @@ pub fn weighted_sum_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    let count = end - start;
-    if count == 0 {
-        return bias;
-    }
-
-    // For very small counts, scalar is faster due to SIMD setup overhead
-    if count < 4 {
-        let mut sum = bias;
-        for i in start..end {
-            let synapse = &synapses[i];
-            sum += activations[synapse.from_index as usize] * synapse.weight;
-        }
-        return sum;
+    // For very small counts, scalar is faster due to SIMD setup overhead.
+    let count = scalar::synapse_count(start, end);
+    if count < scalar::SINGLE_RECORD_SIMD_MIN {
+        return scalar::weighted_sum(synapses, activations, start, end, bias);
     }
 
     // Dual-accumulator approach: two independent accumulators hide FMA latency
@@ -151,19 +150,9 @@ pub fn weighted_sum_of_squares_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    let count = end - start;
-    if count == 0 {
-        return 0.0;
-    }
-
-    if count < 4 {
-        let mut sum_sq = 0.0f32;
-        for i in start..end {
-            let synapse = &synapses[i];
-            let val = activations[synapse.from_index as usize] * synapse.weight;
-            sum_sq += val * val;
-        }
-        return sum_sq;
+    let count = scalar::synapse_count(start, end);
+    if count < scalar::SINGLE_RECORD_SIMD_MIN {
+        return scalar::weighted_sum_of_squares(synapses, activations, start, end);
     }
 
     let mut acc = f32x4_splat(0.0);
@@ -219,18 +208,9 @@ pub fn weighted_sum_no_bias_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    let count = end - start;
-    if count == 0 {
-        return 0.0;
-    }
-
-    if count < 4 {
-        let mut sum = 0.0f32;
-        for i in start..end {
-            let synapse = &synapses[i];
-            sum += activations[synapse.from_index as usize] * synapse.weight;
-        }
-        return sum;
+    let count = scalar::synapse_count(start, end);
+    if count < scalar::SINGLE_RECORD_SIMD_MIN {
+        return scalar::weighted_sum_no_bias(synapses, activations, start, end);
     }
 
     let mut acc = f32x4_splat(0.0);
@@ -283,19 +263,9 @@ pub fn weighted_sum_of_squares_v2_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    let count = end - start;
-    if count == 0 {
-        return 0.0;
-    }
-
-    if count < 4 {
-        let mut sum_sq = 0.0f32;
-        for i in start..end {
-            let synapse = &synapses[i];
-            let val = bias + activations[synapse.from_index as usize] * synapse.weight;
-            sum_sq += val * val;
-        }
-        return sum_sq;
+    let count = scalar::synapse_count(start, end);
+    if count < scalar::SINGLE_RECORD_SIMD_MIN {
+        return scalar::weighted_sum_of_squares_v2(synapses, activations, start, end, bias);
     }
 
     let bias_vec = f32x4_splat(bias);
@@ -356,8 +326,7 @@ pub fn weighted_sum_simd_4records(
     end: usize,
     bias: f32,
 ) -> (f32, f32, f32, f32) {
-    let count = end - start;
-    if count == 0 {
+    if scalar::synapse_count(start, end) == 0 {
         return (bias, bias, bias, bias);
     }
 
@@ -414,8 +383,7 @@ pub fn weighted_sum_simd_8records(
     end: usize,
     bias: f32,
 ) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    let count = end - start;
-    if count == 0 {
+    if scalar::synapse_count(start, end) == 0 {
         return (bias, bias, bias, bias, bias, bias, bias, bias);
     }
 
@@ -474,7 +442,7 @@ pub fn weighted_sum_interleaved_8(
     end: usize,
     bias: f32,
 ) -> [f32; 8] {
-    if end <= start {
+    if scalar::synapse_count(start, end) == 0 {
         return [bias; 8];
     }
 
