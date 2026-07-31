@@ -6,7 +6,7 @@
 //!
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
-use crate::batch_scoring::{SCORING_LANES, inline_squash, neuron_activation_scalar};
+use crate::batch_scoring::{SCORING_LANES, inline_squash, load_record, neuron_activation_scalar};
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
@@ -20,6 +20,13 @@ use wasm_bindgen::prelude::*;
 ///
 /// This macro generates the neuron activation loop for 8 records in parallel,
 /// then calls a provided error calculation closure for each record.
+///
+/// The single home of the batched record-scan skeleton (Issue #445): records are
+/// grouped 8 → 4 → 1, each group's inputs are loaded through the shared
+/// [`load_record`] loader, and the per-record errors accumulate into one `f64`
+/// sum. `$error_fn` carries **only** the per-record reduction
+/// (`(records, target_base, act, output_start, num_outputs) -> f64`), so every
+/// loss kind — MSE included — shares one iteration rule.
 macro_rules! batch_8way_activation {
     ($network:expr_2021, $records:expr_2021, $values_per_record:expr_2021, $input_size:expr_2021, $num_outputs:expr_2021, $num_records:expr_2021, $error_fn:expr_2021) => {{
         let num_neurons = $network.num_neurons;
@@ -56,7 +63,7 @@ macro_rules! batch_8way_activation {
                     6 => &mut act6,
                     _ => &mut act7,
                 };
-                act[..$input_size].copy_from_slice(inputs);
+                load_record(act, inputs, num_inputs);
             }
 
             // Process each neuron for all 8 records
@@ -176,7 +183,7 @@ macro_rules! batch_8way_activation {
                         2 => &mut act2,
                         _ => &mut act3,
                     };
-                    act[..$input_size].copy_from_slice(inputs);
+                    load_record(act, inputs, num_inputs);
                 }
 
                 for (neuron_idx, neuron) in $network.neurons.iter().enumerate() {
@@ -259,7 +266,7 @@ macro_rules! batch_8way_activation {
             let inputs = &$records[base..base + $input_size];
             let target_base = base + $input_size;
 
-            act0[..$input_size].copy_from_slice(inputs);
+            load_record(&mut act0, inputs, num_inputs);
 
             for i in num_inputs..num_neurons {
                 act0[i] = 0.0;
@@ -400,9 +407,11 @@ pub fn mse_sum_batch_packed(
         );
     }
 
-    // Issue #1202 - Use batched 4-record SIMD path for forward-only networks
+    // Issue #1202 - Use batched 4-record SIMD path for forward-only networks.
+    // The shared skeleton's remainder handling is the 4-way path (Issue #445):
+    // with 4..7 records it runs one 4-record group then the scalar tail.
     if forward_only && layout.num_records >= 4 {
-        return mse_sum_batch_4way(
+        return mse_sum_batch_scattered(
             network,
             records,
             layout.values_per_record,
@@ -436,174 +445,6 @@ pub fn mse_sum_batch_packed(
     )
 }
 
-/// Issue #1202 - Batched MSE with 4-record SIMD parallelism.
-///
-/// Processes 4 records simultaneously using SIMD across records.
-/// This is an internal helper that only works for forward-only networks
-/// with standard squash functions. Falls back to single-record for edge cases.
-fn mse_sum_batch_4way(
-    network: &CompiledNetwork,
-    records: &[f32],
-    values_per_record: usize,
-    input_size: usize,
-    num_outputs: usize,
-    num_records: usize,
-) -> f64 {
-    let inv_outputs: f64 = if num_outputs > 0 {
-        1.0 / (num_outputs as f64)
-    } else {
-        return 0.0;
-    };
-
-    // Allocate 4 activation buffers
-    let num_neurons = network.num_neurons;
-    let num_inputs = network.num_inputs;
-    let mut act0: Vec<f32> = vec![0.0; num_neurons];
-    let mut act1: Vec<f32> = vec![0.0; num_neurons];
-    let mut act2: Vec<f32> = vec![0.0; num_neurons];
-    let mut act3: Vec<f32> = vec![0.0; num_neurons];
-
-    let mut sum_error: f64 = 0.0;
-    let output_start = num_neurons - num_outputs;
-
-    // Process in batches of 4
-    let full_batches = num_records / 4;
-    for batch in 0..full_batches {
-        let base_idx = batch * 4;
-
-        // Load inputs for all 4 records
-        for r in 0..4 {
-            let record_idx = base_idx + r;
-            let base = record_idx * values_per_record;
-            let inputs = &records[base..base + input_size];
-            let act = match r {
-                0 => &mut act0,
-                1 => &mut act1,
-                2 => &mut act2,
-                _ => &mut act3,
-            };
-            act[..input_size].copy_from_slice(inputs);
-        }
-
-        // Process each neuron for all 4 records
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                let val = apply_limit_range(SquashType::Identity, neuron.bias);
-                act0[actual_idx] = val;
-                act1[actual_idx] = val;
-                act2[actual_idx] = val;
-                act3[actual_idx] = val;
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                // Only use batched path for standard squash functions
-                match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
-                        // One shared activation rule (Issue #441): the scalar
-                        // helper covers every aggregate squash exactly as the
-                        // single-record reference does.
-                        for act in [&mut act0, &mut act1, &mut act2, &mut act3] {
-                            let value = neuron_activation_scalar(&network.synapses, act, neuron);
-                            act[actual_idx] = value;
-                        }
-                    }
-                    _ => {
-                        // Use SIMD for standard squash functions
-                        let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
-                            &network.synapses,
-                            &act0,
-                            &act1,
-                            &act2,
-                            &act3,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
-
-                        // Vectorised squash for the hot transcendental types
-                        // (Issue #180 approximations, wired into MSE by #246);
-                        // scalar inline fallback otherwise so numerics are
-                        // unchanged for the non-vectorised squashes.
-                        let sums = [sum0, sum1, sum2, sum3];
-                        let squashed = match squash_x4(squash, sums) {
-                            Some(vec) => vec,
-                            None => sums.map(|sum| inline_squash(neuron.squash_type, squash, sum)),
-                        };
-
-                        // Issue #245: resolve the output range once per neuron.
-                        let (low, high) = apply_get_range(squash);
-                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
-                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
-                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
-                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
-                    }
-                }
-            }
-        }
-
-        // Calculate MSE for all 4 records
-        for r in 0..4 {
-            let record_idx = base_idx + r;
-            let target_base = record_idx * values_per_record + input_size;
-            let act = match r {
-                0 => &act0,
-                1 => &act1,
-                2 => &act2,
-                _ => &act3,
-            };
-
-            let mut sq_sum: f64 = 0.0;
-            for j in 0..num_outputs {
-                let diff = (records[target_base + j] - act[output_start + j]) as f64;
-                sq_sum += diff * diff;
-            }
-            sum_error += sq_sum * inv_outputs;
-        }
-    }
-
-    // Handle remainder with single-record processing
-    let remainder_start = full_batches * 4;
-    for record_idx in remainder_start..num_records {
-        let base = record_idx * values_per_record;
-        let inputs = &records[base..base + input_size];
-        let target_base = base + input_size;
-
-        // Reuse act0 for single record
-        act0[..input_size].copy_from_slice(inputs);
-
-        // Reset non-input activations
-        for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
-            *activation = 0.0;
-        }
-
-        // Process each neuron through the one shared activation rule
-        // (Issue #441) so the tail record matches the reference exactly.
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let value = neuron_activation_scalar(&network.synapses, &act0, neuron);
-            act0[num_inputs + neuron_idx] = value;
-        }
-
-        // Calculate MSE
-        let mut sq_sum: f64 = 0.0;
-        for j in 0..num_outputs {
-            let diff = (records[target_base + j] - act0[output_start + j]) as f64;
-            sq_sum += diff * diff;
-        }
-        sum_error += sq_sum * inv_outputs;
-    }
-
-    sum_error
-}
-
 /// Issue #1209 - Batched MSE with 8-record SIMD parallelism.
 ///
 /// Processes 8 records simultaneously using two SIMD vectors across records.
@@ -617,7 +458,7 @@ fn mse_sum_batch_4way(
 /// ([`mse_sum_batch_8way_interleaved`]), so each synapse reads one cache line
 /// instead of eight scattered per-lane buffers; networks containing an
 /// aggregate squash keep the exact per-lane scattered path
-/// ([`mse_sum_batch_8way_scattered`]) unchanged. Both are bit-identical to the
+/// ([`mse_sum_batch_scattered`]) unchanged. Both are bit-identical to the
 /// pre-#384 result.
 fn mse_sum_batch_8way(
     network: &CompiledNetwork,
@@ -628,7 +469,7 @@ fn mse_sum_batch_8way(
     num_records: usize,
 ) -> f64 {
     if network.has_aggregate_squash() {
-        return mse_sum_batch_8way_scattered(
+        return mse_sum_batch_scattered(
             network,
             records,
             values_per_record,
@@ -729,28 +570,13 @@ fn mse_sum_batch_8way_interleaved(
 
     if remaining >= 4 {
         let base_idx = remainder_start;
-        load_batch_input(&mut act0, records, base_idx, values_per_record, input_size);
-        load_batch_input(
-            &mut act1,
-            records,
-            base_idx + 1,
-            values_per_record,
-            input_size,
-        );
-        load_batch_input(
-            &mut act2,
-            records,
-            base_idx + 2,
-            values_per_record,
-            input_size,
-        );
-        load_batch_input(
-            &mut act3,
-            records,
-            base_idx + 3,
-            values_per_record,
-            input_size,
-        );
+        for (r, act) in [&mut act0, &mut act1, &mut act2, &mut act3]
+            .into_iter()
+            .enumerate()
+        {
+            let base = (base_idx + r) * values_per_record;
+            load_record(act, &records[base..base + input_size], num_inputs);
+        }
 
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
             let actual_idx = num_inputs + neuron_idx;
@@ -803,7 +629,7 @@ fn mse_sum_batch_8way_interleaved(
     for record_idx in final_remainder_start..num_records {
         let base = record_idx * values_per_record;
         let target_base = base + input_size;
-        act0[..input_size].copy_from_slice(&records[base..base + input_size]);
+        load_record(&mut act0, &records[base..base + input_size], num_inputs);
         for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
             *activation = 0.0;
         }
@@ -822,25 +648,16 @@ fn mse_sum_batch_8way_interleaved(
     sum_error
 }
 
-/// Copy one record's `input_size` inputs into a per-lane activation buffer and
-/// zero the remaining non-input slots, matching the scattered 8-way loader.
-#[inline]
-fn load_batch_input(
-    act: &mut [f32],
-    records: &[f32],
-    record_idx: usize,
-    values_per_record: usize,
-    input_size: usize,
-) {
-    let base = record_idx * values_per_record;
-    act[..input_size].copy_from_slice(&records[base..base + input_size]);
-}
-
-/// Scattered per-lane fused activate + MSE (Issue #1209), retained unchanged for
-/// networks containing an aggregate squash (Issue #384). Processes 8 records via
-/// two SIMD vectors across records, falling back to 4-way for remainder < 8,
-/// then single-record for remainder < 4.
-fn mse_sum_batch_8way_scattered(
+/// Scattered per-lane fused activate + MSE (Issue #1209), used for networks
+/// containing an aggregate squash (Issue #384) and for the 4..7-record
+/// remainder of any forward-only batch.
+///
+/// Issue #445 — MSE runs the shared [`batch_8way_activation`] skeleton like
+/// every other loss kind: 8-record groups, then a 4-record group, then a scalar
+/// tail, with only the per-record squared-error reduction supplied here. The
+/// numerics are unchanged — the same kernels in the same order as the
+/// hand-inlined 8-way and 4-way copies this replaces.
+fn mse_sum_batch_scattered(
     network: &CompiledNetwork,
     records: &[f32],
     values_per_record: usize,
@@ -854,290 +671,30 @@ fn mse_sum_batch_8way_scattered(
         return 0.0;
     };
 
-    // Allocate 8 activation buffers
-    let num_neurons = network.num_neurons;
-    let num_inputs = network.num_inputs;
-    let mut act0: Vec<f32> = vec![0.0; num_neurons];
-    let mut act1: Vec<f32> = vec![0.0; num_neurons];
-    let mut act2: Vec<f32> = vec![0.0; num_neurons];
-    let mut act3: Vec<f32> = vec![0.0; num_neurons];
-    let mut act4: Vec<f32> = vec![0.0; num_neurons];
-    let mut act5: Vec<f32> = vec![0.0; num_neurons];
-    let mut act6: Vec<f32> = vec![0.0; num_neurons];
-    let mut act7: Vec<f32> = vec![0.0; num_neurons];
-
-    let mut sum_error: f64 = 0.0;
-    let output_start = num_neurons - num_outputs;
-
-    // Process in batches of 8
-    let full_batches = num_records / 8;
-    for batch in 0..full_batches {
-        let base_idx = batch * 8;
-
-        // Load inputs for all 8 records
-        for r in 0..8 {
-            let record_idx = base_idx + r;
-            let base = record_idx * values_per_record;
-            let inputs = &records[base..base + input_size];
-            let act = match r {
-                0 => &mut act0,
-                1 => &mut act1,
-                2 => &mut act2,
-                3 => &mut act3,
-                4 => &mut act4,
-                5 => &mut act5,
-                6 => &mut act6,
-                _ => &mut act7,
-            };
-            act[..input_size].copy_from_slice(inputs);
-        }
-
-        // Process each neuron for all 8 records
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let actual_idx = num_inputs + neuron_idx;
-
-            if neuron.is_constant {
-                let val = apply_limit_range(SquashType::Identity, neuron.bias);
-                act0[actual_idx] = val;
-                act1[actual_idx] = val;
-                act2[actual_idx] = val;
-                act3[actual_idx] = val;
-                act4[actual_idx] = val;
-                act5[actual_idx] = val;
-                act6[actual_idx] = val;
-                act7[actual_idx] = val;
-            } else {
-                let squash = SquashType::from(neuron.squash_type);
-                let start_synapse = neuron.start_synapse as usize;
-                let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                // Only use batched path for standard squash functions
-                match squash {
-                    SquashType::Minimum
-                    | SquashType::Maximum
-                    | SquashType::If
-                    | SquashType::Hypotenuse
-                    | SquashType::HypotenuseV2
-                    | SquashType::Mean => {
-                        // One shared activation rule (Issue #441): the scalar
-                        // helper covers every aggregate squash exactly as the
-                        // single-record reference does.
-                        for act in [
-                            &mut act0, &mut act1, &mut act2, &mut act3, &mut act4, &mut act5,
-                            &mut act6, &mut act7,
-                        ] {
-                            let value = neuron_activation_scalar(&network.synapses, act, neuron);
-                            act[actual_idx] = value;
-                        }
-                    }
-                    _ => {
-                        // Use SIMD for standard squash functions
-                        let (sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7) =
-                            weighted_sum_simd_8records(
-                                &network.synapses,
-                                &act0,
-                                &act1,
-                                &act2,
-                                &act3,
-                                &act4,
-                                &act5,
-                                &act6,
-                                &act7,
-                                start_synapse,
-                                end_synapse,
-                                neuron.bias,
-                            );
-
-                        // Vectorised squash for the hot transcendental types
-                        // (Issue #180 approximations, wired into MSE by #246);
-                        // scalar inline fallback otherwise so numerics are
-                        // unchanged for the non-vectorised squashes.
-                        let sums = [sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7];
-                        let squashed = match squash_x8(squash, sums) {
-                            Some(vec) => vec,
-                            None => sums.map(|sum| inline_squash(neuron.squash_type, squash, sum)),
-                        };
-
-                        // Issue #245: resolve the output range once per neuron
-                        // and clamp all 8 lanes through the bounds.
-                        let (low, high) = apply_get_range(squash);
-                        act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
-                        act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
-                        act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
-                        act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
-                        act4[actual_idx] = apply_limit_range_bounds(low, high, squashed[4]);
-                        act5[actual_idx] = apply_limit_range_bounds(low, high, squashed[5]);
-                        act6[actual_idx] = apply_limit_range_bounds(low, high, squashed[6]);
-                        act7[actual_idx] = apply_limit_range_bounds(low, high, squashed[7]);
-                    }
-                }
-            }
-        }
-
-        // Calculate MSE for all 8 records
-        for r in 0..8 {
-            let record_idx = base_idx + r;
-            let target_base = record_idx * values_per_record + input_size;
-            let act = match r {
-                0 => &act0,
-                1 => &act1,
-                2 => &act2,
-                3 => &act3,
-                4 => &act4,
-                5 => &act5,
-                6 => &act6,
-                _ => &act7,
-            };
-
-            let mut sq_sum: f64 = 0.0;
-            for j in 0..num_outputs {
-                let diff = (records[target_base + j] - act[output_start + j]) as f64;
-                sq_sum += diff * diff;
-            }
-            sum_error += sq_sum * inv_outputs;
-        }
-    }
-
-    // Handle remainder: use 4-way for 4-7 remaining records
-    let remainder_start = full_batches * 8;
-    let remaining = num_records - remainder_start;
-
-    if remaining >= 4 {
-        // Process 4 records at a time
-        let four_way_batches = remaining / 4;
-        for batch in 0..four_way_batches {
-            let base_idx = remainder_start + batch * 4;
-
-            // Load inputs for 4 records
-            for r in 0..4 {
-                let record_idx = base_idx + r;
-                let base = record_idx * values_per_record;
-                let inputs = &records[base..base + input_size];
-                let act = match r {
-                    0 => &mut act0,
-                    1 => &mut act1,
-                    2 => &mut act2,
-                    _ => &mut act3,
-                };
-                act[..input_size].copy_from_slice(inputs);
-            }
-
-            // Process each neuron for all 4 records
-            for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-                let actual_idx = num_inputs + neuron_idx;
-
-                if neuron.is_constant {
-                    let val = apply_limit_range(SquashType::Identity, neuron.bias);
-                    act0[actual_idx] = val;
-                    act1[actual_idx] = val;
-                    act2[actual_idx] = val;
-                    act3[actual_idx] = val;
-                } else {
-                    let squash = SquashType::from(neuron.squash_type);
-                    let start_synapse = neuron.start_synapse as usize;
-                    let end_synapse = start_synapse + neuron.num_synapses as usize;
-
-                    match squash {
-                        SquashType::Minimum
-                        | SquashType::Maximum
-                        | SquashType::If
-                        | SquashType::Hypotenuse
-                        | SquashType::HypotenuseV2
-                        | SquashType::Mean => {
-                            // One shared activation rule (Issue #441).
-                            for act in [&mut act0, &mut act1, &mut act2, &mut act3] {
-                                let value =
-                                    neuron_activation_scalar(&network.synapses, act, neuron);
-                                act[actual_idx] = value;
-                            }
-                        }
-                        _ => {
-                            let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
-                                &network.synapses,
-                                &act0,
-                                &act1,
-                                &act2,
-                                &act3,
-                                start_synapse,
-                                end_synapse,
-                                neuron.bias,
-                            );
-
-                            // Vectorised squash for the hot transcendental
-                            // types (Issue #180 approximations, wired into MSE
-                            // by #246); scalar inline fallback otherwise.
-                            let sums = [sum0, sum1, sum2, sum3];
-                            let squashed = match squash_x4(squash, sums) {
-                                Some(vec) => vec,
-                                None => {
-                                    sums.map(|sum| inline_squash(neuron.squash_type, squash, sum))
-                                }
-                            };
-
-                            // Issue #245: resolve the range once per neuron.
-                            let (low, high) = apply_get_range(squash);
-                            act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
-                            act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
-                            act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
-                            act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
-                        }
-                    }
-                }
-            }
-
-            // Calculate MSE for 4 records
-            for r in 0..4 {
-                let record_idx = base_idx + r;
-                let target_base = record_idx * values_per_record + input_size;
-                let act = match r {
-                    0 => &act0,
-                    1 => &act1,
-                    2 => &act2,
-                    _ => &act3,
-                };
-
-                let mut sq_sum: f64 = 0.0;
-                for j in 0..num_outputs {
-                    let diff = (records[target_base + j] - act[output_start + j]) as f64;
-                    sq_sum += diff * diff;
-                }
-                sum_error += sq_sum * inv_outputs;
-            }
-        }
-    }
-
-    // Handle final remainder with single-record processing
-    let final_remainder_start = remainder_start + (remaining / 4) * 4;
-    for record_idx in final_remainder_start..num_records {
-        let base = record_idx * values_per_record;
-        let inputs = &records[base..base + input_size];
-        let target_base = base + input_size;
-
-        // Reuse act0 for single record
-        act0[..input_size].copy_from_slice(inputs);
-
-        // Reset non-input activations
-        for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
-            *activation = 0.0;
-        }
-
-        // Process each neuron through the one shared activation rule
-        // (Issue #441) so the tail record matches the reference exactly.
-        for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let value = neuron_activation_scalar(&network.synapses, &act0, neuron);
-            act0[num_inputs + neuron_idx] = value;
-        }
-
-        // Calculate MSE
+    // MSE error calculation: mean((target - output)^2)
+    let mse_error = |records: &[f32],
+                     target_base: usize,
+                     act: &[f32],
+                     output_start: usize,
+                     num_outputs: usize|
+     -> f64 {
         let mut sq_sum: f64 = 0.0;
         for j in 0..num_outputs {
-            let diff = (records[target_base + j] - act0[output_start + j]) as f64;
+            let diff = (records[target_base + j] - act[output_start + j]) as f64;
             sq_sum += diff * diff;
         }
-        sum_error += sq_sum * inv_outputs;
-    }
+        sq_sum * inv_outputs
+    };
 
-    sum_error
+    batch_8way_activation!(
+        network,
+        records,
+        values_per_record,
+        input_size,
+        num_outputs,
+        num_records,
+        mse_error
+    )
 }
 
 /// Issue #1209 - Batched MAE with 8-record SIMD parallelism.
@@ -2051,7 +1608,7 @@ mod interleaved_mse_parity {
     //!
     //! `mse_sum_batch_8way` now dispatches standard-squash networks to
     //! [`mse_sum_batch_8way_interleaved`] and aggregate networks to the
-    //! unchanged [`mse_sum_batch_8way_scattered`]. These "what" tests assert the
+    //! unchanged [`mse_sum_batch_scattered`]. These "what" tests assert the
     //! interleaved result is **bit-identical** (`f64::to_bits`) to the scattered
     //! path it replaces across the record counts that straddle the 8-record
     //! group boundary, so a lane-transpose bug, a changed `f64` accumulation
@@ -2166,7 +1723,7 @@ mod interleaved_mse_parity {
             1,
             num_records,
         );
-        let scattered = mse_sum_batch_8way_scattered(
+        let scattered = mse_sum_batch_scattered(
             &net,
             &records,
             values_per_record,
@@ -2205,7 +1762,7 @@ mod interleaved_mse_parity {
     /// scattered kernel — never the interleaved gather (whose standard-only
     /// `squash_x8` fallback would mis-evaluate an aggregate neuron). Asserting
     /// the public `mse_sum_batch_8way` dispatcher is bit-identical to
-    /// `mse_sum_batch_8way_scattered` proves the routing, and keeps aggregate
+    /// `mse_sum_batch_scattered` proves the routing, and keeps aggregate
     /// networks bit-identical to their pre-#384 result.
     #[test]
     fn aggregate_dispatch_stays_on_scattered_path() {
@@ -2232,14 +1789,8 @@ mod interleaved_mse_parity {
                 let records = build_records(n, input_size);
                 let dispatched =
                     mse_sum_batch_8way(&net, &records, values_per_record, input_size, 1, n);
-                let scattered = mse_sum_batch_8way_scattered(
-                    &net,
-                    &records,
-                    values_per_record,
-                    input_size,
-                    1,
-                    n,
-                );
+                let scattered =
+                    mse_sum_batch_scattered(&net, &records, values_per_record, input_size, 1, n);
                 assert_eq!(
                     dispatched.to_bits(),
                     scattered.to_bits(),

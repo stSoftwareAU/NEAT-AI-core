@@ -269,8 +269,13 @@ pub(crate) fn neuron_activation_scalar(
 /// does not cover is zeroed so each record is scored statelessly — buffers are
 /// reused across batches, and every non-input neuron is overwritten during the
 /// forward pass, so no further reset is required.
+///
+/// The single home of the clamp-and-zero loading rule (Issue #445): every
+/// per-lane loader in the batched scoring and fused loss kernels calls this, so
+/// a record's inputs land the same way whether it was scored in a SIMD group or
+/// in the scalar tail.
 #[inline]
-fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
+pub(crate) fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
     let in_len = record.len().min(num_inputs);
     act[..in_len].copy_from_slice(&record[..in_len]);
     act[in_len..num_inputs].fill(0.0);
