@@ -14,7 +14,12 @@
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
-  WORKFLOWS_DIR="${REPO_ROOT}/.github/workflows"
+  export WORKFLOWS_DIR="${REPO_ROOT}/.github/workflows"
+  # Single source of truth for the pin shape (Issue #478). The sweep over the
+  # real workflows and the good/bad literal check below both compile this one
+  # definition, so weakening the gate fails the literal check too — previously
+  # the literal check owned a private copy and passed regardless.
+  export SHA_PIN_RE='^[A-Za-z0-9_.\-/]+@[0-9a-f]{40}$'
 }
 
 # Helper: assert every uses: in every workflow under WORKFLOWS_DIR is pinned
@@ -24,11 +29,11 @@ setup() {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  run python3 - <<PY
+  run python3 - <<'PY'
 import glob, os, re, sys, yaml
 
-workflows_dir = "$WORKFLOWS_DIR"
-sha_re = re.compile(r"^[A-Za-z0-9_.\-/]+@[0-9a-f]{40}$")
+workflows_dir = os.environ["WORKFLOWS_DIR"]
+sha_re = re.compile(os.environ["SHA_PIN_RE"])
 local_re = re.compile(r"^\./")
 
 failures = []
@@ -166,12 +171,13 @@ PY
   [ "$status" -eq 0 ]
 }
 
-# Behavioural sanity check: the regex actually rejects a known-bad ref. If
-# someone weakens the regex this test catches it.
+# Behavioural sanity check: the live gate's regex — read from $SHA_PIN_RE, the
+# same value the sweep above compiles — actually rejects a known-bad ref. If
+# someone weakens the gate this test catches it (Issue #478).
 @test "SHA-pin regex rejects floating tags and branch refs" {
-  run python3 - <<PY
-import re
-sha_re = re.compile(r"^[A-Za-z0-9_.\-/]+@[0-9a-f]{40}$")
+  run python3 - <<'PY'
+import os, re
+sha_re = re.compile(os.environ["SHA_PIN_RE"])
 bad = [
     "actions/checkout@v4",
     "actions/checkout@v4.1.1",

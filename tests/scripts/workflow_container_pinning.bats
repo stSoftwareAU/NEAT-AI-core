@@ -17,18 +17,23 @@
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
-  WORKFLOWS_DIR="${REPO_ROOT}/.github/workflows"
+  export WORKFLOWS_DIR="${REPO_ROOT}/.github/workflows"
+  # Single source of truth for the digest shape (Issue #478). Both sweeps over
+  # the real workflows and the good/bad literal check below compile this one
+  # definition, so weakening the gate fails the literal check too — previously
+  # the literal check owned a private copy and passed regardless.
+  export IMAGE_DIGEST_RE='^[A-Za-z0-9_.\-/:]+@sha256:[0-9a-f]{64}$'
 }
 
 @test "every job container and service image is pinned to a sha256 digest" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  run python3 - <<PY
+  run python3 - <<'PY'
 import glob, os, re, sys, yaml
 
-workflows_dir = "$WORKFLOWS_DIR"
-digest_re = re.compile(r"^[A-Za-z0-9_.\-/:]+@sha256:[0-9a-f]{64}$")
+workflows_dir = os.environ["WORKFLOWS_DIR"]
+digest_re = re.compile(os.environ["IMAGE_DIGEST_RE"])
 
 def image_of(spec):
     """A container/service entry is either a bare image string or a mapping."""
@@ -76,11 +81,11 @@ PY
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  run python3 - <<PY
+  run python3 - <<'PY'
 import glob, os, re, sys, yaml
 
-workflows_dir = "$WORKFLOWS_DIR"
-digest_re = re.compile(r"^[A-Za-z0-9_.\-/:]+@sha256:[0-9a-f]{64}$")
+workflows_dir = os.environ["WORKFLOWS_DIR"]
+digest_re = re.compile(os.environ["IMAGE_DIGEST_RE"])
 
 def env_blocks(data):
     yield "workflow", data.get("env") or {}
@@ -152,12 +157,13 @@ PY
   [ "$status" -eq 0 ]
 }
 
-# Behavioural sanity check: the digest regex must reject the mutable forms
-# this gate exists to keep out. If someone weakens it, this test fails.
+# Behavioural sanity check: the live gate's regex — read from $IMAGE_DIGEST_RE,
+# the same value the sweeps above compile — must reject the mutable forms this
+# gate exists to keep out. If someone weakens it, this test fails (Issue #478).
 @test "digest regex rejects bare image names and mutable tags" {
-  run python3 - <<PY
-import re
-digest_re = re.compile(r"^[A-Za-z0-9_.\-/:]+@sha256:[0-9a-f]{64}\$")
+  run python3 - <<'PY'
+import os, re
+digest_re = re.compile(os.environ["IMAGE_DIGEST_RE"])
 bad = [
     "semgrep/semgrep",
     "semgrep/semgrep:latest",
