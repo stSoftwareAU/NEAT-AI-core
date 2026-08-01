@@ -428,7 +428,12 @@ jobs:
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
+        # Issue #477 — this job only type-checks committed .ts helpers and
+        # never touches the remote, so the persisted GITHUB_TOKEN would be
+        # pure blast radius (same rule as rust-gates/validation).
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
 
       - name: Install Deno
         # denoland/setup-deno@v2.0.5

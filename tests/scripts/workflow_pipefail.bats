@@ -11,6 +11,10 @@
 # These are "what" tests: they extract the step's real script from the workflow,
 # execute it under the same shell GitHub would use with a stub `bump-deps.sh`,
 # and assert on the observed exit status — not on source text.
+#
+# The step extractor is shared via helpers.bash (Issue #477).
+
+load helpers
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
@@ -18,47 +22,6 @@ setup() {
   UPGRADE_WF="${WORKFLOWS_DIR}/upgrade-dependencies.yml"
   WORK="${BATS_TEST_TMPDIR}/step"
   mkdir -p "$WORK"
-}
-
-# Write the named step's script to $WORK/step.sh and the argv GitHub would
-# launch it with to $WORK/shell.cmd.
-extract_step() {
-  python3 - "$1" "$2" "$WORK" <<'PY'
-import os, sys, yaml
-
-workflow, needle, out = sys.argv[1:4]
-with open(workflow) as fh:
-    data = yaml.safe_load(fh)
-
-def declared_shell(step, job):
-    for scope in (step, job.get("defaults", {}).get("run", {}),
-                  (data.get("defaults") or {}).get("run", {})):
-        if scope.get("shell"):
-            return scope["shell"]
-    return None
-
-for job in (data.get("jobs") or {}).values():
-    for step in job.get("steps") or []:
-        if needle not in (step.get("name") or "") or "run" not in step:
-            continue
-        body = step["run"]
-        assert "${{" not in body, "step body interpolates a GitHub expression"
-        shell = declared_shell(step, job)
-        # GitHub: no `shell:` → `bash -e {0}`; `shell: bash` → `bash
-        # --noprofile --norc -eo pipefail {0}`.
-        argv = {
-            None: "bash -e",
-            "bash": "bash --noprofile --norc -eo pipefail",
-        }.get(shell)
-        assert argv, f"unsupported shell for this harness: {shell!r}"
-        with open(os.path.join(out, "step.sh"), "w") as fh:
-            fh.write(body)
-        with open(os.path.join(out, "shell.cmd"), "w") as fh:
-            fh.write(argv)
-        sys.exit(0)
-
-sys.exit(f"no step named like {needle!r} with a run: block in {workflow}")
-PY
 }
 
 # Run the extracted step with a stub `bump-deps.sh` that exits $1.
@@ -80,7 +43,7 @@ EOF
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$UPGRADE_WF" "Refresh dependencies via bump-deps.sh"
+  extract_step "$UPGRADE_WF" "Refresh dependencies via bump-deps.sh" "$WORK"
   run run_step_with_stub 7
   [ "$status" -ne 0 ]
 }
@@ -89,7 +52,7 @@ EOF
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$UPGRADE_WF" "Refresh dependencies via bump-deps.sh"
+  extract_step "$UPGRADE_WF" "Refresh dependencies via bump-deps.sh" "$WORK"
   run run_step_with_stub 0
   [ "$status" -eq 0 ]
 }
@@ -99,7 +62,7 @@ EOF
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$UPGRADE_WF" "Refresh dependencies via bump-deps.sh"
+  extract_step "$UPGRADE_WF" "Refresh dependencies via bump-deps.sh" "$WORK"
   run run_step_with_stub 0
   [ "$status" -eq 0 ]
   run cat "${WORK}/upgrade.log"

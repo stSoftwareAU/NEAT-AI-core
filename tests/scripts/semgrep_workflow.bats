@@ -9,6 +9,11 @@
 #
 # These are "what" tests — they assert on the YAML the runner will execute,
 # not on commentary or surrounding prose.
+#
+# The branch-filter glob model and the step extractor are shared via
+# helpers.bash (Issue #477).
+
+load helpers
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
@@ -25,45 +30,11 @@ setup() {
 }
 
 @test "semgrep.yml pull_request filter matches milestone branches" {
-  if ! command -v python3 &>/dev/null; then
-    skip "python3 required for YAML parsing"
-  fi
-  run python3 - <<PY
-import re, yaml
-data = yaml.safe_load(open("$WF"))
-# YAML parses bare 'on:' as boolean True in some loaders; tolerate both.
-triggers = data.get("on") or data.get(True)
-pr = triggers["pull_request"]
-patterns = pr.get("branches") or []
-assert patterns, f"pull_request has no branches filter: {pr}"
-
-def matches(pattern, branch):
-    # GitHub filter globbing: ** crosses '/', * does not.
-    regex = ""
-    i = 0
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "*":
-            if pattern[i + 1 : i + 2] == "*":
-                regex += ".*"
-                i += 2
-                continue
-            regex += "[^/]*"
-        else:
-            regex += re.escape(c)
-        i += 1
-    return re.fullmatch(regex, branch) is not None
-
-branch = "milestone/clean-up-23-jul"
-assert any(matches(p, branch) for p in patterns), (
-    f"no branch pattern matches {branch!r}: {patterns}"
-)
-# The existing default branches must still match.
-for keep in ("Develop", "main"):
-    assert any(matches(p, keep) for p in patterns), (
-        f"no branch pattern matches {keep!r}: {patterns}"
-    )
-PY
+  require_python3
+  # The existing default branches must still match too.
+  run assert_pr_branch_filter_matches "$WF" \
+    "milestone/clean-up-23-jul" Develop main
+  echo "$output"
   [ "$status" -eq 0 ]
 }
 
@@ -88,21 +59,6 @@ PY
 # timeout there failed the job before any step ran and surfaced as a SAST
 # failure with no scan performed. The pull now lives in a step whose backoff we
 # own. These tests execute that step's real script against a stubbed `docker`.
-
-# Writes the named step's `run:` script to $1. Returns 1 if the step is absent.
-extract_step_script() {
-  python3 - "$1" "$2" <<'PY'
-import sys, yaml
-out_path, step_name = sys.argv[1], sys.argv[2]
-data = yaml.safe_load(open(__import__("os").environ["WF"]))
-steps = data["jobs"]["semgrep"]["steps"]
-for step in steps:
-    if step.get("name") == step_name:
-        open(out_path, "w").write(step["run"])
-        sys.exit(0)
-sys.exit(1)
-PY
-}
 
 # Stubs `docker` (fails the first $1 invocations, then succeeds), `pipx` (exits
 # with $2, default 0) and `sleep` (returns immediately so backoff does not slow
@@ -143,12 +99,11 @@ STUB
   export GITHUB_OUTPUT
 }
 
-# Sets up the "Obtain semgrep" script at $BATS_TEST_TMPDIR/pull.sh and the
+# Sets up the "Obtain semgrep" script at $BATS_TEST_TMPDIR/step.sh and the
 # environment the step reads. $1 = docker failures before success, $2 = pipx
 # exit status.
 setup_obtain_step() {
-  export WF
-  extract_step_script "${BATS_TEST_TMPDIR}/pull.sh" "Obtain semgrep"
+  extract_step "$WF" "Obtain semgrep" "$BATS_TEST_TMPDIR"
   make_stubs "$1" "${2:-0}"
   export SEMGREP_IMAGE="semgrep/semgrep@sha256:$(printf 'a%.0s' {1..64})"
   export SEMGREP_VERSION="1.170.1"
@@ -160,7 +115,7 @@ setup_obtain_step() {
   fi
   setup_obtain_step 2 # two registry timeouts, then a good pull
 
-  run bash "${BATS_TEST_TMPDIR}/pull.sh"
+  run bash "${BATS_TEST_TMPDIR}/step.sh"
   [ "$status" -eq 0 ]
   # Three attempts total: the runner's own 3-attempt job-init pull is what
   # failed here, so a single retry would not have been enough.
@@ -179,7 +134,7 @@ setup_obtain_step() {
   fi
   setup_obtain_step 99 0 # registry never recovers, PyPI works
 
-  run bash "${BATS_TEST_TMPDIR}/pull.sh"
+  run bash "${BATS_TEST_TMPDIR}/step.sh"
   [ "$status" -eq 0 ]
   [ "$(cat "${BATS_TEST_TMPDIR}/calls")" -eq 5 ]
   # The fallback must pin the same version the digest pins — never floating.
@@ -193,7 +148,7 @@ setup_obtain_step() {
   fi
   setup_obtain_step 99 1 # registry never recovers and the PyPI install fails
 
-  run bash "${BATS_TEST_TMPDIR}/pull.sh"
+  run bash "${BATS_TEST_TMPDIR}/step.sh"
   # An unobtainable scanner must never be reported as a clean scan.
   [ "$status" -ne 0 ]
   [[ "$output" == *"no SAST scan ran"* ]]
