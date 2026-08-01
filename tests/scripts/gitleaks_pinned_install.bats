@@ -13,16 +13,16 @@
 #
 # These are "what" tests — they assert on the YAML the runner will
 # execute, not on commentary or surrounding prose.
+#
+# The pinned-install assertions, the comment stripper and the branch-filter glob
+# model are shared with wasm_pack_pinned_install.bats via helpers.bash
+# (Issue #477).
+
+load helpers
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   WF="${REPO_ROOT}/.github/workflows/gitleaks.yml"
-}
-
-# Strip YAML comments so the assertions can't be defeated by leaving the
-# original `uses: gitleaks/gitleaks-action@…` line behind as a comment.
-strip_comments() {
-  sed -E 's/[[:space:]]*#.*$//' "$1"
 }
 
 @test "gitleaks.yml does not use the Node-based gitleaks-action" {
@@ -35,30 +35,14 @@ strip_comments() {
   fi
 }
 
-@test "gitleaks.yml installs gitleaks from a version-pinned release URL" {
+# Download from the gitleaks release archive at a specific tag (either a literal
+# vX.Y.Z or a v${GITLEAKS_VERSION} expansion), verified with sha256sum -c
+# against pinned version + SHA-256 env vars.
+@test "gitleaks.yml installs gitleaks from a version- and checksum-pinned release" {
   [ -f "$WF" ]
-  # Require a download from the gitleaks release archive at a specific tag
-  # (either a literal vX.Y.Z or a v${GITLEAKS_VERSION} env expansion — the
-  # version itself is asserted by a sibling test).
-  run grep -E 'github\.com/gitleaks/gitleaks/releases/download/v(\$\{?GITLEAKS_VERSION\}?|[0-9]+\.[0-9]+\.[0-9]+)/' "$WF"
-  [ "$status" -eq 0 ]
-}
-
-@test "gitleaks.yml verifies the gitleaks tarball with sha256sum -c" {
-  [ -f "$WF" ]
-  run grep -E 'sha256sum[[:space:]]+-c' "$WF"
-  [ "$status" -eq 0 ]
-}
-
-@test "gitleaks.yml declares a 64-hex GITLEAKS_SHA256 env var" {
-  [ -f "$WF" ]
-  run grep -E 'GITLEAKS_SHA256:[[:space:]]*"?[0-9a-f]{64}"?' "$WF"
-  [ "$status" -eq 0 ]
-}
-
-@test "gitleaks.yml declares a semver GITLEAKS_VERSION env var" {
-  [ -f "$WF" ]
-  run grep -E 'GITLEAKS_VERSION:[[:space:]]*"?[0-9]+\.[0-9]+\.[0-9]+"?' "$WF"
+  run assert_pinned_cli_install "$WF" GITLEAKS \
+    'github\.com/gitleaks/gitleaks/releases/download/v(\$\{?GITLEAKS_VERSION\}?|[0-9]+\.[0-9]+\.[0-9]+)/'
+  echo "$output"
   [ "$status" -eq 0 ]
 }
 
@@ -67,44 +51,11 @@ strip_comments() {
 # ["*"] never matches milestone/<slug> and the secret scan silently skips those
 # PRs. The filter must match milestone branches so the gate runs on them too.
 @test "gitleaks.yml pull_request filter matches milestone branches" {
-  if ! command -v python3 &>/dev/null; then
-    skip "python3 required for YAML parsing"
-  fi
-  run python3 - <<PY
-import re, yaml
-data = yaml.safe_load(open("$WF"))
-triggers = data.get("on") or data.get(True)
-pr = triggers["pull_request"]
-patterns = pr.get("branches") or []
-assert patterns, f"pull_request has no branches filter: {pr}"
-
-def matches(pattern, branch):
-    # GitHub filter globbing: ** crosses '/', * does not.
-    regex = ""
-    i = 0
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "*":
-            if pattern[i + 1 : i + 2] == "*":
-                regex += ".*"
-                i += 2
-                continue
-            regex += "[^/]*"
-        else:
-            regex += re.escape(c)
-        i += 1
-    return re.fullmatch(regex, branch) is not None
-
-branch = "milestone/clean-up-23-jul"
-assert any(matches(p, branch) for p in patterns), (
-    f"no branch pattern matches {branch!r}: {patterns}"
-)
-# The existing default branches must still match.
-for keep in ("Develop", "main"):
-    assert any(matches(p, keep) for p in patterns), (
-        f"no branch pattern matches {keep!r}: {patterns}"
-    )
-PY
+  require_python3
+  # The existing default branches must still match too.
+  run assert_pr_branch_filter_matches "$WF" \
+    "milestone/clean-up-23-jul" Develop main
+  echo "$output"
   [ "$status" -eq 0 ]
 }
 

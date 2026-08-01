@@ -12,6 +12,10 @@
 # and re-verified), and the behavioural tests execute the workflow's real step
 # scripts under the same shell GitHub would use and assert on exit status and
 # on-disk results — never on incidental source text.
+#
+# The step extractor is shared via helpers.bash (Issue #477).
+
+load helpers
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
@@ -19,47 +23,6 @@ setup() {
   SIDECAR="wasm_activation-pkg.tar.gz.sha256"
   WORK="${BATS_TEST_TMPDIR}/step"
   mkdir -p "$WORK"
-}
-
-# Write the run: body of the first step whose name contains $2 in workflow $1 to
-# $WORK/step.sh, and the argv GitHub would launch it with to $WORK/shell.cmd.
-extract_step() {
-  python3 - "$1" "$2" "$WORK" <<'PY'
-import os, sys, yaml
-
-workflow, needle, out = sys.argv[1:4]
-with open(workflow) as fh:
-    data = yaml.safe_load(fh)
-
-def declared_shell(step, job):
-    for scope in (step, job.get("defaults", {}).get("run", {}),
-                  (data.get("defaults") or {}).get("run", {})):
-        if scope.get("shell"):
-            return scope["shell"]
-    return None
-
-for job in (data.get("jobs") or {}).values():
-    for step in job.get("steps") or []:
-        if needle not in (step.get("name") or "") or "run" not in step:
-            continue
-        body = step["run"]
-        assert "${{" not in body, "step body interpolates a GitHub expression"
-        shell = declared_shell(step, job)
-        # GitHub: no `shell:` → `bash -e {0}`; `shell: bash` → `bash
-        # --noprofile --norc -eo pipefail {0}`.
-        argv = {
-            None: "bash -e",
-            "bash": "bash --noprofile --norc -eo pipefail",
-        }.get(shell)
-        assert argv, f"unsupported shell for this harness: {shell!r}"
-        with open(os.path.join(out, "step.sh"), "w") as fh:
-            fh.write(body)
-        with open(os.path.join(out, "shell.cmd"), "w") as fh:
-            fh.write(argv)
-        sys.exit(0)
-
-sys.exit(f"no step named like {needle!r} with a run: block in {workflow}")
-PY
 }
 
 # --- Wiring: the sidecar reaches the Release ---------------------------------
@@ -157,7 +120,7 @@ PY
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$WORKFLOW" "sidecar"
+  extract_step "$WORKFLOW" "sidecar" "$WORK"
   work="${BATS_TEST_TMPDIR}/gen"
   mkdir -p "$work"
   printf 'not a real bundle, but real bytes\n' >"$work/wasm_activation-pkg.tar.gz"
@@ -177,7 +140,7 @@ PY
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$WORKFLOW" "sidecar"
+  extract_step "$WORKFLOW" "sidecar" "$WORK"
   work="${BATS_TEST_TMPDIR}/gen-missing"
   mkdir -p "$work"
   run bash -c "cd '$work' && bash -e '$WORK/step.sh'"
@@ -221,7 +184,7 @@ SH
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$WORKFLOW" "Verify published bundle"
+  extract_step "$WORKFLOW" "Verify published bundle" "$WORK"
   work="${BATS_TEST_TMPDIR}/verify-ok"
   stub_workspace "$work"
   printf 'bundle bytes\n' >"$work/fixture/wasm_activation-pkg.tar.gz"
@@ -236,7 +199,7 @@ SH
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$WORKFLOW" "Verify published bundle"
+  extract_step "$WORKFLOW" "Verify published bundle" "$WORK"
   work="${BATS_TEST_TMPDIR}/verify-mismatch"
   stub_workspace "$work"
   printf 'bundle bytes\n' >"$work/fixture/wasm_activation-pkg.tar.gz"
@@ -253,7 +216,7 @@ SH
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
-  extract_step "$WORKFLOW" "Verify published bundle"
+  extract_step "$WORKFLOW" "Verify published bundle" "$WORK"
   work="${BATS_TEST_TMPDIR}/verify-missing"
   stub_workspace "$work"
   printf 'bundle bytes\n' >"$work/fixture/wasm_activation-pkg.tar.gz"
