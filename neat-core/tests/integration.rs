@@ -3,9 +3,9 @@
 mod common;
 
 use neat_core::{
-    SquashType, SynapseType, apply_calculate_error, apply_derivative, apply_get_range,
-    apply_limit_range, apply_safe_zone_adjustment, apply_squash, apply_unsquash,
-    apply_validate_range, compile_creature, parse_creature_json,
+    SquashType, apply_calculate_error, apply_get_range, apply_limit_range,
+    apply_safe_zone_adjustment, apply_squash, apply_validate_range, compile_creature,
+    parse_creature_json,
 };
 
 #[test]
@@ -22,46 +22,10 @@ fn squash_identity_round_trip() {
 }
 
 // --- Crate-root API tests (moved from `src/lib.rs`) ---
-
-#[test]
-fn test_relu() {
-    assert_eq!(apply_squash(SquashType::Relu, 1.0), 1.0);
-    assert_eq!(apply_squash(SquashType::Relu, -1.0), 0.0);
-    assert_eq!(apply_squash(SquashType::Relu, 0.0), 0.0);
-}
-
-#[test]
-fn test_tanh() {
-    let result = apply_squash(SquashType::Tanh, 0.0);
-    assert!((result - 0.0).abs() < 1e-6);
-}
-
-#[test]
-fn test_logistic() {
-    let result = apply_squash(SquashType::Logistic, 0.0);
-    assert!((result - 0.5).abs() < 1e-6);
-}
-
-#[test]
-fn test_derivative_identity() {
-    assert_eq!(apply_derivative(SquashType::Identity, 0.0), 1.0);
-    assert_eq!(apply_derivative(SquashType::Identity, 5.0), 1.0);
-    assert_eq!(apply_derivative(SquashType::Identity, -5.0), 1.0);
-}
-
-#[test]
-fn test_derivative_relu() {
-    assert_eq!(apply_derivative(SquashType::Relu, 1.0), 1.0);
-    assert_eq!(apply_derivative(SquashType::Relu, -1.0), 0.0);
-    assert_eq!(apply_derivative(SquashType::Relu, 0.0), 0.0);
-}
-
-#[test]
-fn test_unsquash_identity() {
-    assert_eq!(apply_unsquash(SquashType::Identity, 0.0, 0.0), 0.0);
-    assert_eq!(apply_unsquash(SquashType::Identity, 5.0, 0.0), 5.0);
-    assert_eq!(apply_unsquash(SquashType::Identity, -5.0, 0.0), -5.0);
-}
+//
+// The squash / derivative / unsquash contracts are pinned by the dedicated
+// per-module suites (`tests/squash.rs`, `tests/derivative.rs`,
+// `tests/unsquash.rs`); this file keeps only what those do not cover.
 
 #[test]
 fn test_calculate_error() {
@@ -92,11 +56,4 @@ fn test_validate_range() {
 fn test_limit_range() {
     let result = apply_limit_range(SquashType::Logistic, 2.0);
     assert!((result - 1.0).abs() < 1e-6);
-}
-
-#[test]
-fn test_version_constant() {
-    // Verify the crate compiles and basic types are accessible
-    let _ = SquashType::Relu;
-    let _ = SynapseType::Standard;
 }
