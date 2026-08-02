@@ -1,11 +1,9 @@
 //! Compiled network activation / trace batch tests (moved from `src/network.rs`).
 //!
-//! Issue #476 — the batch-vs-single parity contract is expressed **once**, in
-//! `assert_batch_matches_single`, and driven from the `parity_cases()` table.
-//! `split_batch_records` derives every record's `start`/`len` by walking the
-//! length header in a loop, so slicing one record with another record's length
-//! (the `len0`/`len2` transcription bug the hand-copied variants carried) is
-//! not expressible.
+//! Issue #484 — this file is the sole home of the `activate_and_trace_batch_4way`
+//! parity tests; the duplicate copy in `src/network.rs` `mod tests` is gone. New
+//! batch-parity cases belong here, exercised through the public API, so the trace
+//! header layout only ever has to be updated in one place.
 
 use neat_core::{CompiledNetwork, NeuronData, SynapseData};
 
