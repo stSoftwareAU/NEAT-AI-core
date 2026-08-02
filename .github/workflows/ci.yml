@@ -424,11 +424,19 @@ jobs:
     name: TypeScript validity gate
     runs-on: ubuntu-latest
     timeout-minutes: 10 # deno check over committed .ts helpers
+    # Issue #482 — least-privilege GITHUB_TOKEN. This job only reads the repo
+    # (checkout, install Deno, deno check); it never writes.
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          # Issue #482 — keep the workflow token out of .git/config; nothing in
+          # this read-only job pushes back.
+          persist-credentials: false
 
       - name: Install Deno
         # denoland/setup-deno@v2.0.5
