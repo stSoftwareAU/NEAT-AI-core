@@ -1,6 +1,9 @@
 # NEAT-AI-Discovery–style PR pipeline: auto patch version + rustfmt push, then strict checks.
-# Requires repository secret ACTIONS_PUSH (PAT with contents:write on this repo) so bots can
-# push to PR branches; default GITHUB_TOKEN alone is often insufficient.
+# Requires the org-level secret ACTIONS_PUSH (PAT with contents:write) so bots can push to PR
+# branches; default GITHUB_TOKEN alone is often insufficient. Issue #483 — this repository holds
+# no Actions secrets of its own, so ACTIONS_PUSH resolves from the organisation and its blast
+# radius is org-wide. It is therefore handed only to the single step that pushes, never persisted
+# into .git/config while PR-authored code (bump-deps.sh, cargo fmt) runs.
 name: CI
 
 on:
@@ -45,11 +48,17 @@ jobs:
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
+        # Issue #483 — no PAT here and `persist-credentials: false`, so nothing
+        # writes ACTIONS_PUSH into .git/config. This job later executes
+        # `./bump-deps.sh` from the PR head; a persisted credential would be
+        # readable by that PR-authored code for the whole job. The repo is
+        # public, so the default GITHUB_TOKEN clones and `git pull` works
+        # anonymously — only the final push needs the PAT.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-          token: ${{ secrets.ACTIONS_PUSH }}
+          persist-credentials: false
 
       - name: Configure Git
         run: |
@@ -169,15 +178,18 @@ jobs:
           cargo outdated -R || true
 
       - name: Commit version and dependency changes
+        # Issue #483 — the PAT is supplied just-in-time to this one step and
+        # pushed through an explicit remote URL, so it never touches disk.
         env:
           HEAD_REF: ${{ github.head_ref }}
+          PUSH_TOKEN: ${{ secrets.ACTIONS_PUSH }}
         run: |
           git add -A
           if git diff --cached --quiet; then
             echo "No changes after version bump / dependency upgrade"
           else
             git commit -m "chore: auto-increment versions for changed projects"
-            git push origin "$HEAD_REF"
+            git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$HEAD_REF"
           fi
 
   # Issue #251 — fail a PR whose breaking change ships on a patch-only bump.
@@ -243,11 +255,15 @@ jobs:
     steps:
       - name: Checkout code
         # actions/checkout@v6.0.2
+        # Issue #483 — same rule as version-increment: no PAT on the checkout
+        # and no persisted credential, because the steps in between run
+        # PR-authored content (`cargo fmt` over the PR head). The PAT is
+        # supplied only to the push step below.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
-          token: ${{ secrets.ACTIONS_PUSH }}
+          persist-credentials: false
 
       - name: Ensure bash scripts are executable
         run: |
@@ -275,13 +291,14 @@ jobs:
         id: fmt_commit
         env:
           HEAD_REF: ${{ github.head_ref }}
+          PUSH_TOKEN: ${{ secrets.ACTIONS_PUSH }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
             git add -A
             git commit -m "chore: apply rustfmt fixes"
-            git push origin "$HEAD_REF"
+            git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$HEAD_REF"
             echo "pushed=true" >> "$GITHUB_OUTPUT"
           else
             echo "pushed=false" >> "$GITHUB_OUTPUT"

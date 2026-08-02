@@ -173,6 +173,83 @@ sys.exit(f"no step named like {needle!r} with a run: block in {workflow}")
 PY
 }
 
+# assert_just_in_time_push_credential <workflow> <job> <secret> — the job must
+# never leave <secret> where code it did not write can read it (Issue #483).
+# Concretely: every checkout in the job runs with `persist-credentials: false`
+# (so no credential lands in .git/config while PR-head scripts such as
+# bump-deps.sh execute), the secret is not exposed job-wide or to any
+# non-pushing step, and the one step that pushes receives it as its own env var
+# and pushes to an explicitly authenticated https remote rather than `origin`.
+assert_just_in_time_push_credential() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import re
+import sys
+
+import yaml
+
+workflow, job_name, secret = sys.argv[1], sys.argv[2], sys.argv[3]
+data = yaml.safe_load(open(workflow))
+jobs = data.get("jobs") or {}
+assert job_name in jobs, f"no {job_name!r} job; jobs are {sorted(jobs)}"
+job = jobs[job_name]
+steps = job.get("steps") or []
+ref = re.compile(r"\$\{\{[^}]*\bsecrets\." + re.escape(secret) + r"\b")
+
+
+def mentions(node):
+    return bool(ref.search(yaml.safe_dump(node, default_flow_style=False)))
+
+
+checkouts = [
+    i for i, s in enumerate(steps)
+    if str(s.get("uses", "")).startswith("actions/checkout@")
+]
+assert checkouts, f"{job_name}: no actions/checkout step found"
+for i in checkouts:
+    with_ = steps[i].get("with") or {}
+    assert with_.get("persist-credentials") is False, (
+        f"{job_name}: checkout persists credentials into .git/config: {steps[i]}"
+    )
+    assert not mentions(with_), (
+        f"{job_name}: checkout is handed {secret}; the PAT must reach only the "
+        f"pushing step"
+    )
+
+assert not mentions(job.get("env") or {}), (
+    f"{job_name}: {secret} is exposed to every step through job-level env"
+)
+
+pushers = [i for i, s in enumerate(steps) if "git push" in (s.get("run") or "")]
+assert pushers, f"{job_name}: no step runs git push"
+for i, step in enumerate(steps):
+    if i in pushers:
+        continue
+    assert not mentions(step), (
+        f"{job_name}: non-pushing step {step.get('name')!r} sees {secret}"
+    )
+
+for i in pushers:
+    step = steps[i]
+    env = step.get("env") or {}
+    names = sorted(k for k, v in env.items() if ref.search(str(v)))
+    assert names, (
+        f"{job_name}: pushing step {step.get('name')!r} does not receive "
+        f"{secret} just-in-time as a step env var"
+    )
+    for line in step["run"].splitlines():
+        if not re.search(r"\bgit push\b", line):
+            continue
+        assert re.search(r'git push\s+"?https://', line), (
+            f"{job_name}: push target is not an explicitly authenticated https "
+            f"remote — `origin` carries no credential once persist-credentials "
+            f"is false: {line.strip()!r}"
+        )
+        assert any(n in line for n in names), (
+            f"{job_name}: push URL does not interpolate {names}: {line.strip()!r}"
+        )
+PY
+}
+
 # assert_cyclonedx_sbom_release <workflow> <job> — the job must build a
 # CycloneDX SBOM with a version-pinned, --locked cargo-cyclonedx install and
 # publish the .cdx.json as an asset of the Release it cuts, generated before the
