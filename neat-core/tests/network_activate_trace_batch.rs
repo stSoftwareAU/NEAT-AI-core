@@ -1,4 +1,9 @@
 //! Compiled network activation / trace batch tests (moved from `src/network.rs`).
+//!
+//! Issue #484 — this file is the sole home of the `activate_and_trace_batch_4way`
+//! parity tests; the duplicate copy in `src/network.rs` `mod tests` is gone. New
+//! batch-parity cases belong here, exercised through the public API, so the trace
+//! header layout only ever has to be updated in one place.
 
 use neat_core::{CompiledNetwork, NeuronData, SynapseData};
 
