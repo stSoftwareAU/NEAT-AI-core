@@ -4,6 +4,12 @@
 #   - the workflow YAML parses,
 #   - the markdownlint-cli2 config file is valid JSONC and applies,
 #   - markdownlint-cli2 actually passes against the current tree.
+#
+# The checkout credential check (Issue #322) now lives in the repo-wide sweep in
+# workflow_checkout_credentials.bats, and the branch-filter assertion runs
+# through the shared glob model in helpers.bash (Issue #477).
+
+load helpers
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
@@ -48,44 +54,11 @@ PY
 # ["*"] never matches milestone/<slug> and this lint gate silently skips those
 # PRs. The filter must match milestone branches so the gate runs on them too.
 @test "markdown-lint workflow pull_request filter matches milestone branches" {
-  if ! command -v python3 &>/dev/null; then
-    skip "python3 required for YAML parsing"
-  fi
-  run python3 - <<PY
-import re, yaml
-data = yaml.safe_load(open("$WORKFLOW"))
-triggers = data.get("on") or data.get(True)
-pr = triggers["pull_request"]
-patterns = pr.get("branches") or []
-assert patterns, f"pull_request has no branches filter: {pr}"
-
-def matches(pattern, branch):
-    # GitHub filter globbing: ** crosses '/', * does not.
-    regex = ""
-    i = 0
-    while i < len(pattern):
-        c = pattern[i]
-        if c == "*":
-            if pattern[i + 1 : i + 2] == "*":
-                regex += ".*"
-                i += 2
-                continue
-            regex += "[^/]*"
-        else:
-            regex += re.escape(c)
-        i += 1
-    return re.fullmatch(regex, branch) is not None
-
-branch = "milestone/clean-up-23-jul"
-assert any(matches(p, branch) for p in patterns), (
-    f"no branch pattern matches {branch!r}: {patterns}"
-)
-# The existing default branches must still match.
-for keep in ("Develop", "main"):
-    assert any(matches(p, keep) for p in patterns), (
-        f"no branch pattern matches {keep!r}: {patterns}"
-    )
-PY
+  require_python3
+  # The existing default branches must still match too.
+  run assert_pr_branch_filter_matches "$WORKFLOW" \
+    "milestone/clean-up-23-jul" Develop main
+  echo "$output"
   [ "$status" -eq 0 ]
 }
 
@@ -118,32 +91,6 @@ for step in data["jobs"]["markdownlint"]["steps"]:
     if uses is None:
         continue
     assert sha_re.match(uses), f"action not SHA-pinned: {uses}"
-PY
-  [ "$status" -eq 0 ]
-}
-
-# Issue #322 — actions/checkout writes the workflow GITHUB_TOKEN into
-# .git/config by default, leaving a usable credential on disk for every later
-# step in the job. This job only lints Markdown and validates Mermaid blocks:
-# it never pushes back to the repository and fetches no private submodule, so
-# the credential is pure blast radius.
-@test "markdown-lint workflow checkout does not persist credentials on disk" {
-  if ! command -v python3 &>/dev/null; then
-    skip "python3 required for YAML parsing"
-  fi
-  run python3 - <<PY
-import yaml
-data = yaml.safe_load(open("$WORKFLOW"))
-checkouts = [
-    s for s in data["jobs"]["markdownlint"]["steps"]
-    if str(s.get("uses", "")).startswith("actions/checkout@")
-]
-assert checkouts, "no actions/checkout step found"
-for step in checkouts:
-    with_ = step.get("with") or {}
-    assert with_.get("persist-credentials") is False, (
-        f"checkout persists credentials: {step}"
-    )
 PY
   [ "$status" -eq 0 ]
 }

@@ -12,16 +12,15 @@
 #
 # These are "what" tests — they assert on the YAML the runner will
 # execute, not on commentary or surrounding prose.
+#
+# The pinned-install assertions and the comment stripper are shared with
+# gitleaks_pinned_install.bats via helpers.bash (Issue #477).
+
+load helpers
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   WF="${REPO_ROOT}/.github/workflows/wasm-bundle.yml"
-}
-
-# Strip YAML comments so the assertions can't be defeated by leaving
-# the original `curl … | sh` line behind as a comment.
-strip_comments() {
-  sed -E 's/[[:space:]]*#.*$//' "$1"
 }
 
 @test "wasm-bundle.yml does not pipe a remote installer into sh" {
@@ -34,29 +33,13 @@ strip_comments() {
   fi
 }
 
-@test "wasm-bundle.yml installs wasm-pack from a version-pinned release URL" {
+# Download from the wasm-pack release archive at a specific tag (either a
+# literal vX.Y.Z or a v${WASM_PACK_VERSION} expansion), verified with
+# sha256sum -c against pinned version + SHA-256 env vars.
+@test "wasm-bundle.yml installs wasm-pack from a version- and checksum-pinned release" {
   [ -f "$WF" ]
-  # Require a download from the rustwasm/wasm-pack release archive at a
-  # specific tag (either a literal vX.Y.Z or a v${WASM_PACK_VERSION} env
-  # expansion — the version itself is asserted by a sibling test).
-  run grep -E 'github\.com/(rustwasm|wasm-bindgen)/wasm-pack/releases/download/v(\$\{?WASM_PACK_VERSION\}?|[0-9]+\.[0-9]+\.[0-9]+)/' "$WF"
-  [ "$status" -eq 0 ]
-}
-
-@test "wasm-bundle.yml verifies the wasm-pack tarball with sha256sum -c" {
-  [ -f "$WF" ]
-  run grep -E 'sha256sum[[:space:]]+-c' "$WF"
-  [ "$status" -eq 0 ]
-}
-
-@test "wasm-bundle.yml declares a 64-hex WASM_PACK_SHA256 env var" {
-  [ -f "$WF" ]
-  run grep -E 'WASM_PACK_SHA256:[[:space:]]*"?[0-9a-f]{64}"?' "$WF"
-  [ "$status" -eq 0 ]
-}
-
-@test "wasm-bundle.yml declares a semver WASM_PACK_VERSION env var" {
-  [ -f "$WF" ]
-  run grep -E 'WASM_PACK_VERSION:[[:space:]]*"?[0-9]+\.[0-9]+\.[0-9]+"?' "$WF"
+  run assert_pinned_cli_install "$WF" WASM_PACK \
+    'github\.com/(rustwasm|wasm-bindgen)/wasm-pack/releases/download/v(\$\{?WASM_PACK_VERSION\}?|[0-9]+\.[0-9]+\.[0-9]+)/'
+  echo "$output"
   [ "$status" -eq 0 ]
 }

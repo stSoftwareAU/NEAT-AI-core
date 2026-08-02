@@ -24,6 +24,23 @@
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   export WORKFLOWS_DIR="${REPO_ROOT}/.github/workflows"
+
+  # Contexts that come from outside the trust boundary. Branch names, PR
+  # titles/bodies, issue bodies, comments, commit messages, and workflow_run
+  # event payloads are all user-controlled.
+  local ctx='head_ref'
+  ctx="${ctx}"'|event\.pull_request\.(?:title|body|head\.ref|head\.label|head\.repo\.[A-Za-z_.]+)'
+  ctx="${ctx}"'|event\.issue\.(?:title|body)'
+  ctx="${ctx}"'|event\.comment\.body'
+  ctx="${ctx}"'|event\.review\.body'
+  ctx="${ctx}"'|event\.commits\.[^}]*'
+  ctx="${ctx}"'|event\.workflow_run\.head_branch'
+  # Single source of truth for the detector (Issue #478). The sweep over the
+  # real workflows and the known-bad/known-safe snippet check below both
+  # compile this one definition, so narrowing the detector fails the snippet
+  # check too — previously that check owned a private copy and passed
+  # regardless.
+  export TAINTED_CONTEXT_RE='\$\{\{\s*github\.(?:'"${ctx}"')\s*\}\}'
 }
 
 @test "no run: block interpolates tainted github contexts directly" {
@@ -34,21 +51,7 @@ setup() {
 import glob, os, re, sys, yaml
 
 workflows_dir = os.environ["WORKFLOWS_DIR"]
-
-# Contexts that come from outside the trust boundary. Branch names, PR
-# titles/bodies, issue bodies, comments, commit messages, and workflow_run
-# event payloads are all user-controlled.
-tainted_re = re.compile(
-    r"\$\{\{\s*github\.(?:"
-    r"head_ref"
-    r"|event\.pull_request\.(?:title|body|head\.ref|head\.label|head\.repo\.[A-Za-z_.]+)"
-    r"|event\.issue\.(?:title|body)"
-    r"|event\.comment\.body"
-    r"|event\.review\.body"
-    r"|event\.commits\.[^}]*"
-    r"|event\.workflow_run\.head_branch"
-    r")\s*\}\}"
-)
+tainted_re = re.compile(os.environ["TAINTED_CONTEXT_RE"])
 
 failures = []
 files = sorted(glob.glob(os.path.join(workflows_dir, "*.yml")))
@@ -87,21 +90,14 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# Behavioural sanity check: the live detector — read from $TAINTED_CONTEXT_RE,
+# the same value the sweep above compiles — must still catch these. Narrowing
+# the detector fails this test (Issue #478).
 @test "tainted-context detector regex catches known-bad patterns" {
   run python3 - <<'PY'
-import re
+import os, re
 
-tainted_re = re.compile(
-    r"\$\{\{\s*github\.(?:"
-    r"head_ref"
-    r"|event\.pull_request\.(?:title|body|head\.ref|head\.label|head\.repo\.[A-Za-z_.]+)"
-    r"|event\.issue\.(?:title|body)"
-    r"|event\.comment\.body"
-    r"|event\.review\.body"
-    r"|event\.commits\.[^}]*"
-    r"|event\.workflow_run\.head_branch"
-    r")\s*\}\}"
-)
+tainted_re = re.compile(os.environ["TAINTED_CONTEXT_RE"])
 
 bad = [
     "git pull origin ${{ github.head_ref }}",

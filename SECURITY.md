@@ -118,7 +118,21 @@ The workflows in [`.github/workflows/`](.github/workflows/) are privileged:
 `ci.yml` and `upgrade-dependencies.yml` use the `ACTIONS_PUSH` PAT, and
 `semgrep.yml` uses `SEMGREP_APP_TOKEN`. An unreviewed edit to any of them is a
 secret-exfiltration / artefact-signing attack path, so changes there require a
-designated owner's review. Two controls enforce that:
+designated owner's review.
+
+`ACTIONS_PUSH` resolves from the **organisation** (this repository defines no
+Actions secrets of its own), so a leak of it is an org-wide, not repo-wide,
+event. The two `ci.yml` jobs that push — *Auto-increment Versions* and
+*Auto-format Code* — check out the **PR head** and then execute code from it
+(`./bump-deps.sh`, `cargo fmt`). They therefore run with
+`persist-credentials: false` and no `token:` on the checkout, and the PAT is
+handed only to the single pushing step through an explicit
+`https://x-access-token:…` remote URL (Issue #483). Handing the PAT to a
+checkout would write it into `.git/config`, where PR-authored code could read it
+for the whole job — the credential-theft pattern behind the 2025–2026 CI
+attacks. `tests/scripts/ci_push_credential_persistence.bats` pins that rule.
+
+Two controls enforce the owner-review requirement:
 
 - **[`.github/CODEOWNERS`](.github/CODEOWNERS)** assigns the repo admins
   `@Green-Beret` and `@nleck` as owners of the privileged CI paths

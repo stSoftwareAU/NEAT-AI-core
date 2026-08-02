@@ -996,13 +996,101 @@ mod tests {
         assert_eq!(out.neurons[1], PropagateOutcome::Skipped);
     }
 
+    /// Multi-path fixture: one input → one hidden → **two** outputs, so the
+    /// hidden neuron accumulates a target delta from each output and reaches
+    /// `count == 2` — the condition that arms the sqrt-scaling branch.
+    ///
+    /// Returns the hidden neuron's `total_error_absolute_delta`, which is
+    /// `|clamp(activation + total_delta) − activation|`; with the neuron range
+    /// left wide open that is exactly `|total_delta|`, so normalisation is
+    /// observable as a factor of `1/sqrt(2)` on the returned value.
+    fn run_two_path_hidden(normalise: bool) -> f32 {
+        let neurons = vec![
+            make_neuron(SquashType::Identity, NEURON_TYPE_INPUT, 0.5, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_HIDDEN, 0.5, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_OUTPUT, 0.0, 0.0),
+            make_neuron(SquashType::Identity, NEURON_TYPE_OUTPUT, 0.0, 0.0),
+        ];
+        // 0 → 1, then 1 → 2 and 1 → 3: two downstream sinks feeding neuron 1.
+        let synapses = vec![
+            SynapseInput {
+                from: 0,
+                to: 1,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+            SynapseInput {
+                from: 1,
+                to: 2,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+            SynapseInput {
+                from: 1,
+                to: 3,
+                original_weight: 1.0,
+                adjusted_weight: 1.0,
+                is_self_loop: false,
+            },
+        ];
+        // Inward lists: n0 none, n1 ← [s0], n2 ← [s1], n3 ← [s2].
+        let inward_starts = vec![0u32, 0, 1, 2];
+        let inward_counts = vec![0u32, 1, 1, 1];
+        let inward_indices = vec![0u32, 1, 2];
+        // Both outputs first, so neuron 1 is processed once both have
+        // contributed their delta.
+        let order = vec![2u32, 3, 1];
+        let expected = vec![1.0f32, 1.0f32];
+
+        let input = PropagateInput {
+            neurons: &neurons,
+            synapses: &synapses,
+            inward_starts: &inward_starts,
+            inward_counts: &inward_counts,
+            inward_synapse_indices: &inward_indices,
+            reverse_topo_order: &order,
+            expected: &expected,
+            input_count: 1,
+            output_count: 2,
+            plank_constant: 1e-7,
+            normalise_gradients: normalise,
+        };
+        let out = propagate_topological_loop(&input);
+        match out.neurons[1] {
+            PropagateOutcome::Standard(s) => s.total_error_absolute_delta,
+            other => panic!("expected Standard for the two-path hidden, got {:?}", other),
+        }
+    }
+
     #[test]
-    fn normalise_gradients_reduces_multi_path_delta() {
-        // Output neuron with 4 accumulated paths — sqrt-scaling halves the
-        // effective target delta compared to raw accumulation.
-        // We exercise this by running both paths through the same wiring
-        // and confirming that the Standard outcome's total_error_absolute_delta
-        // is smaller under normalisation.
+    fn normalise_gradients_scales_two_path_delta_by_inverse_sqrt_count() {
+        let unnormalised = run_two_path_hidden(false);
+        let normalised = run_two_path_hidden(true);
+
+        // Guard against a vacuous 0 == 0 pass: the fixture must actually
+        // propagate a delta to the hidden neuron.
+        assert!(
+            unnormalised > 1e-3,
+            "fixture produced no delta to normalise: {unnormalised}"
+        );
+
+        // Both outputs contribute the same signed delta, so the raw sum is
+        // identical in both runs and only the count == 2 sqrt-scaling differs:
+        // normalised == unnormalised / sqrt(2).
+        let want = unnormalised / 2.0f32.sqrt();
+        assert!(
+            (normalised - want).abs() <= 1e-4 * want,
+            "expected {want} (unnormalised {unnormalised} / sqrt(2)), got {normalised}"
+        );
+    }
+
+    #[test]
+    fn normalise_gradients_is_a_no_op_for_single_path_neurons() {
+        // Every neuron here has exactly one inbound path (count == 1), so the
+        // sqrt-scaling branch is skipped and normalisation must be bit-for-bit
+        // invisible.
         fn run(normalise: bool) -> f32 {
             let neurons = vec![
                 make_neuron(SquashType::Identity, NEURON_TYPE_INPUT, 0.5, 0.0),
@@ -1079,12 +1167,11 @@ mod tests {
 
         let unnormalised = run(false);
         let normalised = run(true);
-        // With a single inbound path to each hidden (from output only, via
-        // one synapse), count == 1 ⇒ branch is a no-op. This test therefore
-        // asserts that normalisation does not *increase* error magnitude —
-        // the full sqrt-scaling behaviour is exercised by multi-path
-        // integration tests in downstream consumers.
-        assert!(normalised <= unnormalised + 1e-6);
+        assert!(
+            unnormalised > 1e-3,
+            "fixture produced no delta at all: {unnormalised}"
+        );
+        assert_eq!(normalised, unnormalised);
     }
 
     #[test]

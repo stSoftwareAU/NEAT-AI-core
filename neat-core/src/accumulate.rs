@@ -781,10 +781,22 @@ mod tests {
 
     #[test]
     fn test_limit_weight_clamping() {
-        // Weight exceeding limit_weight_scale should be clamped
+        // target 200000, current 0, learning_rate 1.0 ⇒ difference = 200000.
+        // |difference| > max_weight_adj_scale (1.0), so the adjustment clamp
+        // fires first: current + max_weight_adj_scale = 0.0 + 1.0 = 1.0.
+        // That is well inside limit_weight_scale (100000), and both decays are
+        // zero, so the exact result is 1.0.
         let result = limit_weight(200000.0, 0.0, 1e-7, 1.0, 1.0, 100000.0, 0.0, 0.0);
-        // max_weight_adj_scale is 1.0, so limited to current + 1.0 = 1.0
-        assert!(result.abs() <= 100000.0);
+        assert_eq!(result, 1.0);
+
+        // The negative direction clamps symmetrically: current − 1.0 = -1.0.
+        let result = limit_weight(-200000.0, 0.0, 1e-7, 1.0, 1.0, 100000.0, 0.0, 0.0);
+        assert_eq!(result, -1.0);
+
+        // With the adjustment clamp wide open (max_weight_adj_scale above the
+        // difference) the *global* scale limit is what bites: 100000.
+        let result = limit_weight(200000.0, 0.0, 1e-7, 1.0, 1e9, 100000.0, 0.0, 0.0);
+        assert_eq!(result, 100000.0);
     }
 
     #[test]
