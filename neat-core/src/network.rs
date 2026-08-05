@@ -8,7 +8,7 @@
 //! NEAT-AI consumes. Public fields are skipped from the bindgen surface (they
 //! remain accessible to native Rust callers); the JS API is the public methods.
 
-use crate::batch_scoring::{inline_squash, load_record};
+use crate::batch_scoring::{SCORING_LANES, inline_squash, load_record};
 use crate::range::apply_limit_range;
 use crate::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
@@ -203,6 +203,13 @@ pub struct CompiledNetwork {
     /// `trace_data_buffer`.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub batch_traces: [Vec<f32>; 4],
+    /// Record-interleaved scratch for the fused 8-way MSE path
+    /// (`inter[n * 8 + l]`). Sized `num_neurons * 8` and reused across
+    /// `mse_sum_batch_packed` calls instead of allocating per chunk
+    /// (NEAT-AI-scorer#531). The 4-way remainder of that path reuses
+    /// [`Self::batch_activations`].
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    pub mse_inter: Vec<f32>,
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -364,6 +371,8 @@ impl CompiledNetwork {
                 Vec::with_capacity(estimated_trace_size),
                 Vec::with_capacity(estimated_trace_size),
             ],
+            // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
+            mse_inter: vec![0.0; num_neurons * SCORING_LANES],
         })
     }
 

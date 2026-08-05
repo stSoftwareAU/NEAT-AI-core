@@ -431,5 +431,7 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
             Vec::with_capacity(estimated_trace_size),
             Vec::with_capacity(estimated_trace_size),
         ],
+        // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
+        mse_inter: vec![0.0; num_neurons * 8],
     })
 }

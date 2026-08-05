@@ -105,6 +105,8 @@ fn unit_network(squash: SquashType) -> CompiledNetwork {
         batch_activations: [vec![0.0; 2], vec![0.0; 2], vec![0.0; 2], vec![0.0; 2]],
         batch_hints: [vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1]],
         batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
+        mse_inter: vec![0.0; 2 * 8],
     }
 }
 
@@ -276,6 +278,8 @@ fn mixed_aggregate_network(squash: SquashType) -> CompiledNetwork {
         batch_activations: [vec![0.0; 4], vec![0.0; 4], vec![0.0; 4], vec![0.0; 4]],
         batch_hints: [vec![0.0; 2], vec![0.0; 2], vec![0.0; 2], vec![0.0; 2]],
         batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
+        mse_inter: vec![0.0; 4 * 8],
     }
 }
 

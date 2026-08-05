@@ -139,6 +139,45 @@ impl BatchScratch {
     }
 }
 
+/// Free-function form of [`CompiledNetwork::interleaved_forward_8`] so the fused
+/// MSE path can borrow `mse_inter` mutably alongside immutable neuron/synapse
+/// slices (NEAT-AI-scorer#531 scratch reuse).
+pub(crate) fn run_interleaved_forward_8(
+    neurons: &[NeuronData],
+    synapses: &[SynapseData],
+    num_inputs: usize,
+    inter: &mut [f32],
+) {
+    const L: usize = SCORING_LANES;
+
+    for (neuron_idx, neuron) in neurons.iter().enumerate() {
+        let out_base = (num_inputs + neuron_idx) * L;
+
+        if neuron.is_constant {
+            let v = apply_limit_range(SquashType::Identity, neuron.bias);
+            for slot in inter[out_base..out_base + L].iter_mut() {
+                *slot = v;
+            }
+            continue;
+        }
+
+        let squash = SquashType::from(neuron.squash_type);
+        let start = neuron.start_synapse as usize;
+        let end = start + neuron.num_synapses as usize;
+        let sums = weighted_sum_interleaved_8(synapses, inter, start, end, neuron.bias);
+
+        let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
+            let st = neuron.squash_type;
+            sums.map(|s| inline_squash(st, squash, s))
+        });
+
+        let (low, high) = apply_get_range(squash);
+        for l in 0..L {
+            inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
+        }
+    }
+}
+
 /// The single home of the hot-squash dispatch rule (Issue #443): which squash
 /// types are hot enough to branch inline, and the exact scalar formula each of
 /// them uses. The four hot types are branched directly; everything else defers
@@ -428,39 +467,7 @@ impl CompiledNetwork {
     /// use the exact per-lane path instead. Bit-identical to the per-lane
     /// 8-record path ([`weighted_sum_simd_8records`]) on the covered neurons.
     pub(crate) fn interleaved_forward_8(&self, inter: &mut [f32]) {
-        const L: usize = SCORING_LANES;
-        let num_inputs = self.num_inputs;
-
-        for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
-            let out_base = (num_inputs + neuron_idx) * L;
-
-            if neuron.is_constant {
-                let v = apply_limit_range(SquashType::Identity, neuron.bias);
-                for slot in inter[out_base..out_base + L].iter_mut() {
-                    *slot = v;
-                }
-                continue;
-            }
-
-            let squash = SquashType::from(neuron.squash_type);
-            let start = neuron.start_synapse as usize;
-            let end = start + neuron.num_synapses as usize;
-            let sums = weighted_sum_interleaved_8(&self.synapses, inter, start, end, neuron.bias);
-
-            // Vectorised squash across all 8 lanes for the covered types
-            // (Issue #243); scalar inline fallback otherwise.
-            let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
-                let st = neuron.squash_type;
-                sums.map(|s| inline_squash(st, squash, s))
-            });
-
-            // Resolve the output range once per neuron (Issue #245) and clamp
-            // all 8 lanes; the writes land in one contiguous cache line.
-            let (low, high) = apply_get_range(squash);
-            for l in 0..L {
-                inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
-            }
-        }
+        run_interleaved_forward_8(&self.neurons, &self.synapses, self.num_inputs, inter);
     }
 
     /// Per-lane fallback scoring path — the original eight-buffer layout, kept
