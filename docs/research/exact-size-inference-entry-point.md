@@ -73,10 +73,12 @@ flowchart LR
 - Records: `PRODUCTION_SCORING_RECORDS` = 4,096 × 2,461 f32 (~40 MiB), one
   production shard at the real observation width (see
   [`BASELINE.md`](../../neat-core/benches/BASELINE.md)).
-- Native: `neat-core/benches/exact_inference.rs`, both arms in **one process**.
+- Native: `neat-core/benches/exact_inference.rs` (at `f3652d7`; reverted with
+  the prototype), both arms in **one process**.
   Criterion warm-up 3 s, ≥5 s measurement, 100 samples (20 for the
   4,096-record group). Eight sessions.
-- Wasm: `wasm-bench/run-exact.sh`, reusing the Issue #509 interleaved driver —
+- Wasm: `wasm-bench/run-exact.sh` (at `f3652d7`; reverted with the prototype),
+  reusing the Issue #509 interleaved driver unchanged —
   both modules instantiated in one Node process, alternating sample by sample
   with the order flipped each sample, statistic = **paired median ratio**.
 - **Null controls everywhere.** Native: a `control_b` arm running byte-identical
