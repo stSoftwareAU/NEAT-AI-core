@@ -1,0 +1,57 @@
+# Issue #509 — WASM gather4 prototype benchmark harness.
+#
+# Deliberately **outside** the root virtual workspace (`exclude`d there, and an
+# empty `[workspace]` table here): it is a research harness, not shipped code,
+# and keeping it out means `quality.sh`, the version-bump job and `cargo deny`
+# see exactly the crate set they saw before.
+[package]
+name = "wasm-gather4-bench"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+# A cdylib with plain C exports: the driver instantiates the control and the
+# experimental module in the *same* process and alternates between them.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+neat-core = { path = "../neat-core" }
+
+[features]
+# Forwarded to neat-core so the driver can build the bounds-checked control.
+checked-gather4 = ["neat-core/checked-gather4"]
+
+# The wasm32 kernels cannot run in the native test suite, and `neat-core`'s own
+# test targets cannot be built for wasm (its `criterion` dev-dependency refuses
+# to compile for wasi). Re-pointing the parity tests here — a crate with no
+# criterion — lets them execute on a real wasm runtime:
+#
+#   RUSTFLAGS="-C target-feature=+simd128,+relaxed-simd" \
+#   CARGO_TARGET_WASM32_WASIP1_RUNNER="node $PWD/wasi-test-runner.mjs" \
+#     cargo test --target wasm32-wasip1
+#
+# Add `--features checked-gather4` to run the same tests against the control.
+[[test]]
+name = "simd_chunk_walk_scaffold"
+path = "../neat-core/tests/simd_chunk_walk_scaffold.rs"
+
+[[test]]
+name = "simd_weighted_sums"
+path = "../neat-core/tests/simd_weighted_sums.rs"
+
+[[test]]
+name = "simd_scalar_layer"
+path = "../neat-core/tests/simd_scalar_layer.rs"
+
+[[test]]
+name = "unchecked_gather_invariant"
+path = "../neat-core/tests/unchecked_gather_invariant.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
