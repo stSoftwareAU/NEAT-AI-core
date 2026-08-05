@@ -12,7 +12,7 @@ No code from Ikaruga/NEAT-AI has been transcribed into this repository as of the
 
 ## Scope reminder
 
-`neat-core` is intentionally narrow: it provides the **compute kernels** (compiled forward pass, topological backprop, SIMD accumulation, loss functions, safe-zone clamping, streaming training-data I/O, topology validation, predictive coding). Evolutionary operators — mutation, crossover, speciation, the generation loop — live upstream in the **NEAT-AI** Deno/TypeScript repository, not here. The comparison below classifies each Ikaruga feature against that scope boundary.
+`neat-core` is intentionally narrow: it provides the **compute kernels** (compiled forward pass, topological backprop, SIMD accumulation, loss functions, safe-zone clamping, streaming training-data I/O, topology validation). At the time of this research it also carried a predictive-coding engine; that was **removed in Issue #414** as it had no caller. Evolutionary operators — mutation, crossover, speciation, the generation loop — live upstream in the **NEAT-AI** Deno/TypeScript repository, not here. The comparison below classifies each Ikaruga feature against that scope boundary.
 
 ## Upstream inventory (Ikaruga/NEAT-AI, `bizhawk-neat` variant)
 
@@ -42,14 +42,15 @@ The `mame-neat` sibling crate mirrors this layout against MAME.
 | `topology_ops` | Cycle detection, reverse topological order, structural validation, batch validation. |
 | `accumulate`, `simd`, `simd_native` | 4-way and 8-way SIMD multi-record weighted-sum / bias accumulation; AVX2/FMA on x86_64 and NEON on aarch64 (#12). |
 | `loss` | MSE/MAE/MAPE/MSLE/cross-entropy/hinge packed-batch reducers + `mse_mean_record`. |
-| `pc_inference` / `pc_learning` | Predictive-coding inference engine and learning rule. |
 | `training_bin_stream` | Chunked double-buffered `.bin` scan API with env-tunable modes (#13). |
 | `training_data` | `.bin` reader / iterator / seeking record reader. |
 | `training_state` | Persistent per-neuron / per-synapse state for online training. |
 | `safe_zone` | Range-clamping for unbounded activations. |
 | `score_scan`, `elastic_distribution`, `fused_error`, `error`, `derivative`, `range`, `unsquash` | Supporting numerics. |
 
-Source footprint: ~15,100 LOC across `neat-core/src/`. No evolutionary operator code is present — by design.
+The table lists the modules present in `neat-core/src/` today. `pc_inference` / `pc_learning` (the predictive-coding inference engine and learning rule) were in this inventory when the research was written and were **removed in Issue #414**; `wasm_dataset` was likewise **removed in Issue #415**.
+
+Source footprint: **~18,300** LOC across `neat-core/src/`, measured on `Develop` at Issue #498. `tests/scripts/research_docs_removed_modules.bats` fails loud once the tree drifts more than 10% from that figure — refresh the number here when it does. No evolutionary operator code is present — by design.
 
 ## Feature-by-feature comparison
 
@@ -83,7 +84,7 @@ Ikaruga computes a topological order with DFS + cycle skip and iterates nodes se
 - `CompiledNetwork` with pre-compiled evaluation order and **38** activation variants — a strict superset.
 - `topological_backprop` for training, which Ikaruga lacks entirely (Ikaruga is inference-only).
 - SIMD 4-way / 8-way batch accumulation across records (AVX2/FMA + NEON).
-- Predictive-coding inference (`PredictiveCodingEngine`) — novel vs Ikaruga.
+- (At the time of research: predictive-coding inference, novel vs Ikaruga — **removed in Issue #414**, having gained no caller.)
 - Aggregate activations (MIN/MAX/IF/HYPOT/MEAN) for conditional branching inside a network — not present in Ikaruga.
 
 Ikaruga's `BatchEvaluator` imports `burn::tensor` but the batched path is still sequential `inputs.iter().map(…)`. Nothing to port.
@@ -132,7 +133,7 @@ Ikaruga's `fitness.rs` (579 LOC) encodes per-game scoring heuristics. Fitness is
 | 2 | Speciation | `species.rs` 304 LOC | — | 🌐 parent repo | — |
 | 3 | Population, tournament, crossover | `population.rs` 381 LOC | — | 🌐 parent repo | — |
 | 4 | NeatConfig JSON | `config.rs` | `TrainingDataConfig` only | 🌐 parent repo | — |
-| 5 | Feed-forward evaluation | 4 activations, no SIMD, no backprop | 38 activations + backprop + SIMD + PC | ✅ already richer | — |
+| 5 | Feed-forward evaluation | 4 activations, no SIMD, no backprop | 38 activations + backprop + SIMD | ✅ already richer | — |
 | 6 | Topology visualisation | 855-LOC egui GUI, no export | `topology_export` (DOT/JSON) | ✅ adopted (data-only export) | [#22](https://github.com/stSoftwareAU/NEAT-AI-core/issues/22) (landed) |
 | 7 | GPU (Burn + WGPU) | declared, unused | — | ⛔ out of scope (breaks WASM) | — |
 | 8 | Genome JSON round-trip | `Serialize` + `Deserialize` | `Serialize` + `Deserialize` | ✅ adopted | [#30](https://github.com/stSoftwareAU/NEAT-AI-core/issues/30) (landed) |
