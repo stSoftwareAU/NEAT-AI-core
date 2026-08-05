@@ -33,6 +33,7 @@ There are three bench targets:
 | `topology_ops` | `scan_available_connections` — the mutation-time availability scan (Issue #387); `compute_reverse_topological_order` — the per-creature backprop-ordering setup (Issue #388) | `n1666_21513`, `n4127_21513` |
 | `weighted_sum_simd` | `weighted_sum_simd` family (single / no-bias / squares / 4- and 8-record) | 64-synapse block |
 | `squash` | `apply_squash` / `apply_unsquash` over a spread of `SquashType`s | scalar |
+| `squash_x4` | `squash_x4` — the lane-parallel 4-record approximation (Issue #180) against a baseline of four scalar `apply_squash` calls, over the hot transcendental squashes `Tanh`, `Logistic`, `Gelu`, `Mish`. The `scalar_x4` id is the four-call baseline; `simd_x4` is the vectorised kernel | one fixed 4-lane block, `[0.42, -1.3, 2.7, -0.05]` |
 
 The `scoring` group (Issue #228) pushes a full production-sized record batch
 through one creature via `score_records_flat`, so `hot_paths` reports
