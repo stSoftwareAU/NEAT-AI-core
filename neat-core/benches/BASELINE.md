@@ -276,15 +276,23 @@ output layout and the packed buffer the fused loss lane already takes
 over the same kernel, so both layouts are **bit-identical**
 (`tests/flat_record_scoring_parity.rs`).
 
-The real win is `TrainingDataset::evaluate_mse` (the >4 GB Memory64 offload lane
-from #298). It stored inputs contiguously in SoA layout yet scored **one record
-at a time** through `activate` — re-bounds-checking per record, allocating a
-fresh `Vec<f32>` per record via `to_vec()` (exactly the per-record allocation
-removed by #229), and never touching the 8-record interleaved SIMD path from
-issues #230/#287. It now bounds-checks once, takes `input_batch(start, count)` as a
-single slice, and drives it through the flat batched path in 1024-record chunks
-(a multiple of the 8-record SIMD group, so grouping and results are unchanged
-while the scratch output buffer stays a bounded constant).
+> **Historical — this lane no longer exists.** The `wasm_dataset` module, its
+> `TrainingDataset::evaluate_mse` / `input_batch` API, and the
+> `dataset_evaluate_mse` bench group were all removed as unconsumed dead code in
+> Issue #415. The paragraph and tables below are retained only as the historical
+> record of the #386 flat-batch change; none of them describes a current code
+> path.
+
+The biggest win at the time was `TrainingDataset::evaluate_mse` (the >4 GB
+Memory64 offload lane from #298). It had stored inputs contiguously in SoA
+layout yet scored **one record at a time** through `activate` —
+re-bounds-checking per record, allocating a fresh `Vec<f32>` per record via
+`to_vec()` (exactly the per-record allocation removed by #229), and never
+touching the 8-record interleaved SIMD path from issues #230/#287. #386 changed
+it to bounds-check once, take `input_batch(start, count)` as a single slice, and
+drive it through the flat batched path in 1024-record chunks (a multiple of the
+8-record SIMD group, so grouping and results were unchanged while the scratch
+output buffer stayed a bounded constant).
 
 **Methodology.** Same alternating-rounds protocol as #287 above, because
 separate `cargo bench` invocations on this laptop drift by more than the effect
@@ -296,10 +304,8 @@ captured alongside as a drift control.
 rustc 1.97.0, `--release`, Criterion
 `--sample-size 10 --measurement-time 5 --warm-up-time 1`.
 
-`dataset_evaluate_mse` (4096 records/iteration), mean of the alternating rounds.
-The group and the `wasm_dataset` module it measured were removed as unconsumed
-dead code in Issue #415; the numbers below are retained as the historical record
-of the #386 flat-batch change:
+`dataset_evaluate_mse` (4096 records/iteration), mean of the alternating rounds
+(the since-removed group — see the Issue #415 note above):
 
 | benchmark (mean of rounds) | old | new | change |
 | --- | --- | --- | --- |
