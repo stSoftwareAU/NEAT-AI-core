@@ -1,6 +1,10 @@
 # Virtual workspace: shared native Rust (`neat-core`). WASM stays in NEAT-AI.
 [workspace]
 members = ["neat-core"]
+# Issue #509 - research-only WASM benchmark harness; excluded so the shipped
+# crate set (and therefore `quality.sh`, the version bump and `cargo deny`)
+# is unchanged.
+exclude = ["wasm-bench"]
 resolver = "2"
 
 [workspace.package]

@@ -40,6 +40,16 @@ sound and the hot path stays branch-free. **Never remove or bypass that check as
 "redundant" — doing so reintroduces UB behind `get_unchecked`.** (See also the
 memory-safety note in [`SECURITY.md`](SECURITY.md#memory-safety-of-compiled-network-loading).)
 
+The `wasm32` `gather4` scaffold helper (`simd.rs`) rests on the same invariant
+since Issue #509 — it reads four `SynapseData` entries and four indirect
+activations unchecked. `checked-gather4` restores the bounds-checked control if
+a build ever needs it; the numbers behind that default are in
+[`docs/research/wasm-gather4-unchecked-loads.md`](docs/research/wasm-gather4-unchecked-loads.md),
+and `neat-core/tests/unchecked_gather_invariant.rs` pins the load-time guard
+that makes it sound — including rejection from **every** lane position of a
+span, which a 4-wide gather needs and the single-synapse unit tests do not
+cover.
+
 ```mermaid
 flowchart LR
     A[compiled .bin buffer] --> B["CompiledNetwork::new"]
@@ -272,7 +282,11 @@ a fold-level edit on top of the shared walk.
 `neat-core/tests/simd_chunk_walk_scaffold.rs` pins the rule: every kernel
 reproduces its `simd::scalar` reference from **any** offset (not just
 `start == 0`), the remainder continues the span rather than restarting it, and a
-reversed span yields the kernel's seed.
+reversed span yields the kernel's seed. Those assertions run natively against
+the `simd_native.rs` kernels; to execute them against the **wasm** kernels, run
+them on a real runtime through `wasm-bench/` (Issue #509) — `neat-core`'s own
+test targets cannot be built for wasm because its `criterion` dev-dependency
+refuses to compile for wasi.
 
 ```mermaid
 flowchart LR
