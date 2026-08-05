@@ -6,7 +6,9 @@
 //!
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
-use crate::batch_scoring::{SCORING_LANES, inline_squash, load_record, neuron_activation_scalar};
+use crate::batch_scoring::{
+    SCORING_LANES, inline_squash, load_record, neuron_activation_scalar, run_interleaved_forward_8,
+};
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
@@ -453,7 +455,7 @@ pub fn mse_sum_batch_packed(
 /// ([`mse_sum_batch_scattered`]) unchanged. Both are bit-identical to the
 /// pre-#384 result.
 fn mse_sum_batch_8way(
-    network: &CompiledNetwork,
+    network: &mut CompiledNetwork,
     records: &[f32],
     values_per_record: usize,
     input_size: usize,
@@ -482,18 +484,20 @@ fn mse_sum_batch_8way(
 
 /// Record-interleaved fused activate + MSE for standard-squash networks
 /// (Issue #384). Full 8-record groups run the shared interleaved forward pass
-/// ([`CompiledNetwork::interleaved_forward_8`]) — the #287 gather that reads
-/// each synapse's eight lanes from one cache line — then the MSE reduction
-/// reads the eight contiguous output lanes. The `< 8` remainder (4-record group
-/// then scalar tail) is kept on the exact same per-lane kernels as the
-/// scattered path, so the whole result is bit-identical to the pre-#384 8-way
-/// path (the interleaved gather is proven bit-identical to
-/// `weighted_sum_simd_8records`).
+/// ([`run_interleaved_forward_8`]) — the #287 gather that reads each synapse's
+/// eight lanes from one cache line — then the MSE reduction reads the eight
+/// contiguous output lanes. The `< 8` remainder (4-record group then scalar
+/// tail) is kept on the exact same per-lane kernels as the scattered path, so
+/// the whole result is bit-identical to the pre-#384 8-way path (the
+/// interleaved gather is proven bit-identical to `weighted_sum_simd_8records`).
 ///
 /// Only called when the network has no aggregate-squash neuron; the caller
 /// (`mse_sum_batch_8way`) routes aggregate networks to the scattered path.
+///
+/// Scratch reuse (NEAT-AI-scorer#531): writes into `network.mse_inter` and
+/// `network.batch_activations` instead of allocating per call.
 fn mse_sum_batch_8way_interleaved(
-    network: &CompiledNetwork,
+    network: &mut CompiledNetwork,
     records: &[f32],
     values_per_record: usize,
     input_size: usize,
@@ -510,14 +514,15 @@ fn mse_sum_batch_8way_interleaved(
     let num_neurons = network.num_neurons;
     let num_inputs = network.num_inputs;
     let output_start = num_neurons - num_outputs;
-
-    // Record-interleaved buffer for the full 8-groups (`inter[n * 8 + l]`), plus
-    // four per-lane buffers reused by the `< 8` remainder (4-way + scalar tail).
-    let mut inter: Vec<f32> = vec![0.0; num_neurons * L];
-    let mut act0: Vec<f32> = vec![0.0; num_neurons];
-    let mut act1: Vec<f32> = vec![0.0; num_neurons];
-    let mut act2: Vec<f32> = vec![0.0; num_neurons];
-    let mut act3: Vec<f32> = vec![0.0; num_neurons];
+    let needed = num_neurons * L;
+    if network.mse_inter.len() != needed {
+        network.mse_inter.resize(needed, 0.0);
+    }
+    for act in &mut network.batch_activations {
+        if act.len() != num_neurons {
+            act.resize(num_neurons, 0.0);
+        }
+    }
 
     let mut sum_error: f64 = 0.0;
 
@@ -526,6 +531,7 @@ fn mse_sum_batch_8way_interleaved(
     let input_lanes = input_size.min(num_inputs);
     for batch in 0..full_batches {
         let base_idx = batch * L;
+        let inter = &mut network.mse_inter;
 
         // Transpose the eight records' inputs into the interleaved buffer;
         // zero any input slot the record does not cover (stateless scoring).
@@ -539,7 +545,7 @@ fn mse_sum_batch_8way_interleaved(
             }
         }
 
-        network.interleaved_forward_8(&mut inter);
+        run_interleaved_forward_8(&network.neurons, &network.synapses, num_inputs, inter);
 
         // MSE reduction reads each lane's contiguous output lanes.
         for l in 0..L {
@@ -557,27 +563,28 @@ fn mse_sum_batch_8way_interleaved(
     // ---- `< 8` remainder: 4-record group then scalar tail -------------------
     // Kept on the exact per-lane kernels of the scattered path so the numerics
     // match bit-for-bit. This branch never sees an aggregate neuron.
+    // Reuses `batch_activations` (Issue #155 / NEAT-AI-scorer#531).
     let remainder_start = full_batches * L;
     let remaining = num_records - remainder_start;
 
     if remaining >= 4 {
         let base_idx = remainder_start;
-        for (r, act) in [&mut act0, &mut act1, &mut act2, &mut act3]
-            .into_iter()
-            .enumerate()
-        {
+        for r in 0..4 {
             let base = (base_idx + r) * values_per_record;
-            load_record(act, &records[base..base + input_size], num_inputs);
+            load_record(
+                &mut network.batch_activations[r],
+                &records[base..base + input_size],
+                num_inputs,
+            );
         }
 
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
             let actual_idx = num_inputs + neuron_idx;
             if neuron.is_constant {
                 let val = apply_limit_range(SquashType::Identity, neuron.bias);
-                act0[actual_idx] = val;
-                act1[actual_idx] = val;
-                act2[actual_idx] = val;
-                act3[actual_idx] = val;
+                for act in &mut network.batch_activations {
+                    act[actual_idx] = val;
+                }
                 continue;
             }
             let squash = SquashType::from(neuron.squash_type);
@@ -585,10 +592,10 @@ fn mse_sum_batch_8way_interleaved(
             let end_synapse = start_synapse + neuron.num_synapses as usize;
             let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
                 &network.synapses,
-                &act0,
-                &act1,
-                &act2,
-                &act3,
+                &network.batch_activations[0],
+                &network.batch_activations[1],
+                &network.batch_activations[2],
+                &network.batch_activations[3],
                 start_synapse,
                 end_synapse,
                 neuron.bias,
@@ -599,14 +606,19 @@ fn mse_sum_batch_8way_interleaved(
                 None => sums.map(|sum| inline_squash(neuron.squash_type, squash, sum)),
             };
             let (low, high) = apply_get_range(squash);
-            act0[actual_idx] = apply_limit_range_bounds(low, high, squashed[0]);
-            act1[actual_idx] = apply_limit_range_bounds(low, high, squashed[1]);
-            act2[actual_idx] = apply_limit_range_bounds(low, high, squashed[2]);
-            act3[actual_idx] = apply_limit_range_bounds(low, high, squashed[3]);
+            network.batch_activations[0][actual_idx] =
+                apply_limit_range_bounds(low, high, squashed[0]);
+            network.batch_activations[1][actual_idx] =
+                apply_limit_range_bounds(low, high, squashed[1]);
+            network.batch_activations[2][actual_idx] =
+                apply_limit_range_bounds(low, high, squashed[2]);
+            network.batch_activations[3][actual_idx] =
+                apply_limit_range_bounds(low, high, squashed[3]);
         }
 
-        for (r, act) in [&act0, &act1, &act2, &act3].into_iter().enumerate() {
+        for r in 0..4 {
             let target_base = (base_idx + r) * values_per_record + input_size;
+            let act = &network.batch_activations[r];
             let mut sq_sum: f64 = 0.0;
             for j in 0..num_outputs {
                 let diff = (records[target_base + j] - act[output_start + j]) as f64;
@@ -621,17 +633,27 @@ fn mse_sum_batch_8way_interleaved(
     for record_idx in final_remainder_start..num_records {
         let base = record_idx * values_per_record;
         let target_base = base + input_size;
-        load_record(&mut act0, &records[base..base + input_size], num_inputs);
-        for activation in act0.iter_mut().take(num_neurons).skip(num_inputs) {
+        load_record(
+            &mut network.batch_activations[0],
+            &records[base..base + input_size],
+            num_inputs,
+        );
+        for activation in network.batch_activations[0]
+            .iter_mut()
+            .take(num_neurons)
+            .skip(num_inputs)
+        {
             *activation = 0.0;
         }
         for (neuron_idx, neuron) in network.neurons.iter().enumerate() {
-            let value = neuron_activation_scalar(&network.synapses, &act0, neuron);
-            act0[num_inputs + neuron_idx] = value;
+            let value =
+                neuron_activation_scalar(&network.synapses, &network.batch_activations[0], neuron);
+            network.batch_activations[0][num_inputs + neuron_idx] = value;
         }
         let mut sq_sum: f64 = 0.0;
         for j in 0..num_outputs {
-            let diff = (records[target_base + j] - act0[output_start + j]) as f64;
+            let diff =
+                (records[target_base + j] - network.batch_activations[0][output_start + j]) as f64;
             sq_sum += diff * diff;
         }
         sum_error += sq_sum * inv_outputs;
@@ -1679,6 +1701,8 @@ mod interleaved_mse_parity {
                 vec![0.0; num_non_inputs],
             ],
             batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+            // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
+            mse_inter: vec![0.0; num_neurons * 8],
         }
     }
 
@@ -1699,7 +1723,7 @@ mod interleaved_mse_parity {
 
     fn assert_bit_identical(squash: SquashType, num_records: usize) {
         let input_size = 6;
-        let net = build_network(input_size, squash);
+        let mut net = build_network(input_size, squash);
         assert!(
             !net.has_aggregate_squash(),
             "{squash:?} must route through the interleaved path"
@@ -1708,7 +1732,7 @@ mod interleaved_mse_parity {
         let values_per_record = input_size + 1;
 
         let interleaved = mse_sum_batch_8way_interleaved(
-            &net,
+            &mut net,
             &records,
             values_per_record,
             input_size,
@@ -1768,7 +1792,7 @@ mod interleaved_mse_parity {
             SquashType::HypotenuseV2,
             SquashType::Mean,
         ] {
-            let net = build_network(input_size, squash);
+            let mut net = build_network(input_size, squash);
             assert!(
                 net.has_aggregate_squash(),
                 "{squash:?} must be detected as an aggregate squash"
@@ -1780,7 +1804,7 @@ mod interleaved_mse_parity {
             for &n in &[8usize, 16, 24, 4096] {
                 let records = build_records(n, input_size);
                 let dispatched =
-                    mse_sum_batch_8way(&net, &records, values_per_record, input_size, 1, n);
+                    mse_sum_batch_8way(&mut net, &records, values_per_record, input_size, 1, n);
                 let scattered =
                     mse_sum_batch_scattered(&net, &records, values_per_record, input_size, 1, n);
                 assert_eq!(
