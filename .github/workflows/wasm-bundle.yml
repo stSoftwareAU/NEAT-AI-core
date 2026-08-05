@@ -65,6 +65,7 @@ jobs:
 
       - name: Build wasm_activation bundle
         run: |
+          set -euo pipefail
           chmod +x scripts/build-wasm-bundle.sh
           ./scripts/build-wasm-bundle.sh \
             --rev "${GITHUB_SHA}" \
@@ -127,6 +128,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           tag="wasm-bundle-${GITHUB_SHA}"
           gh release create "$tag" \
             wasm_activation-pkg.tar.gz \

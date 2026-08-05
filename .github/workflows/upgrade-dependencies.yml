@@ -65,6 +65,7 @@ jobs:
       - name: Check for changes
         id: changes
         run: |
+          set -euo pipefail
           if git diff --quiet -- 'Cargo.toml' '**/Cargo.toml' 'Cargo.lock'; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No Cargo.toml / Cargo.lock dependency changes."
@@ -77,6 +78,7 @@ jobs:
         if: steps.changes.outputs.changed == 'true'
         id: summary
         run: |
+          set -euo pipefail
           {
             echo 'body<<EOF'
             echo '## Dependency Upgrades'

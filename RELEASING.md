@@ -88,6 +88,47 @@ idempotent and **decoupled from the per-commit `wasm-bundle-<sha>` artifacts**:
 - `v<version>` releases address **versions** so consumers can pin and compare
   semver and react to breaking bumps.
 
+## Removing public API: the three-phase flow
+
+A public item is removed in three phases — **deprecate → migrate → delete** —
+staged across separate releases and separate PRs, as #386 → #408 → #409 did for
+the per-record scoring wrappers. Four properties of this repo shape the flow:
+
+- **`#[deprecated]` is a hard error in-repo.** CI builds with
+  `RUSTFLAGS="-D warnings"`, so the deprecating PR must migrate **every in-repo
+  caller in the same PR** — a missed one fails the build rather than warning.
+  A test that must keep calling the old API (a parity oracle, typically) carries
+  an explicit `#[allow(deprecated)]` whose comment **names the deletion issue**.
+- **There is no `CHANGELOG.md`.** The `v<version>` GitHub release cut by
+  `release.yml` is the release note, so a deprecation is recorded by the version
+  bump plus a note in `README.md` and the module docs. Deprecating is additive,
+  so it ships on a **patch**; only the delete is breaking.
+- **Deletion preconditions**, all verified before the delete PR (as #409 did):
+  the item carried `#[deprecated]` in a **prior released version**, at most one
+  in-repo caller remains, and a `gh` **code search across the consumer repos**
+  (NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples, NEAT-AI-Explore)
+  returns **zero source hits** — markdown hits do not count as callers.
+- **Sibling removals take successive minors.** Several breaking removals on one
+  milestone branch must be **rebased in sequence** so each takes the next
+  major-equivalent slot (`0.6.0` → `0.7.0` → `0.8.0`) instead of colliding on a
+  single version, which the `version-gate` job would otherwise let through as one
+  bump covering several breaks.
+
+```mermaid
+flowchart LR
+    A["Phase 1 — deprecate<br/>#deprecated + migrate in-repo callers<br/>patch bump"]
+    B["Phase 2 — release<br/>v&lt;version&gt; carries the deprecation"]
+    C{"preconditions met?<br/>prior release + no in-repo caller<br/>+ zero consumer source hits"}
+    D["Phase 3 — delete<br/>breaking signal, minor bump<br/>+ breaking-change log entry"]
+    E["wait — migrate the caller first"]
+    A --> B --> C
+    C -- "yes" --> D
+    C -- "no" --> E
+```
+
+A removal with **no** consumer at all (a dead module) still ends at phase 3 and
+still needs a log entry — `0.4.0` and `0.5.0` below are that shape.
+
 ## Breaking-change log
 
 Each major-equivalent bump is recorded here so downstream consumers can see what
@@ -169,8 +210,40 @@ let d2 = apply_derivative(squash_type, x2);
 let d3 = apply_derivative(squash_type, x3);
 ```
 
-The sibling `calculate_error_batch_4way`, `accumulate_*_batch_4way` and
-`calculate_{weight,bias}_batch_4way` exports are live and unchanged.
+The sibling `accumulate_*_batch_4way` and `calculate_{weight,bias}_batch_4way`
+exports are live and unchanged.
+
+This list also named `calculate_error_batch_4way`, which was still present at
+`0.6.0`; the `0.7.0` entry above removed it one release later.
+
+### `0.5.0` — `wasm_dataset` training-data offload removed (Issue #415)
+
+The public `neat_core::wasm_dataset` module, the crate-root re-exports
+`DatasetError`, `DatasetRegistry` and `TrainingDataset`, and the seven
+`training_data_load` / `_free` / `_num_records` / `_byte_len` / `_evaluate_mse` /
+`_live_bytes` / `_peak_bytes` WASM exports are **removed**. The offload shipped
+as lane (c) of the wasm64 milestone (#295) on the understanding that the
+`Learn.ts` adoption was owned upstream by NEAT-AI#3410; that issue closed without
+the wiring, and no consumer ever bound an export.
+
+**Migration** — none needed: the module had no caller in any repository, so no
+downstream code can break. Training data still reaches the crate through the flat
+batched scoring path (Issue #386) — `score_records_flat` /
+`score_records_parallel_flat` — which is public, tested and unchanged. See
+[README § Training-data offload](README.md#training-data-offload-wasm-linear-memory--removed-issue-415).
+
+### `0.4.0` — `PredictiveCodingEngine` (`pc_inference` / `pc_learning`) removed (Issue #414)
+
+The public `neat_core::pc_inference` and `neat_core::pc_learning` modules, the
+crate-root re-exports `PredictiveCodingEngine` and `PcEngineError`, and the
+`predictivecodingengine_infer_wasm` / `_infer_batch_wasm` /
+`_compute_gradients_wasm` WASM exports are **removed**. A consumer sweep
+(Issue #416, from #413) found no caller outside the engine's own tests in
+NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples or NEAT-AI-Explore.
+
+**Migration** — none needed: the engine had no caller in any repository.
+Predictive coding is implemented in TypeScript in NEAT-AI
+(`src/predictiveCoding/`), which never called the Rust engine and is unaffected.
 
 ### `0.3.0` — per-record scoring entry points removed (Issue #409)
 
