@@ -55,7 +55,9 @@ fn an_out_of_range_index_is_rejected_from_every_lane_position() {
     let out_of_range = num_neurons as u16;
 
     for position in 0..SPAN {
-        let mut from_indices: Vec<u16> = (0..SPAN).map(|i| (i % num_inputs as usize) as u16).collect();
+        let mut from_indices: Vec<u16> = (0..SPAN)
+            .map(|i| (i % num_inputs as usize) as u16)
+            .collect();
         from_indices[position] = out_of_range;
 
         let bytes = serialise(num_neurons, num_inputs, &from_indices);
@@ -67,7 +69,9 @@ fn an_out_of_range_index_is_rejected_from_every_lane_position() {
                 assert_eq!(from_index, out_of_range, "lane position {position}");
                 assert_eq!(n, num_neurons as usize, "lane position {position}");
             }
-            Err(other) => panic!("lane position {position}: expected InvalidSynapseIndex, got {other:?}"),
+            Err(other) => {
+                panic!("lane position {position}: expected InvalidSynapseIndex, got {other:?}")
+            }
             Ok(_) => panic!(
                 "lane position {position}: malformed network loaded — the gather4 \
                  safety contract is no longer enforced"
@@ -83,7 +87,9 @@ fn every_synapse_of_a_loaded_network_indexes_its_activation_buffer() {
     // unchecked gather relies on.
     let num_inputs = 24u32;
     let num_neurons = num_inputs + 1;
-    let from_indices: Vec<u16> = (0..SPAN).map(|i| (i % num_inputs as usize) as u16).collect();
+    let from_indices: Vec<u16> = (0..SPAN)
+        .map(|i| (i % num_inputs as usize) as u16)
+        .collect();
 
     let net = CompiledNetwork::new(&serialise(num_neurons, num_inputs, &from_indices))
         .expect("well-formed network must load");

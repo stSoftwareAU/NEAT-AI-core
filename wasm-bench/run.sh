@@ -24,6 +24,7 @@ RECORDS="${3:-4096}"
 SESSIONS="${4:-3}"
 
 TARGET="wasm32-unknown-unknown"
+ARTEFACTS="../target/wasm-bench"
 # Production wasm build flags: the release profile (opt-level 3, lto,
 # codegen-units 1 — see Cargo.toml) plus the SIMD features the kernels require.
 export RUSTFLAGS="-C target-feature=+simd128,+relaxed-simd"
@@ -39,8 +40,10 @@ build() {
   local variant="$1" out="$2"
   shift 2
   echo "building $variant …" >&2
-  cargo build --release --target "$TARGET" --target-dir "target/$variant" "$@" >&2
-  cp "target/$variant/$TARGET/release/wasm_gather4_bench.wasm" "$out"
+  # Build under the repo-level target/ so the artefacts land where every
+  # repo-wide scan (codespell, lint, git) already excludes them.
+  cargo build --release --target "$TARGET" --target-dir "$ARTEFACTS/$variant" "$@" >&2
+  cp "$ARTEFACTS/$variant/$TARGET/release/wasm_gather4_bench.wasm" "$out"
 }
 
 mkdir -p results
