@@ -322,17 +322,29 @@ Drift controls — both must be flat, and are:
 | `scoring/production_2x` (4096) | 165.17 ms | 163.06 ms | flat |
 | `scoring/production_exact` (4096) | 70.72 ms | 69.90 ms | flat |
 
-The `scoring` group is the no-regression gate for the `&[Vec<f32>]` wrapper: it
-routes through the same rewritten kernel and must not pay for the new input
-layout. It does not.
+At the time, the `scoring` group was the no-regression gate for the
+`&[Vec<f32>]` wrapper: it routed through the same rewritten kernel and had to
+not pay for the new input layout. It did not. That wrapper is also history —
+Issue #409 deleted `score_records` / `score_records_parallel` outright — so the
+group no longer gates anything about it; today it drives `score_records_flat`
+directly.
 
-`scoring_flat` is the new group scoring the *same* shard through the flat input
-entry point, so the delta against `scoring` isolates the per-record `Vec` header
-indirection (both fixtures are built outside the timed loop, so the caller-side
-one-allocation-per-record the `&[Vec<f32>]` signature forces is *additional*
-saving not counted here):
+> **Historical A/B — `scoring_flat` was retired by Issue #408, and the
+> per-record entry point it was compared against was removed by Issue #409.**
+> It was a second group added by #386 that scored the *same* shard through the
+> flat input entry point, so the delta against `scoring` isolated the per-record
+> `Vec` header indirection (both fixtures were built outside the timed loop, so
+> the caller-side one-allocation-per-record the `&[Vec<f32>]` signature forced
+> was *additional* saving not counted here). With only one input layout left
+> there was nothing to compare against, and `scoring` *is* the flat measurement.
+> The table below is the evidence for the #386 flat-input win, measured before
+> that retirement; it cannot be reproduced against the current tree, where the
+> group's Criterion filter has matched no benchmark since #408. The
+> "The `scoring` group (Issue #228)" paragraph in
+> `neat-core/benches/README.md` and the `bench_scoring` doc comment in
+> `neat-core/benches/hot_paths.rs` tell the same story.
 
-| benchmark (mean of rounds) | `scoring` | `scoring_flat` | change |
+| benchmark (mean of rounds, 2026-07-26) | `scoring` | `scoring_flat` — retired by #408, entry point removed by #409 | change |
 | --- | --- | --- | --- |
 | `production` (4096) | 72.87 ms | 70.34 ms | −3.5% |
 | `production_2x` (4096) | 163.06 ms | 149.70 ms | −8.2% |
