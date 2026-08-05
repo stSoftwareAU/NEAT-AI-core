@@ -70,8 +70,14 @@ use core::arch::wasm32::{
 // ============================================================================
 
 /// Gather the four synapses at `base..base + 4` into `(weights, activations)`
-/// lanes.
-#[cfg(target_arch = "wasm32")]
+/// lanes — the bounds-checked **control**, selected by the `checked-gather4`
+/// feature.
+///
+/// Numerically identical to the shipped unchecked gather below (same lanes,
+/// same order), so it is the reference the Issue #509 A/B harness measures
+/// against and the one-flag way back if the unchecked reads ever need to be
+/// taken out of a build.
+#[cfg(all(target_arch = "wasm32", feature = "checked-gather4"))]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128, v128) {
@@ -89,6 +95,55 @@ fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128,
             activations[s3.from_index as usize],
         ),
     )
+}
+
+/// Gather the four synapses at `base..base + 4` into `(weights, activations)`
+/// lanes, with the bounds checks the load-time invariant has already discharged
+/// elided (Issue #509).
+///
+/// Identical lanes in identical order to the checked control above — it only
+/// drops the per-lane bounds checks. This is the **one** place the scaffold's
+/// `unsafe` lives: every other helper and kernel is unchanged, and
+/// `gather4_products` reaches the unchecked reads only through this function.
+///
+/// # Safety
+///
+/// Two obligations, both discharged by the callers documented on every kernel:
+///
+/// 1. `base + 4 <= synapses.len()` — the kernels only call this from a chunk
+///    loop bounded by `scalar::synapse_count(start, end)`, and `end` is a
+///    caller-supplied bound into `synapses`.
+/// 2. Every `from_index` in `synapses[base..base + 4]` is a valid index into
+///    `activations` — `CompiledNetwork::new` rejects any network whose
+///    `from_index >= num_neurons` with `NetworkError::InvalidSynapseIndex`, and
+///    `activations` is sized to exactly `num_neurons`. That is the same
+///    load-time invariant the `scalar::tail_*` helpers already rely on
+///    (`AGENTS.md`, "Unsafe & SIMD invariants").
+#[cfg(all(target_arch = "wasm32", not(feature = "checked-gather4")))]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128, v128) {
+    // SAFETY: obligation 1 holds because the chunk loops in the kernels below
+    // never advance past `end`, and obligation 2 is the load-time
+    // `InvalidSynapseIndex` validation in `CompiledNetwork::new` — the same
+    // precondition each kernel already documents for its `scalar::tail_*`
+    // remainder.
+    unsafe {
+        let s0 = synapses.get_unchecked(base);
+        let s1 = synapses.get_unchecked(base + 1);
+        let s2 = synapses.get_unchecked(base + 2);
+        let s3 = synapses.get_unchecked(base + 3);
+
+        (
+            f32x4(s0.weight, s1.weight, s2.weight, s3.weight),
+            f32x4(
+                *activations.get_unchecked(s0.from_index as usize),
+                *activations.get_unchecked(s1.from_index as usize),
+                *activations.get_unchecked(s2.from_index as usize),
+                *activations.get_unchecked(s3.from_index as usize),
+            ),
+        )
+    }
 }
 
 /// Lane-wise `activation[from] * weight` for the four synapses at
