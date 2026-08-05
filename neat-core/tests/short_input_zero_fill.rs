@@ -67,6 +67,8 @@ fn network(neurons: Vec<NeuronData>, synapses: Vec<SynapseData>) -> CompiledNetw
             vec![0.0; num_non_inputs],
         ],
         batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
+        mse_inter: vec![0.0; num_neurons * 8],
     }
 }
 

@@ -268,6 +268,8 @@ pub fn build_network(spec: &NetSpec, seed: u64) -> CompiledNetwork {
             Vec::with_capacity(estimated_trace_size),
             Vec::with_capacity(estimated_trace_size),
         ],
+        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
+        mse_inter: vec![0.0; num_neurons * 8],
     }
 }
 
