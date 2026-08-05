@@ -62,6 +62,7 @@ jobs:
 
       - name: Configure Git
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -72,6 +73,7 @@ jobs:
 
       - name: Fetch base branch
         run: |
+          set -euo pipefail
           git fetch origin Develop:Develop || git fetch origin develop:develop || true
 
       - name: Install Rust toolchain
@@ -184,6 +186,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           PUSH_TOKEN: ${{ secrets.ACTIONS_PUSH }}
         run: |
+          set -euo pipefail
           git add -A
           if git diff --cached --quiet; then
             echo "No changes after version bump / dependency upgrade"
@@ -267,6 +270,7 @@ jobs:
 
       - name: Ensure bash scripts are executable
         run: |
+          set -euo pipefail
           CHANGED=false
           while IFS= read -r script; do
             if [ ! -x "$script" ]; then
@@ -293,6 +297,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           PUSH_TOKEN: ${{ secrets.ACTIONS_PUSH }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           if ! git diff --quiet; then
@@ -334,6 +339,7 @@ jobs:
 
       - name: Free up runner disk space
         run: |
+          set -euo pipefail
           df -h /
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
@@ -466,6 +472,7 @@ jobs:
 
       - name: Type-check TypeScript sources (deno check)
         run: |
+          set -euo pipefail
           chmod +x scripts/typescript-check.sh
           ./scripts/typescript-check.sh
 
@@ -495,12 +502,14 @@ jobs:
       # under the repository, mirroring the local quality.sh gate.
       - name: Install shellcheck (koalaman/shellcheck)
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y shellcheck
           shellcheck --version
 
       - name: Run shellcheck (koalaman/shellcheck)
         run: |
+          set -euo pipefail
           failed=0
           while IFS= read -r script; do
             shellcheck -s bash "$script" || failed=1
@@ -509,6 +518,7 @@ jobs:
 
       - name: Check bash script syntax (bash -n)
         run: |
+          set -euo pipefail
           exit_code=0
           while IFS= read -r script; do
             bash -n "$script" || exit_code=1
@@ -521,6 +531,7 @@ jobs:
       # a contributor's machine.
       - name: Install bats
         run: |
+          set -euo pipefail
           sudo apt-get install -y bats
           bats --version
 
@@ -618,6 +629,7 @@ jobs:
 
       - name: Check for required files
         run: |
+          set -euo pipefail
           required_files=(
             "Cargo.toml"
             "README.md"
@@ -636,8 +648,13 @@ jobs:
 
       - name: Validate workspace.package in root Cargo.toml
         run: |
+          set -euo pipefail
+          # Read the uncommented manifest once: under `pipefail` a
+          # `grep ... | grep -q ...` pipeline can report the first grep's
+          # SIGPIPE instead of the match, so match against a here-string.
+          uncommented=$(grep -vE '^[[:space:]]*#' Cargo.toml)
           for field in version edition license; do
-            if ! grep -vE '^[[:space:]]*#' Cargo.toml | grep -qE "^[[:space:]]*${field}[[:space:]]*="; then
+            if ! grep -qE "^[[:space:]]*${field}[[:space:]]*=" <<< "$uncommented"; then
               echo "Missing workspace.package field '${field}' in root Cargo.toml"
               exit 1
             fi
@@ -647,8 +664,12 @@ jobs:
 
       - name: Validate neat-core Cargo.toml
         run: |
+          set -euo pipefail
+          # See the workspace check above: match against a here-string so
+          # `pipefail` cannot turn a successful `grep -q` into a SIGPIPE.
+          uncommented=$(grep -vE '^[[:space:]]*#' neat-core/Cargo.toml)
           for field in name version edition license; do
-            if ! grep -vE '^[[:space:]]*#' neat-core/Cargo.toml | grep -qE "^[[:space:]]*${field}"; then
+            if ! grep -qE "^[[:space:]]*${field}" <<< "$uncommented"; then
               echo "Missing '${field}' in neat-core/Cargo.toml"
               exit 1
             fi
@@ -656,6 +677,7 @@ jobs:
 
       - name: Check README length
         run: |
+          set -euo pipefail
           readme_lines=$(wc -l < README.md)
           if [ "$readme_lines" -lt 10 ]; then
             echo "README.md too short ($readme_lines lines)"
@@ -664,6 +686,7 @@ jobs:
 
       - name: Check neat-core rustdoc presence
         run: |
+          set -euo pipefail
           doc_comments=$(grep -c "///" neat-core/src/lib.rs || echo "0")
           if [ "$doc_comments" -eq 0 ]; then
             echo "No /// in neat-core/src/lib.rs"
