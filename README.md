@@ -11,7 +11,7 @@ vocabulary carries a plain-English gloss.
 - <a id="glossary-neat"></a>**NEAT** — [NeuroEvolution of Augmenting Topologies](https://en.wikipedia.org/wiki/Neuroevolution_of_augmenting_topologies), the algorithm that evolves both the weights *and* the topology of a neural network. NEAT-AI is a project built on this idea; this repo is its shared native core.
 - <a id="glossary-creature"></a>**creature** — the project's term for a single evolved individual: a [genome](https://en.wikipedia.org/wiki/Artificial_neural_network) compiled to a runnable network. Scoring pushes many records through one creature.
 - <a id="glossary-squash"></a>**squash** — a neuron's [activation function](https://en.wikipedia.org/wiki/Activation_function) (the non-linearity applied to its weighted input sum). "Standard-squash" neurons use the project's default activation.
-- <a id="glossary-vibe-coder"></a>**Vibe Coder** — the automated agent that raises the routine dependency-bump and quality PRs (it runs `bump-deps.sh` before `quality.sh` on every such PR).
+- <a id="glossary-vibe-coder"></a>**Vibe Coder** — the automated agent that raises the routine dependency-bump and quality PRs (it runs `bump-deps.sh` on every such PR; the CI `quality` job then applies the same gates `quality.sh` runs locally).
 
 ## Test-driven development
 
@@ -60,7 +60,7 @@ safe-fall-back invariants; see
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. The `rust-gates` job runs the lint (`cargo clippy -D warnings`) and compile/syntax (`cargo check --all-targets`) gates on **every push to `Develop`** (and `workflow_dispatch`); on pull requests the `quality` job — the full PR pipeline — runs the same clippy gate, so `rust-gates` is skipped there rather than compiling the workspace twice (Issue #337). |
 | `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
-| `.github/dependabot.yml` | Advisory-triggered security-update fast lane — raises a fix PR the moment a RustSec/OSV advisory lands, independent of the weekly bump. |
+| `.github/dependabot.yml` | Weekly Cargo **version-updates** channel (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
 | `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`) and for the CI workflow contracts. Shared assertions live in `tests/scripts/helpers.bash` (loaded with `load helpers`, unit-tested by `helpers_shared.bats`) — put a new assertion there rather than copying it between suites (Issue #477). |
 | `LICENSE`, `.gitleaks.toml` | Inherited from NEAT-AI `Develop`. |
 
@@ -214,7 +214,8 @@ graph TD
 Once an enhancement merges to `Develop` here, it flows automatically to the
 next pull request raised in either consumer repository — no manual SHA bump
 is required. The two consumer paths differ in mechanism but share the same
-Vibe Coder hook (`bump-deps.sh` runs before `quality.sh` on every PR).
+Vibe Coder hook (`bump-deps.sh` runs on every PR; the CI `quality` job then
+applies the same gates `quality.sh` runs locally).
 
 ### NEAT-AI (Deno + WASM consumer)
 
@@ -299,21 +300,32 @@ before opening the PR.
 
 ## Dependency updates: two channels
 
-Dependency refresh runs on two complementary channels so the urgent
-"patch this advisory now" path is decoupled from the routine weekly bump:
+Two committed channels raise routine dependency-bump PRs. Both are weekly;
+the quarantine-aware workflow is the authoritative one, because it is the only
+channel that applies this project's release-age quarantine before proposing a
+bump:
 
-- **Routine bump** — [`.github/workflows/upgrade-dependencies.yml`](.github/workflows/upgrade-dependencies.yml)
+- **Routine bump (authoritative)** — [`.github/workflows/upgrade-dependencies.yml`](.github/workflows/upgrade-dependencies.yml)
   runs `bump-deps.sh` every Monday (`cron "0 6 * * 1"`), applying the
   `VIBE_BUMP_QUARANTINE_HOURS` release-age quarantine, `cargo audit`, and
-  dual native/WASM builds before raising a general upgrade PR.
-- **Security fast lane** — [`.github/dependabot.yml`](.github/dependabot.yml)
-  enables Dependabot's Cargo **security-updates** channel. When a
-  RustSec/OSV advisory lands against a crate already in `Cargo.lock`,
-  Dependabot raises a fix PR immediately — independent of the weekly window.
+  dual native/WASM builds before raising a general upgrade PR. The same script
+  runs on every PR from the `ci.yml` `version-increment` job.
+- **Dependabot version updates** — [`.github/dependabot.yml`](.github/dependabot.yml)
+  configures a Cargo **version-updates** entry: `interval: weekly`, a 7-day
+  `cooldown` (newly published crates are not proposed until they have aged),
+  and `open-pull-requests-limit: 10`. It overlaps the workflow above rather
+  than replacing it; its PRs go through the same CI gates.
 
-Advisory *detection* still lives in [`security.yml`](.github/workflows/security.yml)
-and the `ci.yml` `security` job (`cargo audit` / `rustsec/audit-check`); the
-new channel is what *raises* the remediation PR rather than waiting for Monday.
+Dependabot **security updates** — the advisory-triggered fast lane — are a
+repository-level setting rather than anything the committed tree configures, so
+this README cannot state whether the repository has it switched on. See GitHub's
+[about Dependabot security updates](https://docs.github.com/en/code-security/dependabot/dependabot-security-updates/about-dependabot-security-updates)
+for what that setting does and how to enable it.
+
+Advisory *detection* is committed and verifiable: it lives in
+[`security.yml`](.github/workflows/security.yml) and the `ci.yml` `security`
+job (`cargo audit` / `rustsec/audit-check`), which fail the build on a
+`Cargo.lock` crate with a known advisory.
 
 When an actively-exploited advisory's fix is newer than the
 `VIBE_BUMP_QUARANTINE_HOURS` window, an approver can take the documented
@@ -325,12 +337,13 @@ runbook, and the mandatory `cargo audit` re-check) lives in
 flowchart TD
     Adv[RustSec/OSV advisory disclosed] --> Detect[cargo audit detects<br/>security.yml / ci.yml]
     Detect -->|fails PR / scheduled job| Alert[Maintainer alerted]
-    Adv --> Dependabot[dependabot.yml<br/>security-updates channel]
-    Dependabot -->|immediate| FixPR[Advisory fix PR]
-    Cron[Weekly cron Mon 06:00] --> Bump[upgrade-dependencies.yml<br/>bump-deps.sh]
-    Bump -->|general refresh| GenPR[Weekly upgrade PR]
+    Alert --> FixPR[Advisory fix PR]
+    Cron[Weekly cron Mon 06:00] --> Bump[upgrade-dependencies.yml<br/>bump-deps.sh + quarantine]
+    Bump -->|authoritative refresh| GenPR[Weekly upgrade PR]
+    DepCron[Dependabot weekly<br/>7-day cooldown] --> DepPR[Version-update PR]
     FixPR --> Develop[Develop]
     GenPR --> Develop
+    DepPR --> Develop
 ```
 
 ## License

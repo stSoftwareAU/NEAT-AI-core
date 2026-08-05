@@ -3,8 +3,8 @@
 This document covers operational security procedures for NEAT-AI-core. It
 complements the automated supply-chain defences described in
 [`README.md`](README.md#dependency-updates-two-channels) — the weekly
-quarantine-aware bump, the Dependabot security fast lane, and `cargo audit`
-detection.
+quarantine-aware bump, the weekly Dependabot version-updates channel, and
+`cargo audit` detection.
 
 ## Reporting a vulnerability
 
