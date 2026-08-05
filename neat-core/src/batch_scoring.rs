@@ -264,16 +264,19 @@ pub(crate) fn neuron_activation_scalar(
     apply_limit_range(squash, activation)
 }
 
-/// Copy record inputs into a lane buffer, matching [`CompiledNetwork::activate_into`]
-/// (which copies `min(len, num_inputs)` input values). Any input slot the record
-/// does not cover is zeroed so each record is scored statelessly — buffers are
-/// reused across batches, and every non-input neuron is overwritten during the
-/// forward pass, so no further reset is required.
+/// Copy record inputs into an activation buffer: `min(len, num_inputs)` values,
+/// with any input slot the record does not cover zeroed so each record is scored
+/// statelessly — buffers are reused across batches, and every non-input neuron is
+/// overwritten during the forward pass, so no further reset is required.
 ///
 /// The single home of the clamp-and-zero loading rule (Issue #445): every
 /// per-lane loader in the batched scoring and fused loss kernels calls this, so
 /// a record's inputs land the same way whether it was scored in a SIMD group or
-/// in the scalar tail.
+/// in the scalar tail. The three single-record entry points
+/// ([`CompiledNetwork::activate`], [`CompiledNetwork::activate_into`],
+/// [`CompiledNetwork::activate_and_trace`]) call it too, so a record narrower
+/// than `num_inputs` scores the same through either path — before Issue #519
+/// they kept the previous call's values in the slots the record did not cover.
 #[inline]
 pub(crate) fn load_record(act: &mut [f32], record: &[f32], num_inputs: usize) {
     let in_len = record.len().min(num_inputs);

@@ -234,6 +234,10 @@ instruction this is **not** counted as evidence for the performance change and
 is not fixed here — it is filed separately as
 [#519](https://github.com/stSoftwareAU/NEAT-AI-core/issues/519).
 
+**Since fixed by #519:** the three single-record entry points now load their
+inputs through `load_record`, so the uncovered slots are zeroed and the row
+above no longer describes current behaviour.
+
 ## Decision — rejected and removed
 
 | Gate condition | Outcome |

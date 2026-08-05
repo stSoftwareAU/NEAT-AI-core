@@ -8,7 +8,7 @@
 //! NEAT-AI consumes. Public fields are skipped from the bindgen surface (they
 //! remain accessible to native Rust callers); the JS API is the public methods.
 
-use crate::batch_scoring::inline_squash;
+use crate::batch_scoring::{inline_squash, load_record};
 use crate::range::apply_limit_range;
 use crate::simd::{
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
@@ -372,9 +372,9 @@ impl CompiledNetwork {
     /// Issue #1175 - Uses typed structs for better cache locality
     /// Issue #1177 - Inlines common squash functions to avoid function call overhead
     pub fn activate(&mut self, input: &[f32], num_outputs: usize) -> Vec<f32> {
-        // Copy input values to activation buffer
-        let input_len = input.len().min(self.num_inputs);
-        self.activations[..input_len].copy_from_slice(&input[..input_len]);
+        // Copy input values to activation buffer, zeroing any slot the record
+        // does not cover (Issue #519 - see `load_record`).
+        self.load_inputs(input);
 
         // Process each neuron in order
         for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
@@ -531,9 +531,9 @@ impl CompiledNetwork {
     pub fn activate_into(&mut self, input: &[f32], output: &mut [f32]) {
         let num_outputs = output.len();
 
-        // Copy input values to activation buffer
-        let input_len = input.len().min(self.num_inputs);
-        self.activations[..input_len].copy_from_slice(&input[..input_len]);
+        // Copy input values to activation buffer, zeroing any slot the record
+        // does not cover (Issue #519 - see `load_record`).
+        self.load_inputs(input);
 
         // Process each neuron in order
         for (neuron_idx, neuron) in self.neurons.iter().enumerate() {
@@ -724,9 +724,9 @@ impl CompiledNetwork {
     ///     - For IF: branch_taken (1.0 = positive, 0.0 = negative)
     ///   - Terminated by -1.0
     pub fn activate_and_trace(&mut self, input: &[f32], num_outputs: usize) -> Vec<f32> {
-        // Copy input values to activation buffer
-        let input_len = input.len().min(self.num_inputs);
-        self.activations[..input_len].copy_from_slice(&input[..input_len]);
+        // Copy input values to activation buffer, zeroing any slot the record
+        // does not cover (Issue #519 - see `load_record`).
+        self.load_inputs(input);
 
         // Issue #1173 - Reuse pre-allocated trace data buffer instead of allocating
         // Track trace data for aggregate functions
@@ -1241,6 +1241,19 @@ impl CompiledNetwork {
 
 /// Issue #1212 - Helper methods for batch activate_and_trace processing
 impl CompiledNetwork {
+    /// Load one record's inputs into the reused activation buffer.
+    ///
+    /// Delegates to [`load_record`] — the single home of the clamp-and-zero
+    /// loading rule (Issue #445): copy `min(input.len(), num_inputs)` values
+    /// and **zero** every input slot the record does not cover. The buffer is
+    /// reused across calls, so without the zero-fill a record narrower than
+    /// `num_inputs` would score against the previous call's values and disagree
+    /// with the batched loaders (Issue #519).
+    #[inline]
+    fn load_inputs(&mut self, input: &[f32]) {
+        load_record(&mut self.activations, input, self.num_inputs);
+    }
+
     /// Process MINIMUM aggregate for 4 records
     #[allow(clippy::too_many_arguments)]
     fn process_minimum_4way(
