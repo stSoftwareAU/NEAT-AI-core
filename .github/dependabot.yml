@@ -1,24 +1,22 @@
-# Advisory-triggered security-update channel (Issue #121).
+# Weekly Cargo version-updates channel (Issue #121, corrected in Issue #500).
 #
-# The weekly `upgrade-dependencies.yml` cron is the routine, general bump path.
-# This file gives Dependabot a *security-update* fast lane: when a RustSec/OSV
-# advisory lands against a crate already in the tree, Dependabot opens a fix PR
-# immediately — independent of the Monday-morning weekly window and the 24h
-# VIBE_BUMP_QUARANTINE_HOURS release-age deferral. Detection still lives in
-# `security.yml` / `ci.yml` (cargo audit); this channel is what *raises* the
-# remediation PR.
+# The quarantine-aware `upgrade-dependencies.yml` cron is the authoritative
+# routine bump path; this file adds a second, overlapping weekly channel with a
+# 7-day cooldown. Dependabot *security* updates (the advisory-triggered fast
+# lane) are a repository-level setting, not something this file configures —
+# see https://docs.github.com/en/code-security/dependabot/dependabot-security-updates/about-dependabot-security-updates
+# Advisory detection lives in `security.yml` / `ci.yml` (cargo audit).
 version: 2
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      # Routine version bumps stay weekly to mirror upgrade-dependencies.yml;
-      # security advisories raise PRs immediately, outside this window.
+      # Routine version bumps stay weekly to mirror upgrade-dependencies.yml.
       interval: "weekly"
     # Semgrep package_managers.dependabot.dependabot-missing-cooldown — wait
     # before proposing version bumps of newly published crates so supply-chain
-    # compromise has time to surface. Security updates are unaffected (they
-    # bypass cooldown and still open immediately).
+    # compromise has time to surface. Cooldown applies to version updates only;
+    # repository-level security updates are not affected by it.
     cooldown:
       default-days: 7
     open-pull-requests-limit: 10
