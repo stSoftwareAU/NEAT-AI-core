@@ -103,7 +103,8 @@ Throughput highlights: `forward_pass` ≈ 126 Melem/s (production) / 123 Melem/s
 
 The single-core `parallel_scoring` figure (16.86 Krecords/s for `production`)
 matches the `hot_paths` `scoring` group (16.87 Krecords/s) — both drive the same
-sequential `score_records` path, an internal consistency check on the fixture.
+sequential `score_records_flat` path, an internal consistency check on the
+fixture.
 
 ## Production-exact topology baseline (Issue #286)
 
@@ -164,8 +165,9 @@ lane sub-issue's optimisation is measured against.
 
 > **Scoring-lane variance (be honest about it).** The ~90 ms `hot_paths`
 > `scoring` figure and the ~62 ms `parallel_scoring` `1_core` figure exercise the
-> *same* sequential `score_records` path, so in principle they match — but they
-> were taken in separate `cargo bench` invocations and the ~90 ms → ~62 ms spread
+> *same* sequential `score_records_flat` path, so in principle they match — but
+> they were taken in separate `cargo bench` invocations and the ~90 ms → ~62 ms
+> spread
 > is real run-to-run variance (thermal state on the laptop-class M4 Pro under a
 > ~90 ms single-shot benchmark with 100 iterations). Treat the **`parallel_scoring`
 > 1-core/12-core pair as the authoritative scoring anchor** — both were measured
@@ -175,8 +177,8 @@ lane sub-issue's optimisation is measured against.
 
 ## Record-interleaved scoring optimisation (Issue #287)
 
-The single-thread scoring hot path (`score_records` → `score_batch_into`, the
-same lane NEAT-AI's per-creature wasm32 workers drive) now transposes each
+The single-thread scoring hot path (`score_records_flat` → `score_batch_into`,
+the same lane NEAT-AI's per-creature wasm32 workers drive) now transposes each
 group of eight records into a **record-interleaved** activation buffer:
 lane `l` of source neuron `n` lives at `inter[n * 8 + l]`, so all eight records
 for a synapse's source are contiguous. Each gather in
@@ -220,8 +222,9 @@ bit-for-bit identical to `activate` (asserted by
 The `#[wasm_bindgen]` fused activate + MSE entry point (`mse_sum_batch_packed`)
 ran its **own** duplicate forward pass over the old eight-scattered-buffer
 per-lane layout (`mse_sum_batch_8way` → `weighted_sum_simd_8records`), so the
-locality win #287 landed for `score_records` never reached the loss lane
-production scoring actually calls. #384 dispatches standard-squash networks
+locality win #287 landed for the then-current per-record `score_records` entry
+point (removed in Issue #409; `score_records_flat` is its successor) never
+reached the loss lane production scoring actually calls. #384 dispatches standard-squash networks
 (the all-`Tanh` production topology) through the same record-interleaved gather
 (`interleaved_forward_8` → `weighted_sum_interleaved_8`) and keeps aggregate
 networks on the exact per-lane path. The full 8-record groups are **bit-identical**
@@ -364,7 +367,7 @@ benchmark, and this decision.
 
 ### The two lanes being compared
 
-Both lanes drive the **same** `score_records` forward pass (the #287
+Both lanes drive the **same** `score_records_flat` forward pass (the #287
 record-interleaved batched-SIMD gather); they differ only in codegen and thread
 count:
 
@@ -388,8 +391,9 @@ calibration above) scored through one creature.
   (Criterion, `--sample-size 30`), median estimate.
 - **wasm32**: `wasm-pack build --target nodejs --release` of a throwaway harness
   that reuses the committed `benches/common` fixtures and calls the identical
-  `score_records`, driven by `node` timing `score_once()` (median of 20, after a
-  5-iteration warm-up). Harness source and commands under **Reproducing** below.
+  `score_records_flat`, driven by `node` timing `score_once()` (median of 20,
+  after a 5-iteration warm-up). Harness source and commands under
+  **Reproducing** below.
 
 | Shape | wasm32 1-thread | native 1 core | native 12 cores |
 | --- | --- | --- | --- |
@@ -447,8 +451,9 @@ Two distinct wins stack:
   the native SIMD/`libm` split widens further — so the native advantage here is
   a lower bound, not an upper one.
 - **wasm32 lane is a codegen ceiling, not the production wasm scorer.** This
-  measures the shared `score_records` compiled to wasm32. NEAT-AI's production
-  wasm path additionally pays JS↔wasm orchestration per record, so the real
+  measures the shared `score_records_flat` compiled to wasm32. NEAT-AI's
+  production wasm path additionally pays JS↔wasm orchestration per record, so
+  the real
   wasm32 scoring lane is no faster than this row — reinforcing the verdict.
 
 ## Backprop-setup adjacency: `Vec<Vec<u32>>` → CSR (Issue #388)
