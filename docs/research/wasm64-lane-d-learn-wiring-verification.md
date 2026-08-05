@@ -6,10 +6,20 @@ lane (d) — Issue
 a learn-stage **exit-133** V8 heap-limit abort observed on an 8 GB production
 host in the downstream production training system.
 
+> **Superseded in part — lane (c)'s artefact was removed.** The `wasm_dataset`
+> training-data offload this document referred to as a live delivery path was
+> **removed as dead code in Issue #415**: the `Learn.ts` adoption was never
+> done, and the milestone and its upstream adoption issue both closed with the
+> seven `training_data_*` exports unbound. The authoritative record is
+> [README.md § Training-data offload (WASM linear memory) — removed, Issue #415](../../README.md#training-data-offload-wasm-linear-memory--removed-issue-415).
+> The lane (d) verification content below — the `learn_flags_wiring.ts`
+> invariants and the RAM-aware selection table — is unaffected and still current.
+
 ## Purpose
 
-Lanes (a)/(b)/(c) established **what** to ship; lane (d) verifies the
-downstream-side **wiring** end-to-end and records the outcome:
+Lanes (a)/(b)/(c) established **what** to ship (lane (c)'s shipped artefact was
+later removed — see the note above); lane (d) verifies the downstream-side
+**wiring** end-to-end and records the outcome:
 
 - **Lane (a) (#296):** the ~4 GB learn ceiling is the **V8 old-space heap**
   (exit 133 / "Reached heap limit"), liftable by
@@ -18,10 +28,12 @@ downstream-side **wiring** end-to-end and records the outcome:
 - **Lane (b) (#297):** a wasm64 build is feasible only on the raw
   nightly + `-Z build-std` path (wasm-bindgen silently strips exports), so
   wasm64 is **not adopted yet**.
-- **Lane (c) (#298):** `wasm_dataset` moves the large training arrays **off the
-  JS heap** into neat-core's own linear memory (the residual-growth fix), with
-  the `Learn.ts` adoption owned upstream by
-  [NEAT-AI#3410](https://github.com/stSoftwareAU/NEAT-AI/issues/3410).
+- **Lane (c) (#298) — shipped, then removed:** `wasm_dataset` *moved* the large
+  training arrays **off the JS heap** into neat-core's own linear memory (the
+  proposed residual-growth fix). Its `Learn.ts` adoption, owned upstream by
+  [NEAT-AI#3410](https://github.com/stSoftwareAU/NEAT-AI/issues/3410), was never
+  done; that issue closed unadopted and the module was **removed in Issue #415**
+  (see the note above).
 
 Lane (d) confirms the downstream learn invocation selects the heap flag
 **RAM-aware** and fails **loud** on a heap abort, and records the 8 GB-host
@@ -97,12 +109,13 @@ milestone repo too.
   (RAM-aware heap + the constrained-8 GB step-down + the fail-loud marker) is
   shipped on `Develop`; the fleet owns the live job re-run on an 8 GB host.
 - **Residual heap growth** (why an 8 GB host cannot simply be given a larger
-  heap — 4326 MB is already ~all an 8 GB host can back) is addressed by lane
-  (c)'s `wasm_dataset` offload, whose `Learn.ts` adoption + `MemoryMonitor` fix
-  are **upstream** in NEAT-AI#3410. That fix reaches the downstream system
-  through the ordinary released-dependency bump (Issue #1613) once NEAT-AI#3410
-  lands and is released — it is **not** pulled in via a raw commit/pre-release
-  (Issue #2944).
+  heap — 4326 MB is already ~all an 8 GB host can back) was to have been
+  addressed by lane (c)'s `wasm_dataset` offload, whose `Learn.ts` adoption +
+  `MemoryMonitor` fix sat **upstream** in NEAT-AI#3410. Neither landed:
+  NEAT-AI#3410 closed unadopted and the module was **removed in Issue #415**, so
+  **no delivery path for this residual is open** — nothing downstream is waiting
+  on a released-dependency bump. Re-adopting the offload means re-landing the
+  module against a live consumer, per the README record linked above.
 - **Not fabricated here:** a live 8 GB fleet-host run of the failing job class
   requires the full production cluster environment and is fleet/human-owned; it
   is recorded as the remaining confirmation rather than simulated.
