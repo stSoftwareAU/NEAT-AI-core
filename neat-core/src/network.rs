@@ -57,36 +57,6 @@ pub enum NetworkError {
         /// The network's node count; valid indices are `0..num_neurons`.
         num_neurons: usize,
     },
-    /// The caller supplied an input slice whose length is not exactly the
-    /// network's input count.
-    ///
-    /// Issue #511 — raised only by the experimental
-    /// [`CompiledNetwork::activate_into_exact`] entry point, which refuses to
-    /// silently truncate or partially fill the input activations the way
-    /// [`CompiledNetwork::activate_into`] does.
-    #[cfg(feature = "experimental-exact-inference")]
-    InputLengthMismatch {
-        /// The network's input count — the only accepted input length.
-        expected: usize,
-        /// The length the caller actually supplied.
-        actual: usize,
-    },
-    /// The caller supplied an output buffer that cannot be filled from the
-    /// network's non-input activations.
-    ///
-    /// Issue #511 — raised only by the experimental
-    /// [`CompiledNetwork::activate_into_exact`]. A compiled network does not
-    /// record its own output count (outputs are the last `output.len()`
-    /// activations), so the checkable contract is
-    /// `1 <= output.len() <= num_neurons - num_inputs`.
-    #[cfg(feature = "experimental-exact-inference")]
-    OutputLengthMismatch {
-        /// The largest output length this network can fill
-        /// (`num_neurons - num_inputs`).
-        max: usize,
-        /// The length the caller actually supplied.
-        actual: usize,
-    },
 }
 
 impl std::fmt::Display for NetworkError {
@@ -110,21 +80,6 @@ impl std::fmt::Display for NetworkError {
                     f,
                     "Synapse source index {from_index} is out of bounds for a network \
                      with {num_neurons} nodes (valid indices are 0..{num_neurons})"
-                )
-            }
-            #[cfg(feature = "experimental-exact-inference")]
-            NetworkError::InputLengthMismatch { expected, actual } => {
-                write!(
-                    f,
-                    "Input length {actual} does not match the network's {expected} inputs"
-                )
-            }
-            #[cfg(feature = "experimental-exact-inference")]
-            NetworkError::OutputLengthMismatch { max, actual } => {
-                write!(
-                    f,
-                    "Output length {actual} is not fillable by this network \
-                     (expected 1..={max})"
                 )
             }
         }

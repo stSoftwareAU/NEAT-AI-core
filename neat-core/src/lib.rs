@@ -14,9 +14,6 @@ pub mod creature;
 pub mod derivative;
 pub mod elastic_distribution;
 pub mod error;
-// Issue #511 - experimental exact-size inference prototype, off by default.
-#[cfg(feature = "experimental-exact-inference")]
-pub mod exact_inference;
 pub mod fused_error;
 pub mod loss;
 pub mod network;
