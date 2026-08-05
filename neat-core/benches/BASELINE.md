@@ -347,8 +347,9 @@ it drives the identical `score_batch_into`:
 
 ## Native (`--features parallel`) vs wasm32 scoring lane — decision (Issue #288)
 
-The `parallel` feature (rayon, #179) has always compiled the native
-`CompiledNetwork::score_records_parallel` entry point but was never A/B'd
+The `parallel` feature (rayon, #179) has always compiled a native rayon entry
+point — `CompiledNetwork::score_records_parallel_flat` today, named
+`score_records_parallel` before Issue #409 removed it — but it was never A/B'd
 against the wasm32 lane at production scale, so production never routed
 per-creature scoring to it. This section quantifies the trade-off and records
 the decision.
@@ -358,10 +359,9 @@ the native `rust_scorer` is built.** Native beats wasm32 on the production
 fixture on both axes — per-core codegen (NEON + FMA vs simd128 + relaxed-madd)
 and, decisively, by using idle cores the single-threaded wasm32 lane cannot.
 This is a **positive result**; the core-side native path
-(`score_records_parallel` with its sequential/wasm32 fallback) is ready, and the
-production wiring is raised
-cross-repo (a WorkerPool idle-tail change and a host-flags change in the
-downstream production repos) per the issue's
+(`score_records_parallel_flat` with its sequential/wasm32 fallback) is ready,
+and the production wiring is raised cross-repo (a WorkerPool idle-tail change
+and a host-flags change in the downstream production repos) per the issue's
 one-root-cause-one-repo rule — this issue owns only the neat-core native path,
 benchmark, and this decision.
 
@@ -379,7 +379,7 @@ count:
   ceiling.
 - **native** — the same source compiled for `aarch64-apple-darwin` (AVX2/FMA on
   x86, NEON on ARM), scored through a fixed-size rayon pool of 1 or 12 workers
-  via `score_records_parallel`.
+  via `score_records_parallel_flat`.
 
 ### Measured 2026-07-18 — Apple M4 Pro host class
 
@@ -433,9 +433,9 @@ Two distinct wins stack:
    un-scored creatures outnumber cores, but at the **generation-end tail** fewer
    creatures than cores remain and cores go idle. wasm32 workers are
    single-threaded per creature, so that idle time is wasted; native
-   `score_records_parallel` lets each remaining creature spread its record batch
-   across the idle cores. This tail is the **per-creature parallelism win zone**
-   — where native rayon converts otherwise-idle cores into throughput.
+   `score_records_parallel_flat` lets each remaining creature spread its record
+   batch across the idle cores. This tail is the **per-creature parallelism win
+   zone** — where native rayon converts otherwise-idle cores into throughput.
 
 ### Honesty caveats
 
