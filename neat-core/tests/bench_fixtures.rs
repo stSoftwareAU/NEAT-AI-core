@@ -8,8 +8,8 @@
 mod common;
 
 use common::{
-    FanIn, NETWORKS, NetSpec, PRODUCTION_SCORING_RECORDS, build_backprop_data, build_inputs,
-    build_network, build_records,
+    FanIn, NETWORKS, NetSpec, PRODUCTION_SCORING_RECORDS, aggregate_count, build_backprop_data,
+    build_inputs, build_network, build_records, with_aggregates,
 };
 use neat_core::squash::SquashType;
 
@@ -333,4 +333,87 @@ fn score_records_on_production_batch_yields_finite_ordered_outputs() {
         out.iter().all(|v| v.is_finite()),
         "production scoring must produce finite outputs"
     );
+}
+
+#[test]
+fn aggregate_rewrite_hits_the_requested_frequency() {
+    // Issue #510 - the aggregate_frequency sweep is only meaningful if the
+    // requested percentage is what the fixture actually carries.
+    let spec = spec("production_exact");
+    for (percent, expected) in [(0usize, 0usize), (10, 167), (50, 833), (100, 1666)] {
+        let net = with_aggregates(build_network(spec, 0x5152_5354), percent);
+        assert_eq!(
+            aggregate_count(&net),
+            expected,
+            "{percent}% aggregate rewrite produced the wrong neuron count"
+        );
+    }
+}
+
+#[test]
+fn aggregate_rewrite_leaves_topology_and_weights_untouched() {
+    // Only squash types (and If synapse types) may change: otherwise the sweep
+    // would be measuring a different creature at each frequency.
+    let spec = spec("production_exact");
+    let base = build_network(spec, 0x5152_5354);
+    let rewritten = with_aggregates(build_network(spec, 0x5152_5354), 50);
+
+    assert_eq!(rewritten.num_neurons, base.num_neurons);
+    assert_eq!(rewritten.synapses.len(), base.synapses.len());
+    for (i, (got, want)) in rewritten
+        .synapses
+        .iter()
+        .zip(base.synapses.iter())
+        .enumerate()
+    {
+        assert_eq!(got.from_index, want.from_index, "synapse {i} source moved");
+        assert_eq!(
+            got.weight.to_bits(),
+            want.weight.to_bits(),
+            "synapse {i} weight changed"
+        );
+    }
+    for (i, (got, want)) in rewritten
+        .neurons
+        .iter()
+        .zip(base.neurons.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            got.start_synapse, want.start_synapse,
+            "neuron {i} span moved"
+        );
+        assert_eq!(
+            got.num_synapses, want.num_synapses,
+            "neuron {i} fan-in changed"
+        );
+        assert_eq!(
+            got.bias.to_bits(),
+            want.bias.to_bits(),
+            "neuron {i} bias changed"
+        );
+    }
+}
+
+#[test]
+fn rewritten_if_neurons_carry_a_condition_synapse() {
+    // An If neuron with no condition synapse would always take the negative
+    // branch, so the If arm would not be exercised at all.
+    let spec = spec("production_exact");
+    let net = with_aggregates(build_network(spec, 0x5152_5354), 100);
+    let mut checked = 0;
+    for neuron in net
+        .neurons
+        .iter()
+        .filter(|n| SquashType::from(n.squash_type) == SquashType::If && n.num_synapses > 0)
+    {
+        let start = neuron.start_synapse as usize;
+        let end = start + neuron.num_synapses as usize;
+        assert!(
+            net.synapses[start..end].iter().any(|s| s.synapse_type == 1),
+            "If neuron at {start} has no condition synapse"
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "fixture produced no If neurons to check");
 }

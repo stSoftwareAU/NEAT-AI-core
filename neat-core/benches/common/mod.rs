@@ -415,3 +415,56 @@ pub fn make_neuron(squash: SquashType, neuron_type: u8, adjusted_activation: f32
         adjusted_bias: 0.0,
     }
 }
+
+/// The three aggregate squashes swept by the `aggregate_frequency` bench
+/// (Issue #510), cycled across the rewritten neurons.
+pub const AGGREGATES: [SquashType; 3] = [SquashType::Minimum, SquashType::Maximum, SquashType::If];
+
+/// Rewrite a deterministic `percent` of a network's non-input neurons to the
+/// three aggregate squashes, cycling `Minimum`/`Maximum`/`If` and spreading them
+/// evenly rather than clustering them (Issue #510).
+///
+/// Topology, weights, biases and fan-in are untouched — only `squash_type` and,
+/// for `If` neurons, the synapse types change. That keeps the gather pattern at
+/// production sparsity so aggregate **frequency** is the only swept variable.
+/// The committed `production*` fixtures are homogeneous `Tanh`, so this is the
+/// only way to put aggregate neurons in a production-sized creature.
+pub fn with_aggregates(mut net: CompiledNetwork, percent: usize) -> CompiledNetwork {
+    if percent == 0 {
+        return net;
+    }
+    let num_non_inputs = net.neurons.len();
+    let target = num_non_inputs * percent / 100;
+    if target == 0 {
+        return net;
+    }
+    let stride = (num_non_inputs / target).max(1);
+
+    for n in (0..num_non_inputs).step_by(stride) {
+        let squash = AGGREGATES[(n / stride) % AGGREGATES.len()];
+        net.neurons[n].squash_type = squash as u8;
+
+        if squash == SquashType::If {
+            let start = net.neurons[n].start_synapse as usize;
+            let end = start + net.neurons[n].num_synapses as usize;
+            for (k, synapse) in net.synapses[start..end].iter_mut().enumerate() {
+                // First synapse is the condition; the rest alternate the
+                // positive and negative branches.
+                synapse.synapse_type = match k {
+                    0 => 1,               // Condition
+                    _ if k % 2 == 1 => 3, // Positive
+                    _ => 2,               // Negative
+                };
+            }
+        }
+    }
+    net
+}
+
+/// Count of non-constant neurons using an aggregate squash.
+pub fn aggregate_count(net: &CompiledNetwork) -> usize {
+    net.neurons
+        .iter()
+        .filter(|n| !n.is_constant && SquashType::from(n.squash_type).is_aggregate())
+        .count()
+}

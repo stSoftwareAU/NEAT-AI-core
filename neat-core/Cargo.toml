@@ -56,3 +56,10 @@ harness = false
 [[bench]]
 name = "parallel_scoring"
 harness = false
+
+# Issue #510 - inference throughput across a sweep of aggregate-squash
+# frequencies on the production_exact creature. Its `agg0pct` point is a null
+# control (no aggregate neurons), so its spread measures host noise.
+[[bench]]
+name = "aggregate_frequency"
+harness = false

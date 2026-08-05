@@ -5,12 +5,19 @@ Criterion harness for the core hot paths (Issue #152). These benchmarks are
 `neat-core/Cargo.toml` keeps them out of `cargo test` and the `quality.sh`
 gate, so the CI runtime is unaffected.
 
-There are two bench targets:
+There are three bench targets:
 
 - `hot_paths` — the per-record hot paths (always available).
 - `parallel_scoring` — data-parallel record scoring throughput (Issue #179),
   **requires `--features parallel`**. Without the feature its `main` is a no-op
   shim, so the target still builds on every configuration.
+- `aggregate_frequency` — forward, traced and batched-scoring throughput on the
+  `production_exact` creature across a sweep of aggregate-squash frequency
+  (0 / 10 / 50 / 100% of neurons on `Minimum`/`Maximum`/`If`, Issue #510). The
+  `production*` fixtures are homogeneous `Tanh`, so this is the only committed
+  fixture with aggregate neurons in a production-sized creature. Its `agg0pct`
+  point contains no aggregate neuron at all, which makes it a **null control**:
+  its session-to-session spread is this host's noise floor.
 
 ## What is measured
 
@@ -126,6 +133,22 @@ here so the levers are **not re-attempted** and the numbers are read correctly.
   the committed homogeneous-`Tanh` numbers are a lower bound for production.
   Chasing branch-misprediction *on this fixture* will measure nothing — validate
   such levers against the real varied-squash creature, not the synthetic shape.
+- **Unchecked indexing in the aggregate kernels buys nothing (Issue #510,
+  negative result — do not re-attempt).** Removing the per-synapse bounds check
+  from the `Minimum`/`Maximum`/`If` loops measured **−1.3% to −4.8%** end-to-end
+  at the production-realistic ~10% aggregate frequency, against a **19–40%**
+  session noise floor on this host. The 15–38% wins appear only at 50–100%
+  aggregate — synthetic-only. An isolated A/B against *safe* attribution
+  controls showed the little that was there comes from **slice iteration, not
+  bounds-check removal**: rewriting `synapses[start + i]` as a span-slice walk
+  recovers most of it with no `unsafe`. Full record:
+  [`docs/research/aggregate-unchecked-kernels-2026-08-05.md`](../../docs/research/aggregate-unchecked-kernels-2026-08-05.md).
+- **Aggregate frequency, not aggregate kernel cost, is the lever (Issue #510).**
+  `score_batch_into` drops to the per-lane path when **any** neuron is an
+  aggregate, so a 10%-aggregate creature loses the record-interleaved fast path
+  for all of its neurons: 35.8 ms → 85.9 ms per 4,096-record shard, a **2.4×**
+  cost. That is where scoring effort on aggregate creatures belongs — tracked as
+  [#514](https://github.com/stSoftwareAU/NEAT-AI-core/issues/514).
 
 ## Running
 
@@ -139,6 +162,9 @@ cargo bench -p neat-core --bench hot_paths -- backprop
 
 # Run only the production-scale shapes across every hot path.
 cargo bench -p neat-core --bench hot_paths -- production
+
+# Sweep aggregate-squash frequency on the production_exact creature.
+cargo bench -p neat-core --bench aggregate_frequency
 ```
 
 > Use `--bench hot_paths` so Criterion's CLI flags are not handed to the
