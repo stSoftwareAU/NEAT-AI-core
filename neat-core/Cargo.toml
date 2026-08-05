@@ -25,10 +25,6 @@ serde_json = "1"
 # `wasm32` builds pull in no rayon symbols and keep their single-thread path.
 [features]
 parallel = ["dep:rayon"]
-# Issue #510 - experimental prototype: route the Minimum/Maximum/If aggregate
-# kernels through unchecked activation gathers. Off by default; the shipped
-# library keeps the checked loops. Enable only to reproduce the benchmark A/B.
-experimental-aggregate-unchecked = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { version = "1.12", optional = true }
@@ -53,9 +49,9 @@ harness = false
 name = "parallel_scoring"
 harness = false
 
-# Issue #510 - aggregate-kernel experiment harness. The end-to-end groups build
-# without any feature (they measure whichever kernel the build selects); the
-# isolated safe-vs-unchecked A/B needs `experimental-aggregate-unchecked`.
+# Issue #510 - inference throughput across a sweep of aggregate-squash
+# frequencies on the production_exact creature. Its `agg0pct` point is a null
+# control (no aggregate neurons), so its spread measures host noise.
 [[bench]]
-name = "aggregate_unchecked"
+name = "aggregate_frequency"
 harness = false

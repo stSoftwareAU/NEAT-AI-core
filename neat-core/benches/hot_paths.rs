@@ -30,6 +30,7 @@ use neat_core::unsquash::apply_unsquash;
 /// Deterministic network/backprop fixtures, shared with the `bench_fixtures`
 /// integration test (Issue #176) so the production-scale builders are exercised
 /// by a real `cargo test` run as well as the harness.
+#[allow(dead_code)] // shared fixture module; this bench uses only a subset
 mod common;
 use common::{
     Lcg, NETWORKS, PRODUCTION_SCORING_RECORDS, build_backprop_data, build_inputs, build_network,

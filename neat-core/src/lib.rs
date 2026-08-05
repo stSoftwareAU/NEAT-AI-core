@@ -7,13 +7,6 @@
 //!
 //! Issue #1964 - Extract shared Rust library crate from wasm_activation.
 
-// Issue #510 — experimental unchecked aggregate kernels. Prototype only,
-// compiled behind the non-default `experimental-aggregate-unchecked` feature so
-// the shipped library keeps the checked aggregate loops until (and unless) the
-// measurements justify otherwise.
-#[cfg(feature = "experimental-aggregate-unchecked")]
-pub mod aggregate_experiment;
-
 // Core computation modules
 pub mod accumulate;
 pub mod batch_scoring;
