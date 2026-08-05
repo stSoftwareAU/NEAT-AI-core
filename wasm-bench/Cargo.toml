@@ -25,6 +25,13 @@ neat-core = { path = "../neat-core" }
 # Forwarded to neat-core so the driver can build the bounds-checked control.
 checked-gather4 = ["neat-core/checked-gather4"]
 
+# Issue #511 — builds `bench_activate` against the validated exact-size entry
+# point (`activate_into_exact`) instead of the shipped `activate_into`, so the
+# same interleaved driver can A/B that prototype on a real wasm runtime. The
+# `kernel` and `score` benches are unaffected by the switch, which makes them
+# null controls for the session's noise. See `run-exact.sh`.
+exact-inference = ["neat-core/experimental-exact-inference"]
+
 # The wasm32 kernels cannot run in the native test suite, and `neat-core`'s own
 # test targets cannot be built for wasm (its `criterion` dev-dependency refuses
 # to compile for wasi). Re-pointing the parity tests here — a crate with no

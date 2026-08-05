@@ -34,6 +34,13 @@ parallel = ["dep:rayon"]
 # back out.
 checked-gather4 = []
 
+# Issue #511 - off by default: the validated exact-size inference prototype
+# (`activate_into_exact`). An A/B experiment, not a shipped path — the control
+# (`activate_into`) is untouched and stays the only production entry point.
+# Remove with the prototype once the acceptance gate has been decided; see
+# `docs/research/exact-size-inference-entry-point.md`.
+experimental-exact-inference = []
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { version = "1.12", optional = true }
 
@@ -62,4 +69,11 @@ harness = false
 # control (no aggregate neurons), so its spread measures host noise.
 [[bench]]
 name = "aggregate_frequency"
+harness = false
+
+# Issue #511 - control-vs-prototype A/B for the validated exact-size inference
+# entry point. Runs control-only without `experimental-exact-inference`; with
+# the feature both arms are measured in one process.
+[[bench]]
+name = "exact_inference"
 harness = false

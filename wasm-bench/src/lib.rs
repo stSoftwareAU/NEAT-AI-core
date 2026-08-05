@@ -147,13 +147,24 @@ pub extern "C" fn bench_kernel() -> f64 {
 }
 
 /// End-to-end single-record inference over every record. Returns the checksum.
+///
+/// Issue #511 — under the `exact-inference` feature this calls the validated
+/// exact-size entry point instead of the shipped one, which is what makes the
+/// driver's interleaved A/B measure that prototype. Every record is exactly
+/// `num_inputs` wide, so the two forms are required to agree bit-for-bit; the
+/// checksum the driver compares is the parity check.
 #[unsafe(no_mangle)]
 pub extern "C" fn bench_activate() -> f64 {
     with_fixture(|f| {
         let mut out = std::mem::take(&mut f.out);
         let mut checksum = 0.0f64;
         for record in &f.records {
+            #[cfg(not(feature = "exact-inference"))]
             f.net.activate_into(record, &mut out);
+            #[cfg(feature = "exact-inference")]
+            f.net
+                .activate_into_exact(record, &mut out)
+                .expect("fixture records are exactly num_inputs wide");
             for value in &out {
                 checksum += *value as f64;
             }
