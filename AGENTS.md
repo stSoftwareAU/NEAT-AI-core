@@ -102,6 +102,9 @@ When production cannot construct the edge case that would expose an oracle bug,
 **test the oracle** directly: a synthetic buffer with distinct per-record
 lengths, plus fail-loud assertions for a header that overruns or undercovers the
 payload. An oracle with untested edge cases is production code without tests.
+`split_batch_records` (#476) walks the batch header loop-derived, so every
+record is sliced with its own length — the `len0`/`len2` slip is no longer
+expressible, and the synthetic tests catch header-overrun and undercover cases.
 
 `tests/scripts/oracle_mutation_evidence.bats` pins these rules.
 
