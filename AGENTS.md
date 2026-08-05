@@ -121,6 +121,10 @@ soundness rules. They are load-bearing — an edit that ignores one either fails
 the build or ships undefined behaviour. Absorbed from the SIMD/`unsafe`/
 buffer-reuse campaign (PRs #11, #112, #154, #155, #165, #207).
 
+The `wasm32` half of this hot path is **not** compiled by any PR gate — run
+`cargo check -p neat-core --target wasm32-unknown-unknown` before you merge a
+change to it, per [CI / secrets](#ci--secrets).
+
 ### Load-time index validation is the soundness precondition for `get_unchecked`
 
 The SIMD kernels read the activation buffer (sized to exactly `num_neurons`)
@@ -390,7 +394,10 @@ reversed span yields the kernel's seed. Those assertions run natively against
 the `simd_native.rs` kernels; to execute them against the **wasm** kernels, run
 them on a real runtime through `wasm-bench/` (Issue #509) — `neat-core`'s own
 test targets cannot be built for wasm because its `criterion` dev-dependency
-refuses to compile for wasi.
+refuses to compile for wasi. No PR gate compiles this file at all: check it with
+`cargo check -p neat-core --target wasm32-unknown-unknown`, and for a numeric
+edit diff the `f32` bit patterns under WASI, per
+[CI / secrets](#ci--secrets).
 
 ```mermaid
 flowchart LR
@@ -410,3 +417,5 @@ flowchart LR
 - **`ACTIONS_PUSH` is supplied just-in-time** (Issue #483): the `version-increment` / `auto-format` checkouts run with **`persist-credentials: false`** and no `token:`, and the PAT reaches only the one step that pushes, through an explicit `https://x-access-token:…` remote URL. Never hand it to a checkout — those jobs execute PR-authored code (`bump-deps.sh`, `cargo fmt`) that would then be able to read an org-wide credential off `.git/config`.
 - **Versioning/release policy:** **`RELEASING.md`** is the single source of truth (Issue #251) — semver, what counts as breaking, and how to signal it. In CI the `version-increment` job bumps minor on a break (patch otherwise); the `version-gate` job **fails** a break shipped on a patch-only bump; `release.yml` cuts a **`v<version>`** tag + GitHub release on `Develop`, decoupled from `wasm-bundle-<sha>`.
 - **`clippy::uninlined_format_args`** is not denied in CI until the test corpus is cleaned up; workspace lints still deny **`filter_next`** / **`collapsible_if`**.
+- **`wasm32` is not gated on PRs — check it yourself before touching wasm-only code.** Neither `quality.sh` nor any `ci.yml` job builds for `wasm32-unknown-unknown` (the `wasm64-memory64-smoke` job is a Deno Memory64 runtime test, not a wasm32 build); the target compiles only *after* merge — on **push to `Develop`** through `wasm-bundle.yml`, and on the scheduled `upgrade-dependencies.yml` run, whose `bump-deps.sh` dual build the PR lane skips with `--skip-build`. The load-bearing manual check is **`cargo check -p neat-core --target wasm32-unknown-unknown`**. What it catches: deleting the last consumer of a `#[cfg(target_arch = "wasm32")]` block leaves an orphaned `use core::arch::wasm32::{…}` that every host gate compiles right past and only the bundle build rejects (Issues #422, #423). For **numeric** wasm changes go further, as Issue #448 did — compile to `wasm32-wasip1`, run under Node's WASI with `-C target-feature=+simd128,+relaxed-simd`, and diff the raw `f32` bit patterns before against after.
+- **CI gates must be repo-owned and unconditional.** Never `if:`-gate a step on a file another repository owns: the Mermaid check was conditioned on a path that never exists here, so it skipped **every** run and a broken diagram merged (Issue #379). Its replacement, `scripts/check_mermaid.ts`, is owned by this repo and runs unconditionally from both `quality.sh` and `markdown-lint.yml`. Related budget rule: **GitHub rejects `timeout-minutes:` on a reusable-workflow *caller* job** — put it on the called workflow's own job instead (`ci.yml`'s `security` job calls `security.yml`, whose job carries `timeout-minutes: 30`; Issue #333).
