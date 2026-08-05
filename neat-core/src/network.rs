@@ -388,6 +388,25 @@ impl CompiledNetwork {
                 let start_synapse = neuron.start_synapse as usize;
                 let end_synapse = start_synapse + neuron.num_synapses as usize;
 
+                // Issue #510 experiment — prototype only, off by default.
+                #[cfg(feature = "experimental-aggregate-unchecked")]
+                {
+                    // SAFETY: `CompiledNetwork::new` rejects any
+                    // `from_index >= num_neurons` at load time and `activations`
+                    // is sized to `num_neurons`, so every gather is in range.
+                    if let Some(activation) = unsafe {
+                        crate::aggregate_experiment::aggregate_forward_unchecked(
+                            &self.synapses,
+                            &self.activations,
+                            neuron,
+                            squash,
+                        )
+                    } {
+                        self.activations[actual_idx] = apply_limit_range(squash, activation);
+                        continue;
+                    }
+                }
+
                 // Handle aggregate functions differently (Issue #1125)
                 let activation = match squash {
                     SquashType::Minimum => {
@@ -546,6 +565,25 @@ impl CompiledNetwork {
                 let squash = SquashType::from(neuron.squash_type);
                 let start_synapse = neuron.start_synapse as usize;
                 let end_synapse = start_synapse + neuron.num_synapses as usize;
+
+                // Issue #510 experiment — prototype only, off by default.
+                #[cfg(feature = "experimental-aggregate-unchecked")]
+                {
+                    // SAFETY: `CompiledNetwork::new` rejects any
+                    // `from_index >= num_neurons` at load time and `activations`
+                    // is sized to `num_neurons`, so every gather is in range.
+                    if let Some(activation) = unsafe {
+                        crate::aggregate_experiment::aggregate_forward_unchecked(
+                            &self.synapses,
+                            &self.activations,
+                            neuron,
+                            squash,
+                        )
+                    } {
+                        self.activations[actual_idx] = apply_limit_range(squash, activation);
+                        continue;
+                    }
+                }
 
                 // Handle aggregate functions differently (Issue #1125)
                 let activation = match squash {
@@ -752,6 +790,30 @@ impl CompiledNetwork {
                 let start_synapse = neuron.start_synapse as usize;
                 let num_synapse = neuron.num_synapses as usize;
                 let end_synapse = start_synapse + num_synapse;
+
+                // Issue #510 experiment — prototype only, off by default. Trace
+                // pushes and hint semantics are reproduced exactly.
+                #[cfg(feature = "experimental-aggregate-unchecked")]
+                {
+                    // SAFETY: `CompiledNetwork::new` rejects any
+                    // `from_index >= num_neurons` at load time and `activations`
+                    // is sized to `num_neurons`, so every gather is in range.
+                    if let Some((activation, trace_info)) = unsafe {
+                        crate::aggregate_experiment::aggregate_traced_unchecked(
+                            &self.synapses,
+                            &self.activations,
+                            neuron,
+                            squash,
+                        )
+                    } {
+                        self.trace_data_buffer.push(neuron_idx as f32);
+                        self.trace_data_buffer.push(trace_info);
+                        let activation_limited = apply_limit_range(squash, activation);
+                        self.activations[actual_idx] = activation_limited;
+                        self.hint_values_buffer[neuron_idx] = activation_limited;
+                        continue;
+                    }
+                }
 
                 // Handle aggregate functions differently (Issue #1125)
                 let (activation, hint_value) = match squash {

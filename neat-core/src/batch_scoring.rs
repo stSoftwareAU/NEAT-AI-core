@@ -191,6 +191,22 @@ pub(crate) fn neuron_activation_scalar(
     let start = neuron.start_synapse as usize;
     let end = start + neuron.num_synapses as usize;
 
+    // Issue #510 experiment — prototype only, off by default. Routes the three
+    // prototyped aggregates through the unchecked kernel; every other squash
+    // falls through to the match below unchanged.
+    #[cfg(feature = "experimental-aggregate-unchecked")]
+    {
+        // SAFETY: `CompiledNetwork::new` rejects any `from_index >= num_neurons`
+        // at load time, and `act` is sized to `num_neurons`, so every gather in
+        // the kernel is in range. Same precondition the SIMD weighted-sum
+        // kernels already rely on.
+        if let Some(activation) = unsafe {
+            crate::aggregate_experiment::aggregate_forward_unchecked(synapses, act, neuron, squash)
+        } {
+            return apply_limit_range(squash, activation);
+        }
+    }
+
     let activation = match squash {
         SquashType::Minimum => {
             let mut min_val = f32::INFINITY;
