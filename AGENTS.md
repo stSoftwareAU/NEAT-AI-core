@@ -3,6 +3,7 @@
 ## TDD (required)
 
 - **Test-driven development:** new behaviour or bugfixes start from **failing tests**, then minimal implementation, then refactor. Do not land Rust changes without **tests** in `neat-core` (or the relevant crate) and a green **`cargo test --workspace`**.
+- **Characterisation-test exception — pure extractions only.** Collapsing N identical copies into one helper adds no behaviour for a failing-first test to describe, so write the tests against the **pre-change copies**, run them green there, and keep them green through the extraction (that is what proves the refactor behaviour-preserving — `pr-summary-442.md`). The red run you skip is repaid by the mutation evidence below: a characterisation test that never fails is worth nothing.
 - Run **`./quality.sh`** before commit/PR.
 
 ## Testing: "what" not "how"
@@ -13,6 +14,99 @@ All test cases must be **"what" tests** (same rule as **NEAT-AI** `CONTRIBUTING.
 - **How tests** tie to **implementation detail** and are discouraged: asserting on private fields, internal call order, source greps, line counts, or "this helper was invoked" unless the contract under test is explicitly that wiring.
 
 Name tests after the behaviour or outcome (e.g. `relu_maps_negative_to_zero`), not the mechanism (`relu_calls_clamp_branch`).
+
+## Oracles and mutation evidence
+
+A green test is not evidence. What a reviewer needs is evidence the test **can
+fail** — and this repo has repeatedly shipped tests that could not. These five
+rules are the de facto merge gate for refactors here, absorbed from the
+oracle-integrity campaign: the oracle rules from PRs #409, #476, #478, #479, and
+the mutation-evidence practice from PRs #387, #388, #442, #443, #444, #446, #480.
+
+### 1. An oracle **must not share** the code path under test
+
+`flat_record_scoring_parity.rs` compared `score_records_flat` against
+`score_records` — both fed the *same* `score_batch_into`, so a fault in the
+kernel moved both sides of the assertion and the test stayed green (#409). A
+parity oracle must reach the expected value by an **independent** route: score
+each record on its own through the scalar `activate` forward pass, or keep the
+**pre-change** implementation verbatim in the test module as a
+**differential** reference (#387, #388).
+
+Independence has an honest price: the batched path re-associates its sums and
+uses the vectorised squash approximations, so the assertion drops from
+bit-exact to a stated **tolerance** (`TOL = 1e-3`, matching
+`score_squash_simd_parity.rs`). Take the tolerance — a real lane or stride slip
+is an O(1) error, far above it. Never buy bit-exactness back by re-pointing the
+oracle at the kernel.
+
+```mermaid
+flowchart LR
+    subgraph blind["Blind — oracle shares the kernel"]
+        A1["path under test"] --> K1["shared kernel"]
+        A2["'oracle'"] --> K1
+        K1 --> C1{"assert equal"}
+        C1 -.->|"a kernel fault moves<br/>both sides — green"| B1["blind spot"]
+    end
+    subgraph sound["Sound — independent oracle"]
+        A3["path under test"] --> K2["kernel"]
+        A4["reference: scalar activate<br/>or pre-change copy"] --> S["independent route"]
+        K2 --> C2{"assert within TOL"}
+        S --> C2
+        C2 -.->|"a kernel fault moves<br/>one side — red"| G1["fault caught"]
+    end
+```
+
+### 2. A refactor that collapses N copies must kill **every former site**
+
+Prove the new test reaches each copy *before* merging them: mutate one site at a
+time (e.g. `1 => sum.max(0.0)` → `sum.max(0.1)`) and record that the suite goes
+red for it. #443's sweep over all eleven copies of the inline-squash rule found
+two the suite never reached — the 4-record remainder inside the 8-way macro and
+the scattered MSE kernel — and the tests were tightened (alternating input signs,
+a mixed aggregate/standard network) until all eleven died. List the per-site
+results in the PR summary, and revert every mutation before commit. Two
+independent nets are better than one: #446 gets a **compile error** from the
+pattern macro *and* test failures from the predicate.
+
+### 3. No **vacuous** oracles — derive the expected value
+
+These shapes have all shipped here and all pass against broken code (#479):
+
+- `assert!(result.is_finite())` and `assert!(result.abs() <= 100000.0)`;
+- bare magic lengths (`assert_eq!(result.len(), 28)`);
+- a loose inequality on a fixture where the branch under test never fires
+  (`count == 1` against sqrt-scaling that only arms at `count > 1`).
+
+Replace each with the value the documented formula requires, and write the
+**derivation** beside it — `28` becomes `BATCH_4WAY * WEIGHT_SLOTS_PER_SYNAPSE`,
+`is_finite()` becomes `assert_close(result, 1.5)` with the blend/clamp steps
+spelled out. If a fixture cannot arm the branch, build one that does, and guard
+against a vacuous `0 == 0` pass.
+
+### 4. A gate self-test must compile the **live pattern**, not a private copy
+
+Three bats suites asserted "this regex rejects known-bad input" against a second
+copy of the regex, so gutting the live pattern to `.*` failed nothing (#478).
+Each pattern gets exactly **one** definition — exported from `setup()` and
+compiled by both the sweep over the real files and the good/bad literal check.
+Read it in a **quoted** heredoc (`<<'PY'` with `os.environ[...]`), never `<<PY`,
+so the shell cannot interpolate or re-escape the pattern text.
+
+### 5. Test the oracle itself with **synthetic** input when production cannot
+
+A hand-copied parity oracle sliced record 2 with record 0's length and stayed
+green, because every record in that fixture happened to be the same length
+(#476).
+When production cannot construct the edge case that would expose an oracle bug,
+**test the oracle** directly: a synthetic buffer with distinct per-record
+lengths, plus fail-loud assertions for a header that overruns or undercovers the
+payload. An oracle with untested edge cases is production code without tests.
+`split_batch_records` (#476) walks the batch header loop-derived, so every
+record is sliced with its own length — the `len0`/`len2` slip is no longer
+expressible, and the synthetic tests catch header-overrun and undercover cases.
+
+`tests/scripts/oracle_mutation_evidence.bats` pins these rules.
 
 ## Repository layout
 
