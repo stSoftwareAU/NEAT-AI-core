@@ -186,11 +186,21 @@ bit-identical.
 
 `load_record` (`neat-core/src/batch_scoring.rs`) owns the loading sub-rule:
 copy `min(record.len(), num_inputs)` values and **zero** every input slot the
-record does not cover, exactly as `CompiledNetwork::activate_into` does. Every
-per-lane loader in the batched scoring and fused loss kernels calls it, so a
-record scored in a SIMD group, in the 4-record remainder, or in the scalar tail
-sees the same inputs. `neat-core/tests/batch_record_skeleton.rs` pins the rule
-across every packed loss entry point.
+record does not cover. Every per-lane loader in the batched scoring and fused
+loss kernels calls it, so a record scored in a SIMD group, in the 4-record
+remainder, or in the scalar tail sees the same inputs.
+`neat-core/tests/batch_record_skeleton.rs` pins the rule across every packed
+loss entry point.
+
+The three single-record entry points (`CompiledNetwork::activate`,
+`activate_into`, `activate_and_trace`) route their input copy through the same
+helper, via the private `load_inputs` (Issue #519). They previously copied
+`min(len, num_inputs)` and stopped, so the reused activation buffer left a
+**previous call's** values in the slots a narrower record did not cover, and the
+same record scored differently through the single-record and batched paths.
+`neat-core/tests/short_input_zero_fill.rs` pins the agreement. Only the input
+copy is shared — the activation rule itself stays inlined in those entry points
+for the performance reason in the Issue #441 section above.
 
 ```mermaid
 flowchart LR
