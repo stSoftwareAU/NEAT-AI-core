@@ -153,9 +153,15 @@ impl BatchScratch {
 /// Each lane is an independent `bias + Σ w·a` in synapse order and is squashed
 /// and clamped by the same per-lane rule, so a record's activation is
 /// **bit-identical** at every tile width.
+///
+/// The synapse stream comes in as the struct-of-arrays hot view (`hot_weights` /
+/// `hot_from`, Issue #533): the gather reads only weight and source index, so
+/// leaving `synapse_type` behind on [`SynapseData`] narrows the hot stream from
+/// 8 B to 6 B per synapse.
 pub(crate) fn run_interleaved_forward<const R: usize>(
     neurons: &[NeuronData],
-    synapses: &[SynapseData],
+    hot_weights: &[f32],
+    hot_from: &[u16],
     num_inputs: usize,
     inter: &mut [f32],
 ) {
@@ -173,7 +179,8 @@ pub(crate) fn run_interleaved_forward<const R: usize>(
         let squash = SquashType::from(neuron.squash_type);
         let start = neuron.start_synapse as usize;
         let end = start + neuron.num_synapses as usize;
-        let sums = weighted_sum_interleaved::<R>(synapses, inter, start, end, neuron.bias);
+        let sums =
+            weighted_sum_interleaved::<R>(hot_weights, hot_from, inter, start, end, neuron.bias);
 
         let squashed = squash_xn(squash, sums).unwrap_or_else(|| {
             let st = neuron.squash_type;
@@ -476,9 +483,12 @@ impl CompiledNetwork {
     /// use the exact per-lane path instead. Bit-identical to the per-lane
     /// 8-record path ([`weighted_sum_simd_8records`]) on the covered neurons.
     pub(crate) fn interleaved_forward_8(&self, inter: &mut [f32]) {
+        // Issue #533 - fail loud in debug if the SoA hot view has drifted.
+        self.debug_assert_hot_soa();
         run_interleaved_forward::<SCORING_LANES>(
             &self.neurons,
-            &self.synapses,
+            &self.hot_weights,
+            &self.hot_from,
             self.num_inputs,
             inter,
         );

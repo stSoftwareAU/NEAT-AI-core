@@ -205,6 +205,34 @@ flowchart LR
     B --> S
 ```
 
+### Struct-of-arrays hot synapse view (Issue #533)
+
+The interleaved gather reads only two of `SynapseData`'s three fields, so
+`CompiledNetwork` also carries a parallel **struct-of-arrays** view of them —
+`hot_weights: Vec<f32>` and `hot_from: Vec<u16>`, in the same order as
+`synapses`. The interleaved kernels take those two slices, streaming 6 B per
+synapse instead of the struct's 8 B; `synapse_type` stays on `SynapseData` for
+the aggregate/IF and single-record paths, which are unchanged. Values and
+accumulation order are identical, so every result stays bit-identical.
+
+Both views are built by `hot_synapse_soa` at every construction path
+(`CompiledNetwork::new`, `compile_creature`), and cost **+6 B per synapse per
+compiled network** — ~126 KB on the production creature, cloned once per
+directory-scoring worker. Because the fields are public they can be made to
+drift; `debug_assert_hot_soa` runs at every interleaved entry point and panics
+in debug builds if they have.
+
+```mermaid
+flowchart LR
+    C["compile_creature / CompiledNetwork::new"] --> S["synapses: Vec&lt;SynapseData&gt;<br/>weight + from_index + synapse_type"]
+    S --> H["hot_synapse_soa"]
+    H --> W["hot_weights: Vec&lt;f32&gt;"]
+    H --> F["hot_from: Vec&lt;u16&gt;"]
+    W --> G["weighted_sum_interleaved::&lt;R&gt;<br/>6 B per synapse"]
+    F --> G
+    S --> A["aggregate / IF / single-record paths<br/>unchanged, 8 B per synapse"]
+```
+
 ```bash
 # Run the data-parallel scoring throughput bench (1 vs all cores).
 cargo bench -p neat-core --features parallel --bench parallel_scoring

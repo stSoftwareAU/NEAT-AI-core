@@ -7,7 +7,7 @@
 //! a single source of truth that is exercised by a real `cargo test` run rather
 //! than only compiled inside the `harness = false` bench.
 
-use neat_core::network::{CompiledNetwork, NeuronData, SynapseData};
+use neat_core::network::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
 use neat_core::squash::SquashType;
 use neat_core::topological_backprop::{
     NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT, NEURON_TYPE_OUTPUT, NeuronInput, SynapseInput,
@@ -241,11 +241,14 @@ pub fn build_network(spec: &NetSpec, seed: u64) -> CompiledNetwork {
     }
 
     let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
     CompiledNetwork {
         num_neurons,
         num_inputs,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::with_capacity(estimated_trace_size),

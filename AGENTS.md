@@ -291,6 +291,27 @@ lane-major revisits the whole `num_inputs * R` region once per lane and stops
 fitting in L1 as `R` grows. `loss::interleaved_mse_parity` pins both across
 widths 8/16/32/64.
 
+## One struct-of-arrays hot view for the interleaved gather (Issue #533)
+
+`hot_synapse_soa` (`neat-core/src/network.rs`) is the single home of the rule
+that says what `CompiledNetwork::hot_weights` / `hot_from` contain: exactly
+`synapses[i].weight` and `synapses[i].from_index`, in the order `synapses` holds
+them. **Every** construction path calls it — the binary deserialiser
+`CompiledNetwork::new` and `compile_creature` — so the two views cannot drift.
+The record-interleaved kernels (`weighted_sum_interleaved::<R>` and its
+scalar/AVX2/NEON/wasm variants) take the two slices instead of
+`&[SynapseData]`, streaming **6 B** per synapse instead of 8; `synapse_type`
+stays on `SynapseData` for the aggregate/IF and single-record paths, which are
+untouched. Numerics are unchanged — same values, same order.
+
+The redundancy is the hazard, and the fields are public, so a caller can still
+assemble a `CompiledNetwork` literal (the test and bench fixtures do) or mutate
+`synapses` afterwards. `CompiledNetwork::debug_assert_hot_soa` is the fail-loud
+guard: every entry point into the interleaved gather calls it, so a drifted view
+panics in debug and test builds instead of silently scoring wrong numbers, and
+compiles away in release. `neat-core/tests/hot_synapse_soa.rs` pins the
+invariant across both construction paths, `Clone`, and the guard itself.
+
 `load_record` (`neat-core/src/batch_scoring.rs`) owns the loading sub-rule:
 copy `min(record.len(), num_inputs)` values and **zero** every input slot the
 record does not cover. Every per-lane loader in the batched scoring and fused

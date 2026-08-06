@@ -15,7 +15,7 @@
 //! loaded one (statelessness), and a narrow record must score identically
 //! through the single-record path and the batched loader (parity).
 
-use neat_core::{CompiledNetwork, NeuronData, SynapseData};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
 
 const IDENTITY: u8 = 0;
 const TANH: u8 = 7;
@@ -46,11 +46,14 @@ const TOL: f32 = 1e-5;
 fn network(neurons: Vec<NeuronData>, synapses: Vec<SynapseData>) -> CompiledNetwork {
     let num_non_inputs = neurons.len();
     let num_neurons = NUM_INPUTS + num_non_inputs;
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
     CompiledNetwork {
         num_neurons,
         num_inputs: NUM_INPUTS,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::new(),

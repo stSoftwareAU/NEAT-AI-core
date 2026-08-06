@@ -22,7 +22,7 @@ use neat_core::loss::{
 use neat_core::range::apply_limit_range;
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::SQUASH_SIMD_MAX_ABS_ERR;
-use neat_core::{CompiledNetwork, NeuronData, SynapseData};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
 
 /// Every standard (non-aggregate) squash type. Aggregates 32–37 are activated
 /// by a different rule and are covered by `aggregate_squash_tail_parity.rs`.
@@ -94,11 +94,14 @@ fn unit_network(squash: SquashType) -> CompiledNetwork {
         is_constant: false,
     }];
 
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
     CompiledNetwork {
         num_neurons: 2,
         num_inputs: 1,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; 2],
         hint_values_buffer: vec![0.0; 1],
         trace_data_buffer: Vec::new(),
@@ -267,11 +270,14 @@ fn mixed_aggregate_network(squash: SquashType) -> CompiledNetwork {
         },
     ];
 
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
     CompiledNetwork {
         num_neurons: 4,
         num_inputs: 2,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; 4],
         hint_values_buffer: vec![0.0; 2],
         trace_data_buffer: Vec::new(),

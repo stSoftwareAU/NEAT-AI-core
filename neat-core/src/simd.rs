@@ -523,6 +523,10 @@ fn store_quad(out: &mut [f32], acc: v128) {
 /// Issue #287 - record-interleaved `R`-lane weighted sum for the batched
 /// scoring hot path; widened to a tunable tile in Issue #530.
 ///
+/// The synapse stream is read through the struct-of-arrays hot view
+/// (`hot_weights` / `hot_from`, Issue #533) rather than `&[SynapseData]`, so the
+/// loop streams 6 B per synapse instead of 8 B.
+///
 /// `inter` is the transposed batch activation buffer: lane `l` of source neuron
 /// `n` lives at `inter[n * R + l]`, so all `R` records for a synapse's source
 /// are contiguous. Each gather is then `R / 4` adjacent 4-wide reads instead of
@@ -535,13 +539,19 @@ fn store_quad(out: &mut [f32], acc: v128) {
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_interleaved<const R: usize>(
-    synapses: &[SynapseData],
+    hot_weights: &[f32],
+    hot_from: &[u16],
     inter: &[f32],
     start: usize,
     end: usize,
     bias: f32,
 ) -> [f32; R] {
     const { assert_interleaved_tile::<R>() };
+    debug_assert_eq!(
+        hot_weights.len(),
+        hot_from.len(),
+        "Issue #533 - the hot synapse arrays must be the same length"
+    );
 
     if scalar::synapse_count(start, end) == 0 {
         return [bias; R];
@@ -551,9 +561,8 @@ pub fn weighted_sum_interleaved<const R: usize>(
     let mut acc = [f32x4_splat(bias); MAX_INTERLEAVED_LANES / 4];
 
     for i in start..end {
-        let synapse = &synapses[i];
-        let base = synapse.from_index as usize * R;
-        let weights = f32x4_splat(synapse.weight);
+        let base = hot_from[i] as usize * R;
+        let weights = f32x4_splat(hot_weights[i]);
 
         // The R lanes are contiguous, so these reads walk whole cache lines.
         for (q, a) in acc.iter_mut().take(quads).enumerate() {
@@ -576,13 +585,14 @@ pub fn weighted_sum_interleaved<const R: usize>(
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_interleaved_8(
-    synapses: &[SynapseData],
+    hot_weights: &[f32],
+    hot_from: &[u16],
     inter: &[f32],
     start: usize,
     end: usize,
     bias: f32,
 ) -> [f32; 8] {
-    weighted_sum_interleaved::<8>(synapses, inter, start, end, bias)
+    weighted_sum_interleaved::<8>(hot_weights, hot_from, inter, start, end, bias)
 }
 
 // Native (non-wasm32) multi-record helpers now live in `simd_native.rs` and use

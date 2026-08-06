@@ -1,6 +1,6 @@
 //! SIMD weighted-sum tests (moved from `src/simd.rs`).
 
-use neat_core::network::SynapseData;
+use neat_core::network::{SynapseData, hot_synapse_soa};
 use neat_core::simd::{
     weighted_sum_interleaved_8, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
     weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
@@ -518,7 +518,9 @@ fn interleaved_8_is_bit_identical_to_scattered_8records() {
                 scattered.6,
                 scattered.7,
             ];
-            let interleaved = weighted_sum_interleaved_8(&synapses, &inter, 0, count, bias);
+            let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
+            let interleaved =
+                weighted_sum_interleaved_8(&hot_weights, &hot_from, &inter, 0, count, bias);
             for l in 0..8 {
                 assert_eq!(
                     interleaved[l].to_bits(),

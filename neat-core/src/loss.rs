@@ -581,7 +581,13 @@ fn interleaved_tile_mse<const R: usize>(
         *slot = 0.0;
     }
 
-    run_interleaved_forward::<R>(&network.neurons, &network.synapses, num_inputs, inter);
+    run_interleaved_forward::<R>(
+        &network.neurons,
+        &network.hot_weights,
+        &network.hot_from,
+        num_inputs,
+        inter,
+    );
 
     for l in 0..R {
         let target_base = (base_idx + l) * values_per_record + input_size;
@@ -604,6 +610,8 @@ fn mse_sum_batch_interleaved<const R: usize>(
     num_outputs: usize,
     num_records: usize,
 ) -> f64 {
+    // Issue #533 - fail loud in debug if the SoA hot view has drifted.
+    network.debug_assert_hot_soa();
     let inv_outputs: f64 = if num_outputs > 0 {
         1.0 / (num_outputs as f64)
     } else {
@@ -1777,11 +1785,14 @@ mod interleaved_mse_parity {
 
         let num_non_inputs = neurons.len();
         let num_neurons = num_inputs + num_non_inputs;
+        let (hot_weights, hot_from) = crate::network::hot_synapse_soa(&synapses);
         CompiledNetwork {
             num_neurons,
             num_inputs,
             neurons,
             synapses,
+            hot_weights,
+            hot_from,
             activations: vec![0.0; num_neurons],
             hint_values_buffer: vec![0.0; num_non_inputs],
             trace_data_buffer: Vec::new(),

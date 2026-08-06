@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::loss::MSE_TILE_LANES;
-use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData};
+use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData, hot_synapse_soa};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -405,11 +405,17 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
     // Estimate trace data buffer capacity (same heuristic as binary deserialisation)
     let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
 
+    // Issue #533 - struct-of-arrays view of the two fields the interleaved
+    // gather reads, built from the same vector so it cannot drift.
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
+
     Ok(CompiledNetwork {
         num_neurons,
         num_inputs,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::with_capacity(estimated_trace_size),

@@ -116,19 +116,19 @@ fn weighted_sum_simd_4records_scalar(
 /// whichever tile width** is used.
 #[inline]
 fn weighted_sum_interleaved_scalar<const R: usize>(
-    synapses: &[SynapseData],
+    hot_weights: &[f32],
+    hot_from: &[u16],
     inter: &[f32],
     start: usize,
     end: usize,
     bias: f32,
 ) -> [f32; R] {
     let mut acc = [bias; R];
-    for synapse in synapses.iter().take(end).skip(start) {
-        let base = synapse.from_index as usize * R;
-        let w = synapse.weight;
+    for (w, from) in hot_weights[start..end].iter().zip(&hot_from[start..end]) {
+        let base = *from as usize * R;
         let chunk = &inter[base..base + R];
         for (a, c) in acc.iter_mut().zip(chunk) {
-            *a += *c * w;
+            *a += *c * *w;
         }
     }
     acc
@@ -201,13 +201,17 @@ mod x86 {
     /// # Safety
     /// Caller must ensure AVX2 is enabled (`is_x86_feature_detected!("avx2")`).
     /// Issue #287 - `inter.len()` must be `num_neurons * R` and every
-    /// `synapse.from_index` in `start..end` must be `< num_neurons`, so
+    /// `hot_from` entry in `start..end` must be `< num_neurons`, so
     /// `from_index * R + R <= inter.len()`; `CompiledNetwork::new` validates the
     /// synapse index range at load time. The `R`-wide read is then in bounds.
+    /// Issue #533 - `start..end` must also be in bounds for **both** hot arrays
+    /// (`end <= hot_weights.len() == hot_from.len()`), which holds because both
+    /// are built from `synapses` by `hot_synapse_soa` and carry its length.
     #[target_feature(enable = "avx2")]
     #[inline]
     pub unsafe fn weighted_sum_interleaved_avx2<const R: usize>(
-        synapses: &[SynapseData],
+        hot_weights: &[f32],
+        hot_from: &[u16],
         inter: &[f32],
         start: usize,
         end: usize,
@@ -218,9 +222,11 @@ mod x86 {
         let mut acc = [_mm256_set1_ps(bias); super::MAX_INTERLEAVED_LANES / 8];
         let ptr = inter.as_ptr();
         for i in start..end {
-            let synapse = unsafe { synapses.get_unchecked(i) };
-            let base = synapse.from_index as usize * R;
-            let ws = _mm256_set1_ps(synapse.weight);
+            // SAFETY: `i < end <= hot_from.len() == hot_weights.len()`, checked
+            // by the caller's `synapse_count` prologue against the same span
+            // that indexes `synapses`.
+            let base = unsafe { *hot_from.get_unchecked(i) } as usize * R;
+            let ws = _mm256_set1_ps(unsafe { *hot_weights.get_unchecked(i) });
             for (o, a) in acc.iter_mut().take(octs).enumerate() {
                 // SAFETY: base + R <= inter.len() by the load-time index
                 // validation documented above, and `o < R / 8`, so this
@@ -488,14 +494,18 @@ mod aarch64 {
     /// # Safety
     /// Caller must ensure NEON is available (typical on aarch64-apple-darwin /
     /// linux-aarch64). Issue #287 - `inter.len()` must be `num_neurons * R` and
-    /// every `synapse.from_index` in `start..end` must be `< num_neurons`, so
+    /// every `hot_from` entry in `start..end` must be `< num_neurons`, so
     /// `from_index * R + R <= inter.len()`; `CompiledNetwork::new` validates the
     /// synapse index range at load time, making the `R / 4` 4-wide reads in
     /// bounds.
+    /// Issue #533 - `start..end` must also be in bounds for **both** hot arrays
+    /// (`end <= hot_weights.len() == hot_from.len()`), which holds because both
+    /// are built from `synapses` by `hot_synapse_soa` and carry its length.
     #[target_feature(enable = "neon")]
     #[inline]
     pub unsafe fn weighted_sum_interleaved_neon<const R: usize>(
-        synapses: &[SynapseData],
+        hot_weights: &[f32],
+        hot_from: &[u16],
         inter: &[f32],
         start: usize,
         end: usize,
@@ -506,9 +516,11 @@ mod aarch64 {
         let mut acc = [vdupq_n_f32(bias); super::MAX_INTERLEAVED_LANES / 4];
         let ptr = inter.as_ptr();
         for i in start..end {
-            let synapse = unsafe { synapses.get_unchecked(i) };
-            let base = synapse.from_index as usize * R;
-            let vw = vdupq_n_f32(synapse.weight);
+            // SAFETY: `i < end <= hot_from.len() == hot_weights.len()`, checked
+            // by the caller's `synapse_count` prologue against the same span
+            // that indexes `synapses`.
+            let base = unsafe { *hot_from.get_unchecked(i) } as usize * R;
+            let vw = vdupq_n_f32(unsafe { *hot_weights.get_unchecked(i) });
             for (q, a) in acc.iter_mut().take(quads).enumerate() {
                 // SAFETY: base + R <= inter.len() by the load-time index
                 // validation documented above, and `q < R / 4`, so this 4-wide
@@ -777,13 +789,19 @@ pub fn weighted_sum_simd_8records(
 /// other lanes, so widening `R` leaves each record's sum **bit-identical**.
 #[inline]
 pub fn weighted_sum_interleaved<const R: usize>(
-    synapses: &[SynapseData],
+    hot_weights: &[f32],
+    hot_from: &[u16],
     inter: &[f32],
     start: usize,
     end: usize,
     bias: f32,
 ) -> [f32; R] {
     const { assert_interleaved_tile::<R>() };
+    debug_assert_eq!(
+        hot_weights.len(),
+        hot_from.len(),
+        "Issue #533 - the hot synapse arrays must be the same length"
+    );
 
     if scalar::synapse_count(start, end) == 0 {
         return [bias; R];
@@ -796,7 +814,14 @@ pub fn weighted_sum_interleaved<const R: usize>(
             // available, satisfying the `#[target_feature(enable = "avx2")]`
             // precondition on `weighted_sum_interleaved_avx2`.
             return unsafe {
-                x86::weighted_sum_interleaved_avx2::<R>(synapses, inter, start, end, bias)
+                x86::weighted_sum_interleaved_avx2::<R>(
+                    hot_weights,
+                    hot_from,
+                    inter,
+                    start,
+                    end,
+                    bias,
+                )
             };
         }
     }
@@ -808,25 +833,33 @@ pub fn weighted_sum_interleaved<const R: usize>(
             // is available, satisfying the `#[target_feature(enable = "neon")]`
             // precondition on `weighted_sum_interleaved_neon`.
             return unsafe {
-                aarch64::weighted_sum_interleaved_neon::<R>(synapses, inter, start, end, bias)
+                aarch64::weighted_sum_interleaved_neon::<R>(
+                    hot_weights,
+                    hot_from,
+                    inter,
+                    start,
+                    end,
+                    bias,
+                )
             };
         }
     }
 
-    weighted_sum_interleaved_scalar::<R>(synapses, inter, start, end, bias)
+    weighted_sum_interleaved_scalar::<R>(hot_weights, hot_from, inter, start, end, bias)
 }
 
 /// The 8-lane tile of [`weighted_sum_interleaved`], kept as the name the
 /// batched **scoring** path (`BatchScratch::inter`) and its tests use.
 #[inline]
 pub fn weighted_sum_interleaved_8(
-    synapses: &[SynapseData],
+    hot_weights: &[f32],
+    hot_from: &[u16],
     inter: &[f32],
     start: usize,
     end: usize,
     bias: f32,
 ) -> [f32; 8] {
-    weighted_sum_interleaved::<8>(synapses, inter, start, end, bias)
+    weighted_sum_interleaved::<8>(hot_weights, hot_from, inter, start, end, bias)
 }
 
 /// 4-record weighted sum: FMA+SSE on x86_64, NEON on aarch64, else scalar.
