@@ -277,10 +277,19 @@ per-record reduction (`(records, target_base, act, output_start, num_outputs) ->
 f64`). Changing the grouping (a 16-lane tier, a different remainder strategy) is
 an edit **there and nowhere else**; do not re-inline the skeleton.
 
-The record-**interleaved** 8-group path (`mse_sum_batch_8way_interleaved`,
-Issue #384) is a genuinely different memory layout and stays separate — its
-`< 8` remainder still runs the same per-lane kernels, so the two are
-bit-identical.
+The record-**interleaved** tiled path (`mse_sum_batch_8way_interleaved` →
+`mse_sum_batch_interleaved::<R>`, Issue #384) is a genuinely different memory
+layout and stays separate. Its tile width is the single constant
+`loss::MSE_TILE_LANES` (Issue #530, `32`); the `< R` remainder steps down whole
+8-record interleaved tiles, then the same 4-way and scalar per-lane kernels, so
+every tier is bit-identical. Two rules make the width a free knob and both are
+load-bearing: `interleaved_tile_mse` is **seed-taking** — it takes the running
+`f64 sum_error` and returns it, because a per-tile partial sum re-associates the
+reduction and breaks bit-parity — and the tile transpose walks **input-major**,
+writing a neuron's `R` lanes to consecutive `mse_inter` slots, because
+lane-major revisits the whole `num_inputs * R` region once per lane and stops
+fitting in L1 as `R` grows. `loss::interleaved_mse_parity` pins both across
+widths 8/16/32/64.
 
 `load_record` (`neat-core/src/batch_scoring.rs`) owns the loading sub-rule:
 copy `min(record.len(), num_inputs)` values and **zero** every input slot the

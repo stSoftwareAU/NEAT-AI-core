@@ -461,16 +461,26 @@ fn squash_lanes<const N: usize>(squash: SquashType, x: [f32; N]) -> Option<[f32;
     }
 }
 
+/// Vectorised squash for an `N`-record batch lane (Issue #530, so the
+/// record-interleaved tile width is tunable). See `squash_lanes`.
+///
+/// Every lane is squashed independently by the same approximation, so the
+/// result for a given lane value does not depend on `N`.
+#[inline]
+pub fn squash_xn<const N: usize>(squash: SquashType, x: [f32; N]) -> Option<[f32; N]> {
+    squash_lanes(squash, x)
+}
+
 /// Vectorised squash for a 4-record batch lane. See `squash_lanes`.
 #[inline]
 pub fn squash_x4(squash: SquashType, x: [f32; 4]) -> Option<[f32; 4]> {
-    squash_lanes(squash, x)
+    squash_xn(squash, x)
 }
 
 /// Vectorised squash for an 8-record batch lane. See `squash_lanes`.
 #[inline]
 pub fn squash_x8(squash: SquashType, x: [f32; 8]) -> Option<[f32; 8]> {
-    squash_lanes(squash, x)
+    squash_xn(squash, x)
 }
 
 #[cfg(test)]

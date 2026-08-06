@@ -43,12 +43,12 @@
 use crate::network::{CompiledNetwork, NeuronData, SynapseData};
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{
-    weighted_sum_interleaved_8, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
+    weighted_sum_interleaved, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
     weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
     weighted_sum_simd_8records,
 };
 use crate::squash::{SquashType, apply_squash};
-use crate::squash_simd::{squash_x4, squash_x8};
+use crate::squash_simd::{squash_x4, squash_x8, squash_xn};
 use crate::synapse_type::SynapseType;
 
 /// Number of records processed per SIMD batch (one lane each).
@@ -141,21 +141,30 @@ impl BatchScratch {
 
 /// Free-function form of [`CompiledNetwork::interleaved_forward_8`] so the fused
 /// MSE path can borrow `mse_inter` mutably alongside immutable neuron/synapse
-/// slices (NEAT-AI-scorer#531 scratch reuse).
-pub(crate) fn run_interleaved_forward_8(
+/// slices (NEAT-AI-scorer#531 scratch reuse), generic over the record tile width
+/// `R` (Issue #530).
+///
+/// `inter` must hold exactly `num_neurons * R` values — lane `l` of neuron `n`
+/// at `inter[n * R + l]` — with the `num_inputs * R` input lanes already
+/// transposed in. `R` must be a non-zero multiple of 8 and at most
+/// [`crate::simd::MAX_INTERLEAVED_LANES`], enforced at compile time by the
+/// gather kernel.
+///
+/// Each lane is an independent `bias + Σ w·a` in synapse order and is squashed
+/// and clamped by the same per-lane rule, so a record's activation is
+/// **bit-identical** at every tile width.
+pub(crate) fn run_interleaved_forward<const R: usize>(
     neurons: &[NeuronData],
     synapses: &[SynapseData],
     num_inputs: usize,
     inter: &mut [f32],
 ) {
-    const L: usize = SCORING_LANES;
-
     for (neuron_idx, neuron) in neurons.iter().enumerate() {
-        let out_base = (num_inputs + neuron_idx) * L;
+        let out_base = (num_inputs + neuron_idx) * R;
 
         if neuron.is_constant {
             let v = apply_limit_range(SquashType::Identity, neuron.bias);
-            for slot in inter[out_base..out_base + L].iter_mut() {
+            for slot in inter[out_base..out_base + R].iter_mut() {
                 *slot = v;
             }
             continue;
@@ -164,16 +173,16 @@ pub(crate) fn run_interleaved_forward_8(
         let squash = SquashType::from(neuron.squash_type);
         let start = neuron.start_synapse as usize;
         let end = start + neuron.num_synapses as usize;
-        let sums = weighted_sum_interleaved_8(synapses, inter, start, end, neuron.bias);
+        let sums = weighted_sum_interleaved::<R>(synapses, inter, start, end, neuron.bias);
 
-        let squashed = squash_x8(squash, sums).unwrap_or_else(|| {
+        let squashed = squash_xn(squash, sums).unwrap_or_else(|| {
             let st = neuron.squash_type;
             sums.map(|s| inline_squash(st, squash, s))
         });
 
         let (low, high) = apply_get_range(squash);
-        for l in 0..L {
-            inter[out_base + l] = apply_limit_range_bounds(low, high, squashed[l]);
+        for (slot, value) in inter[out_base..out_base + R].iter_mut().zip(squashed) {
+            *slot = apply_limit_range_bounds(low, high, value);
         }
     }
 }
@@ -459,15 +468,20 @@ impl CompiledNetwork {
     /// `inter[i * 8 + l]` for every input neuron `i` and lane `l`. This fills
     /// each non-input neuron's eight output lanes at
     /// `inter[(num_inputs + neuron_idx) * 8 + l]`, gathering through
-    /// [`weighted_sum_interleaved_8`] so each synapse reads one cache line.
+    /// [`weighted_sum_interleaved`] so each synapse reads one cache line.
     ///
     /// Only valid when [`Self::has_aggregate_squash`] is false — every
     /// non-constant neuron is treated as standard-squash (vectorised
-    /// `squash_x8` with the scalar inline fallback), so aggregate networks must
+    /// `squash_xn` with the scalar inline fallback), so aggregate networks must
     /// use the exact per-lane path instead. Bit-identical to the per-lane
     /// 8-record path ([`weighted_sum_simd_8records`]) on the covered neurons.
     pub(crate) fn interleaved_forward_8(&self, inter: &mut [f32]) {
-        run_interleaved_forward_8(&self.neurons, &self.synapses, self.num_inputs, inter);
+        run_interleaved_forward::<SCORING_LANES>(
+            &self.neurons,
+            &self.synapses,
+            self.num_inputs,
+            inter,
+        );
     }
 
     /// Per-lane fallback scoring path — the original eight-buffer layout, kept

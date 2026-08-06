@@ -27,6 +27,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::loss::MSE_TILE_LANES;
 use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -432,6 +433,6 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
             Vec::with_capacity(estimated_trace_size),
         ],
         // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
-        mse_inter: vec![0.0; num_neurons * 8],
+        mse_inter: vec![0.0; num_neurons * MSE_TILE_LANES],
     })
 }
