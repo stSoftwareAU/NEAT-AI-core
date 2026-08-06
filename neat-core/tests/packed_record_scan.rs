@@ -19,7 +19,7 @@ use neat_core::loss::{
     mae_sum_batch_packed, mape_sum_batch_packed, mse_mean_record, mse_sum_batch_packed,
     msle_sum_batch_packed,
 };
-use neat_core::{CompiledNetwork, NeuronData, SynapseData};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
 
 /// Identity squash — keeps every fixture's activation exact, so a mismatch is a
 /// carve bug rather than an approximation.
@@ -103,11 +103,14 @@ fn network(
     synapses: Vec<SynapseData>,
 ) -> CompiledNetwork {
     let num_non_inputs = neurons.len();
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
     CompiledNetwork {
         num_neurons,
         num_inputs,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::new(),

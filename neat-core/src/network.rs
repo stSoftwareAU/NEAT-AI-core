@@ -143,6 +143,29 @@ pub struct SynapseData {
     pub synapse_type: u8,
 }
 
+/// Build the struct-of-arrays view of the hot synapse fields (Issue #533).
+///
+/// The single home of the rule that says what
+/// [`CompiledNetwork::hot_weights`] / [`CompiledNetwork::hot_from`] contain:
+/// `synapses[i].weight` and `synapses[i].from_index` in **exactly** the order
+/// `synapses` holds them, one entry per synapse. Every construction path calls
+/// this — the binary deserialiser [`CompiledNetwork::new`] and
+/// [`crate::creature::compile_creature`] — so the two views cannot drift.
+///
+/// The interleaved gather reads only these two fields; splitting them out drops
+/// the hot loop's synapse stream from 8 B to 6 B per synapse and gives the
+/// prefetcher two clean sequential streams over `start..end`.
+/// `synapse_type` stays on [`SynapseData`] for the aggregate/IF paths.
+pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
+    let mut weights = Vec::with_capacity(synapses.len());
+    let mut from = Vec::with_capacity(synapses.len());
+    for s in synapses {
+        weights.push(s.weight);
+        from.push(s.from_index);
+    }
+    (weights, from)
+}
+
 /// Compiled network data structure
 ///
 /// `Clone` is supported so native tools (for example the NEAT-AI scorer) can run
@@ -177,6 +200,16 @@ pub struct CompiledNetwork {
     /// Synapse data using typed struct for cache efficiency
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub synapses: Vec<SynapseData>,
+    /// Hot-path weights, struct-of-arrays view of `synapses[i].weight`
+    /// (Issue #533). Built by [`hot_synapse_soa`] at every construction path;
+    /// read only by the record-interleaved gather.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    pub hot_weights: Vec<f32>,
+    /// Hot-path source indices, struct-of-arrays view of
+    /// `synapses[i].from_index` (Issue #533). Same order and length as
+    /// [`Self::synapses`] and [`Self::hot_weights`].
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    pub hot_from: Vec<u16>,
     /// Activation buffer - reused across calls
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub activations: Vec<f32>,
@@ -212,6 +245,44 @@ pub struct CompiledNetwork {
     /// [`Self::batch_activations`].
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
     pub mse_inter: Vec<f32>,
+}
+
+impl CompiledNetwork {
+    /// Debug-only guard that the Issue #533 struct-of-arrays hot view still
+    /// mirrors [`Self::synapses`] element-for-element.
+    ///
+    /// The two views are redundant by construction — [`hot_synapse_soa`] builds
+    /// them from the same vector at every construction path — but the fields are
+    /// public, so a caller assembling a [`CompiledNetwork`] literal (or mutating
+    /// `synapses` afterwards) could let them drift. Every entry point into the
+    /// record-interleaved gather calls this first, so a drifted network fails
+    /// loudly in debug and test builds rather than silently scoring wrong
+    /// numbers. Compiles away entirely in release.
+    #[inline]
+    pub(crate) fn debug_assert_hot_soa(&self) {
+        debug_assert_eq!(
+            self.hot_weights.len(),
+            self.synapses.len(),
+            "Issue #533 - hot_weights must hold one entry per synapse"
+        );
+        debug_assert_eq!(
+            self.hot_from.len(),
+            self.synapses.len(),
+            "Issue #533 - hot_from must hold one entry per synapse"
+        );
+        #[cfg(debug_assertions)]
+        for (i, s) in self.synapses.iter().enumerate() {
+            debug_assert_eq!(
+                self.hot_weights[i].to_bits(),
+                s.weight.to_bits(),
+                "Issue #533 - hot_weights[{i}] drifted from synapses[{i}].weight"
+            );
+            debug_assert_eq!(
+                self.hot_from[i], s.from_index,
+                "Issue #533 - hot_from[{i}] drifted from synapses[{i}].from_index"
+            );
+        }
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
@@ -344,11 +415,17 @@ impl CompiledNetwork {
         // Each aggregate records 2 floats (neuron_idx, trace_info), plus -1.0 terminator
         let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
 
+        // Issue #533 - struct-of-arrays view of the two fields the interleaved
+        // gather reads, built from the same vector so it cannot drift.
+        let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
+
         Ok(CompiledNetwork {
             num_neurons,
             num_inputs,
             neurons,
             synapses,
+            hot_weights,
+            hot_from,
             activations: vec![0.0; num_neurons],
             // Issue #1173 - Pre-allocate hint values buffer
             hint_values_buffer: vec![0.0; num_non_inputs],

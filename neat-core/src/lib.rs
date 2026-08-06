@@ -46,7 +46,7 @@ pub use creature::{
     creature_to_json_pretty, parse_creature_json, parse_squash_name, parse_synapse_type,
     squash_name_from, synapse_type_name_from,
 };
-pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData};
+pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{

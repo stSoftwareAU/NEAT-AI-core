@@ -19,7 +19,7 @@
 //! the 7/9/12 remainder counts.
 
 use neat_core::squash::SquashType;
-use neat_core::{CompiledNetwork, NeuronData, SynapseData};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
 
 #[path = "../benches/common/mod.rs"]
 #[allow(dead_code)]
@@ -81,11 +81,14 @@ fn build_local_network(num_inputs: usize, squash: SquashType) -> CompiledNetwork
 
     let num_non_inputs = neurons.len();
     let num_neurons = num_inputs + num_non_inputs;
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
     CompiledNetwork {
         num_neurons,
         num_inputs,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::new(),

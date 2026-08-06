@@ -13,7 +13,7 @@
 //! regression guard for the batching itself.
 
 use neat_core::squash::SquashType;
-use neat_core::{CompiledNetwork, NeuronData, SynapseData};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
 
 /// Build a small forward network: `num_inputs` inputs fully connected into two
 /// hidden neurons and one output neuron, every non-input neuron using `squash`.
@@ -62,11 +62,14 @@ fn build_network(num_inputs: usize, squash: SquashType) -> CompiledNetwork {
 
     let num_non_inputs = neurons.len();
     let num_neurons = num_inputs + num_non_inputs;
+    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
     CompiledNetwork {
         num_neurons,
         num_inputs,
         neurons,
         synapses,
+        hot_weights,
+        hot_from,
         activations: vec![0.0; num_neurons],
         hint_values_buffer: vec![0.0; num_non_inputs],
         trace_data_buffer: Vec::new(),

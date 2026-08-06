@@ -330,6 +330,47 @@ straddling every tier boundary
 > squash-vectorisation lever it is neither a lower nor an upper bound on
 > varied-squash creatures.
 
+## Struct-of-arrays hot synapse fields for the interleaved gather (Issue #533)
+
+The interleaved gather reads only two of `SynapseData`'s three fields, so #533
+adds a parallel struct-of-arrays view — `CompiledNetwork::hot_weights: Vec<f32>`
+and `hot_from: Vec<u16>`, built by `hot_synapse_soa` at every construction path
+— and points `weighted_sum_interleaved::<R>` (scalar/AVX2/NEON/wasm) at those
+two slices. The hot loop's synapse stream drops from **8 B to 6 B** per synapse;
+`synapse_type` stays on `SynapseData` for the aggregate/IF and single-record
+paths, which are untouched. Nothing is removed, the binary format is unchanged
+and the numbers are bit-identical — the same values accumulate in the same
+order.
+
+**Measured 2026-08-06**, Apple M4 Pro (12 cores, this host), rustc 1.97.1,
+`--release`. `base` is the parent commit run from a separate `git worktree`;
+`after` is this branch. **24 ABBA pairs per group** (`base, after, after, base`
+— each round's two arms bracket each other so drift cancels), criterion
+`--warm-up-time 1 --measurement-time 3 --sample-size 20`, comparing the mean of
+each arm's two runs within a round:
+
+| group | base median | after median | Δ median | paired Δ (mean ± SE) | rounds favouring `after` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `mse_sum_production/production_exact` | 15.566 ms | 15.412 ms | **−0.99%** | −1.12% ± 0.72 | 18 / 24 |
+| `scoring/production_exact` | 24.621 ms | 24.061 ms | **−2.28%** | −1.02% ± 0.71 | 17 / 24 |
+
+> **Read the sign, not the magnitude.** The host was **not quiet** — an
+> unrelated process held the load average near 15 on a 12-core machine, so
+> round-to-round noise is ~3.5% and neither group's mean clears its own standard
+> error. What does clear is the **direction**: 35 of 48 paired rounds favour
+> `after` (two-sided sign test p ≈ 0.002), and symmetric noise cannot produce
+> that. The honest reading is a real gain of roughly **1–2%**, at the low end of
+> the issue's ≥1–2% bar, not the 3–8% the issue hoped for.
+
+**Why the upside shrank.** The issue's L1-residency argument was written against
+the pre-#530 world: 21,513 synapses × 8 B = 168 KB against an M4 core's 128 KB
+L1D, with an 8-lane `mse_inter` of 132 KB. At the shipped `MSE_TILE_LANES = 32`
+that framing no longer holds — `mse_inter` is ~528 KB and never L1-resident, and
+each synapse now drives `R = 32` lanes (128 B of gather traffic) against its own
+8 B, so trimming 2 B removes ~1.5% of the loop's bytes rather than crossing a
+capacity threshold. The 8-lane `scoring` group, where the ratio is 8 B against
+32 B, is the better-placed of the two and shows the larger median.
+
 ## Flat-slice record **input** for batched scoring (Issue #386)
 
 Issue #229 flattened the scoring *output* to one contiguous buffer, but the
