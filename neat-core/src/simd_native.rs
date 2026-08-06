@@ -18,6 +18,29 @@
 use crate::network::SynapseData;
 use crate::simd::scalar;
 
+/// Widest record-interleaved tile the generic gather kernels support
+/// (Issue #530).
+///
+/// The vector kernels hold their accumulators in a fixed-size array sized for
+/// this maximum and use only the leading `R / 8` (AVX2) or `R / 4` (NEON)
+/// entries, so the unused accumulators are eliminated at compile time. Every
+/// tile width `R` must be a multiple of 8 and no wider than this — both are
+/// checked at compile time by the kernels' `assert_interleaved_tile` guard.
+pub const MAX_INTERLEAVED_LANES: usize = 64;
+
+/// Compile-time guard on a record-interleaved tile width (Issue #530): `R` must
+/// be a non-zero multiple of 8 and no wider than [`MAX_INTERLEAVED_LANES`].
+///
+/// Fails the build rather than silently mis-sizing an accumulator array
+/// (fail-loud, Issue #3234).
+#[inline]
+pub(crate) const fn assert_interleaved_tile<const R: usize>() {
+    assert!(
+        R > 0 && R % 8 == 0 && R <= MAX_INTERLEAVED_LANES,
+        "record-interleaved tile width must be a non-zero multiple of 8 and at most MAX_INTERLEAVED_LANES"
+    );
+}
+
 #[inline]
 fn weighted_sum_simd_8records_scalar(
     synapses: &[SynapseData],
@@ -82,28 +105,30 @@ fn weighted_sum_simd_4records_scalar(
     (sum0, sum1, sum2, sum3)
 }
 
-/// Scalar fallback for the record-interleaved 8-lane weighted sum (Issue #287).
+/// Scalar fallback for the record-interleaved `R`-lane weighted sum
+/// (Issue #287; widened to a tunable tile in Issue #530).
 ///
 /// `inter` is the transposed batch activation buffer: lane `l` of neuron `n`
-/// lives at `inter[n * 8 + l]`, so all eight records for a source neuron are
+/// lives at `inter[n * R + l]`, so all `R` records for a source neuron are
 /// contiguous. This mirrors [`weighted_sum_simd_8records_scalar`] numerically —
-/// same per-synapse FMA order, bias seeded into every lane — so the covered
-/// scoring path is bit-identical whichever gather layout is used.
+/// same per-synapse FMA order, bias seeded into every lane, each lane summed
+/// independently — so the result is bit-identical whichever gather layout **and
+/// whichever tile width** is used.
 #[inline]
-fn weighted_sum_interleaved_8_scalar(
+fn weighted_sum_interleaved_scalar<const R: usize>(
     synapses: &[SynapseData],
     inter: &[f32],
     start: usize,
     end: usize,
     bias: f32,
-) -> [f32; 8] {
-    let mut acc = [bias; 8];
+) -> [f32; R] {
+    let mut acc = [bias; R];
     for synapse in synapses.iter().take(end).skip(start) {
-        let base = synapse.from_index as usize * 8;
+        let base = synapse.from_index as usize * R;
         let w = synapse.weight;
-        let chunk = &inter[base..base + 8];
-        for l in 0..8 {
-            acc[l] += chunk[l] * w;
+        let chunk = &inter[base..base + R];
+        for (a, c) in acc.iter_mut().zip(chunk) {
+            *a += *c * w;
         }
     }
     acc
@@ -164,43 +189,52 @@ mod x86 {
         )
     }
 
-    /// Record-interleaved 8-lane weighted sum (Issue #287).
+    /// Record-interleaved `R`-lane weighted sum (Issue #287; widened to a
+    /// tunable tile in Issue #530).
     ///
-    /// `inter` holds the transposed batch: the eight records for source neuron
-    /// `n` are contiguous at `inter[n * 8 .. n * 8 + 8]`, so each synapse gather
-    /// is a single `_mm256_loadu_ps` from one cache line instead of eight
-    /// scattered scalar loads — the whole point of the layout change.
+    /// `inter` holds the transposed batch: the `R` records for source neuron
+    /// `n` are contiguous at `inter[n * R .. n * R + R]`, so each synapse gather
+    /// is `R / 8` adjacent `_mm256_loadu_ps` reads instead of `R` scattered
+    /// scalar loads. Widening `R` amortises the synapse stream: the whole
+    /// synapse array is re-read once per **tile**, not once per eight records.
     ///
     /// # Safety
     /// Caller must ensure AVX2 is enabled (`is_x86_feature_detected!("avx2")`).
-    /// Issue #287 - `inter.len()` must be `num_neurons * 8` and every
+    /// Issue #287 - `inter.len()` must be `num_neurons * R` and every
     /// `synapse.from_index` in `start..end` must be `< num_neurons`, so
-    /// `from_index * 8 + 8 <= inter.len()`; `CompiledNetwork::new` validates the
-    /// synapse index range at load time. The 8-wide read is then in bounds.
+    /// `from_index * R + R <= inter.len()`; `CompiledNetwork::new` validates the
+    /// synapse index range at load time. The `R`-wide read is then in bounds.
     #[target_feature(enable = "avx2")]
     #[inline]
-    pub unsafe fn weighted_sum_interleaved_8_avx2(
+    pub unsafe fn weighted_sum_interleaved_avx2<const R: usize>(
         synapses: &[SynapseData],
         inter: &[f32],
         start: usize,
         end: usize,
         bias: f32,
-    ) -> [f32; 8] {
-        let mut acc = _mm256_set1_ps(bias);
+    ) -> [f32; R] {
+        const { super::assert_interleaved_tile::<R>() };
+        let octs = R / 8;
+        let mut acc = [_mm256_set1_ps(bias); super::MAX_INTERLEAVED_LANES / 8];
         let ptr = inter.as_ptr();
         for i in start..end {
             let synapse = unsafe { synapses.get_unchecked(i) };
-            let base = synapse.from_index as usize * 8;
-            let w = synapse.weight;
-            // SAFETY: base + 8 <= inter.len() by the load-time index validation
-            // documented above; the unaligned 8-wide load is in bounds.
-            let acts = unsafe { _mm256_loadu_ps(ptr.add(base)) };
-            let ws = _mm256_set1_ps(w);
-            // `_mm256_fmadd_ps` needs `fma` (mirrors the 8records kernel above).
-            acc = unsafe { _mm256_fmadd_ps(ws, acts, acc) };
+            let base = synapse.from_index as usize * R;
+            let ws = _mm256_set1_ps(synapse.weight);
+            for (o, a) in acc.iter_mut().take(octs).enumerate() {
+                // SAFETY: base + R <= inter.len() by the load-time index
+                // validation documented above, and `o < R / 8`, so this
+                // unaligned 8-wide load is in bounds.
+                let acts = unsafe { _mm256_loadu_ps(ptr.add(base + o * 8)) };
+                // `_mm256_fmadd_ps` needs `fma` (mirrors the 8records kernel above).
+                *a = unsafe { _mm256_fmadd_ps(ws, acts, *a) };
+            }
         }
-        let mut out = [0.0_f32; 8];
-        unsafe { _mm256_storeu_ps(out.as_mut_ptr(), acc) };
+        let mut out = [0.0_f32; R];
+        for (o, a) in acc.iter().take(octs).enumerate() {
+            // SAFETY: `o < R / 8`, so `out[o * 8 .. o * 8 + 8]` is in bounds.
+            unsafe { _mm256_storeu_ps(out.as_mut_ptr().add(o * 8), *a) };
+        }
         out
     }
 
@@ -441,46 +475,53 @@ mod aarch64 {
         )
     }
 
-    /// Record-interleaved 8-lane weighted sum (Issue #287).
+    /// Record-interleaved `R`-lane weighted sum (Issue #287; widened to a
+    /// tunable tile in Issue #530).
     ///
-    /// `inter` holds the transposed batch: the eight records for source neuron
-    /// `n` are contiguous at `inter[n * 8 .. n * 8 + 8]`, so each synapse gather
-    /// is two adjacent `vld1q_f32` loads from one cache line instead of eight
-    /// scattered scalar loads staged through a stack array.
+    /// `inter` holds the transposed batch: the `R` records for source neuron
+    /// `n` are contiguous at `inter[n * R .. n * R + R]`, so each synapse gather
+    /// is `R / 4` adjacent `vld1q_f32` loads instead of `R` scattered scalar
+    /// loads staged through a stack array. Widening `R` amortises the synapse
+    /// stream: the whole synapse array is re-read once per **tile**, not once
+    /// per eight records.
     ///
     /// # Safety
     /// Caller must ensure NEON is available (typical on aarch64-apple-darwin /
-    /// linux-aarch64). Issue #287 - `inter.len()` must be `num_neurons * 8` and
+    /// linux-aarch64). Issue #287 - `inter.len()` must be `num_neurons * R` and
     /// every `synapse.from_index` in `start..end` must be `< num_neurons`, so
-    /// `from_index * 8 + 8 <= inter.len()`; `CompiledNetwork::new` validates the
-    /// synapse index range at load time, making the two 4-wide reads in bounds.
+    /// `from_index * R + R <= inter.len()`; `CompiledNetwork::new` validates the
+    /// synapse index range at load time, making the `R / 4` 4-wide reads in
+    /// bounds.
     #[target_feature(enable = "neon")]
     #[inline]
-    pub unsafe fn weighted_sum_interleaved_8_neon(
+    pub unsafe fn weighted_sum_interleaved_neon<const R: usize>(
         synapses: &[SynapseData],
         inter: &[f32],
         start: usize,
         end: usize,
         bias: f32,
-    ) -> [f32; 8] {
-        let mut acc03 = vdupq_n_f32(bias);
-        let mut acc47 = vdupq_n_f32(bias);
+    ) -> [f32; R] {
+        const { super::assert_interleaved_tile::<R>() };
+        let quads = R / 4;
+        let mut acc = [vdupq_n_f32(bias); super::MAX_INTERLEAVED_LANES / 4];
         let ptr = inter.as_ptr();
         for i in start..end {
             let synapse = unsafe { synapses.get_unchecked(i) };
-            let base = synapse.from_index as usize * 8;
-            let w = synapse.weight;
-            // SAFETY: base + 8 <= inter.len() by the load-time index validation
-            // documented above; both 4-wide reads are in bounds.
-            let a03 = unsafe { vld1q_f32(ptr.add(base)) };
-            let a47 = unsafe { vld1q_f32(ptr.add(base + 4)) };
-            let vw = vdupq_n_f32(w);
-            acc03 = vfmaq_f32(acc03, vw, a03);
-            acc47 = vfmaq_f32(acc47, vw, a47);
+            let base = synapse.from_index as usize * R;
+            let vw = vdupq_n_f32(synapse.weight);
+            for (q, a) in acc.iter_mut().take(quads).enumerate() {
+                // SAFETY: base + R <= inter.len() by the load-time index
+                // validation documented above, and `q < R / 4`, so this 4-wide
+                // read is in bounds.
+                let acts = unsafe { vld1q_f32(ptr.add(base + q * 4)) };
+                *a = vfmaq_f32(*a, vw, acts);
+            }
         }
-        let mut out = [0.0_f32; 8];
-        unsafe { vst1q_f32(out.as_mut_ptr(), acc03) };
-        unsafe { vst1q_f32(out.as_mut_ptr().add(4), acc47) };
+        let mut out = [0.0_f32; R];
+        for (q, a) in acc.iter().take(quads).enumerate() {
+            // SAFETY: `q < R / 4`, so `out[q * 4 .. q * 4 + 4]` is in bounds.
+            unsafe { vst1q_f32(out.as_mut_ptr().add(q * 4), *a) };
+        }
         out
     }
 
@@ -723,20 +764,29 @@ pub fn weighted_sum_simd_8records(
     )
 }
 
-/// Record-interleaved 8-lane weighted sum (Issue #287): AVX2+FMA on x86_64,
-/// NEON on aarch64, else scalar. `inter` is the transposed batch buffer
-/// (`inter[n * 8 + l]` = lane `l` of neuron `n`), so each synapse gather touches
-/// one cache line instead of eight scattered per-lane buffers.
+/// Record-interleaved `R`-lane weighted sum (Issue #287; widened to a tunable
+/// tile in Issue #530): AVX2+FMA on x86_64, NEON on aarch64, else scalar.
+/// `inter` is the transposed batch buffer (`inter[n * R + l]` = lane `l` of
+/// neuron `n`), so each synapse gather reads `R` contiguous floats instead of
+/// `R` scattered per-lane buffers.
+///
+/// `R` must be a non-zero multiple of 8 and at most
+/// [`MAX_INTERLEAVED_LANES`] — enforced at compile time.
+///
+/// Every lane accumulates `bias + Σ w·a` in synapse order, independently of the
+/// other lanes, so widening `R` leaves each record's sum **bit-identical**.
 #[inline]
-pub fn weighted_sum_interleaved_8(
+pub fn weighted_sum_interleaved<const R: usize>(
     synapses: &[SynapseData],
     inter: &[f32],
     start: usize,
     end: usize,
     bias: f32,
-) -> [f32; 8] {
+) -> [f32; R] {
+    const { assert_interleaved_tile::<R>() };
+
     if scalar::synapse_count(start, end) == 0 {
-        return [bias; 8];
+        return [bias; R];
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -744,9 +794,9 @@ pub fn weighted_sum_interleaved_8(
         if std::arch::is_x86_feature_detected!("avx2") {
             // SAFETY: the `is_x86_feature_detected!("avx2")` guard proves AVX2 is
             // available, satisfying the `#[target_feature(enable = "avx2")]`
-            // precondition on `weighted_sum_interleaved_8_avx2`.
+            // precondition on `weighted_sum_interleaved_avx2`.
             return unsafe {
-                x86::weighted_sum_interleaved_8_avx2(synapses, inter, start, end, bias)
+                x86::weighted_sum_interleaved_avx2::<R>(synapses, inter, start, end, bias)
             };
         }
     }
@@ -756,14 +806,27 @@ pub fn weighted_sum_interleaved_8(
         if std::arch::is_aarch64_feature_detected!("neon") {
             // SAFETY: the `is_aarch64_feature_detected!("neon")` guard proves NEON
             // is available, satisfying the `#[target_feature(enable = "neon")]`
-            // precondition on `weighted_sum_interleaved_8_neon`.
+            // precondition on `weighted_sum_interleaved_neon`.
             return unsafe {
-                aarch64::weighted_sum_interleaved_8_neon(synapses, inter, start, end, bias)
+                aarch64::weighted_sum_interleaved_neon::<R>(synapses, inter, start, end, bias)
             };
         }
     }
 
-    weighted_sum_interleaved_8_scalar(synapses, inter, start, end, bias)
+    weighted_sum_interleaved_scalar::<R>(synapses, inter, start, end, bias)
+}
+
+/// The 8-lane tile of [`weighted_sum_interleaved`], kept as the name the
+/// batched **scoring** path (`BatchScratch::inter`) and its tests use.
+#[inline]
+pub fn weighted_sum_interleaved_8(
+    synapses: &[SynapseData],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; 8] {
+    weighted_sum_interleaved::<8>(synapses, inter, start, end, bias)
 }
 
 /// 4-record weighted sum: FMA+SSE on x86_64, NEON on aarch64, else scalar.

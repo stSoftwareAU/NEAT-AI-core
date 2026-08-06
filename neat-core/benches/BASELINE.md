@@ -263,6 +263,73 @@ the vectorised path, so they gain at least as much.
 > comparable within this section's own old/new pair, which is what the
 > gain claim rests on.
 
+## Fused-MSE record tile widened from 8 to a tunable `R` (Issue #530)
+
+Issue #384 routed the fused MSE lane through the #287 interleaved gather but
+kept the record group at **8**, so the network's whole synapse array was re-streamed once
+per eight records. On `production_exact` that array is ~172 KB (21,513 × 8 B
+`SynapseData`) and the 8-lane `mse_inter` is ~132 KB — together well past an
+M4 performance core's 128 KB L1D, so every group re-fetched the synapses from
+L2. #530 makes the tile a single constant, `loss::MSE_TILE_LANES`, gathered by
+const-generic kernels (`weighted_sum_interleaved::<R>`: `R / 8` `__m256`
+accumulators on AVX2, `R / 4` `float32x4` on NEON, contiguous `f32x4` quads on
+wasm `simd128`). Per-record synapse traffic falls by `R / 8`.
+
+Two changes are load-bearing beyond the width itself, and both are pinned by
+`loss::interleaved_mse_parity`:
+
+- The tile transpose walks **input-major** — a neuron's `R` lanes go to
+  consecutive `mse_inter` slots — so the scratch buffer is filled by one linear
+  sweep. The original lane-major order revisits the whole `num_inputs * R`
+  region once per lane, which stops fitting in L1 as `R` grows and would have
+  eaten the gain. This alone is most of the `R = 8` column below.
+- `interleaved_tile_mse` is **seed-taking**: it takes the running `f64`
+  `sum_error` and returns it. Returning a per-tile partial sum re-associates the
+  reduction — caught in development as a 12-ULP parity failure at n = 4096.
+
+**Measured 2026-08-06**, Apple M4 (10 cores, this host), rustc 1.97.1,
+`--release`, `hot_paths -- mse_sum_production/production_exact` (4,096 records
+per iteration). **5 interleaved A/B rounds**, each round rebuilding and running
+every arm back to back so thermal drift hits all arms alike; `base` is the
+pre-#530 code run from a separate `git worktree` at the parent commit.
+**Medians** (`n` rounds per arm):
+
+| arm | n | median | min | max | vs `base` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `base` (pre-#530, 8-record groups) | 6 | 21.343 ms | 19.877 | 21.819 | — |
+| `MSE_TILE_LANES = 8` | 6 | 17.994 ms | 16.978 | 19.127 | **−15.7%** |
+| `MSE_TILE_LANES = 16` | 6 | 14.468 ms | 13.659 | 15.281 | **−32.2%** |
+| **`MSE_TILE_LANES = 32` (shipped)** | 5 | **11.558 ms** | 10.252 | 12.152 | **−45.8%** |
+| `MSE_TILE_LANES = 64` | 5 | 12.728 ms | 12.130 | 13.496 | −40.4% |
+
+The arms do not overlap at all — `R = 32`'s worst round (12.152 ms) beats
+`base`'s best (19.877 ms) and `R = 8`'s best (16.978 ms) — so the ordering does
+not rest on the medians alone. Against the same-code `R = 8` arm (the A/B the
+issue asks for, one constant apart) `R = 32` is **−35.8%**.
+
+**The curve turns between 32 and 64.** At `R = 64` `mse_inter` reaches ~1 MB on
+this creature and the NEON kernel needs 16 live accumulators; both the extra
+capacity pressure and the register pressure show up as a partial give-back. 32
+is the shipped default.
+
+**Memory.** `mse_inter` is `num_neurons * MSE_TILE_LANES * 4` bytes per compiled
+network — ~132 KB at 8 lanes, **~528 KB at 32**, ~1 MB at 64 on the ~4,127-neuron
+production creature. Directory scoring holds one compiled network per worker, so
+at N = 50 workers that is ~26 MB of scratch at the shipped width. Budget it
+against the scorer's worker-count RAM ceiling before raising the constant.
+
+**Numerics.** Bit-identical at every width: each lane accumulates its own
+`bias + Σ w·a` in synapse order, independently of the other lanes, and every
+tier reduces into `sum_error` in strict record order. Asserted against the
+independent scattered oracle for widths 8/16/32/64 across 15 record counts
+straddling every tier boundary
+(`loss::interleaved_mse_parity::every_tile_width_is_bit_identical_to_scattered`).
+
+> Per the squash-homogeneity caveat above these all-`Tanh` figures isolate the
+> memory-traffic effect; this change is layout-only, so unlike a
+> squash-vectorisation lever it is neither a lower nor an upper bound on
+> varied-squash creatures.
+
 ## Flat-slice record **input** for batched scoring (Issue #386)
 
 Issue #229 flattened the scoring *output* to one contiguous buffer, but the

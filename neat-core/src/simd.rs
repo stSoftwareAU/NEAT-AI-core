@@ -490,16 +490,88 @@ pub fn weighted_sum_simd_8records(
     )
 }
 
-/// Issue #287 - record-interleaved 8-lane weighted sum for the batched scoring
-/// hot path.
+/// Widest record-interleaved tile the generic gather kernel supports
+/// (Issue #530). Mirrors `simd_native::MAX_INTERLEAVED_LANES`.
+#[cfg(target_arch = "wasm32")]
+pub const MAX_INTERLEAVED_LANES: usize = 64;
+
+/// Compile-time guard on a record-interleaved tile width (Issue #530): `R` must
+/// be a non-zero multiple of 8 and no wider than [`MAX_INTERLEAVED_LANES`].
+#[cfg(target_arch = "wasm32")]
+#[inline]
+pub(crate) const fn assert_interleaved_tile<const R: usize>() {
+    assert!(
+        R > 0 && R % 8 == 0 && R <= MAX_INTERLEAVED_LANES,
+        "record-interleaved tile width must be a non-zero multiple of 8 and at most MAX_INTERLEAVED_LANES"
+    );
+}
+
+/// Read one 4-lane quad out of a `v128` accumulator into `out`.
+///
+/// Lane extraction needs a *const* index, so a generic tile width cannot index
+/// the accumulator array element-wise — the quad is unpacked whole instead.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+fn store_quad(out: &mut [f32], acc: v128) {
+    out[0] = f32x4_extract_lane::<0>(acc);
+    out[1] = f32x4_extract_lane::<1>(acc);
+    out[2] = f32x4_extract_lane::<2>(acc);
+    out[3] = f32x4_extract_lane::<3>(acc);
+}
+
+/// Issue #287 - record-interleaved `R`-lane weighted sum for the batched
+/// scoring hot path; widened to a tunable tile in Issue #530.
 ///
 /// `inter` is the transposed batch activation buffer: lane `l` of source neuron
-/// `n` lives at `inter[n * 8 + l]`, so all eight records for a synapse's source
-/// are contiguous. Each gather is then two adjacent 4-wide reads from one cache
-/// line instead of eight scattered per-lane loads, cutting gather traffic on the
-/// gather-bound production topology. Numerically identical to
-/// [`weighted_sum_simd_8records`]: same per-synapse FMA order, bias seeded into
-/// every lane.
+/// `n` lives at `inter[n * R + l]`, so all `R` records for a synapse's source
+/// are contiguous. Each gather is then `R / 4` adjacent 4-wide reads instead of
+/// `R` scattered per-lane loads, cutting gather traffic on the gather-bound
+/// production topology; a wider `R` further amortises the synapse stream, which
+/// is re-read once per tile rather than once per eight records. Numerically
+/// identical to [`weighted_sum_simd_8records`]: same per-synapse FMA order,
+/// bias seeded into every lane, each lane summed independently.
+#[cfg(target_arch = "wasm32")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+pub fn weighted_sum_interleaved<const R: usize>(
+    synapses: &[SynapseData],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; R] {
+    const { assert_interleaved_tile::<R>() };
+
+    if scalar::synapse_count(start, end) == 0 {
+        return [bias; R];
+    }
+
+    let quads = R / 4;
+    let mut acc = [f32x4_splat(bias); MAX_INTERLEAVED_LANES / 4];
+
+    for i in start..end {
+        let synapse = &synapses[i];
+        let base = synapse.from_index as usize * R;
+        let weights = f32x4_splat(synapse.weight);
+
+        // The R lanes are contiguous, so these reads walk whole cache lines.
+        for (q, a) in acc.iter_mut().take(quads).enumerate() {
+            let o = base + q * 4;
+            let acts = f32x4(inter[o], inter[o + 1], inter[o + 2], inter[o + 3]);
+            *a = f32x4_relaxed_madd(weights, acts, *a);
+        }
+    }
+
+    let mut out = [0.0_f32; R];
+    for (q, a) in acc.iter().take(quads).enumerate() {
+        store_quad(&mut out[q * 4..q * 4 + 4], *a);
+    }
+    out
+}
+
+/// The 8-lane tile of [`weighted_sum_interleaved`], kept as the name the
+/// batched **scoring** path (`BatchScratch::inter`) and its tests use.
 #[cfg(target_arch = "wasm32")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
@@ -510,46 +582,7 @@ pub fn weighted_sum_interleaved_8(
     end: usize,
     bias: f32,
 ) -> [f32; 8] {
-    if scalar::synapse_count(start, end) == 0 {
-        return [bias; 8];
-    }
-
-    let mut acc03 = f32x4_splat(bias);
-    let mut acc47 = f32x4_splat(bias);
-
-    for i in start..end {
-        let synapse = &synapses[i];
-        let base = synapse.from_index as usize * 8;
-        let weights = f32x4_splat(synapse.weight);
-
-        // The eight lanes are contiguous, so these read one cache line.
-        let acts03 = f32x4(
-            inter[base],
-            inter[base + 1],
-            inter[base + 2],
-            inter[base + 3],
-        );
-        let acts47 = f32x4(
-            inter[base + 4],
-            inter[base + 5],
-            inter[base + 6],
-            inter[base + 7],
-        );
-
-        acc03 = f32x4_relaxed_madd(weights, acts03, acc03);
-        acc47 = f32x4_relaxed_madd(weights, acts47, acc47);
-    }
-
-    [
-        f32x4_extract_lane::<0>(acc03),
-        f32x4_extract_lane::<1>(acc03),
-        f32x4_extract_lane::<2>(acc03),
-        f32x4_extract_lane::<3>(acc03),
-        f32x4_extract_lane::<0>(acc47),
-        f32x4_extract_lane::<1>(acc47),
-        f32x4_extract_lane::<2>(acc47),
-        f32x4_extract_lane::<3>(acc47),
-    ]
+    weighted_sum_interleaved::<8>(synapses, inter, start, end, bias)
 }
 
 // Native (non-wasm32) multi-record helpers now live in `simd_native.rs` and use
@@ -564,7 +597,7 @@ mod simd_native;
 // kernels and run on the primary `activate()` forward-pass hot path.
 #[cfg(not(target_arch = "wasm32"))]
 pub use simd_native::{
-    weighted_sum_interleaved_8, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
-    weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
-    weighted_sum_simd_8records,
+    MAX_INTERLEAVED_LANES, weighted_sum_interleaved, weighted_sum_interleaved_8,
+    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
+    weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
 };

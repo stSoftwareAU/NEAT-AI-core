@@ -7,7 +7,7 @@
 //! Issue #118x, #1202, #1209 - Batch scoring optimisations.
 
 use crate::batch_scoring::{
-    SCORING_LANES, inline_squash, load_record, neuron_activation_scalar, run_interleaved_forward_8,
+    SCORING_LANES, inline_squash, load_record, neuron_activation_scalar, run_interleaved_forward,
 };
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
@@ -482,14 +482,39 @@ fn mse_sum_batch_8way(
     )
 }
 
+/// Record tile width for the fused-MSE record-interleaved forward pass
+/// (Issue #530).
+///
+/// The interleaved kernel re-streams the network's entire synapse array once per
+/// tile, so per-record synapse traffic is `synapse_bytes / MSE_TILE_LANES`.
+/// Widening the tile from the original 8 divides that traffic by
+/// `MSE_TILE_LANES / 8`, at the cost of a proportionally larger `mse_inter`
+/// scratch buffer: `num_neurons * MSE_TILE_LANES * 4` bytes **per network**,
+/// and directory scoring holds one compiled network per worker. On the
+/// production creature (~4,127 neurons) that is ~132 KB at 8 lanes and ~528 KB
+/// at 32 — budget it against the scorer's worker-count RAM ceiling before
+/// raising it further.
+///
+/// Must be a non-zero multiple of 8 and at most
+/// [`crate::simd::MAX_INTERLEAVED_LANES`]; both are checked at compile time by
+/// the gather kernel. Every tile width produces **bit-identical** results (see
+/// `interleaved_mse_parity`), so this constant is a pure
+/// memory-traffic/footprint trade-off.
+pub const MSE_TILE_LANES: usize = 32;
+
 /// Record-interleaved fused activate + MSE for standard-squash networks
-/// (Issue #384). Full 8-record groups run the shared interleaved forward pass
-/// ([`run_interleaved_forward_8`]) — the #287 gather that reads each synapse's
-/// eight lanes from one cache line — then the MSE reduction reads the eight
-/// contiguous output lanes. The `< 8` remainder (4-record group then scalar
-/// tail) is kept on the exact same per-lane kernels as the scattered path, so
-/// the whole result is bit-identical to the pre-#384 8-way path (the
-/// interleaved gather is proven bit-identical to `weighted_sum_simd_8records`).
+/// (Issue #384; tunable tile width in Issue #530). Full `R`-record tiles run the
+/// shared interleaved forward pass ([`run_interleaved_forward`]) — the #287
+/// gather that reads each synapse's lanes from contiguous memory — then the MSE
+/// reduction reads each lane's contiguous output slot. The `< R` remainder
+/// steps down the existing ladder: whole 8-record interleaved tiles, then one
+/// 4-record group, then the scalar tail, all on the exact same per-lane kernels
+/// as the scattered path.
+///
+/// Records are reduced into `sum_error` in strict record order at every tier, and
+/// each lane's weighted sum is an independent `bias + Σ w·a` in synapse order, so
+/// the result is bit-identical to the pre-#384 8-way path **and** to any other
+/// tile width.
 ///
 /// Only called when the network has no aggregate-squash neuron; the caller
 /// (`mse_sum_batch_8way`) routes aggregate networks to the scattered path.
@@ -504,7 +529,81 @@ fn mse_sum_batch_8way_interleaved(
     num_outputs: usize,
     num_records: usize,
 ) -> f64 {
-    const L: usize = SCORING_LANES;
+    mse_sum_batch_interleaved::<MSE_TILE_LANES>(
+        network,
+        records,
+        values_per_record,
+        input_size,
+        num_outputs,
+        num_records,
+    )
+}
+
+/// Transpose `R` records' inputs into the interleaved buffer and reduce their
+/// squared error after the forward pass — the body shared by every tile tier.
+///
+/// Walks **input-major**: for each input neuron the `R` lanes are written to
+/// consecutive `inter` slots, so the scratch buffer is filled by a single linear
+/// sweep whatever `R` is. (Lane-major would revisit the whole `num_inputs * R`
+/// region once per lane, which stops fitting in L1 as the tile widens.)
+///
+/// Takes the caller's **running** `sum_error` and returns it with this tile's
+/// per-record MSE added in record order — a seed-taking helper, like the SIMD
+/// tail helpers in [`crate::simd::scalar`]. Returning a per-tile partial sum
+/// instead would re-associate the `f64` reduction and break bit-parity with the
+/// scattered path.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn interleaved_tile_mse<const R: usize>(
+    network: &mut CompiledNetwork,
+    records: &[f32],
+    values_per_record: usize,
+    input_size: usize,
+    num_outputs: usize,
+    base_idx: usize,
+    inv_outputs: f64,
+    mut sum_error: f64,
+) -> f64 {
+    let num_neurons = network.num_neurons;
+    let num_inputs = network.num_inputs;
+    let output_start = num_neurons - num_outputs;
+    let input_lanes = input_size.min(num_inputs);
+    let inter = &mut network.mse_inter[..num_neurons * R];
+
+    for i in 0..input_lanes {
+        let row = &mut inter[i * R..i * R + R];
+        for (l, slot) in row.iter_mut().enumerate() {
+            *slot = records[(base_idx + l) * values_per_record + i];
+        }
+    }
+    // Zero every input slot the records do not cover (stateless scoring).
+    for slot in inter[input_lanes * R..num_inputs * R].iter_mut() {
+        *slot = 0.0;
+    }
+
+    run_interleaved_forward::<R>(&network.neurons, &network.synapses, num_inputs, inter);
+
+    for l in 0..R {
+        let target_base = (base_idx + l) * values_per_record + input_size;
+        let mut sq_sum: f64 = 0.0;
+        for j in 0..num_outputs {
+            let out_val = inter[(output_start + j) * R + l];
+            let diff = (records[target_base + j] - out_val) as f64;
+            sq_sum += diff * diff;
+        }
+        sum_error += sq_sum * inv_outputs;
+    }
+    sum_error
+}
+
+fn mse_sum_batch_interleaved<const R: usize>(
+    network: &mut CompiledNetwork,
+    records: &[f32],
+    values_per_record: usize,
+    input_size: usize,
+    num_outputs: usize,
+    num_records: usize,
+) -> f64 {
     let inv_outputs: f64 = if num_outputs > 0 {
         1.0 / (num_outputs as f64)
     } else {
@@ -514,7 +613,9 @@ fn mse_sum_batch_8way_interleaved(
     let num_neurons = network.num_neurons;
     let num_inputs = network.num_inputs;
     let output_start = num_neurons - num_outputs;
-    let needed = num_neurons * L;
+    // Sized for the widest tier used below, so the `< R` 8-lane remainder tiles
+    // can take a prefix of the same buffer.
+    let needed = num_neurons * R.max(SCORING_LANES);
     if network.mse_inter.len() != needed {
         network.mse_inter.resize(needed, 0.0);
     }
@@ -526,45 +627,41 @@ fn mse_sum_batch_8way_interleaved(
 
     let mut sum_error: f64 = 0.0;
 
-    // ---- full 8-record groups through the interleaved gather ----------------
-    let full_batches = num_records / L;
-    let input_lanes = input_size.min(num_inputs);
-    for batch in 0..full_batches {
-        let base_idx = batch * L;
-        let inter = &mut network.mse_inter;
+    // ---- full `R`-record tiles through the interleaved gather ---------------
+    let full_tiles = num_records / R;
+    for tile in 0..full_tiles {
+        sum_error = interleaved_tile_mse::<R>(
+            network,
+            records,
+            values_per_record,
+            input_size,
+            num_outputs,
+            tile * R,
+            inv_outputs,
+            sum_error,
+        );
+    }
 
-        // Transpose the eight records' inputs into the interleaved buffer;
-        // zero any input slot the record does not cover (stateless scoring).
-        for l in 0..L {
-            let base = (base_idx + l) * values_per_record;
-            for i in 0..input_lanes {
-                inter[i * L + l] = records[base + i];
-            }
-            for i in input_lanes..num_inputs {
-                inter[i * L + l] = 0.0;
-            }
-        }
-
-        run_interleaved_forward_8(&network.neurons, &network.synapses, num_inputs, inter);
-
-        // MSE reduction reads each lane's contiguous output lanes.
-        for l in 0..L {
-            let target_base = (base_idx + l) * values_per_record + input_size;
-            let mut sq_sum: f64 = 0.0;
-            for j in 0..num_outputs {
-                let out_val = inter[(output_start + j) * L + l];
-                let diff = (records[target_base + j] - out_val) as f64;
-                sq_sum += diff * diff;
-            }
-            sum_error += sq_sum * inv_outputs;
-        }
+    // ---- `< R` remainder: whole 8-record interleaved tiles ------------------
+    let mut remainder_start = full_tiles * R;
+    while num_records - remainder_start >= SCORING_LANES {
+        sum_error = interleaved_tile_mse::<SCORING_LANES>(
+            network,
+            records,
+            values_per_record,
+            input_size,
+            num_outputs,
+            remainder_start,
+            inv_outputs,
+            sum_error,
+        );
+        remainder_start += SCORING_LANES;
     }
 
     // ---- `< 8` remainder: 4-record group then scalar tail -------------------
     // Kept on the exact per-lane kernels of the scattered path so the numerics
     // match bit-for-bit. This branch never sees an aggregate neuron.
     // Reuses `batch_activations` (Issue #155 / NEAT-AI-scorer#531).
-    let remainder_start = full_batches * L;
     let remaining = num_records - remainder_start;
 
     if remaining >= 4 {
@@ -1721,7 +1818,12 @@ mod interleaved_mse_parity {
         records
     }
 
-    fn assert_bit_identical(squash: SquashType, num_records: usize) {
+    /// Assert the tile-`R` interleaved kernel is bit-identical to the scattered
+    /// oracle. The oracle reaches the same value by a genuinely independent
+    /// route — the per-lane scattered kernels driven by the shared 8 → 4 → 1
+    /// skeleton — so a lane-transpose slip, a wrong remainder split, or a
+    /// changed `f64` reduction order in the tiled path moves only one side.
+    fn assert_bit_identical<const R: usize>(squash: SquashType, num_records: usize) {
         let input_size = 6;
         let mut net = build_network(input_size, squash);
         assert!(
@@ -1731,7 +1833,7 @@ mod interleaved_mse_parity {
         let records = build_records(num_records, input_size);
         let values_per_record = input_size + 1;
 
-        let interleaved = mse_sum_batch_8way_interleaved(
+        let interleaved = mse_sum_batch_interleaved::<R>(
             &mut net,
             &records,
             values_per_record,
@@ -1750,26 +1852,68 @@ mod interleaved_mse_parity {
         assert_eq!(
             interleaved.to_bits(),
             scattered.to_bits(),
-            "{squash:?} n={num_records}: interleaved MSE {interleaved} not bit-identical to scattered {scattered}"
+            "{squash:?} R={R} n={num_records}: interleaved MSE {interleaved} not bit-identical to scattered {scattered}"
         );
     }
 
+    /// Record counts straddling every tier boundary of the 8-lane ladder:
+    /// 8 = one full group; 9 = group + scalar tail; 12 = group + 4-way
+    /// remainder; 13/15 = group + 4-way + scalar tail; 16 = two full groups;
+    /// 4096 = the production steady state (all full groups). At the wider tiles
+    /// these also cover "no full tile at all" (n < R) and "full tile + 8-record
+    /// remainder tiles", which is the ladder Issue #530 adds.
+    const BOUNDARY_COUNTS: [usize; 15] =
+        [8, 9, 12, 13, 15, 16, 17, 24, 31, 32, 33, 40, 64, 71, 4096];
+
+    const PARITY_SQUASHES: [SquashType; 7] = [
+        SquashType::Tanh,
+        SquashType::Logistic,
+        SquashType::Gelu,
+        SquashType::Mish,
+        SquashType::Relu,
+        SquashType::Identity,
+        SquashType::Sine,
+    ];
+
     #[test]
     fn interleaved_mse_bit_identical_to_scattered_across_boundaries() {
-        // 8 = one full group; 9 = group + scalar tail; 12 = group + 4-way
-        // remainder; 13/15 = group + 4-way + scalar tail; 16 = two full groups;
-        // 4096 = the production steady state (all full groups).
-        for squash in [
-            SquashType::Tanh,
-            SquashType::Logistic,
-            SquashType::Gelu,
-            SquashType::Mish,
-            SquashType::Relu,
-            SquashType::Identity,
-            SquashType::Sine,
-        ] {
-            for &n in &[8usize, 9, 12, 13, 15, 16, 17, 24, 4096] {
-                assert_bit_identical(squash, n);
+        for squash in PARITY_SQUASHES {
+            for &n in &BOUNDARY_COUNTS {
+                assert_bit_identical::<{ SCORING_LANES }>(squash, n);
+            }
+        }
+    }
+
+    /// Issue #530 — widening the record tile must not move a single bit. Each
+    /// lane accumulates its own `bias + Σ w·a` in synapse order and every tier
+    /// reduces in record order, so tiles of 16/32/64 must agree with the
+    /// scattered oracle exactly as the 8-lane tile does. This is the guard that
+    /// makes `MSE_TILE_LANES` a free memory-traffic knob.
+    #[test]
+    fn every_tile_width_is_bit_identical_to_scattered() {
+        for squash in PARITY_SQUASHES {
+            for &n in &BOUNDARY_COUNTS {
+                assert_bit_identical::<16>(squash, n);
+                assert_bit_identical::<32>(squash, n);
+                assert_bit_identical::<64>(squash, n);
+            }
+        }
+    }
+
+    /// The shipped tile width must itself be one of the widths proven above and
+    /// stay inside the kernel's compile-time bounds — a stray value would fail
+    /// the build, but this states the contract where a reader looks for it.
+    #[test]
+    fn shipped_tile_width_is_a_supported_multiple_of_eight() {
+        assert!(
+            MSE_TILE_LANES.is_multiple_of(SCORING_LANES)
+                && MSE_TILE_LANES >= SCORING_LANES
+                && MSE_TILE_LANES <= crate::simd::MAX_INTERLEAVED_LANES,
+            "MSE_TILE_LANES = {MSE_TILE_LANES} is not a supported tile width"
+        );
+        for squash in PARITY_SQUASHES {
+            for &n in &BOUNDARY_COUNTS {
+                assert_bit_identical::<MSE_TILE_LANES>(squash, n);
             }
         }
     }

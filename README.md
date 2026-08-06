@@ -171,9 +171,46 @@ flowchart LR
     B --> O[outputs in input order]
 ```
 
+### Fused-MSE record tile (Issue #530)
+
+`mse_sum_batch_packed` — the fused activate + MSE entry point production
+scoring calls — walks records in **record-interleaved tiles** of
+`loss::MSE_TILE_LANES` (`32`), not the 8 the scoring lane uses. The interleaved
+kernel re-streams the network's whole synapse array once per *tile*, so a wider
+tile divides per-record synapse traffic by `MSE_TILE_LANES / 8`; the cost is a
+proportionally larger `mse_inter` scratch buffer,
+`num_neurons * MSE_TILE_LANES * 4` bytes **per compiled network** (~528 KB on
+the production creature at 32 lanes, ~132 KB at 8). Directory scoring holds one
+compiled network per worker, so budget that against the worker-count RAM ceiling
+before raising it.
+
+`MSE_TILE_LANES` is a single constant, must be a non-zero multiple of 8 and at
+most `simd::MAX_INTERLEAVED_LANES` (`64`) — both checked at compile time — and
+every width is **bit-identical**: each lane accumulates its own
+`bias + Σ w·a` in synapse order and every tier reduces in record order.
+The `< MSE_TILE_LANES` remainder steps down the unchanged ladder.
+
+```mermaid
+flowchart LR
+    R["packed records"] --> T{"records left"}
+    T -- "&ge; MSE_TILE_LANES" --> A["R-record interleaved tile<br/>one synapse sweep per R records"]
+    T -- "8..R-1" --> B["8-record interleaved tile"]
+    T -- "4..7" --> C["4-record scattered group"]
+    T -- "&lt; 4" --> D["scalar tail — exact activate"]
+    A --> T
+    B --> T
+    C --> S["running f64 sum_error<br/>in record order"]
+    D --> S
+    A --> S
+    B --> S
+```
+
 ```bash
 # Run the data-parallel scoring throughput bench (1 vs all cores).
 cargo bench -p neat-core --features parallel --bench parallel_scoring
+
+# A/B the fused-MSE tile width (edit MSE_TILE_LANES, rebuild, compare medians).
+cargo bench -p neat-core --bench hot_paths -- mse_sum_production
 ```
 
 ## Related Repositories
