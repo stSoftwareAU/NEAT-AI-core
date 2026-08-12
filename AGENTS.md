@@ -266,6 +266,25 @@ callers, where it genuinely differs (MSE falls back through the 8-way *and*
 switch the driver's behaviour, leave that entry point out rather than growing a
 flag. `neat-core/tests/packed_record_scan.rs` pins the rule across all eight.
 
+## One scalar per-record MSE reduction (Issue #538)
+
+`mse_record` (`neat-core/src/loss.rs`) is the single home of the squared-error
+reduction: mean over outputs of `(target - output)^2`, accumulated in `f64`,
+`0.0` for an empty record. The scalar `mse_sum_batch_packed` fallback,
+`mse_mean_record`, and the streaming directory helper all call it, and it is
+**public** so consumers holding their own activations (the
+NEAT-AI-Backpropagation trace pass) stop re-deriving the maths. The SIMD tiles
+(`interleaved_tile_mse`, `mse_sum_batch_scattered`) read strided/interleaved
+buffers and are bit-parity-critical — they keep their inlined reduction.
+
+`mse_mean_streaming` is the directory entry point built on it: chunked reads via
+`training_bin_stream`, whole chunks scored through `mse_sum_batch_packed` so the
+tiled SIMD path still runs, and `(0.0, 0)` for a directory with no whole records
+— the caller decides whether that is an error.
+`neat-core/tests/mse_streaming_directory.rs` and
+`neat-core/tests/mse_streaming_chunk_boundary.rs` pin both against a
+single-record `activate` oracle.
+
 ## One batched record-scan skeleton for every loss kind (Issue #445)
 
 `batch_8way_activation!` (`neat-core/src/loss.rs`) is the single home of the
