@@ -231,6 +231,24 @@ fused batch path. The SIMD tile kernels keep their own bit-parity-critical
 reductions. Neither helper is on the `wasm_bindgen` export surface — they are
 native-host conveniences.
 
+```rust
+use neat_core::mse_mean_streaming;
+
+// (mean per-record MSE, records scored); `None` = the whole corpus.
+let (mse, records) = mse_mean_streaming(
+    &mut network,
+    std::path::Path::new("./training"),
+    input_size,
+    num_outputs,
+    /* forward_only */ true,
+    /* max_records */ None,
+)?;
+```
+
+Chunk boundaries decide which records land in an 8-way SIMD group, so the
+result matches `mse_sum_batch_packed(all_records) / N` to floating-point
+tolerance rather than bit-for-bit.
+
 ```mermaid
 flowchart LR
     D["training .bin directory"] --> F["find_bin_files<br/>numeric order"]
@@ -268,56 +286,6 @@ flowchart LR
     W --> G["weighted_sum_interleaved::&lt;R&gt;<br/>6 B per synapse"]
     F --> G
     S --> A["aggregate / IF / single-record paths<br/>unchanged, 8 B per synapse"]
-```
-
-### Streaming directory MSE (Issue #538)
-
-Consumers that score a whole `.bin` **directory** no longer re-implement the
-chunk → packed-buffer → fused-MSE loop around `mse_sum_batch_packed`.
-`loss::mse_mean_streaming` is that loop, and `loss::mse_record` is the
-per-record reduction it is built from — the mean over outputs of
-`(target - output)^2`, exported for callers (a backpropagation trace pass, for
-instance) that already hold the activations and cannot use a fused batch path.
-Both are re-exported from the crate root.
-
-```rust
-use neat_core::mse_mean_streaming;
-
-// (mean per-record MSE, records scored); `None` = the whole corpus.
-let (mse, records) = mse_mean_streaming(
-    &mut network,
-    std::path::Path::new("./training"),
-    input_size,
-    num_outputs,
-    /* forward_only */ true,
-    /* max_records */ None,
-)?;
-```
-
-The mean is `(1/N) * Σ_records mse_record(targets, outputs)`, matching NEAT-AI
-`Costs.MSE` and `mse_mean_record`. Chunk boundaries decide which records land in
-an 8-way SIMD group, so the result matches
-`mse_sum_batch_packed(all_records) / N` to floating-point tolerance rather than
-bit-for-bit. `max_records` truncates the batch at the cap instead of throttling
-the reader, so the cap costs no extra I/O.
-
-It is a native-host convenience and deliberately stays **outside** the
-`wasm_bindgen` export surface. Failures are loud: a path that is not a
-directory, an unreadable shard, and a corpus ending mid-record all return
-`Err`. A directory that simply yields no whole records returns `(0.0, 0)` — the
-caller decides whether scoring nothing is an error.
-
-```mermaid
-flowchart LR
-    D["training dir"] --> B["find_bin_files"]
-    B --> C["for_each_read_chunk_with_mode"]
-    C --> P{"whole records<br/>in this chunk?"}
-    P -- "partial tail" --> R["residual buffer<br/>joined by the next chunk"]
-    R --> P
-    P -- "yes" --> U["unpack LE f32 →<br/>packed inputs+targets"]
-    U --> M["mse_sum_batch_packed<br/>8/4-way SIMD"]
-    M --> S["Σ error, Σ records"]
-    S --> A["mean = Σ error / Σ records"]
 ```
 
 ```bash
