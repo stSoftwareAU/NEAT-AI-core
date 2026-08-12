@@ -19,6 +19,14 @@
 # the worker reverts per the contract.
 set -euo pipefail
 
+# Source cargo environment if available (needed for non-login shells).
+# quality.sh does the same; the worker runs this script *before* quality.sh,
+# so without this preamble rustup's cargo is often missing from PATH.
+if [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+fi
+
 usage() {
   cat <<'EOF'
 Usage: bump-deps.sh [options]
