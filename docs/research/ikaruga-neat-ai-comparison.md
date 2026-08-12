@@ -41,7 +41,7 @@ The `mame-neat` sibling crate mirrors this layout against MAME.
 | `topological_backprop` | Topologically ordered backprop loop (lifted from `wasm_activation` per #9). |
 | `topology_ops` | Cycle detection, reverse topological order, structural validation, batch validation. |
 | `accumulate`, `simd`, `simd_native` | 4-way and 8-way SIMD multi-record weighted-sum / bias accumulation; AVX2/FMA on x86_64 and NEON on aarch64 (#12). |
-| `loss` | MSE/MAE/MAPE/MSLE/cross-entropy/hinge packed-batch reducers + `mse_mean_record`. |
+| `loss` | MSE/MAE/MAPE/MSLE/cross-entropy/hinge packed-batch reducers + `mse_record` / `mse_mean_record` / `mse_mean_streaming`. |
 | `training_bin_stream` | Chunked double-buffered `.bin` scan API with env-tunable modes (#13). |
 | `training_data` | `.bin` reader / iterator / seeking record reader. |
 | `training_state` | Persistent per-neuron / per-synapse state for online training. |
