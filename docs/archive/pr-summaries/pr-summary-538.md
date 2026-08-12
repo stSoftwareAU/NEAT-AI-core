@@ -55,7 +55,11 @@ Backend/library change — no web interface to screenshot. Evidence is the test
 suite plus per-site mutation runs.
 
 `./quality.sh` passes clean (fmt, clippy `-D warnings`, deny, doc, release
-build, and the full `cargo test --workspace`: 45 test groups, 0 failures). The
+build, and the full `cargo test --workspace`: 45 test groups, 0 failures). No
+PR gate compiles `wasm32`, and `loss.rs` now pulls in `training_bin_stream` /
+`training_data` on every target, so
+`cargo check -p neat-core --target wasm32-unknown-unknown` was run manually —
+clean. The
 existing bit-parity tests (`interleaved_mse_parity`,
 `mse_batch_interleaved_parity`, `mse_squash_simd_parity`,
 `packed_record_scan`, `batch_record_skeleton`) pass **unchanged** — the
