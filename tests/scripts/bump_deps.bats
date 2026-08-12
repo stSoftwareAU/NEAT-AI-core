@@ -105,3 +105,28 @@ teardown() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"unknown option"* ]]
 }
+
+@test "sources HOME/.cargo/env so cargo is found in non-login shells" {
+  # quality.sh already sources ~/.cargo/env; bump-deps must too — the Vibe
+  # Coder worker invokes bump-deps before quality.sh, and a non-login shell
+  # often has rustup's cargo only via that file (PR #539 comment).
+  fake_home="$(mktemp -d)"
+  mkdir -p "$fake_home/.cargo" "$fake_home/bin"
+  cat >"$fake_home/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+# Stub: empty dry-run → bump_external reports "no updates" and exits 0.
+exit 0
+EOF
+  chmod +x "$fake_home/bin/cargo"
+  cat >"$fake_home/.cargo/env" <<EOF
+export PATH="$fake_home/bin:\$PATH"
+EOF
+
+  # PATH has no cargo; HOME points at the stub env that would add it.
+  run env HOME="$fake_home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$SCRIPT_UNDER_TEST" --skip-audit --skip-build --repo "$TMP_REPO"
+  rm -rf "$fake_home"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"cargo not available"* ]]
+  [[ "$output" == *"external=no updates"* ]]
+}
