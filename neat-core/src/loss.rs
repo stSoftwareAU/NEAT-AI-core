@@ -14,6 +14,9 @@ use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds}
 use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
 use crate::squash::SquashType;
 use crate::squash_simd::{squash_x4, squash_x8};
+use crate::training_bin_stream::{for_each_read_chunk_with_mode, training_read_tuning_from_env};
+use crate::training_data::find_bin_files;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -360,6 +363,32 @@ fn packed_record_scan(
     sum_error
 }
 
+/// Per-record MSE: the mean over a record's outputs of `(target - output)^2`.
+///
+/// Accumulates in `f64` from the `f32` inputs, then scales by `1/outputs.len()`
+/// — the reduction every scalar MSE path in this module applies, exported so
+/// consumers holding activations already (e.g. a backpropagation trace pass
+/// that cannot use a fused batch path) reduce them the same way.
+///
+/// Pairs are taken in order; when the slices differ in length the shorter one
+/// ends the pairing, but the divisor is always `outputs.len()`.
+///
+/// Returns `0.0` when `outputs` is empty — there is nothing to average over.
+///
+/// Issue #538 — the single home of the per-record squared-error reduction.
+pub fn mse_record(targets: &[f32], outputs: &[f32]) -> f64 {
+    if outputs.is_empty() {
+        return 0.0;
+    }
+    let inv_outputs = 1.0 / (outputs.len() as f64);
+    let mut sq_sum: f64 = 0.0;
+    for (t, o) in targets.iter().zip(outputs.iter()) {
+        let diff = (*t - *o) as f64;
+        sq_sum += diff * diff;
+    }
+    sq_sum * inv_outputs
+}
+
 /// Fused activate + MSE (Mean Squared Error) calculation for batch scoring.
 ///
 /// This is a scoring fast-path designed to minimise JS/WASM boundary crossings:
@@ -415,27 +444,14 @@ pub fn mse_sum_batch_packed(
         );
     }
 
-    let inv_outputs: f64 = if num_outputs > 0 {
-        1.0 / (num_outputs as f64)
-    } else {
-        0.0
-    };
-
+    // Issue #538 — the per-record reduction lives in `mse_record`.
     packed_record_scan(
         network,
         records,
         input_size,
         num_outputs,
         forward_only,
-        |targets, outputs| {
-            // Per-record MSE = mean((target - output)^2)
-            let mut sq_sum: f64 = 0.0;
-            for (t, o) in targets.iter().zip(outputs.iter()) {
-                let diff = (*t - *o) as f64;
-                sq_sum += diff * diff;
-            }
-            sq_sum * inv_outputs
-        },
+        mse_record,
     )
 }
 
@@ -1446,32 +1462,183 @@ pub fn mse_mean_record(
         return 0.0;
     };
 
-    let inv_outputs: f64 = if num_outputs > 0 {
-        1.0 / (num_outputs as f64)
-    } else {
-        0.0
-    };
-
     // Non-fused recurrent path: `forward_only = false` clears hidden state
     // between records so the previous record's activations cannot leak in.
-    let sum_error = packed_record_scan(
-        network,
-        records,
-        input_size,
-        num_outputs,
-        false,
-        |targets, outputs| {
-            // Per-record MSE = mean over outputs of (target - output)^2.
-            let mut sq_sum: f64 = 0.0;
-            for (t, o) in targets.iter().zip(outputs.iter()) {
-                let diff = (*t - *o) as f64;
-                sq_sum += diff * diff;
-            }
-            sq_sum * inv_outputs
-        },
-    );
+    // Issue #538 — the per-record reduction lives in `mse_record`.
+    let sum_error =
+        packed_record_scan(network, records, input_size, num_outputs, false, mse_record);
 
     sum_error / (layout.num_records as f64)
+}
+
+/// Append the little-endian `f32` values in `bytes` to `out`.
+///
+/// A trailing 1..3 bytes cannot form a value and are ignored; callers hand
+/// this helper whole records only.
+fn append_le_f32(bytes: &[u8], out: &mut Vec<f32>) {
+    out.extend(
+        bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+    );
+}
+
+/// Drop every `.bin` file past the one that covers `max_records`, so a capped
+/// scan never opens a file it cannot use.
+///
+/// Fails loud when a listed file cannot be stat-ed — a corpus we cannot size
+/// is not a corpus we can cap.
+fn truncate_bin_files_to_cap(
+    bin_files: &mut Vec<PathBuf>,
+    record_bytes: usize,
+    max_records: u64,
+) -> Result<(), String> {
+    let budget_bytes = (max_records as u128) * (record_bytes as u128);
+    let mut covered: u128 = 0;
+    for (idx, path) in bin_files.iter().enumerate() {
+        let len = std::fs::metadata(path)
+            .map_err(|e| format!("failed to stat training file '{}': {e}", path.display()))?
+            .len();
+        covered += len as u128;
+        if covered >= budget_bytes {
+            bin_files.truncate(idx + 1);
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// Streaming mean per-record MSE over a `.bin` training directory.
+///
+/// Semantics match [`mse_mean_record`] and NEAT-AI's `Costs.MSE`:
+///
+/// `(1 / N) * Σ_records mse_record(targets, outputs)`
+///
+/// — the per-record mean over outputs, then averaged over records.
+///
+/// Records are buffered into packed `[inputs…, targets…]` chunks and scored
+/// through [`mse_sum_batch_packed`], so a `forward_only` corpus still takes the
+/// fused SIMD path; a record straddling a read-chunk (or file) boundary is
+/// carried in a residual buffer and scored with the next chunk. `forward_only
+/// = false` keeps stateless semantics — `mse_sum_batch_packed` resets the
+/// network before every record on that route.
+///
+/// `max_records` caps the scan: files past the cap are never opened and the
+/// final chunk is truncated, so the cap costs no extra I/O. `Some(0)` reads
+/// nothing.
+///
+/// Returns `(mean_mse, record_count)`, or `(0.0, 0)` when the directory yields
+/// no whole records — the caller decides whether an empty corpus is an error.
+///
+/// # Errors
+/// - the path is not an existing directory;
+/// - a `.bin` file cannot be listed, stat-ed, opened, or read;
+/// - the corpus ends mid-record (trailing bytes that form no whole record).
+///
+/// This is a native-host convenience and is deliberately **not** part of the
+/// `wasm_bindgen` export surface.
+///
+/// Issue #538 — one streaming directory MSE loop for every consumer.
+pub fn mse_mean_streaming(
+    network: &mut CompiledNetwork,
+    training_data: &Path,
+    input_size: usize,
+    num_outputs: usize,
+    forward_only: bool,
+    max_records: Option<u64>,
+) -> Result<(f64, u64), String> {
+    let values_per_record = input_size + num_outputs;
+    if values_per_record == 0 || max_records == Some(0) {
+        return Ok((0.0, 0));
+    }
+    if !training_data.is_dir() {
+        return Err(format!(
+            "training data path '{}' is not an existing directory",
+            training_data.display()
+        ));
+    }
+
+    let record_bytes = values_per_record * std::mem::size_of::<f32>();
+    let mut bin_files = find_bin_files(training_data).map_err(|e| {
+        format!(
+            "failed to list .bin files in '{}': {e}",
+            training_data.display()
+        )
+    })?;
+    if bin_files.is_empty() {
+        return Ok((0.0, 0));
+    }
+    if let Some(max) = max_records {
+        truncate_bin_files_to_cap(&mut bin_files, record_bytes, max)?;
+    }
+
+    let (mode, read_buf_len) = training_read_tuning_from_env(record_bytes);
+
+    let mut sum_error: f64 = 0.0;
+    let mut records_done: u64 = 0;
+    // Bytes of a record split across a chunk (or file) boundary.
+    let mut pending: Vec<u8> = Vec::with_capacity(record_bytes);
+    let mut packed: Vec<f32> = Vec::new();
+    let mut capped = false;
+
+    for_each_read_chunk_with_mode(&bin_files, read_buf_len, mode, |chunk| {
+        if capped {
+            return Ok(());
+        }
+
+        let mut bytes = chunk;
+        packed.clear();
+
+        // Finish the record left straddling the previous chunk first, so the
+        // whole chunk still scores through one batched call.
+        if !pending.is_empty() {
+            let take = (record_bytes - pending.len()).min(bytes.len());
+            pending.extend_from_slice(&bytes[..take]);
+            bytes = &bytes[take..];
+            if pending.len() < record_bytes {
+                return Ok(());
+            }
+            append_le_f32(&pending, &mut packed);
+            pending.clear();
+        }
+
+        let whole_bytes = (bytes.len() / record_bytes) * record_bytes;
+        append_le_f32(&bytes[..whole_bytes], &mut packed);
+        pending.extend_from_slice(&bytes[whole_bytes..]);
+
+        let mut chunk_records = packed.len() / values_per_record;
+        if let Some(max) = max_records {
+            let remaining = max - records_done;
+            if chunk_records as u64 >= remaining {
+                chunk_records = remaining as usize;
+                packed.truncate(chunk_records * values_per_record);
+                capped = true;
+            }
+        }
+        if chunk_records == 0 {
+            return Ok(());
+        }
+
+        sum_error += mse_sum_batch_packed(network, &packed, input_size, num_outputs, forward_only);
+        records_done += chunk_records as u64;
+        Ok(())
+    })?;
+
+    // A corpus that ends mid-record is malformed — say so rather than
+    // silently dropping the tail. A capped scan stops early by design, so its
+    // residual is expected.
+    if !pending.is_empty() && !capped {
+        return Err(format!(
+            "training data in '{}' ends with {} trailing bytes that do not form a whole {record_bytes}-byte record",
+            training_data.display(),
+            pending.len()
+        ));
+    }
+
+    if records_done == 0 {
+        return Ok((0.0, 0));
+    }
+    Ok((sum_error / records_done as f64, records_done))
 }
 
 #[cfg(test)]

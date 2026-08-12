@@ -205,6 +205,43 @@ flowchart LR
     B --> S
 ```
 
+### Streaming directory MSE (Issue #538)
+
+`mse_mean_streaming` scores a whole `.bin` training directory without loading
+it into memory, so consumers stop re-implementing the chunk → packed-buffer →
+`mse_sum_batch_packed` loop around this crate's MSE maths. It returns
+`(mean_mse, record_count)` for
+`(1/N) * Σ_records mse_record(targets, outputs)` — the same semantics as
+`mse_mean_record` and NEAT-AI's `Costs.MSE` — and `(0.0, 0)` when the directory
+yields no whole records, leaving the fail-loud decision to the caller. A
+malformed corpus is **not** silent: a missing directory, an unreadable file, or
+a trailing partial record returns `Err`.
+
+Records are buffered into packed chunks so the fused SIMD tile above still
+does the work; a record straddling a read-chunk or file boundary is carried in
+a residual buffer and scored with the next chunk. `max_records` truncates both
+the file list and the final chunk, so a capped scan never opens a file it
+cannot use.
+
+`mse_record` is the per-record reduction those paths share — the mean over a
+record's outputs of `(target - output)^2`, accumulated in `f64`. Both scalar
+MSE closures in `loss.rs` call it, and it is exported for consumers (such as a
+backpropagation trace pass) that already hold activations and cannot use a
+fused batch path. The SIMD tile kernels keep their own bit-parity-critical
+reductions. Neither helper is on the `wasm_bindgen` export surface — they are
+native-host conveniences.
+
+```mermaid
+flowchart LR
+    D["training .bin directory"] --> F["find_bin_files<br/>numeric order"]
+    F --> C["for_each_read_chunk_with_mode"]
+    C --> P["pending residual<br/>+ whole records → packed f32"]
+    P --> M["mse_sum_batch_packed<br/>per chunk — fused SIMD"]
+    M --> A["Σ per-record MSE / N"]
+    P -. "cap reached" .-> T["truncate final chunk"]
+    T --> A
+```
+
 ### Struct-of-arrays hot synapse view (Issue #533)
 
 The interleaved gather reads only two of `SynapseData`'s three fields, so
