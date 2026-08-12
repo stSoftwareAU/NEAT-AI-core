@@ -346,9 +346,11 @@ fn streaming_mean_fails_loud_on_a_trailing_partial_record() {
     let mut net = network();
     let err = mse_mean_streaming(&mut net, dir.path(), INPUT_SIZE, NUM_OUTPUTS, true, None)
         .expect_err("a truncated record must not be silently dropped");
+    // The error must describe the malformed tail concretely: how many bytes
+    // were left over, and the record width they could not fill.
     assert!(
-        err.contains("incomplete record"),
-        "error should name the incomplete record: {err}"
+        err.contains("trailing bytes") && err.contains("12") && err.contains("20-byte record"),
+        "error should describe the trailing bytes and the record width: {err}"
     );
 }
 
