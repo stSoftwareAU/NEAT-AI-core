@@ -1,128 +1,187 @@
-# PR Summary — Issue #538
+# Streaming directory MSE helper + exported per-record MSE reduction (Issue #538)
 
 ## Summary
 
-`loss.rs` gains two additive public items so consumers stop re-implementing MSE.
-Closes #538.
+`neat-core` owned the MSE maths but not the loop around it, so every consumer
+that scored a `.bin` **directory** re-implemented the streaming walk — and two
+of them re-implemented the squared-error reduction itself. Neither
+`mse_sum_batch_packed` nor `mse_mean_record` could be reused, because both take
+an in-memory packed `&[f32]`.
 
-- **`mse_record(targets, outputs) -> f64`** — the per-record reduction (mean
-  over outputs of `(target - output)^2`, `f64` accumulation, `0.0` for an empty
-  record), now exported. The scalar `mse_sum_batch_packed` fallback closure and
-  the `mse_mean_record` closure were the same maths written twice; both now
-  delegate to it. The SIMD tiles (`interleaved_tile_mse`,
-  `mse_sum_batch_scattered`) read strided/interleaved buffers and are
-  bit-parity-critical — untouched.
+Two additive, non-breaking public items in `neat-core/src/loss.rs`, both
+re-exported from `lib.rs`:
+
+- **`mse_record(targets, outputs) -> f64`** — the per-record reduction: the mean
+  over outputs of `(target - output)^2`, accumulated in `f64`. This is what a
+  backpropagation trace pass calls when it already holds the activations.
+  `mse_sum_batch_packed`'s scalar `packed_record_scan` closure and
+  `mse_mean_record`'s closure — the same maths written twice — now delegate to
+  it. The SIMD tiles (`interleaved_tile_mse`, `mse_sum_batch_scattered`) are
+  **untouched**: they read strided/interleaved buffers and are
+  bit-parity-critical.
 - **`mse_mean_streaming(network, dir, input_size, num_outputs, forward_only,
-  max_records) -> Result<(f64, u64), String>`** — mean per-record MSE over a
-  `.bin` training directory, streamed. Chunked reads through
-  `training_bin_stream::for_each_read_chunk_with_mode`, whole chunks scored via
-  `mse_sum_batch_packed` so the tiled SIMD fast path still does the work, and a
-  small residual buffer for records straddling a chunk boundary. Read sizing
-  honours `NEAT_SCORER_IO_MODE` / `NEAT_SCORER_READ_BYTES` like every other
-  `.bin` scan. `max_records` truncates the final chunk and stops the scan there,
-  so the cap costs no extra I/O. Returns `(0.0, 0)` for a directory with no
-  whole records — the caller decides whether that is an error. Not on the
-  `wasm_bindgen` export surface.
+  max_records) -> Result<(f64, u64), String>`** — the chunk → packed-buffer →
+  fused-MSE loop over a `.bin` directory, buffering records out of
+  `for_each_read_chunk_with_mode` chunks and handing each batch to
+  `mse_sum_batch_packed`, so the SIMD 8/4-way fast path carries the work. A
+  record straddling a chunk or shard boundary is held in a residual buffer.
+  `max_records` truncates the batch at the cap rather than throttling the
+  reader, so the cap costs no extra I/O. The signature is deliberately general
+  (explicit `input_size` / `num_outputs` / `forward_only`) rather than
+  creature-shaped, so NEAT-AI-scorer's `stream_score.rs` can converge on it
+  later.
 
-Both are re-exported from `lib.rs`. No existing signature changed, so this is a
-patch/minor bump, not a breaking one. The `wasm-bindgen 0.2.126 → 0.2.127` and
-`Cargo.lock` bumps are `quality.sh`'s dependency refresh riding along.
+Bit-parity detail: `mse_record` scales by the **reciprocal** of the output count
+(`sq_sum * inv_outputs`), exactly as the closures it replaces did — not
+`sq_sum / n`, which rounds differently. The existing bit-parity tests
+(`interleaved_mse_parity` and friends) pass unchanged.
 
-### Early stop is loud, not silent
+Per the issue, the helper stays **out of** the
+`#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]` export surface — it is a
+native-host convenience — and follows the `training_data.rs` precedent of using
+`std::fs` unconditionally. `cargo check -p neat-core --target
+wasm32-unknown-unknown` is clean (AGENTS.md: wasm32 is not gated on PRs).
 
-`for_each_read_chunk` has no early exit, so the `max_records` cap stops the
-reader by returning a sentinel error from the chunk callback. That sentinel is
-swallowed **only** when this function raised it (`cap_reached`) **and** the
-error is nothing but the wrapped sentinel — when the reader thread also failed
-it prefixes its own I/O message, and that error reaches the caller unchanged.
+**Fail-loud boundary (guideline #3234).** A path that is not a directory, an
+unreadable shard, and a corpus ending mid-record all return `Err` — the same
+stance NEAT-AI-scorer already takes on trailing bytes. `(0.0, 0)` is reserved
+for a directory that genuinely yields no whole records (empty directory,
+zero-length shards, zero-width record, `max_records = Some(0)`); as the issue
+specifies, the caller decides whether that is an error.
 
-```mermaid
-flowchart LR
-    D["`.bin` directory<br/>find_bin_files"] --> F["for_each_read_chunk_with_mode"]
-    F --> P["pending residual<br/>+ whole records"]
-    P --> K["mse_sum_batch_packed<br/>per chunk"]
-    K --> A["f64 sum + record count"]
-    A --> C{"max_records hit?"}
-    C -- yes --> S["sentinel Err → stop reading"]
-    C -- no --> F
-    S --> M["mean = sum / records"]
-    A --> M
-```
+Additive only — no signature changes to existing public items.
+
+Closes #538.
 
 ## Evidence
 
-Backend/library change — no web interface to screenshot. Evidence is the test
-suite plus per-site mutation runs.
+Backend/library change, no web interface to screenshot. Evidence is the test
+suite, the mutation sweep below, and the quality gate.
 
-`./quality.sh` passes clean (fmt, clippy `-D warnings`, deny, doc, release
-build, and the full `cargo test --workspace`: 45 test groups, 0 failures). No
-PR gate compiles `wasm32`, and `loss.rs` now pulls in `training_bin_stream` /
-`training_data` on every target, so
-`cargo check -p neat-core --target wasm32-unknown-unknown` was run manually —
-clean. The
-existing bit-parity tests (`interleaved_mse_parity`,
-`mse_batch_interleaved_parity`, `mse_squash_simd_parity`,
-`packed_record_scan`, `batch_record_skeleton`) pass **unchanged** — the
-delegation is bit-identical because `outputs.len() == num_outputs` in the scan,
-so the divisor and the summation order are the same values in the same order.
+```mermaid
+flowchart LR
+    D["training dir"] --> B["find_bin_files"]
+    B --> C["for_each_read_chunk_with_mode"]
+    C --> P{"whole records<br/>in this chunk?"}
+    P -- "partial tail" --> R["residual buffer<br/>joined by the next chunk"]
+    R --> P
+    P -- "yes" --> U["unpack LE f32 →<br/>packed inputs+targets"]
+    U --> M["mse_sum_batch_packed<br/>8/4-way SIMD"]
+    M --> S["Σ error, Σ records"]
+    S --> A["mean = Σ error / Σ records"]
+    subgraph shared["one reduction (Issue #538)"]
+        MR["mse_record"]
+    end
+    M -. "scalar fall-through" .-> MR
+    MM["mse_mean_record"] -.-> MR
+```
 
-### Mutation evidence (AGENTS.md rule 2 — every former site must die)
+### Quality gate
 
-Each mutation was applied alone, the suite run with `--no-fail-fast`, then
-reverted.
+`./quality.sh < /dev/null` → **`✅ All quality checks passed!`** (fmt, clippy,
+`cargo deny`, `cargo test --workspace` — 44 test binaries green, doc build,
+release build). `cargo check -p neat-core --target wasm32-unknown-unknown` also
+clean.
+
+### Mutation evidence (AGENTS.md rules 1–3)
+
+Every mutation was applied one at a time and reverted before commit.
 
 | # | Mutation | Result |
 | --- | --- | --- |
-| A | `mse_record` returns `… + 0.5` | **red** — 18 tests across `loss::tests`, `packed_record_scan`, `batch_record_skeleton`, `mse_batch_interleaved_parity`, `inline_squash_dispatch`, and both new suites |
-| B | former site 1: `mse_sum_batch_packed` calls `\|t, o\| mse_record(t, o) + 0.5` | **red** — 15 tests, incl. `every_sum_entry_point_equals_the_sum_of_its_single_record_scans`, `stateless_reset_is_conditional_on_forward_only`, `max_records_truncates_to_the_mean_over_the_first_n_records` |
-| C | former site 2: `mse_mean_record` calls `\|t, o\| mse_record(t, o) + 0.5` | **red** — `mse_mean_record_matches_hand_rolled_reference`, `mse_mean_record_agrees_with_sum_divided_by_records_on_forward_only`, `stateless_reset_is_conditional_on_forward_only` |
-| D | drop the `max_records` truncation (`whole.min(room)`) | **red** — `max_records_truncates_to_the_mean_over_the_first_n_records` |
-| E | return the sum instead of `sum / records` | **red** — 7 of the new streaming tests |
+| M1 | `mse_record` returns `sq_sum` instead of `sq_sum * inv_outputs` | **7 red** — `mse_record_is_the_mean_of_the_squared_differences`, `mse_record_ignores_targets_beyond_the_output_count`, `packed_sum_scalar_path_averages_over_the_output_count`, `mean_record_averages_over_the_output_count`, `streaming_mean_is_stateless_when_not_forward_only`, `streaming_mean_matches_a_per_record_reference`, `streaming_max_records_truncates_to_the_first_n_records` |
+| M2 | residual bytes discarded (no straddle carry) | **3 red** — the straddling-shard parity test, the cap test, and the trailing-partial-record test |
+| M3 | `max_records` clamp removed | **1 red** — `streaming_max_records_truncates_to_the_first_n_records` |
+| M4 | trailing-partial-record error removed | **1 red** — `streaming_mean_fails_loud_on_a_trailing_partial_record` |
+| M5 | missing-directory guard removed | **1 red** — `streaming_mean_fails_loud_on_a_missing_directory` |
 
-B and C kill disjoint test sets, so the suite reaches **both** collapsed copies
-independently, not just the shared helper.
+**Rule 2 — every former site dies.** M1 is the load-bearing one: both closures
+that used to hold the reduction now go red through it (site 1
+`mse_sum_batch_packed`'s scalar path, site 2 `mse_mean_record`). The two
+delegation tests exist because M1 initially killed *neither* former site —
+the pre-existing `loss.rs` unit tests all use `num_outputs = 1`, where
+`inv_outputs == 1.0` and dropping the factor is invisible. Both new tests use
+**two** outputs, so the per-record `1/num_outputs` factor is observable.
 
-### Oracle independence
+**Rule 1 — the acceptance-criteria oracle shares the kernel, so it does not
+stand alone.** `streaming_mean_equals_the_packed_sum_over_the_record_count`
+compares `mse_mean_streaming` against `mse_sum_batch_packed(...) / N`; both
+sides run the same kernel, so under M1 it stayed **green**. The independent
+oracle (`reference_mean_mse` — every record scored on its own through
+`CompiledNetwork::activate`, with the squared-error reduction written out in
+the test) is what caught it. Both are kept: the shared-kernel one because the
+issue asks for it, the independent one because it is the assertion that can
+actually fail.
 
-Expected values come from the single-record `CompiledNetwork::activate` forward
-pass with the squared-error arithmetic written out in the test — never from
-`mse_record` or the batched kernels — so a fault inside the code under test
-moves only one side of each assertion (AGENTS.md rule 1). Tolerance is `1e-6`:
-chunking re-associates the sums, so parity is stated, not bit-exact. The
-`streaming_mean_equals_packed_sum_over_record_count` test is the issue's
-acceptance criterion and deliberately does share the kernel; it is not the only
-oracle.
+**Rule 3 — no vacuous oracles.** Every expected value is derived: `mse_record`
+against a hand-worked `4.5 / 4 = 1.125`, and every streaming assertion against
+the per-record reference rather than a finiteness or magnitude check.
 
 ## Test Plan
 
-New — `neat-core/tests/mse_streaming_directory.rs` (15 tests):
+New file `neat-core/tests/mse_streaming.rs` (16 tests). Fixture: a 3-input,
+2-output forward-only creature with TANH/IDENTITY/LOGISTIC squashes, so the
+vectorised and scalar squash paths both carry real work.
 
-- `mse_record_averages_squared_error_over_outputs`,
-  `mse_record_of_an_exact_prediction_is_zero`,
-  `mse_record_empty_outputs_is_zero`,
-  `mse_record_accumulates_in_f64_beyond_f32_precision` (an `f32` accumulator
-  would overflow to `+inf`).
-- `streaming_mean_matches_the_scalar_activate_reference` (37 records, 3 shards)
-  and `streaming_mean_equals_packed_sum_over_record_count` (the issue's
-  `mse_sum_batch_packed(..) / N` criterion).
-- `streaming_an_empty_directory_yields_zero_records`,
-  `streaming_a_directory_of_empty_files_yields_zero_records`,
-  `streaming_a_missing_directory_yields_zero_records`,
-  `a_zero_width_record_yields_zero_records` — all `(0.0, 0)`.
-- `max_records_truncates_to_the_mean_over_the_first_n_records` (caps 1/7/10/23
-  against the scalar reference), `max_records_of_zero_reads_nothing`,
-  `max_records_above_the_corpus_size_scores_every_record`.
-- `a_trailing_partial_record_is_not_scored`.
-- `forward_only_false_resets_state_between_records` — self-loop network; the
-  test also asserts the leaked-state value *differs*, so the check is not
-  vacuous.
+**`mse_record`**
 
-New — `neat-core/tests/mse_streaming_chunk_boundary.rs` (1 test, its own binary
-because it sets a process-wide env var): `NEAT_SCORER_READ_BYTES=20` against a
-12-byte record forces every chunk to end mid-record;
-`records_straddling_a_read_chunk_boundary_are_scored_once` asserts the record
-count, the mean, and that the cap still holds across boundaries.
+- `mse_record_is_the_mean_of_the_squared_differences` — hand-derived `1.125`.
+- `mse_record_returns_zero_for_no_outputs` — empty `outputs`, and a non-empty
+  `targets` with empty `outputs`.
+- `mse_record_ignores_targets_beyond_the_output_count` — extra targets cannot
+  inflate the mean (the reduction zips).
 
-Docs: `README.md` gains a "Streaming directory MSE (Issue #538)" section with a
-Mermaid flow; `AGENTS.md` records `mse_record` as the single home of the scalar
-reduction.
+**Delegation sites**
+
+- `packed_sum_scalar_path_averages_over_the_output_count` — `forward_only =
+  false` keeps `mse_sum_batch_packed` on the scalar closure.
+- `mean_record_averages_over_the_output_count` — `mse_mean_record` against the
+  independent reference.
+
+**`mse_mean_streaming`**
+
+- `streaming_mean_matches_a_per_record_reference` — 11 records (8-way group,
+  4-way remainder and scalar tail) across 66-byte shards against 20-byte
+  records, so records straddle shard boundaries and the residual buffer runs.
+- `streaming_mean_equals_the_packed_sum_over_the_record_count` — the
+  acceptance-criteria parity with `mse_sum_batch_packed(...) / num_records`.
+- `streaming_mean_is_stateless_when_not_forward_only` — the `forward_only =
+  false` route.
+- `streaming_mean_of_an_empty_directory_is_a_silent_zero` — `(0.0, 0)`.
+- `streaming_mean_of_empty_shards_is_a_silent_zero` — `(0.0, 0)`.
+- `streaming_max_records_truncates_to_the_first_n_records` — caps 1/5/8/13/20
+  over 20 records in 46-byte shards, so caps land mid-shard; each equals the
+  mean over the first N records.
+- `streaming_max_records_above_the_corpus_scores_every_record`.
+- `streaming_max_records_of_zero_scores_nothing` — `(0.0, 0)`, no I/O.
+- `streaming_mean_fails_loud_on_a_missing_directory` — `Err` naming the path.
+- `streaming_mean_fails_loud_on_a_trailing_partial_record` — `Err` naming the
+  incomplete record.
+- `streaming_mean_of_a_zero_width_record_is_zero` — bytes present but
+  `input_size + num_outputs == 0`; the guard fires before any read.
+
+No existing test was modified or removed.
+
+## Documentation
+
+- `README.md` — new "Streaming directory MSE (Issue #538)" section with a usage
+  snippet and a Mermaid flow of the chunk → residual → fused-MSE walk.
+- `AGENTS.md` — new "One per-record MSE reduction, and one streaming directory
+  entry point (Issue #538)" rule, alongside the existing single-home rules: what
+  delegates to `mse_record`, why the SIMD tiles must not, the fail-loud
+  boundary, and why the shared-kernel oracle cannot stand alone.
+
+## Dependencies
+
+`quality.sh` bumped `wasm-bindgen` 0.2.126 → 0.2.127 and refreshed `Cargo.lock`
+(`cc`, `clap`, …), which lands in this PR per the repo's bump policy (#1613).
+The full suite, `cargo deny` and the release build are green on the bumped
+versions.
+
+## Consumers
+
+NEAT-AI-Backpropagation#30 can now convert both local MSE surfaces —
+`mse.rs::compute_mse` onto `mse_mean_streaming`, and
+`propagate_layout.rs::accumulate_creature_learning_report` onto `mse_record`.
+This change is additive, so its `neat-core.expected-version` gate does not trip
+and no baseline change is needed.
