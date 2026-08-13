@@ -260,6 +260,68 @@ flowchart LR
     T --> A
 ```
 
+### Sampled corpus reads (NEAT-AI-Lamarck#123)
+
+`for_each_read_chunk` reads every byte. A caller scoring a **stratified
+subsample** — NEAT-AI-scorer's `--sample-rate`, `0.05` on NEAT-AI-Lamarck's
+screen tier — then decodes all of them and discards ~95 %, so a 5 % call costs
+very nearly what a full-corpus call costs.
+
+`for_each_sampled_read_chunk` fetches the kept records only:
+
+```rust,ignore
+use neat_core::training_bin_stream::{for_each_sampled_read_chunk, sampled_read_is_worthwhile};
+
+// `keep` takes a GLOBAL record index across `bin_files` in order, so the kept
+// set never depends on how the corpus is split into files or chunks.
+let keep = |index: u64| index % 20 == 19;
+if sampled_read_is_worthwhile(record_bytes, 0.05) {
+    for_each_sampled_read_chunk(&bin_files, read_buf_len, record_bytes, readers, &keep, |chunk| {
+        // Whole records, kept ones only, in corpus order.
+        Ok(())
+    })?;
+}
+```
+
+Two properties make it safe to put on an authoritative scoring path:
+
+- **Order is preserved.** Segment `k` is read by reader `k % readers` and pulled
+  back in `k` order, so the delivered bytes are identical for every reader count
+  and a caller's float accumulation stays **bit-identical**.
+- **It declines when it would lose.** Sparse reads trade sequential bandwidth for
+  seeks; `sampled_read_is_worthwhile` takes the sampled path only when ≤ 25 % of
+  records are kept *and* the mean skip is ≥ 64 KiB.
+
+Measured on the 21 GiB / 10 048 B-per-record production corpus at rate 0.05:
+
+| Read | Bytes fetched | Wall |
+|---|---|---|
+| full sequential sweep | 21.17 GiB | 5.0–6.2 s |
+| sampled, 1 reader | 1.06 GiB | 9.8–31.8 s |
+| sampled, 8 readers | 1.06 GiB | 1.73 s |
+| sampled, 16 readers | 1.06 GiB | **1.27 s** |
+
+One reader is *slower* than reading everything — the pool is the point, not a
+tuning knob.
+
+```mermaid
+flowchart LR
+    P["record windows<br/>global order"] --> R1["reader k%N"]
+    P --> R2["reader k%N+1"]
+    P --> R3["reader …"]
+    R1 --> Q{"pull back in<br/>segment order"}
+    R2 --> Q
+    R3 --> Q
+    Q --> K["on_chunk<br/>kept records only"]
+    G["sampled_read_is_worthwhile<br/>≤25% kept, ≥64 KiB skip"] -. "no" .-> S["full sequential sweep"]
+    G -. "yes" .-> P
+
+    classDef stage fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#451a03
+    classDef out fill:#dcfce7,stroke:#15803d,stroke-width:2px,color:#052e16
+    class P,R1,R2,R3,Q,G stage
+    class K,S out
+```
+
 ### Struct-of-arrays hot synapse view (Issue #533)
 
 The interleaved gather reads only two of `SynapseData`'s three fields, so

@@ -42,6 +42,18 @@ use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
 
+// Record-sampled reads live beside the full sweep: same corpus, same record
+// order, same callback contract — the only difference is which records the
+// bytes are fetched for. Native only; `wasm32` has neither the thread pool nor
+// the file handles a sparse read needs, and keeps the sequential sweep.
+#[cfg(not(target_arch = "wasm32"))]
+mod sampled;
+#[cfg(not(target_arch = "wasm32"))]
+pub use sampled::{
+    SAMPLED_READ_MAX_KEPT_FRACTION, SAMPLED_READ_MIN_SKIP_BYTES, for_each_sampled_read_chunk,
+    sampled_read_is_worthwhile,
+};
+
 /// Environment variable that, when set to a truthy value, forces the sequential
 /// single-threaded read path even on native targets.
 pub const SEQUENTIAL_ENV: &str = "NEAT_TRAINING_READ_SEQUENTIAL";
