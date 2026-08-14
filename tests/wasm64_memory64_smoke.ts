@@ -10,20 +10,24 @@
 // Every value below is a plain byte constant — the module is small enough to
 // audit by hand against the WebAssembly binary format.
 
-/** Bytes in one WASM page (64 KiB). */
-export const WASM_PAGE_BYTES = 64 * 1024;
+// Issue #541 — the page/ceiling constants and the memory-section parser are
+// shared with the shipped-bundle gate (`scripts/wasm64_bundle_gate.ts`). One
+// home: a second copy of "which flag bit means i64" is exactly the drift that
+// would let a wasm32 regression pass one check and fail the other.
+export {
+  MEMORY64_INDEX_FLAG,
+  type MemoryLimits,
+  parseMemoryLimits,
+  WASM32_MAX_BYTES,
+  WASM32_MAX_PAGES,
+  WASM_PAGE_BYTES,
+} from "../scripts/wasm64_bundle_gate.ts";
 
-/** wasm32 linear memory is capped at 65536 pages = exactly 4 GiB. */
-export const WASM32_MAX_PAGES = 65536;
-
-/** The hard wasm32 address-space ceiling in bytes (4 GiB). */
-export const WASM32_MAX_BYTES = WASM32_MAX_PAGES * WASM_PAGE_BYTES;
-
-/**
- * Memory-type flag bit that marks a 64-bit (i64) index type. A wasm32 memory
- * has this bit clear; a Memory64 memory has it set. (Bit 0 = has-maximum.)
- */
-export const MEMORY64_INDEX_FLAG = 0x04;
+import {
+  MEMORY64_INDEX_FLAG,
+  WASM32_MAX_PAGES,
+  WASM_PAGE_BYTES,
+} from "../scripts/wasm64_bundle_gate.ts";
 
 /** Unsigned LEB128 encoding of a non-negative integer. */
 export function unsignedLeb128(value: number): number[] {
@@ -106,44 +110,6 @@ export function buildMemory64Module(maxPages: number): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(new ArrayBuffer(parts.length));
   out.set(parts);
   return out;
-}
-
-/** Parsed limits of the first memory declared in a module. */
-export interface MemoryLimits {
-  count: number;
-  flags: number;
-  /** True when the memory declares a 64-bit (i64) index type. */
-  isMemory64: boolean;
-}
-
-/**
- * Parse the memory section (id 0x05) of a module and report its flags. Used to
- * assert — without instantiating — that the module we built really carries the
- * i64 index type.
- */
-export function parseMemoryLimits(bytes: Uint8Array<ArrayBuffer>): MemoryLimits {
-  let p = 8; // skip magic + version
-  const readLeb = (): number => {
-    let result = 0, shift = 0, byte: number;
-    do {
-      byte = bytes[p++];
-      result |= (byte & 0x7f) << shift;
-      shift += 7;
-    } while (byte & 0x80);
-    return result >>> 0;
-  };
-  while (p < bytes.length) {
-    const id = bytes[p++];
-    const len = readLeb();
-    const start = p;
-    if (id === 0x05) {
-      const count = readLeb();
-      const flags = bytes[p];
-      return { count, flags, isMemory64: (flags & MEMORY64_INDEX_FLAG) !== 0 };
-    }
-    p = start + len;
-  }
-  throw new Error("no memory section (0x05) found in module");
 }
 
 /** Handles bound to an instantiated Memory64 store/load module. */

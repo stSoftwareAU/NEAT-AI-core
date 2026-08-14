@@ -11,10 +11,10 @@
 //!
 //! All exports use `js_name` to match the canonical
 //! `wasm_activation/pkg/wasm_activation.d.ts` surface that NEAT-AI consumes.
-//! This module is gated entirely behind `cfg(target_arch = "wasm32")` so
+//! This module is gated entirely behind `cfg(target_family = "wasm")` so
 //! native consumers (`rust_scorer`, CLI, native tests) never see it.
 
-#![cfg(target_arch = "wasm32")]
+#![cfg(target_family = "wasm")]
 
 use wasm_bindgen::prelude::*;
 

@@ -19,7 +19,7 @@ use crate::squash::SquashType;
 use crate::squash_simd::squash_x4;
 use crate::synapse_type::SynapseType;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
 /// Errors that can occur when constructing a [`CompiledNetwork`] from serialised bytes.
@@ -91,7 +91,7 @@ impl std::error::Error for NetworkError {}
 
 // On `wasm32`, `CompiledNetwork::new` is a `#[wasm_bindgen(constructor)]`, which
 // requires the error type to convert into a `JsValue`.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 impl From<NetworkError> for wasm_bindgen::JsValue {
     fn from(err: NetworkError) -> Self {
         wasm_bindgen::JsValue::from_str(&err.to_string())
@@ -185,57 +185,57 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
 ///
 /// This compact format minimises memory access and enables efficient iteration.
 /// Issue #1175 - Uses typed structs for better cache locality and compiler optimisation.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 #[derive(Clone)]
 pub struct CompiledNetwork {
     /// Total number of neurons (including input)
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub num_neurons: usize,
     /// Number of input neurons
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub num_inputs: usize,
     /// Neuron metadata using typed struct for cache efficiency
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub neurons: Vec<NeuronData>,
     /// Synapse data using typed struct for cache efficiency
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub synapses: Vec<SynapseData>,
     /// Hot-path weights, struct-of-arrays view of `synapses[i].weight`
     /// (Issue #533). Built by [`hot_synapse_soa`] at every construction path;
     /// read only by the record-interleaved gather.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub hot_weights: Vec<f32>,
     /// Hot-path source indices, struct-of-arrays view of
     /// `synapses[i].from_index` (Issue #533). Same order and length as
     /// [`Self::synapses`] and [`Self::hot_weights`].
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub hot_from: Vec<u16>,
     /// Activation buffer - reused across calls
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub activations: Vec<f32>,
     /// Pre-allocated buffer for hint values in activate_and_trace
     /// Issue #1173 - Pre-allocate `Vec<f32>` buffers in CompiledNetwork struct
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub hint_values_buffer: Vec<f32>,
     /// Pre-allocated buffer for trace data in activate_and_trace
     /// Issue #1173 - Eliminates heap allocation per call
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub trace_data_buffer: Vec<f32>,
     /// Pre-allocated per-record activation buffers for the 4-way batch path.
     /// Issue #155 - Extends the #1173 buffer-reuse precedent to
     /// `activate_and_trace_batch_4way` so the 4 activation buffers are reused
     /// across calls instead of re-allocated each invocation.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub batch_activations: [Vec<f32>; 4],
     /// Pre-allocated per-record hint-value buffers for the 4-way batch path.
     /// Issue #155 - Reused across calls (zeroed per call), mirroring
     /// `hint_values_buffer`.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub batch_hints: [Vec<f32>; 4],
     /// Pre-allocated per-record trace-data buffers for the 4-way batch path.
     /// Issue #155 - Reused across calls (cleared per call), mirroring
     /// `trace_data_buffer`.
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub batch_traces: [Vec<f32>; 4],
     /// Record-interleaved scratch for the fused MSE path
     /// (`inter[n * MSE_TILE_LANES + l]`). Sized
@@ -243,7 +243,7 @@ pub struct CompiledNetwork {
     /// `mse_sum_batch_packed` calls instead of allocating per chunk
     /// (NEAT-AI-scorer#531). The 4-way remainder of that path reuses
     /// [`Self::batch_activations`].
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(skip))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
     pub mse_inter: Vec<f32>,
 }
 
@@ -285,7 +285,7 @@ impl CompiledNetwork {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 impl CompiledNetwork {
     /// Reset non-input activations to 0.0.
     ///
@@ -314,7 +314,7 @@ impl CompiledNetwork {
     ///     - u8: synapse_type
     ///     - u8: padding
     ///     - f64: weight
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(constructor))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(constructor))]
     pub fn new(data: &[u8]) -> Result<CompiledNetwork, NetworkError> {
         if data.len() < 8 {
             return Err(NetworkError::TruncatedData { section: "header" });
@@ -762,19 +762,19 @@ impl CompiledNetwork {
     }
 
     /// Get the number of neurons in the network
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(getter))]
     pub fn num_neurons(&self) -> usize {
         self.num_neurons
     }
 
     /// Get the number of input neurons
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(getter))]
     pub fn num_inputs(&self) -> usize {
         self.num_inputs
     }
 
     /// Get the number of synapses in the network
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(getter))]
+    #[cfg_attr(target_family = "wasm", wasm_bindgen(getter))]
     pub fn num_synapses(&self) -> usize {
         self.synapses.len()
     }

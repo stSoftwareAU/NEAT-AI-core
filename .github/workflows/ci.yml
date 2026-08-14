@@ -580,8 +580,17 @@ jobs:
         with:
           deno-version: "2.9.3"
 
-      - name: Run Memory64 smoke test
-        run: deno test tests/wasm64_memory64_smoke_test.ts < /dev/null
+      # Issue #541 — the same job also runs the *shipped-bundle* gate unit tests
+      # (memory-type and export-surface checks, and the numeric-parity fixture
+      # and comparator). Those need no nightly build, so they belong on every
+      # PR; the end-to-end check against the real artefact runs in
+      # wasm-bundle.yml, which is the only place a built pkg/ exists.
+      - name: Run Memory64 smoke and bundle-gate tests
+        run: |
+          deno test \
+            tests/wasm64_memory64_smoke_test.ts \
+            tests/wasm64_bundle_gate_test.ts \
+            tests/wasm_arch_parity_test.ts < /dev/null
 
   security:
     uses: ./.github/workflows/security.yml

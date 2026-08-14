@@ -109,12 +109,12 @@ pub fn training_read_tuning_from_env(record_bytes: usize) -> (TrainingReadMode, 
 /// On `wasm32` the returned label is always `"sequential_chunked_file_read"`
 /// regardless of the input mode (there is only one backend on that target).
 pub fn io_backend_label(mode: TrainingReadMode) -> &'static str {
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(target_family = "wasm")]
     {
         let _ = mode;
         "sequential_chunked_file_read"
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     {
         match mode {
             TrainingReadMode::PipelinedDoubleBuffer => "pipelined_double_buffer",
@@ -139,7 +139,7 @@ pub fn for_each_read_chunk<F>(
 where
     F: FnMut(&[u8]) -> Result<(), String>,
 {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     {
         let mode = if sequential_env_requested() {
             TrainingReadMode::SingleBufferSequential
@@ -149,7 +149,7 @@ where
         for_each_read_chunk_with_mode(bin_files, read_buf_len, mode, on_chunk)
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(target_family = "wasm")]
     {
         for_each_read_chunk_with_mode(
             bin_files,
@@ -182,7 +182,7 @@ where
         return Err("read_buf_len must be positive".to_string());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_family = "wasm"))]
     {
         match mode {
             TrainingReadMode::PipelinedDoubleBuffer => {
@@ -194,7 +194,7 @@ where
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(target_family = "wasm")]
     {
         let _ = mode;
         for_each_read_chunk_sequential(bin_files, read_buf_len, on_chunk)
@@ -202,7 +202,7 @@ where
 }
 
 /// Returns true if the legacy sequential escape hatch is selected via env var.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 fn sequential_env_requested() -> bool {
     match std::env::var(SEQUENTIAL_ENV) {
         Ok(v) => {
@@ -248,7 +248,7 @@ where
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 fn for_each_read_chunk_native_double<F>(
     bin_files: &[PathBuf],
     read_buf_len: usize,
@@ -384,7 +384,7 @@ where
     }
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
     use std::fs;

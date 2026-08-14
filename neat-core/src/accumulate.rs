@@ -22,7 +22,7 @@
 //! Output array (3 f64s per item):
 //!   [count, total_bias, total_adjusted_bias]
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
 /// Apply L1/L2 weight regularisation (weight decay).
@@ -302,7 +302,7 @@ pub(crate) fn accumulate_weight_single(
 ///   [count, totalPositiveActivation, totalNegativeActivation,
 ///    countPositiveActivations, countNegativeActivations,
 ///    totalPositiveAdjustedValue, totalNegativeAdjustedValue] × 4
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_weight_batch_4way(
     current_weights: &[f64],
     target_values: &[f64],
@@ -342,7 +342,7 @@ pub fn accumulate_weight_batch_4way(
 /// Issue #1518 - Batch weight accumulation for 8 synapses.
 ///
 /// Same as 4-way but processes 8 synapses. Returns 56 f64 values.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_weight_batch_8way(
     current_weights: &[f64],
     target_values: &[f64],
@@ -432,7 +432,7 @@ pub(crate) fn accumulate_bias_single(
 /// # Returns
 /// Float64Array with 12 values (3 per neuron):
 ///   [count, totalBias, totalAdjustedBias] × 4
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_bias_batch_4way(
     target_pre_activations: &[f64],
     pre_activations: &[f64],
@@ -467,7 +467,7 @@ pub fn accumulate_bias_batch_4way(
 /// Issue #1518 - Batch bias accumulation for 8 neurons.
 ///
 /// Same as 4-way but processes 8 neurons. Returns 24 f64 values.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_bias_batch_8way(
     target_pre_activations: &[f64],
     pre_activations: &[f64],
@@ -524,7 +524,7 @@ pub fn accumulate_bias_batch_8way(
 ///
 /// # Returns
 /// The calculated average weight
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn calculate_weight(
     count: f64,
     total_positive_activation: f64,
@@ -615,7 +615,7 @@ pub fn calculate_weight(
 ///
 /// # Returns
 /// The calculated bias
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn calculate_bias(
     count: f64,
     total_adjusted_bias: f64,
@@ -671,7 +671,7 @@ pub fn calculate_bias(
 ///
 /// # Returns
 /// Float64Array with 4 calculated weights
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn calculate_weight_batch_4way(
     packed_state: &[f64],
     generations: f64,
@@ -729,7 +729,7 @@ pub fn calculate_weight_batch_4way(
 ///
 /// # Returns
 /// Float64Array with 4 calculated biases
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn calculate_bias_batch_4way(
     packed_state: &[f64],
     no_change_flags: &[u8],

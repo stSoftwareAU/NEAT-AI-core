@@ -111,7 +111,7 @@ expressible, and the synthetic tests catch header-overrun and undercover cases.
 ## Repository layout
 
 - **`neat-core/`** — shared native library; **WASM** stays in **NEAT-AI** (`wasm_activation`).
-- **`training_bin_stream`** (`neat-core/src/training_bin_stream.rs`) — **one** chunked `.bin` scan API: pipelined double-buffer reads on native hosts, sequential `File::read` chunks on `wasm32` (same `for_each_read_chunk` callback). Used by **NEAT-AI-scorer** for production-sized forward-only scoring.
+- **`training_bin_stream`** (`neat-core/src/training_bin_stream.rs`) — **one** chunked `.bin` scan API: pipelined double-buffer reads on native hosts, sequential `File::read` chunks on the wasm family (same `for_each_read_chunk` callback). Used by **NEAT-AI-scorer** for production-sized forward-only scoring.
 - Root **`Cargo.toml`** is a **virtual workspace**; **`[workspace.package].version`** is what the PR **auto-bump** job edits; **`neat-core`** uses `version.workspace = true`.
 
 ## Unsafe & SIMD invariants
@@ -121,7 +121,7 @@ soundness rules. They are load-bearing — an edit that ignores one either fails
 the build or ships undefined behaviour. Absorbed from the SIMD/`unsafe`/
 buffer-reuse campaign (PRs #11, #112, #154, #155, #165, #207).
 
-The `wasm32` half of this hot path is **not** compiled by any PR gate — run
+The wasm half of this hot path is **not** compiled by any PR gate — run
 `cargo check -p neat-core --target wasm32-unknown-unknown` before you merge a
 change to it, per [CI / secrets](#ci--secrets).
 
@@ -138,7 +138,7 @@ sound and the hot path stays branch-free. **Never remove or bypass that check as
 "redundant" — doing so reintroduces UB behind `get_unchecked`.** (See also the
 memory-safety note in [`SECURITY.md`](SECURITY.md#memory-safety-of-compiled-network-loading).)
 
-The `wasm32` `gather4` scaffold helper (`simd.rs`) rests on the same invariant
+The wasm `gather4` scaffold helper (`simd.rs`) rests on the same invariant
 since Issue #509 — it reads four `SynapseData` entries and four indirect
 activations unchecked. `checked-gather4` restores the bounds-checked control if
 a build ever needs it; the numbers behind that default are in
@@ -367,7 +367,7 @@ flowchart LR
 `neat-core/src/simd/scalar.rs` is the single home of the rule that says what a
 weighted-sum kernel *means*: the reference scalar semantics of each kernel and
 the small-count guard in front of it — the thing every SIMD path must agree with
-bit-for-bit. It carries no intrinsics and no `cfg`, so the `wasm32` kernels in
+bit-for-bit. It carries no intrinsics and no `cfg`, so the wasm kernels in
 `simd.rs` and the x86/aarch64 kernels in `simd_native.rs` share one copy.
 
 Two layers, deliberately distinct:
@@ -399,7 +399,7 @@ reference.
 
 ```mermaid
 flowchart LR
-    W["simd.rs (wasm32)"] --> S["simd::scalar"]
+    W["simd.rs (wasm32 + wasm64)"] --> S["simd::scalar"]
     N["simd_native.rs — x86"] --> S
     A["simd_native.rs — NEON"] --> S
     S --> G["synapse_count / SINGLE_RECORD_SIMD_MIN"]
@@ -411,7 +411,7 @@ flowchart LR
 
 The scaffold helpers at the top of `neat-core/src/simd.rs` — `gather4`,
 `gather4_products`, `reduce4` — are the single home of the rule that says *how a
-`wasm32` kernel walks a synapse span*: chunk into fours, gather weights and
+wasm kernel walks a synapse span*: chunk into fours, gather weights and
 activations into `f32x4` lanes, fold, reduce the lanes, then finish the 0..3
 remainder from the **running** accumulator through the `scalar::tail_*` helpers
 (Issue #447). All four single-record kernels — `weighted_sum_simd`,
@@ -459,6 +459,65 @@ flowchart LR
     R --> T["scalar::tail_* — seed-taking remainder"]
 ```
 
+## One wasm cfg for both address sizes (Issue #541)
+
+The crate builds for **two** wasm targets — `wasm32-unknown-unknown` and
+`wasm64-unknown-unknown` (Memory64) — and every wasm gate is keyed to
+`cfg(target_family = "wasm")`, never `cfg(target_arch = "wasm32")`. On a wasm64
+build `target_arch` is `"wasm64"`, so an arch-keyed gate fails **silently and
+asymmetrically**: `Cargo.toml`'s dependency tables would drop `wasm-bindgen`
+(no bindings) *and* pull in `rayon` (native-only) at the same time, while every
+`#[cfg_attr(…, wasm_bindgen)]` export quietly vanished. Widen the family, do
+not add a second arch arm.
+
+`wasm_arch` (`neat-core/src/wasm_arch.rs`) is the one exception and the single
+home of the split that genuinely is arch-shaped: `core::arch::wasm32` exists
+only on wasm32, and the identical SIMD128 intrinsics live at
+`core::arch::wasm64` on wasm64 (unstable `simd_wasm64`, enabled from the crate
+root for that arch only). Both wasm kernels — `simd.rs` and
+`elastic_distribution.rs` — import through it. A second copy is how a wasm64
+build comes to compile one kernel and fail the other.
+
+The shipped bundle is **dual-ship**, built and gated by
+`scripts/build-wasm-bundle.sh --arch <wasm32|wasm64>`:
+
+- **wasm32** goes through `wasm-pack`, as before.
+- **wasm64** cannot: wasm-pack 0.15.0 still hard-codes `wasm32-unknown-unknown`
+  as the cargo target it builds and reads back, so the lane drives
+  `cargo +nightly … -Z build-std=std,panic_abort` and then the `wasm-bindgen`
+  CLI itself. That is the *same* post-processing step wasm-pack would run — the
+  July 2026 NO-GO was CLI **skew** (0.2.108 stripped the bindings), not a
+  permanent gap, and the workflow now fails loud if the pinned CLI version and
+  the `Cargo.lock` crate version disagree.
+
+Three gates stand between a build and a published asset, and each exists
+because the corresponding failure is otherwise silent:
+
+1. `scripts/check_wasm64_bundle.ts` — the module's memory index type must match
+   `--arch` (an i64 build that regressed to i32 still validates and still
+   scores, right up to the 4 GiB wall the port exists to remove), and the
+   activation/backprop surface must survive into **both** the `_bg.wasm` and
+   the generated glue. A byte-size threshold cannot see a stripped glue.
+2. `scripts/check_wasm_arch_parity.ts` — the two bundles share every kernel, so
+   the committed fixture (`tests/wasm_arch_parity_fixture.ts`) must produce
+   **bit-identical** `f32`/`f64` results across both. No tolerance: a tolerance
+   would hide exactly the pointer-width slip this gate is for.
+3. `verify-wasm-bundle.sh` — re-downloads each published asset and re-checks it.
+
+This issue does **not** claim to fix V8 exit-133 JS-heap aborts; that ceiling is
+the JS heap, and `--max-old-space-size` remains its lever (lane (a), #296).
+
+```mermaid
+flowchart TD
+    S["neat-core sources<br/>cfg(target_family = &quot;wasm&quot;)"] --> A["wasm-pack<br/>wasm32-unknown-unknown"]
+    S --> B["cargo +nightly -Z build-std<br/>wasm64-unknown-unknown"]
+    B --> C["wasm-bindgen CLI<br/>(pinned = Cargo.lock)"]
+    A --> G1["check_wasm64_bundle.ts<br/>memory type + export surface"]
+    C --> G1
+    G1 --> G2["check_wasm_arch_parity.ts<br/>bit-identical f32/f64"]
+    G2 --> R["per-commit Release<br/>wasm64 = the pin, wasm32 = rollback"]
+```
+
 ## CI / secrets
 
 - PR pipeline: version bump + **`./bump-deps.sh --quarantine-hours … --skip-build`** (a `cargo update` under the **`VIBE_BUMP_QUARANTINE_HOURS`** release-age quarantine, Issue #76), **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (**org-level** PAT with **contents:write**).
@@ -466,5 +525,6 @@ flowchart LR
 - **`ACTIONS_PUSH` is supplied just-in-time** (Issue #483): the `version-increment` / `auto-format` checkouts run with **`persist-credentials: false`** and no `token:`, and the PAT reaches only the one step that pushes, through an explicit `https://x-access-token:…` remote URL. Never hand it to a checkout — those jobs execute PR-authored code (`bump-deps.sh`, `cargo fmt`) that would then be able to read an org-wide credential off `.git/config`.
 - **Versioning/release policy:** **`RELEASING.md`** is the single source of truth (Issue #251) — semver, what counts as breaking, and how to signal it. In CI the `version-increment` job bumps minor on a break (patch otherwise); the `version-gate` job **fails** a break shipped on a patch-only bump; `release.yml` cuts a **`v<version>`** tag + GitHub release on `Develop`, decoupled from `wasm-bundle-<sha>`.
 - **`clippy::uninlined_format_args`** is not denied in CI until the test corpus is cleaned up; workspace lints still deny **`filter_next`** / **`collapsible_if`**.
-- **`wasm32` is not gated on PRs — check it yourself before touching wasm-only code.** Neither `quality.sh` nor any `ci.yml` job builds for `wasm32-unknown-unknown` (the `wasm64-memory64-smoke` job is a Deno Memory64 runtime test, not a wasm32 build); the target compiles only *after* merge — on **push to `Develop`** through `wasm-bundle.yml`, and on the scheduled `upgrade-dependencies.yml` run, whose `bump-deps.sh` dual build the PR lane skips with `--skip-build`. The load-bearing manual check is **`cargo check -p neat-core --target wasm32-unknown-unknown`**. What it catches: deleting the last consumer of a `#[cfg(target_arch = "wasm32")]` block leaves an orphaned `use core::arch::wasm32::{…}` that every host gate compiles right past and only the bundle build rejects (Issues #422, #423). For **numeric** wasm changes go further, as Issue #448 did — compile to `wasm32-wasip1`, run under Node's WASI with `-C target-feature=+simd128,+relaxed-simd`, and diff the raw `f32` bit patterns before against after.
+- **`wasm32` is not gated on PRs — check it yourself before touching wasm-only code.** Neither `quality.sh` nor any `ci.yml` job builds for `wasm32-unknown-unknown` (the `wasm64-memory64-smoke` job is a Deno Memory64 runtime test plus the shipped-bundle gate unit tests, not a wasm32 build); the target compiles only *after* merge — on **push to `Develop`** through `wasm-bundle.yml`, and on the scheduled `upgrade-dependencies.yml` run, whose `bump-deps.sh` dual build the PR lane skips with `--skip-build`. The load-bearing manual check is **`cargo check -p neat-core --target wasm32-unknown-unknown`**. What it catches: deleting the last consumer of a `#[cfg(target_family = "wasm")]` block leaves an orphaned `use crate::wasm_arch::{…}` that every host gate compiles right past and only the bundle build rejects (Issues #422, #423). For **numeric** wasm changes go further, as Issue #448 did — compile to `wasm32-wasip1`, run under Node's WASI with `-C target-feature=+simd128,+relaxed-simd`, and diff the raw `f32` bit patterns before against after.
+- **`wasm64` is ungated on PRs for the same reason, and costs more to check.** `wasm64-unknown-unknown` is a Rust **Tier 3** target: no prebuilt `std`, so it needs a nightly toolchain, the `rust-src` component and `-Z build-std` — `rustup target add` refuses it outright. The local check is **`cargo +nightly build -p neat-core --target wasm64-unknown-unknown --release -Z build-std=std,panic_abort`**. Both bundles are built and gated on push to `Develop` (see the wasm64 section below).
 - **CI gates must be repo-owned and unconditional.** Never `if:`-gate a step on a file another repository owns: the Mermaid check was conditioned on a path that never exists here, so it skipped **every** run and a broken diagram merged (Issue #379). Its replacement, `scripts/check_mermaid.ts`, is owned by this repo and runs unconditionally from both `quality.sh` and `markdown-lint.yml`. Related budget rule: **GitHub rejects `timeout-minutes:` on a reusable-workflow *caller* job** — put it on the called workflow's own job instead (`ci.yml`'s `security` job calls `security.yml`, whose job carries `timeout-minutes: 30`; Issue #333).

@@ -31,14 +31,14 @@ pub mod scalar;
 
 // Native single-record/multi-record kernels live in `simd_native.rs`; only the
 // wasm32 implementations below reference `SynapseData` directly.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use crate::network::SynapseData;
 
 // Issue #1178 - WASM SIMD support
 // SIMD intrinsics for vectorised synapse weight summation
 // Issue #1197 - Added f32x4_relaxed_madd for FMA optimisation
-#[cfg(target_arch = "wasm32")]
-use core::arch::wasm32::{
+#[cfg(target_family = "wasm")]
+use crate::wasm_arch::{
     f32x4, f32x4_add, f32x4_extract_lane, f32x4_mul, f32x4_relaxed_madd, f32x4_splat, v128,
 };
 
@@ -77,7 +77,7 @@ use core::arch::wasm32::{
 /// same order), so it is the reference the Issue #509 A/B harness measures
 /// against and the one-flag way back if the unchecked reads ever need to be
 /// taken out of a build.
-#[cfg(all(target_arch = "wasm32", feature = "checked-gather4"))]
+#[cfg(all(target_family = "wasm", feature = "checked-gather4"))]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128, v128) {
@@ -119,7 +119,7 @@ fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128,
 ///    `activations` is sized to exactly `num_neurons`. That is the same
 ///    load-time invariant the `scalar::tail_*` helpers already rely on
 ///    (`AGENTS.md`, "Unsafe & SIMD invariants").
-#[cfg(all(target_arch = "wasm32", not(feature = "checked-gather4")))]
+#[cfg(all(target_family = "wasm", not(feature = "checked-gather4")))]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128, v128) {
@@ -151,7 +151,7 @@ fn gather4(synapses: &[SynapseData], activations: &[f32], base: usize) -> (v128,
 ///
 /// Bit-identical to computing each product scalar-wise and packing the lanes:
 /// `f32x4_mul` is a plain IEEE-754 multiply per lane, not a relaxed operation.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 fn gather4_products(synapses: &[SynapseData], activations: &[f32], base: usize) -> v128 {
@@ -160,7 +160,7 @@ fn gather4_products(synapses: &[SynapseData], activations: &[f32], base: usize) 
 }
 
 /// Horizontal sum of the four lanes, in lane order.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 fn reduce4(acc: v128) -> f32 {
@@ -186,7 +186,7 @@ fn reduce4(acc: v128) -> f32 {
 /// (`NetworkError::InvalidSynapseIndex`), so callers holding a loaded network
 /// already satisfy the precondition.
 ///
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_simd(
@@ -251,7 +251,7 @@ pub fn weighted_sum_simd(
 /// accumulator over chunks of four. Same index precondition as
 /// [`weighted_sum_simd`].
 ///
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_of_squares_simd(
@@ -293,7 +293,7 @@ pub fn weighted_sum_of_squares_simd(
 /// on [`weighted_sum_simd`] only. Same index precondition as
 /// [`weighted_sum_simd`].
 ///
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_no_bias_simd(
@@ -333,7 +333,7 @@ pub fn weighted_sum_no_bias_simd(
 /// accumulator over chunks of four. Same index precondition as
 /// [`weighted_sum_simd`].
 ///
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_of_squares_v2_simd(
@@ -381,7 +381,7 @@ pub fn weighted_sum_of_squares_v2_simd(
 /// Processes the same neuron for 4 different records in parallel using SIMD.
 /// Each record has its own activation buffer, but weights are shared.
 ///
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_simd_4records(
@@ -433,7 +433,7 @@ pub fn weighted_sum_simd_4records(
 /// This extends the 4-record approach (Issue #1202) by stacking two v128 operations
 /// for better cache utilisation and amortised overhead.
 ///
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 #[allow(clippy::too_many_arguments)]
@@ -492,12 +492,12 @@ pub fn weighted_sum_simd_8records(
 
 /// Widest record-interleaved tile the generic gather kernel supports
 /// (Issue #530). Mirrors `simd_native::MAX_INTERLEAVED_LANES`.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub const MAX_INTERLEAVED_LANES: usize = 64;
 
 /// Compile-time guard on a record-interleaved tile width (Issue #530): `R` must
 /// be a non-zero multiple of 8 and no wider than [`MAX_INTERLEAVED_LANES`].
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[inline]
 pub(crate) const fn assert_interleaved_tile<const R: usize>() {
     assert!(
@@ -510,7 +510,7 @@ pub(crate) const fn assert_interleaved_tile<const R: usize>() {
 ///
 /// Lane extraction needs a *const* index, so a generic tile width cannot index
 /// the accumulator array element-wise — the quad is unpacked whole instead.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 fn store_quad(out: &mut [f32], acc: v128) {
@@ -535,7 +535,7 @@ fn store_quad(out: &mut [f32], acc: v128) {
 /// is re-read once per tile rather than once per eight records. Numerically
 /// identical to [`weighted_sum_simd_8records`]: same per-synapse FMA order,
 /// bias seeded into every lane, each lane summed independently.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_interleaved<const R: usize>(
@@ -581,7 +581,7 @@ pub fn weighted_sum_interleaved<const R: usize>(
 
 /// The 8-lane tile of [`weighted_sum_interleaved`], kept as the name the
 /// batched **scoring** path (`BatchScratch::inter`) and its tests use.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_interleaved_8(
@@ -597,7 +597,7 @@ pub fn weighted_sum_interleaved_8(
 
 // Native (non-wasm32) multi-record helpers now live in `simd_native.rs` and use
 // AVX2/FMA on x86_64, NEON on aarch64, falling back to scalar elsewhere.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[path = "simd_native.rs"]
 mod simd_native;
 
@@ -605,7 +605,7 @@ mod simd_native;
 // (AVX2/FMA on x86_64, NEON on aarch64, scalar fallback elsewhere and for the
 // 0..3 synapse tail). They live in `simd_native.rs` alongside the multi-record
 // kernels and run on the primary `activate()` forward-pass hot path.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 pub use simd_native::{
     MAX_INTERLEAVED_LANES, weighted_sum_interleaved, weighted_sum_interleaved_8,
     weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,

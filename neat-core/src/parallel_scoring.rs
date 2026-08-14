@@ -67,7 +67,7 @@ use crate::network::CompiledNetwork;
 /// interior runs full 8-record SIMD batches (only the final task's tail can be
 /// short), and small enough that a 2048-record batch splits into many chunks for
 /// work-stealing balance across cores.
-#[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "parallel", not(target_family = "wasm")))]
 const PARALLEL_CHUNK_RECORDS: usize = 64;
 
 impl CompiledNetwork {
@@ -153,7 +153,7 @@ impl CompiledNetwork {
     ///
     /// Panics on a malformed `inputs`/`stride` pair (see
     /// [`CompiledNetwork::score_records_flat`]).
-    #[cfg(all(feature = "parallel", not(target_arch = "wasm32")))]
+    #[cfg(all(feature = "parallel", not(target_family = "wasm")))]
     pub fn score_records_parallel_flat(
         &self,
         inputs: &[f32],
@@ -189,7 +189,7 @@ impl CompiledNetwork {
     ///
     /// Panics on a malformed `inputs`/`stride` pair (see
     /// [`CompiledNetwork::score_records_flat`]).
-    #[cfg(not(all(feature = "parallel", not(target_arch = "wasm32"))))]
+    #[cfg(not(all(feature = "parallel", not(target_family = "wasm"))))]
     pub fn score_records_parallel_flat(
         &self,
         inputs: &[f32],

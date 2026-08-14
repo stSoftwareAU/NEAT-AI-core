@@ -9,18 +9,18 @@
 /// Planck constant for floating-point comparisons (matches TypeScript default).
 const PLANK_CONSTANT: f32 = 1e-12;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
 /// SIMD-accelerated scoring pass: computes activation² × clamped safeZoneFactor.
 ///
 /// Uses WASM SIMD128 to process 4 elements at a time for the squaring and
 /// multiplication, with a scalar fallback for non-WASM targets.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 fn score_pass_simd(activations: &[f32], safe_zone_factors: &[f32], scores: &mut [f32]) -> f32 {
-    use core::arch::wasm32::{
+    use crate::wasm_arch::{
         f32x4, f32x4_add, f32x4_extract_lane, f32x4_max, f32x4_min, f32x4_mul, f32x4_splat,
     };
 
@@ -115,7 +115,7 @@ fn score_pass_simd(activations: &[f32], safe_zone_factors: &[f32], scores: &mut 
 }
 
 /// Scalar fallback scoring pass for non-WASM targets (testing).
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(target_family = "wasm"))]
 #[inline]
 fn score_pass_simd(activations: &[f32], safe_zone_factors: &[f32], scores: &mut [f32]) -> f32 {
     let count = activations.len();
@@ -248,7 +248,7 @@ pub fn apply_distribute_elastic_error(
 ///
 /// # Returns
 /// `Vec<f32>` of error shares, one per link. Sum equals `error`.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn distribute_elastic_error(
     error: f32,
     activations: &[f32],
