@@ -21,6 +21,57 @@ Development in this repository follows **TDD**: do not merge behaviour changes u
 
 **`wasm_activation`** and **`pkg/`** remain in the **NEAT-AI** repo on `Develop` — not in this repository.
 
+### wasm64 (Memory64) bundle — dual-ship, Issue #541
+
+Every push to `Develop` publishes **two** bundles on the per-commit
+`wasm-bundle-<sha>` Release:
+
+| Asset | Target | Role |
+|-------|--------|------|
+| `wasm_activation-wasm64-pkg.tar.gz` | `wasm64-unknown-unknown` | Genuine Memory64 `(memory i64 …)` build — **the pin new `neatCore.rev` revisions take**. Linear memory grows past the wasm32 65536-page (4 GiB) ceiling. |
+| `wasm_activation-pkg.tar.gz` | `wasm32-unknown-unknown` | Unchanged wasm32 build, retained as the rollback window until NEAT-AI's Memory64 loader lands. |
+
+Each carries its own `.sha256` sidecar and a CycloneDX SBOM resolved against
+its own target triple, and both are covered by the build-provenance attestation.
+
+The July 2026 spike recorded the production `wasm-bindgen` path as a wasm64
+**NO-GO**. That was **CLI skew, not a permanent gap**: CLI `0.2.108` exited 0
+while stripping the bindings, and CLI ≥ `0.2.120` ships Memory64 codegen
+([wasm-bindgen#5004](https://github.com/wasm-bindgen/wasm-bindgen/pull/5004)).
+Re-measured **2026-08-14** against CLI `0.2.127` — the production path emits the
+full activation/backprop surface. See
+[`docs/research/wasm64-lane-b-build-lane-feasibility.md`](docs/research/wasm64-lane-b-build-lane-feasibility.md).
+
+This does **not** fix V8 exit-133 JS-heap aborts: that ceiling is the JS heap,
+not WASM linear memory, and `--max-old-space-size` remains its lever (lane (a),
+Issue #296).
+
+```mermaid
+flowchart TD
+    S["neat-core sources<br/>cfg(target_family = &quot;wasm&quot;)"] --> A["wasm-pack<br/>wasm32"]
+    S --> B["cargo +nightly -Z build-std<br/>wasm64 (Tier 3)"]
+    B --> C["wasm-bindgen CLI<br/>pinned = Cargo.lock"]
+    A --> G1["check_wasm64_bundle.ts<br/>memory type + export surface"]
+    C --> G1
+    G1 --> G2["check_wasm_arch_parity.ts<br/>bit-identical f32/f64"]
+    G2 --> R["Release wasm-bundle-&lt;sha&gt;<br/>wasm64 = pin · wasm32 = rollback"]
+```
+
+Building locally:
+
+```bash
+# wasm32 (needs wasm-pack)
+./scripts/build-wasm-bundle.sh --arch wasm32 --rev "$(git rev-parse HEAD)"
+
+# wasm64 (needs nightly + rust-src + the wasm-bindgen CLI matching Cargo.lock)
+rustup toolchain install nightly --profile minimal --component rust-src
+./scripts/build-wasm-bundle.sh --arch wasm64 --rev "$(git rev-parse HEAD)" \
+  --out wasm_activation-wasm64-pkg.tar.gz
+```
+
+Both invocations gate the built `pkg/` before packaging, so a stripped glue or
+a wrong-arch memory type fails the build instead of shipping.
+
 ## Training-data offload (WASM linear memory) — removed, Issue #415
 
 wasm64 milestone #295, lane (c) — Issue #298 — shipped a `wasm_dataset` module
