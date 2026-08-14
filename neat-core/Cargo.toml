@@ -34,10 +34,14 @@ parallel = ["dep:rayon"]
 # back out.
 checked-gather4 = []
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Issue #541 - keyed on the wasm *family*, not `wasm32`. A
+# `wasm64-unknown-unknown` build reports `target_arch = "wasm64"`, so the
+# previous `wasm32` tables silently dropped wasm-bindgen and silently pulled
+# rayon into a wasm64 build.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 rayon = { version = "1.12", optional = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(target_family = "wasm")'.dependencies]
 wasm-bindgen = "0.2.127"
 
 [dev-dependencies]

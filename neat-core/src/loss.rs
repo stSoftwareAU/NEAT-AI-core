@@ -18,7 +18,7 @@ use crate::training_bin_stream::{for_each_read_chunk_with_mode, training_read_tu
 use crate::training_data::find_bin_files;
 use std::path::{Path, PathBuf};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
 /// Issue #1209 - Shared 8-way activation helper macro to reduce code duplication.
@@ -405,7 +405,7 @@ pub fn mse_record(targets: &[f32], outputs: &[f32]) -> f64 {
 ///
 /// Issue #118x - Fuse activate + MSE for scoring performance.
 /// Issue #1202 - Use 4-record SIMD batching for forward-only networks.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn mse_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1062,7 +1062,7 @@ fn hinge_sum_batch_8way(
 ///
 /// # Returns
 /// Sum of per-record MAE errors (divide by record count for mean)
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn mae_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1123,7 +1123,7 @@ pub fn mae_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record Cross Entropy errors (divide by record count for mean)
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn cross_entropy_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1188,7 +1188,7 @@ pub fn cross_entropy_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record MAPE errors (divide by record count for mean)
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn mape_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1252,7 +1252,7 @@ pub fn mape_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record MSLE errors (divide by record count for mean)
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn msle_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1312,7 +1312,7 @@ pub fn msle_sum_batch_packed(
 ///
 /// # Returns
 /// Sum of per-record Hinge errors (divide by record count for mean)
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn hinge_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],
@@ -1384,7 +1384,7 @@ pub fn hinge_sum_batch_packed(
 ///
 /// Issue stSoftwareAU/NEAT-AI-core#88 — extend native scorer with the last
 /// remaining built-in NEAT-AI cost function.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn categorical_error_sum_batch_packed(
     network: &mut CompiledNetwork,
     records: &[f32],

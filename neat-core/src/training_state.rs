@@ -24,7 +24,7 @@ use std::cell::RefCell;
 
 use crate::accumulate::{accumulate_bias_single, accumulate_weight_single};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
 /// Number of f64 fields per synapse in the training state.
@@ -51,7 +51,7 @@ thread_local! {
 /// # Arguments
 /// * `num_synapses` - Number of synapses in the network
 /// * `num_neurons` - Number of neurons in the network
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn init_training_state(num_synapses: usize, num_neurons: usize) {
     SYNAPSE_STATE.with(|s| {
         let mut state = s.borrow_mut();
@@ -73,7 +73,7 @@ pub fn init_training_state(num_synapses: usize, num_neurons: usize) {
 ///
 /// More efficient than `init_training_state` when the network size
 /// hasn't changed — avoids reallocation.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn reset_training_state() {
     SYNAPSE_STATE.with(|s| s.borrow_mut().fill(0.0));
     NEURON_STATE.with(|s| s.borrow_mut().fill(0.0));
@@ -82,7 +82,7 @@ pub fn reset_training_state() {
 /// Free all training state memory.
 ///
 /// Call this when training is complete to release WASM linear memory.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn free_training_state() {
     SYNAPSE_STATE.with(|s| {
         let mut state = s.borrow_mut();
@@ -102,7 +102,7 @@ pub fn free_training_state() {
 ///   [count, totalPositiveActivation, totalNegativeActivation,
 ///    countPositiveActivations, countNegativeActivations,
 ///    totalPositiveAdjustedValue, totalNegativeAdjustedValue]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn read_synapse_state(index: usize) -> Vec<f64> {
     SYNAPSE_STATE.with(|s| {
         let state = s.borrow();
@@ -119,7 +119,7 @@ pub fn read_synapse_state(index: usize) -> Vec<f64> {
 ///
 /// Returns a packed f64 array with 3 values:
 ///   [count, totalBias, totalAdjustedBias]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn read_neuron_state(index: usize) -> Vec<f64> {
     NEURON_STATE.with(|s| {
         let state = s.borrow();
@@ -136,7 +136,7 @@ pub fn read_neuron_state(index: usize) -> Vec<f64> {
 ///
 /// Returns the entire synapse state buffer (num_synapses × 7 values).
 /// More efficient than calling `read_synapse_state` per synapse.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn read_all_synapse_state() -> Vec<f64> {
     SYNAPSE_STATE.with(|s| s.borrow().clone())
 }
@@ -145,7 +145,7 @@ pub fn read_all_synapse_state() -> Vec<f64> {
 ///
 /// Returns the entire neuron state buffer (num_neurons × 3 values).
 /// More efficient than calling `read_neuron_state` per neuron.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn read_all_neuron_state() -> Vec<f64> {
     NEURON_STATE.with(|s| s.borrow().clone())
 }
@@ -165,7 +165,7 @@ pub fn read_all_neuron_state() -> Vec<f64> {
 /// * `learning_rate` - Learning rate for weight adjustment
 /// * `max_weight_adj_scale` - Maximum weight adjustment scale
 /// * `limit_weight_scale` - Global weight scale limit
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_weight_persistent_4way(
     start_index: usize,
     current_weights: &[f64],
@@ -208,7 +208,7 @@ pub fn accumulate_weight_persistent_4way(
 }
 
 /// Accumulate weight adjustments for 8 synapses into persistent state.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_weight_persistent_8way(
     start_index: usize,
     current_weights: &[f64],
@@ -264,7 +264,7 @@ pub fn accumulate_weight_persistent_8way(
 /// * `learning_rate` - Learning rate for bias adjustment
 /// * `max_bias_adj_scale` - Maximum bias adjustment scale
 /// * `limit_bias_scale` - Global bias scale limit
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_bias_persistent_4way(
     start_index: usize,
     target_pre_activations: &[f64],
@@ -302,7 +302,7 @@ pub fn accumulate_bias_persistent_4way(
 }
 
 /// Accumulate bias adjustments for 8 neurons into persistent state.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_bias_persistent_8way(
     start_index: usize,
     target_pre_activations: &[f64],

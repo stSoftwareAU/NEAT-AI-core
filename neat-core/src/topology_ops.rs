@@ -6,7 +6,7 @@
 //! single implementation.
 //!
 //! Functions are exported as ordinary `pub fn` items, with
-//! `#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]` on each export so the
+//! `#[cfg_attr(target_family = "wasm", wasm_bindgen)]` on each export so the
 //! same source compiles for native and WASM targets — matching the
 //! pre-existing pattern used by `accumulate`.
 //!
@@ -15,7 +15,7 @@
 //! - NEAT-AI #1960 — batch API design.
 //! - NEAT-AI #1961 — structural integrity + cycle detection.
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
 use crate::squash::SquashType;
@@ -96,7 +96,7 @@ const SYN_POSITIVE: u8 = SynapseType::Positive as u8;
 ///
 /// # Returns
 /// A two-element vector `[error_code, synapse_index]`.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn validate_topology(from_indices: &[u32], to_indices: &[u32]) -> Vec<i32> {
     let len = from_indices.len();
     if len != to_indices.len() {
@@ -187,7 +187,7 @@ fn scan_is_constant(is_constant: &[u8], to_idx: usize) -> bool {
 /// malformed input — mismatched `from`/`to` lengths, an implausibly large
 /// `num_neurons`, or a candidate count whose result vector could not be
 /// addressed — rather than panicking (which would trap under WASM).
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn scan_available_connections(
     from_indices: &[u32],
     to_indices: &[u32],
@@ -338,7 +338,7 @@ pub fn scan_available_connections(
 /// indices ordered with output neurons first, then hidden neurons after
 /// their downstream consumers. Input neurons are excluded. Neurons remaining
 /// in cycles are appended at the end.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn compute_reverse_topological_order(
     from_indices: &[u32],
     to_indices: &[u32],
@@ -475,7 +475,7 @@ pub fn compute_reverse_topological_order(
 ///
 /// # Returns
 /// `[error_code_0, synapse_index_0, error_code_1, synapse_index_1, ...]`.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn validate_topology_batch(
     all_from_indices: &[u32],
     all_to_indices: &[u32],
@@ -518,7 +518,7 @@ pub fn validate_topology_batch(
 /// - Non-input neuron biases are finite.
 /// - IF neurons have at least 3 inward connections with condition,
 ///   positive (or standard), and negative synapse types.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn validate_structural_integrity(
     from_indices: &[u32],
     to_indices: &[u32],
@@ -646,7 +646,7 @@ pub fn validate_structural_integrity(
 ///
 /// # Returns
 /// `0` if acyclic, `1` if a cycle is detected.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn detect_cycles(
     from_indices: &[u32],
     to_indices: &[u32],

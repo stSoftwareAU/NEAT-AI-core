@@ -1,30 +1,47 @@
 #!/usr/bin/env bash
-# build-wasm-bundle.sh — Build wasm_activation/pkg via wasm-pack and tarball
-# it for per-commit publication (Issue #37).
+# build-wasm-bundle.sh — Build wasm_activation/pkg and tarball it for
+# per-commit publication (Issue #37; wasm64 lane, Issue #541).
 #
 # Used by .github/workflows/wasm-bundle.yml. Kept as a standalone script so
 # the build/packaging contract is unit-testable via bats without spinning up
 # a runner.
 #
 # Behaviour:
-#   1. Run `wasm-pack build neat-core --target web --out-name wasm_activation
-#      --out-dir wasm_activation/pkg` (skipped when --pkg-dir is supplied).
-#   2. Verify `wasm_activation_bg.wasm` exceeds the configured byte threshold
+#   1. Build the bundle for --arch (skipped when --pkg-dir is supplied):
+#        wasm32 — `wasm-pack build neat-core --target web …`
+#        wasm64 — `cargo +nightly build --target wasm64-unknown-unknown
+#                  -Z build-std=…` followed by the `wasm-bindgen` CLI, because
+#                  wasm-pack hard-codes `wasm32-unknown-unknown` as its cargo
+#                  target and cannot emit a Memory64 module.
+#   2. Gate what was just built: `scripts/check_wasm64_bundle.ts` proves the
+#      memory index type matches --arch and the activation/backprop surface
+#      survived into both the module and the generated glue. wasm-bindgen
+#      0.2.108 exited 0 while stripping that glue on wasm64, so "the CLI
+#      returned 0" is not evidence of a usable bundle.
+#   3. Verify `wasm_activation_bg.wasm` exceeds the configured byte threshold
 #      (defaults to 100 KB) so a stub build does not get published.
-#   3. Embed the commit SHA in `pkg/neat_core_rev.txt` for downstream
+#   4. Embed the commit SHA in `pkg/neat_core_rev.txt` for downstream
 #      integrity checks (NEAT-AI's `build.sh`).
-#   4. Tar+gzip the `pkg/` directory so the resulting archive unpacks to a
+#   5. Tar+gzip the `pkg/` directory so the resulting archive unpacks to a
 #      `pkg/` subfolder, matching NEAT-AI's existing import paths.
 #
 # Exits non-zero (without producing a tarball) on any failure so the workflow
-# never publishes an incomplete or undersized bundle.
+# never publishes an incomplete, undersized or wrong-arch bundle.
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 DEFAULT_MIN_WASM_BYTES=102400
+DEFAULT_ARCH="wasm32"
+# `wasm64-unknown-unknown` is a Rust Tier 3 target: no prebuilt `std`, so the
+# build needs a nightly toolchain plus `rust-src` and `-Z build-std`.
+WASM64_TOOLCHAIN="${WASM64_TOOLCHAIN:-nightly}"
+WASM64_TARGET="wasm64-unknown-unknown"
 REV="${GITHUB_SHA:-}"
 OUT_TAR="wasm_activation-pkg.tar.gz"
 MIN_WASM_BYTES="$DEFAULT_MIN_WASM_BYTES"
+ARCH="$DEFAULT_ARCH"
 PKG_DIR=""
 SKIP_BUILD=0
 
@@ -35,6 +52,10 @@ Usage: build-wasm-bundle.sh [options]
 Builds the wasm_activation bundle and packages pkg/ as a tarball.
 
 Options:
+  --arch <wasm32|wasm64>   Address size to build and gate against
+                           (default: ${DEFAULT_ARCH}). wasm64 emits a Memory64
+                           module and needs the ${WASM64_TOOLCHAIN} toolchain,
+                           the rust-src component and the wasm-bindgen CLI.
   --rev <SHA>              Commit SHA to embed in neat_core_rev.txt.
                            Defaults to \$GITHUB_SHA if set.
   --out <path>             Output tarball path
@@ -50,6 +71,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --arch)
+      [[ $# -ge 2 ]] || { echo "error: --arch requires a value" >&2; exit 2; }
+      ARCH="$2"
+      shift 2
+      ;;
     --rev)
       [[ $# -ge 2 ]] || { echo "error: --rev requires a value" >&2; exit 2; }
       REV="$2"
@@ -97,23 +123,67 @@ if ! [[ "$MIN_WASM_BYTES" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
+if [[ "$ARCH" != "wasm32" && "$ARCH" != "wasm64" ]]; then
+  echo "error: --arch must be wasm32 or wasm64 (got '$ARCH')" >&2
+  exit 2
+fi
+
 if [[ "$SKIP_BUILD" -eq 1 && -z "$PKG_DIR" ]]; then
   echo "error: --skip-build requires --pkg-dir" >&2
   exit 2
 fi
 
-if [[ "$SKIP_BUILD" -eq 0 ]]; then
-  if ! command -v wasm-pack >/dev/null 2>&1; then
-    echo "error: wasm-pack is required on PATH" >&2
+require_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "error: $1 is required on PATH$2" >&2
     exit 1
   fi
+}
+
+if [[ "$SKIP_BUILD" -eq 0 ]]; then
   PKG_DIR="neat-core/wasm_activation/pkg"
   rm -rf "neat-core/wasm_activation"
-  echo "🛠️  Running wasm-pack build (target=web, out-name=wasm_activation)"
-  wasm-pack build neat-core \
-    --target web \
-    --out-name wasm_activation \
-    --out-dir wasm_activation/pkg
+
+  if [[ "$ARCH" == "wasm32" ]]; then
+    require_cmd wasm-pack ""
+    echo "🛠️  Running wasm-pack build (target=web, out-name=wasm_activation)"
+    wasm-pack build neat-core \
+      --target web \
+      --out-name wasm_activation \
+      --out-dir wasm_activation/pkg
+  else
+    # wasm-pack cannot reach this target: 0.15.0 still hard-codes
+    # `wasm32-unknown-unknown` as the cargo target it builds and reads back.
+    # Driving cargo + the wasm-bindgen CLI by hand is the documented
+    # equivalent, and it is the *same* wasm-bindgen post-processing step
+    # wasm-pack would run — no raw `extern "C"` fallback needed since CLI
+    # 0.2.120 landed Memory64 codegen.
+    require_cmd cargo ""
+    require_cmd wasm-bindgen " (cargo install wasm-bindgen-cli --version <crate version>)"
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    raw_wasm="${target_dir}/${WASM64_TARGET}/release/neat_core.wasm"
+    echo "🛠️  Building neat-core for ${WASM64_TARGET} (${WASM64_TOOLCHAIN} + -Z build-std)"
+    cargo "+${WASM64_TOOLCHAIN}" build \
+      --package neat-core \
+      --release \
+      --target "$WASM64_TARGET" \
+      -Z build-std=std,panic_abort
+    if [[ ! -f "$raw_wasm" ]]; then
+      echo "error: cargo produced no ${WASM64_TARGET} artefact at ${raw_wasm}" >&2
+      exit 1
+    fi
+    echo "🔗  Running wasm-bindgen (target=web, out-name=wasm_activation)"
+    wasm-bindgen "$raw_wasm" \
+      --target web \
+      --out-name wasm_activation \
+      --out-dir "$PKG_DIR"
+  fi
+
+  # Gate what was just built, before anything is packaged. A CLI that exits 0
+  # while stripping the bindings is a silent failure, not a pass.
+  require_cmd deno " (needed to gate the built bundle)"
+  echo "🚦 Gating the built bundle (arch=${ARCH})"
+  deno run --allow-read "${SCRIPT_DIR}/check_wasm64_bundle.ts" "$PKG_DIR" --arch "$ARCH"
 fi
 
 if [[ ! -d "$PKG_DIR" ]]; then

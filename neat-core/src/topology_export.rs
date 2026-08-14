@@ -40,7 +40,7 @@ use std::fmt::Write;
 
 use serde::Serialize;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 use wasm_bindgen::prelude::*;
 
 use crate::network::CompiledNetwork;
@@ -317,7 +317,7 @@ pub fn to_dot(network: &CompiledNetwork, num_outputs: usize) -> String {
 // mirroring the pattern used for `activate` / `activate_view` / `reset_state`
 // in `network.rs`. NEAT-AI's TypeScript wrapper depends on these exports.
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
 impl CompiledNetwork {
     /// Export this network as a DOT (Graphviz) string.
     ///

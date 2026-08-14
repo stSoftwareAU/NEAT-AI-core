@@ -1,11 +1,20 @@
 //! Shared computation library for NEAT-AI neural network operations.
 //!
 //! This crate contains the core neural network logic extracted from the
-//! `wasm_activation` crate. Native targets omit `wasm-bindgen`; on
-//! `wasm32-unknown-unknown`, `accumulate` exports use `wasm-bindgen` behind
-//! `cfg_attr` so the same sources build for CLI tools and WASM.
+//! `wasm_activation` crate. Native targets omit `wasm-bindgen`; on the
+//! **wasm target family** (`wasm32-unknown-unknown` *and*
+//! `wasm64-unknown-unknown`, Issue #541), `accumulate` exports use
+//! `wasm-bindgen` behind `cfg_attr` so the same sources build for CLI tools and
+//! both WASM address sizes.
 //!
 //! Issue #1964 - Extract shared Rust library crate from wasm_activation.
+
+// Issue #541 - `core::arch::wasm64` is unstable (`simd_wasm64`,
+// rust-lang/rust#90599). `wasm64-unknown-unknown` is a Tier 3 target that
+// already requires nightly + `-Z build-std`, so enabling the feature there
+// costs the stable wasm32 and native builds nothing: the attribute is inert
+// unless `target_arch = "wasm64"`.
+#![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))]
 
 // Core computation modules
 pub mod accumulate;
@@ -37,8 +46,13 @@ pub mod unsquash;
 // Issue #36 — WASM-only `#[wasm_bindgen]` shims that wrap apply_* helpers,
 // tuple returns, and the byte-packed `propagate_topological` ABI. Native
 // targets do not see this module.
-#[cfg(target_arch = "wasm32")]
+#[cfg(target_family = "wasm")]
 pub mod wasm_exports;
+
+// Issue #541 — one home for the `core::arch::wasm32` / `core::arch::wasm64`
+// split, so both wasm SIMD kernels reach the SIMD128 intrinsics by one path.
+#[cfg(target_family = "wasm")]
+pub mod wasm_arch;
 
 // Re-export key types for convenience
 pub use creature::{
