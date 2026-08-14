@@ -131,6 +131,35 @@ LOCK
   rm -rf "$tmp"
 }
 
+@test "the pinned wasm-bindgen CLI version already agrees with Cargo.lock" {
+  # The workflow guard fails the publish on a skew; this catches the same skew
+  # one step earlier, on the PR that bumps the crate, so Develop never breaks.
+  run python3 - "$WF" "${REPO_ROOT}/Cargo.lock" <<'PY'
+import re
+import sys
+
+import yaml
+
+workflow, lockfile = sys.argv[1], sys.argv[2]
+steps = yaml.safe_load(open(workflow))["jobs"]["publish"]["steps"]
+pinned = next(
+    s["env"]["WASM_BINDGEN_VERSION"]
+    for s in steps
+    if "WASM_BINDGEN_VERSION" in (s.get("env") or {})
+)
+lock = open(lockfile, encoding="utf-8").read()
+match = re.search(r'name = "wasm-bindgen"\nversion = "([^"]+)"', lock)
+assert match, "Cargo.lock has no wasm-bindgen entry"
+assert pinned == match.group(1), (
+    f"workflow pins wasm-bindgen CLI {pinned} but Cargo.lock resolves the "
+    f"crate to {match.group(1)} — bump WASM_BINDGEN_VERSION and "
+    f"WASM_BINDGEN_SHA256 together with the crate"
+)
+PY
+  echo "$output"
+  [ "$status" -eq 0 ]
+}
+
 @test "the CycloneDX SBOM is resolved against the arch it describes" {
   run publish_runs
   [ "$status" -eq 0 ]
