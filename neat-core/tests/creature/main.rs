@@ -4,4 +4,5 @@
 mod common;
 
 mod compile_smoke;
+mod metadata_roundtrip;
 mod roundtrip;

@@ -56,9 +56,9 @@ pub mod wasm_arch;
 
 // Re-export key types for convenience
 pub use creature::{
-    CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature, creature_to_json,
-    creature_to_json_pretty, parse_creature_json, parse_squash_name, parse_synapse_type,
-    squash_name_from, synapse_type_name_from,
+    CreatureError, CreatureExport, CreatureTag, MemeticExport, NeuronExport, SynapseExport,
+    compile_creature, creature_to_json, creature_to_json_pretty, parse_creature_json,
+    parse_squash_name, parse_synapse_type, squash_name_from, synapse_type_name_from,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
 pub use squash::SquashType;

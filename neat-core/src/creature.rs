@@ -22,15 +22,70 @@
 //! respectively, for callers constructing `NeuronExport` / `SynapseExport`
 //! values in Rust from enum variants.
 //!
-//! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation).
+//! NEAT-AI#3747: the metadata the TypeScript contract carries — per-neuron
+//! [`NeuronExport::tags`], per-synapse [`SynapseExport::tags`], and top-level
+//! [`CreatureExport::uuid`] / [`CreatureExport::tags`] /
+//! [`CreatureExport::memetic`] — is parsed and re-emitted rather than dropped,
+//! so a Rust rewrite no longer strips a creature's `intelligentDesign`
+//! pedigree or its memetic lineage. All five are appended **after** the
+//! pre-existing fields so a creature carrying none of them serialises exactly
+//! as it did before.
+//!
+//! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
+//! NEAT-AI#3747 (tags / uuid / memetic fidelity).
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use std::collections::HashMap;
 
 use crate::loss::MSE_TILE_LANES;
 use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData, hot_synapse_soa};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
+
+/// A single metadata tag, matching the `@stsoftware/tags` wire shape
+/// `{ "name": string, "value": string }`.
+///
+/// Tags are opaque to this crate: they are parsed, held, and re-emitted
+/// unchanged so metadata such as the `intelligentDesign` pedigree
+/// (`"Swish -> SOFTSIGN"`) survives a Rust rewrite of a creature.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct CreatureTag {
+    /// Tag name, e.g. `"intelligentDesign"`.
+    pub name: String,
+    /// Tag value, e.g. `"Swish -> SOFTSIGN"`.
+    pub value: String,
+}
+
+/// The creature's memetic block, preserved verbatim.
+///
+/// The TypeScript `MemeticInterface` is a nested `biases` / `weights` map keyed
+/// by neuron and synapse UUID. This crate never interprets it, so it is held as
+/// raw JSON text rather than a parsed [`serde_json::Value`]: a `Value` is backed
+/// by a sorted map, which would silently re-order every key on the way out and
+/// churn the diff of any model file the Rust path rewrites. Raw text keeps the
+/// original key order and number formatting byte-for-byte.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct MemeticExport(
+    /// The memetic block exactly as it appeared in the source JSON.
+    pub Box<RawValue>,
+);
+
+impl MemeticExport {
+    /// The memetic block as raw JSON text, exactly as parsed.
+    pub fn as_json_str(&self) -> &str {
+        self.0.get()
+    }
+}
+
+/// Compares the raw JSON text, since [`RawValue`] itself is not [`PartialEq`].
+/// Two blocks are equal when they parsed from identical bytes.
+impl PartialEq for MemeticExport {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.get() == other.0.get()
+    }
+}
 
 /// Top-level creature export format matching the TypeScript `CreatureExport` interface.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -49,6 +104,15 @@ pub struct CreatureExport {
     /// When true, training rows are independent (no recurrent / feedback state).
     #[serde(rename = "forwardOnly", default)]
     pub forward_only: bool,
+    /// Optional stable identity of the creature itself (NEAT-AI#3747).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
+    /// Optional creature-level metadata tags (NEAT-AI#3747).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<CreatureTag>>,
+    /// Optional memetic lineage block, preserved verbatim (NEAT-AI#3747).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memetic: Option<MemeticExport>,
 }
 
 /// Neuron export format matching the TypeScript `NeuronExport` interface.
@@ -64,6 +128,9 @@ pub struct NeuronExport {
     /// Activation function name (e.g. "TANH", "ReLU"). Defaults to IDENTITY.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub squash: Option<String>,
+    /// Optional per-neuron metadata tags (NEAT-AI#3747).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<CreatureTag>>,
 }
 
 /// Synapse export format matching the TypeScript `SynapseExport` interface.
@@ -80,6 +147,9 @@ pub struct SynapseExport {
     /// Optional synapse type: "positive", "negative", or "condition".
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub synapse_type: Option<String>,
+    /// Optional per-synapse metadata tags (NEAT-AI#3747).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<CreatureTag>>,
 }
 
 /// Errors that can occur when parsing, serialising, or compiling a creature.

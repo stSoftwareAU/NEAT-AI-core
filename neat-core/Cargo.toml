@@ -17,7 +17,10 @@ crate-type = ["cdylib", "rlib"]
 # Native builds omit wasm-bindgen; WASM targets link it for `accumulate` exports.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# NEAT-AI#3747 - `raw_value` lets the creature's `memetic` block round trip as
+# the exact source bytes (key order and number formatting intact) instead of
+# being re-ordered by `serde_json::Value`'s sorted map.
+serde_json = { version = "1", features = ["raw_value"] }
 
 # Issue #179 - opt-in data-parallel record scoring. `rayon` is native-only
 # (it is not wasm-friendly), so it is declared under a `cfg(not(wasm32))`

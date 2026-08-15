@@ -623,12 +623,15 @@ fn test_compile_creature_single_output_no_synapses() {
 
 #[test]
 fn test_parse_creature_json_ignores_extra_fields() {
-    // The JSON may contain extra fields like forwardOnly, memetic, tags etc.
+    // The JSON may contain extra fields like `frozen` that this crate does not
+    // model. NEAT-AI#3747: `tags` is no longer one of them — it is parsed and
+    // re-emitted — so the fixture now carries the real `{name, value}` wire
+    // shape instead of a name-only stand-in.
     let json = r#"{
             "input": 1,
             "output": 1,
             "forwardOnly": true,
-            "tags": [{"name": "test"}],
+            "tags": [{"name": "test", "value": "extra"}],
             "neurons": [
                 {"type": "output", "uuid": "output-0", "bias": 0.0, "squash": "IDENTITY", "frozen": true}
             ],
@@ -692,6 +695,7 @@ fn compile_creature_rejects_too_many_nodes() {
             uuid: format!("n{i}"),
             bias: 0.0,
             squash: None,
+            tags: None,
         })
         .collect();
 
@@ -702,6 +706,9 @@ fn compile_creature_rejects_too_many_nodes() {
         synapses: Vec::new(),
         semantic_version: None,
         forward_only: false,
+        uuid: None,
+        tags: None,
+        memetic: None,
     };
 
     match compile_creature(&creature) {
