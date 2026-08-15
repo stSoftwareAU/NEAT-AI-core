@@ -5,10 +5,35 @@
 //! `CompiledNetwork` for efficient activation.
 //!
 //! The structs derive both [`serde::Deserialize`] and [`serde::Serialize`], so
-//! a parsed creature can be written back out to the same JSON shape. Round
-//! tripping — `parse -> serialise -> parse` — preserves every field, and two
-//! serialisations of the same `CreatureExport` produce byte-identical JSON
-//! (serde emits fields in declaration order).
+//! a parsed creature can be written back out to the same JSON shape.
+//!
+//! # Round-trip guarantee
+//!
+//! Round tripping — `parse -> serialise -> parse` — preserves every field,
+//! **including keys these structs do not declare**: each of [`CreatureExport`],
+//! [`NeuronExport`] and [`SynapseExport`] carries a `#[serde(flatten)] extra`
+//! map that captures the leftovers (NEAT-AI#3748). Nothing is discarded, so a
+//! field the TypeScript engine adds ahead of these structs survives a Rust
+//! rewrite instead of vanishing.
+//!
+//! Serialisation is deterministic — two serialisations of the same value are
+//! byte-identical — under these rules:
+//!
+//! - declared fields are emitted in struct declaration order;
+//! - unknown keys are emitted **after** every declared field of their object,
+//!   because that is where the flattened map sits in the declaration order; and
+//! - unknown keys, and the keys of any object nested inside them, are emitted
+//!   in **sorted** order, because [`serde_json::Map`] is a sorted map here.
+//!
+//! So `parse -> serialise` is byte-identical for a creature whose unknown keys
+//! already sit in that canonical position and order, and otherwise moves those
+//! keys to it without losing any of them. Declared fields never move, and an
+//! empty `extra` map contributes no keys at all, so a creature carrying no
+//! unknown keys serialises exactly as it did before the catch-all existed.
+//!
+//! The one field held outside this normalisation is
+//! [`CreatureExport::memetic`], kept as raw JSON text so its UUID keys and
+//! number formatting survive verbatim (NEAT-AI#3747).
 //!
 //! The `#[serde(rename = "...")]` attributes (`semanticVersion`, `forwardOnly`,
 //! `fromUUID`, `toUUID`, `type`) apply symmetrically on both input and output,
@@ -32,10 +57,12 @@
 //! as it did before.
 //!
 //! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
-//! NEAT-AI#3747 (tags / uuid / memetic fidelity).
+//! NEAT-AI#3747 (tags / uuid / memetic fidelity), NEAT-AI#3748 (unknown-field
+//! passthrough).
 
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 use crate::loss::MSE_TILE_LANES;
@@ -113,6 +140,12 @@ pub struct CreatureExport {
     /// Optional memetic lineage block, preserved verbatim (NEAT-AI#3747).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memetic: Option<MemeticExport>,
+    /// Every creature-level key this struct does not declare, preserved so a
+    /// Rust rewrite cannot silently drop a field the TypeScript engine added
+    /// (NEAT-AI#3748). Empty for a creature carrying no unknown keys, and an
+    /// empty flattened map contributes no keys to the output.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Neuron export format matching the TypeScript `NeuronExport` interface.
@@ -131,6 +164,10 @@ pub struct NeuronExport {
     /// Optional per-neuron metadata tags (NEAT-AI#3747).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<CreatureTag>>,
+    /// Every neuron-level key this struct does not declare, preserved rather
+    /// than dropped (NEAT-AI#3748).
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Synapse export format matching the TypeScript `SynapseExport` interface.
@@ -150,6 +187,10 @@ pub struct SynapseExport {
     /// Optional per-synapse metadata tags (NEAT-AI#3747).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<CreatureTag>>,
+    /// Every synapse-level key this struct does not declare, preserved rather
+    /// than dropped (NEAT-AI#3748).
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 /// Errors that can occur when parsing, serialising, or compiling a creature.

@@ -147,6 +147,7 @@ fn camelcase_field_names_are_symmetric_on_output() {
             bias: 0.0,
             squash: Some("IDENTITY".to_string()),
             tags: None,
+            extra: Default::default(),
         }],
         synapses: vec![SynapseExport {
             from_uuid: "input-0".to_string(),
@@ -154,12 +155,14 @@ fn camelcase_field_names_are_symmetric_on_output() {
             weight: 1.0,
             synapse_type: Some("condition".to_string()),
             tags: None,
+            extra: Default::default(),
         }],
         semantic_version: Some("1.2.3".to_string()),
         forward_only: true,
         uuid: None,
         tags: None,
         memetic: None,
+        extra: Default::default(),
     };
 
     let serialised = creature_to_json(&creature).expect("serialise");
@@ -214,6 +217,7 @@ fn optional_fields_absent_when_none() {
             bias: 0.0,
             squash: None,
             tags: None,
+            extra: Default::default(),
         }],
         synapses: vec![SynapseExport {
             from_uuid: "input-0".to_string(),
@@ -221,12 +225,14 @@ fn optional_fields_absent_when_none() {
             weight: 1.0,
             synapse_type: None,
             tags: None,
+            extra: Default::default(),
         }],
         semantic_version: None,
         forward_only: false,
         uuid: None,
         tags: None,
         memetic: None,
+        extra: Default::default(),
     };
 
     let serialised = creature_to_json(&creature).expect("serialise");

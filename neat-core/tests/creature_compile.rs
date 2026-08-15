@@ -622,11 +622,16 @@ fn test_compile_creature_single_output_no_synapses() {
 }
 
 #[test]
-fn test_parse_creature_json_ignores_extra_fields() {
+fn test_parse_creature_json_keeps_extra_fields_out_of_compilation() {
     // The JSON may contain extra fields like `frozen` that this crate does not
     // model. NEAT-AI#3747: `tags` is no longer one of them — it is parsed and
     // re-emitted — so the fixture now carries the real `{name, value}` wire
     // shape instead of a name-only stand-in.
+    //
+    // NEAT-AI#3748 — documented business-logic change: unmodelled fields are no
+    // longer *discarded*, they are preserved in the `extra` catch-all. What this
+    // test pins is unchanged: they do not disturb compilation. That they survive
+    // the round trip is pinned by `tests/creature/unknown_fields.rs`.
     let json = r#"{
             "input": 1,
             "output": 1,
@@ -642,6 +647,8 @@ fn test_parse_creature_json_ignores_extra_fields() {
 
     let creature = parse_creature_json(json).unwrap();
     assert_eq!(creature.input, 1);
+    assert_eq!(creature.neurons[0].extra["frozen"], true);
+    assert_eq!(creature.synapses[0].extra["frozen"], true);
     let network = compile_creature(&creature).unwrap();
     assert_eq!(network.num_neurons, 2);
 }
@@ -696,6 +703,7 @@ fn compile_creature_rejects_too_many_nodes() {
             bias: 0.0,
             squash: None,
             tags: None,
+            extra: Default::default(),
         })
         .collect();
 
@@ -709,6 +717,7 @@ fn compile_creature_rejects_too_many_nodes() {
         uuid: None,
         tags: None,
         memetic: None,
+        extra: Default::default(),
     };
 
     match compile_creature(&creature) {

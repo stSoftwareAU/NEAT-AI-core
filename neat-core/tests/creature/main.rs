@@ -6,3 +6,4 @@ mod common;
 mod compile_smoke;
 mod metadata_roundtrip;
 mod roundtrip;
+mod unknown_fields;
