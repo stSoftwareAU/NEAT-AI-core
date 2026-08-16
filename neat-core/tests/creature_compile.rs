@@ -87,6 +87,9 @@ fn test_parse_squash_names() {
         SquashType::Complement
     );
     assert_eq!(parse_squash_name("SINUSOID").unwrap(), SquashType::Sine);
+    // NEAT-AI tags output neurons SOFTMAX for loss/intent; the per-neuron
+    // forward pass is the logistic surrogate (Issue #547).
+    assert_eq!(parse_squash_name("SOFTMAX").unwrap(), SquashType::Logistic);
 }
 
 #[test]
@@ -227,6 +230,35 @@ fn test_compile_creature_no_hidden_neurons() {
     // output-1 = logistic(0.0 * 1.0 + (-0.2)) = logistic(-0.2)
     let expected_logistic = apply_squash(SquashType::Logistic, -0.2);
     assert!((output[1] - expected_logistic).abs() < 1e-5);
+}
+
+#[test]
+fn softmax_tagged_output_compiles_as_logistic() {
+    // Creature JSON still carries squash: "SOFTMAX" for loss/intent tagging.
+    // The TypeScript WASM path aliases that name to LOGISTIC; compile must
+    // do the same or rust_scorer rejects the creature (Issue #547).
+    let json = r#"{
+            "input": 1,
+            "output": 1,
+            "neurons": [
+                {"type": "output", "uuid": "output-0", "bias": -0.2, "squash": "SOFTMAX"}
+            ],
+            "synapses": [
+                {"fromUUID": "input-0", "toUUID": "output-0", "weight": 1.0}
+            ]
+        }"#;
+
+    let creature = parse_creature_json(json).unwrap();
+    let mut network = compile_creature(&creature).unwrap();
+
+    // weighted sum = 0.5 * 1.0 + (-0.2) = 0.3; logistic(0.3) is the oracle.
+    let output = network.activate(&[0.5], 1);
+    let expected = apply_squash(SquashType::Logistic, 0.3);
+    assert!(
+        (output[0] - expected).abs() < 1e-5,
+        "SOFTMAX-tagged output must activate as logistic: got {}, expected {expected}",
+        output[0],
+    );
 }
 
 #[test]
