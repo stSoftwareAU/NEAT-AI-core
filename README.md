@@ -1,5 +1,9 @@
 # NEAT-AI-core
 
+<p align="center">
+  <img width="720" src="https://raw.githubusercontent.com/stSoftwareAU/NEAT-AI/Develop/docs/brand/social-previews/neat-ai-core.png" alt="NEAT-AI-core — the shared native Rust core of NEAT-AI">
+</p>
+
 **Native shared Rust** for [NEAT-AI](https://github.com/stSoftwareAU/NEAT-AI) — an implementation of [**NEAT** (NeuroEvolution of Augmenting Topologies)](https://en.wikipedia.org/wiki/Neuroevolution_of_augmenting_topologies): the **`neat-core`** crate (tests included) lives here as a Cargo workspace member.
 
 ## Glossary
