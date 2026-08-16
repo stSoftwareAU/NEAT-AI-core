@@ -157,7 +157,7 @@ impl From<serde_json::Error> for CreatureError {
 /// Parse a squash function name string into a `SquashType` enum value.
 ///
 /// Handles all activation function names from the TypeScript codebase,
-/// including aliases (CLIPPED, RELU, INVERSE, SINUSOID).
+/// including aliases (CLIPPED, RELU, INVERSE, SINUSOID, SOFTMAX).
 pub fn parse_squash_name(name: &str) -> Result<SquashType, CreatureError> {
     match name {
         "IDENTITY" => Ok(SquashType::Identity),
@@ -166,7 +166,11 @@ pub fn parse_squash_name(name: &str) -> Result<SquashType, CreatureError> {
         "LeakyReLU" => Ok(SquashType::LeakyRelu),
         "SELU" => Ok(SquashType::Selu),
         "ELU" => Ok(SquashType::Elu),
-        "LOGISTIC" => Ok(SquashType::Logistic),
+        // SOFTMAX: NEAT-AI tags multi-class outputs with this name for
+        // loss/intent (Issue #547 / NEAT-AI #3783 / #2793). Per-neuron forward
+        // pass is the logistic surrogate (`wasmAliasName() → LOGISTIC`), so
+        // creature JSON carrying `squash: "SOFTMAX"` compiles as Logistic.
+        "LOGISTIC" | "SOFTMAX" => Ok(SquashType::Logistic),
         "TANH" => Ok(SquashType::Tanh),
         "HARD_TANH" | "CLIPPED" => Ok(SquashType::HardTanh),
         "SOFTSIGN" => Ok(SquashType::Softsign),
