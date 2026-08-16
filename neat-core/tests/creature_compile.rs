@@ -87,6 +87,8 @@ fn test_parse_squash_names() {
         SquashType::Complement
     );
     assert_eq!(parse_squash_name("SINUSOID").unwrap(), SquashType::Sine);
+    // NEAT-AI SOFTMAX is a logistic surrogate at compile time (Issue #547).
+    assert_eq!(parse_squash_name("SOFTMAX").unwrap(), SquashType::Logistic);
 }
 
 #[test]
@@ -227,6 +229,27 @@ fn test_compile_creature_no_hidden_neurons() {
     // output-1 = logistic(0.0 * 1.0 + (-0.2)) = logistic(-0.2)
     let expected_logistic = apply_squash(SquashType::Logistic, -0.2);
     assert!((output[1] - expected_logistic).abs() < 1e-5);
+}
+
+#[test]
+fn test_compile_creature_softmax_alias_matches_logistic() {
+    // Issue #547: SOFTMAX is NEAT-AI's multi-class tag; compile as Logistic.
+    let json = r#"{
+            "input": 1,
+            "output": 1,
+            "neurons": [
+                {"type": "output", "uuid": "output-0", "bias": -0.2, "squash": "SOFTMAX"}
+            ],
+            "synapses": [
+                {"fromUUID": "input-0", "toUUID": "output-0", "weight": 1.0}
+            ]
+        }"#;
+
+    let creature = parse_creature_json(json).unwrap();
+    let mut network = compile_creature(&creature).unwrap();
+    let output = network.activate(&[0.0], 1);
+    let expected = apply_squash(SquashType::Logistic, -0.2);
+    assert!((output[0] - expected).abs() < 1e-5);
 }
 
 #[test]
