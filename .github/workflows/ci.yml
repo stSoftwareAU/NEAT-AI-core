@@ -587,6 +587,7 @@ jobs:
       # wasm-bundle.yml, which is the only place a built pkg/ exists.
       - name: Run Memory64 smoke and bundle-gate tests
         run: |
+          set -euo pipefail
           deno test \
             tests/wasm64_memory64_smoke_test.ts \
             tests/wasm64_bundle_gate_test.ts \
