@@ -114,6 +114,63 @@ expressible, and the synthetic tests catch header-overrun and undercover cases.
 - **`training_bin_stream`** (`neat-core/src/training_bin_stream.rs`) — **one** chunked `.bin` scan API: pipelined double-buffer reads on native hosts, sequential `File::read` chunks on the wasm family (same `for_each_read_chunk` callback). Used by **NEAT-AI-scorer** for production-sized forward-only scoring.
 - Root **`Cargo.toml`** is a **virtual workspace**; **`[workspace.package].version`** is what the PR **auto-bump** job edits; **`neat-core`** uses `version.workspace = true`.
 
+## Ownership fence (Issue #544)
+
+Native training is split across two FFI surfaces, and this crate owns exactly
+one of them: the **per-sample** primitives. **NEAT-AI-Backpropagation**
+(`libneat_ai_backpropagation`) owns the **directory epoch** loop — `trainDir`:
+accumulate, apply, MSE accept/rollback, journal — and calls in one sample at a
+time.
+
+**Stays here.** Backpropagation and NEAT-AI-scorer depend on these, so they are
+never deleted or narrowed as "unused":
+
+- `propagate_topological_loop` (`neat-core/src/topological_backprop.rs`) and the
+  byte-packed ABI codec `propagate_codec` — pinned at the out-of-crate boundary
+  by `neat-core/tests/backprop_ffi_surface.rs`, which is what fails if either is
+  narrowed to `pub(crate)`.
+- `mse_mean_streaming` (`neat-core/src/loss.rs`) over `training_bin_stream`
+  (`neat-core/tests/mse_streaming_directory.rs`).
+- The training-data iterators (`training_data`, `training_state`) and the
+  topology helpers (`topology_ops`, `topology_export`).
+
+**Stays in NEAT-AI-Backpropagation.** Do not relocate into `neat-core`:
+
+- the product `train` epoch loop over a directory (`trainDir`) and its
+  `train.rs`-style orchestration;
+- the journal, the CLI apply policy, the `traceStore` layout, and the
+  sample-rate policy for memetic training.
+
+Absorbing the epoch loop would pull journal and CLI apply policy into **every**
+core consumer — the scorer and Discovery included — for a loop only the trainer
+runs. New NEAT-AI scenarios are reached by FFI *to* Backpropagation, not by
+moving host orchestration down here or by removing core primitives.
+
+`tests/scripts/core_ownership_fence.bats` is the gate: it sweeps
+`neat-core/src` for host-orchestration **item definitions** (`fn train_dir_…`,
+`struct EpochJournal`, `mod trace_store`) and for `train.rs`/`journal.rs`-style
+module files, and fails if one lands here. Prose that merely mentions an epoch
+is free — the sweep matches definitions, not comments.
+
+```mermaid
+flowchart LR
+    subgraph host["NEAT-AI-Backpropagation — host orchestration"]
+        T["trainDir epoch loop<br/>accumulate, apply, accept/rollback"]
+        J["journal + CLI apply policy"]
+        S["traceStore layout<br/>memetic sample-rate policy"]
+        T --> J
+        T --> S
+    end
+    subgraph core["neat-core — per-sample primitives"]
+        P["propagate_topological_loop<br/>propagate_codec packed ABI"]
+        M["mse_mean_streaming<br/>training_bin_stream"]
+        O["topology_ops / topology_export"]
+    end
+    T -->|"one sample per call, FFI"| P
+    T -->|"epoch score for accept/rollback"| M
+    T --> O
+```
+
 ## Unsafe & SIMD invariants
 
 The native SIMD hot path (`neat-core/src/simd_native.rs`) carries durable

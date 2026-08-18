@@ -396,6 +396,8 @@ flowchart LR
 
 The NEAT-AI project is split across seven public repositories. Each focuses on one concern and composes with the others as shown below.
 
+`neat-core` keeps the **per-sample** training primitives (`propagate_topological_loop`, the packed propagate ABI, `mse_mean_streaming`, the topology helpers); the `trainDir` **epoch** loop and its journal, CLI apply policy and `traceStore` layout stay in NEAT-AI-Backpropagation. The rule and the gate that enforces it live in [`AGENTS.md`](AGENTS.md#ownership-fence-issue-544) (Issue #544).
+
 | Repository | Role |
 |------------|------|
 | [NEAT-AI](https://github.com/stSoftwareAU/NEAT-AI) | Primary Deno/TypeScript neural-network engine (evolution, training, WASM activation). |
