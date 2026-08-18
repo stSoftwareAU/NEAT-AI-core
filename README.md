@@ -351,6 +351,47 @@ cargo bench -p neat-core --features parallel --bench parallel_scoring
 cargo bench -p neat-core --bench hot_paths -- mse_sum_production
 ```
 
+### Creature JSON observation-width contract (Issue #550)
+
+`CreatureExport` (`neat-core/src/creature.rs`) is the Rust mirror of the
+TypeScript `CreatureExport` interface: top-level `input` / `output` integers,
+then `neurons` and `synapses`. The two counts are the **width contract** for
+the whole fleet — `input` is the observation count and `output` the target
+count — and `neurons` deliberately lists only *non-input* neurons, so **`input`
+cannot be re-derived from the neuron list**: lose it and the width is gone.
+
+`input < 1` or `output < 1` is therefore never accepted anywhere in this crate.
+`validate_creature_width` is the single home of the rule and every entry point
+calls it:
+
+| Entry point | `input: 0` / `output: 0` | missing key | `-1` |
+|-------------|--------------------------|-------------|------|
+| `parse_creature_json` | `CreatureError::InvalidInputCount { found }` / `InvalidOutputCount { found }` | `CreatureError::Json` (no `#[serde(default)]`) | `CreatureError::Json` |
+| `compile_creature` | same typed error, checked **before** any other validation | — | — |
+| `creature_to_json` / `creature_to_json_pretty` | same typed error — a widthless creature is never *written* | — | — |
+
+The Display text (`Must have at least one input neurons was: 0`) mirrors
+NEAT-AI `src/architecture/CreatureValidate.ts` so logs line up across the TS
+and Rust stacks. A valid creature round-trips `input` / `output` byte-identically
+through parse → serialise (`neat-core/tests/creature_width_contract.rs`).
+
+Consumers (NEAT-AI-scorer, -Backpropagation, -Lamarck, -Discovery and the
+downstream trainers) read
+the top-level counts and never re-derive them from `neurons`; a hand-built
+`CreatureExport` should go through `validate_creature_width` at the boundary.
+
+```mermaid
+flowchart LR
+    J["creature JSON"] --> P["parse_creature_json<br/>serde → validate_creature_width"]
+    E["CreatureExport (hand-built)"] --> C["compile_creature<br/>validate_creature_width first"]
+    P --> C
+    E --> S["creature_to_json / _pretty<br/>validate_creature_width first"]
+    P --> S
+    P -. "input &lt; 1 / output &lt; 1" .-> X["Err(InvalidInputCount / InvalidOutputCount)"]
+    C -. "input &lt; 1 / output &lt; 1" .-> X
+    S -. "input &lt; 1 / output &lt; 1" .-> X
+```
+
 ## Related Repositories
 
 The NEAT-AI project is split across seven public repositories. Each focuses on one concern and composes with the others as shown below.

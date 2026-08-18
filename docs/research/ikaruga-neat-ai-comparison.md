@@ -111,6 +111,8 @@ Ikaruga derives both `Serialize` and `Deserialize` on its `Genome`, enabling ful
 
 That has **landed**: `CreatureExport`, `NeuronExport`, and `SynapseExport` (`neat-core/src/creature.rs`) now derive both `Deserialize` and `Serialize`, so networks round-trip out to JSON as well as in (Issue #30).
 
+Since Issue #550 the round trip also enforces the **observation-width contract**: the top-level `input` (authoritative observation count — not derivable from `neurons`, which lists only non-input neurons) and `output` (target count) must both be `>= 1`. `parse_creature_json`, `compile_creature` and `creature_to_json` all reject `input < 1` / `output < 1` with the typed `CreatureError::InvalidInputCount` / `InvalidOutputCount`, and neither field carries a `#[serde(default)]`.
+
 - **Priority:** medium.
 - **Effort:** small (~150 LOC + tests: round-trip, deterministic field order, numerical precision on f64 weights).
 - **Status:** **done** — shipped via issue [#30](https://github.com/stSoftwareAU/NEAT-AI-core/issues/30) (`neat-core/src/creature.rs`).

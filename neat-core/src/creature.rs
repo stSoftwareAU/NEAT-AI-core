@@ -22,7 +22,20 @@
 //! respectively, for callers constructing `NeuronExport` / `SynapseExport`
 //! values in Rust from enum variants.
 //!
-//! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation).
+//! **Observation-width contract (Issue #550).** The top-level `input` /
+//! `output` counts are the width contract for the whole fleet: `input` is the
+//! observation count and `output` the target count. `neurons` deliberately
+//! lists only *non-input* neurons, so `input` can never be re-derived once it
+//! is lost. [`validate_creature_width`] is the single home of the rule that
+//! `input < 1` or `output < 1` is never accepted — [`parse_creature_json`],
+//! [`compile_creature`], [`creature_to_json`] and [`creature_to_json_pretty`]
+//! all call it and fail with [`CreatureError::InvalidInputCount`] /
+//! [`CreatureError::InvalidOutputCount`]. There is no default and no fallback:
+//! a missing key is a serde error, a zero is a typed error, and neither is
+//! ever written back out.
+//!
+//! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
+//! #550 (observation-width contract).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -35,9 +48,20 @@ use crate::synapse_type::SynapseType;
 /// Top-level creature export format matching the TypeScript `CreatureExport` interface.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CreatureExport {
-    /// Number of input neurons.
+    /// Number of input neurons — the **authoritative observation count**.
+    ///
+    /// Not derivable from [`neurons`](Self::neurons): input neurons are not
+    /// listed there, so if this value is lost the width is gone for good.
+    /// Must be `>= 1` (Issue #550); there is deliberately no `#[serde(default)]`
+    /// — an absent key fails deserialisation and a zero fails
+    /// [`validate_creature_width`] on parse, compile and serialise.
     pub input: usize,
-    /// Number of output neurons.
+    /// Number of output neurons — the **authoritative target count**.
+    ///
+    /// Must be `>= 1` (Issue #550). Although output neurons *are* listed in
+    /// [`neurons`](Self::neurons), this declared value is the contract, and
+    /// [`compile_creature`] additionally checks it against the typed neurons
+    /// ([`CreatureError::OutputCountMismatch`]). No `#[serde(default)]`.
     pub output: usize,
     /// List of non-input neurons (hidden, output, constant).
     pub neurons: Vec<NeuronExport>,
@@ -114,6 +138,25 @@ pub enum CreatureError {
         /// The node count that exceeded [`crate::network::MAX_NODE_COUNT`].
         count: usize,
     },
+    /// `CreatureExport::input` was below the minimum of one (Issue #550).
+    ///
+    /// `input` is the authoritative observation width and cannot be re-derived
+    /// from `neurons` (input neurons are not listed there), so a widthless
+    /// creature is rejected on parse, compile *and* serialise. Display text
+    /// mirrors NEAT-AI `CreatureValidate.ts` so logs line up across stacks.
+    InvalidInputCount {
+        /// The `input` value that was found (always `0` today; `usize` cannot
+        /// go negative, and a negative JSON literal fails in serde first).
+        found: usize,
+    },
+    /// `CreatureExport::output` was below the minimum of one (Issue #550).
+    ///
+    /// Same rule and same three enforcement points as
+    /// [`CreatureError::InvalidInputCount`].
+    InvalidOutputCount {
+        /// The `output` value that was found.
+        found: usize,
+    },
 }
 
 impl std::fmt::Display for CreatureError {
@@ -134,6 +177,12 @@ impl std::fmt::Display for CreatureError {
                      addressable by a u16 source index",
                     crate::network::MAX_NODE_COUNT
                 )
+            }
+            CreatureError::InvalidInputCount { found } => {
+                write!(f, "Must have at least one input neurons was: {found}")
+            }
+            CreatureError::InvalidOutputCount { found } => {
+                write!(f, "Must have at least one output neurons was: {found}")
             }
         }
     }
@@ -288,9 +337,41 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
     }
 }
 
+/// Enforce the observation-width contract: `input >= 1` and `output >= 1`.
+///
+/// Single home of the rule (Issue #550) called by [`parse_creature_json`],
+/// [`compile_creature`], [`creature_to_json`] and [`creature_to_json_pretty`].
+/// `input` is checked first because it is the value that can never be
+/// recovered from the rest of the export. Consumers that build a
+/// [`CreatureExport`] by hand, or deserialise one through their own serde
+/// path, should call this at their own boundary before trusting the widths.
+///
+/// Mirrors NEAT-AI (TS) `src/architecture/CreatureValidate.ts`.
+pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), CreatureError> {
+    if creature.input < 1 {
+        return Err(CreatureError::InvalidInputCount {
+            found: creature.input,
+        });
+    }
+    if creature.output < 1 {
+        return Err(CreatureError::InvalidOutputCount {
+            found: creature.output,
+        });
+    }
+    Ok(())
+}
+
 /// Parse a creature JSON string into a `CreatureExport` struct.
+///
+/// After serde deserialisation the result is passed through
+/// [`validate_creature_width`], so `input: 0` / `output: 0` return
+/// [`CreatureError::InvalidInputCount`] / [`CreatureError::InvalidOutputCount`]
+/// rather than a struct with a zero width. A missing `input` / `output` key or
+/// a negative literal is a [`CreatureError::Json`] error (Issue #550).
 pub fn parse_creature_json(json: &str) -> Result<CreatureExport, CreatureError> {
-    Ok(serde_json::from_str(json)?)
+    let creature: CreatureExport = serde_json::from_str(json)?;
+    validate_creature_width(&creature)?;
+    Ok(creature)
 }
 
 /// Serialise a [`CreatureExport`] to canonical JSON text.
@@ -298,12 +379,18 @@ pub fn parse_creature_json(json: &str) -> Result<CreatureExport, CreatureError> 
 /// Output is deterministic: fields are emitted in struct declaration order,
 /// so two calls with the same input produce byte-identical output. This is
 /// the symmetric counterpart to [`parse_creature_json`].
+///
+/// Refuses to write a widthless creature: `input < 1` / `output < 1` return
+/// [`CreatureError::InvalidInputCount`] / [`CreatureError::InvalidOutputCount`]
+/// (Issue #550).
 pub fn creature_to_json(creature: &CreatureExport) -> Result<String, CreatureError> {
+    validate_creature_width(creature)?;
     Ok(serde_json::to_string(creature)?)
 }
 
-/// Pretty-printed variant of [`creature_to_json`].
+/// Pretty-printed variant of [`creature_to_json`]; applies the same width check.
 pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, CreatureError> {
+    validate_creature_width(creature)?;
     Ok(serde_json::to_string_pretty(creature)?)
 }
 
@@ -314,7 +401,14 @@ pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, Crea
 /// 2. Maps neuron UUIDs to their indices
 /// 3. Resolves synapse UUID references to index-based connections
 /// 4. Maps squash function names and synapse type strings to enum values
+///
+/// The observation-width contract ([`validate_creature_width`]) is checked
+/// before anything else, so a hand-built `CreatureExport { input: 0, .. }`
+/// fails exactly as loudly as one that came through [`parse_creature_json`]
+/// (Issue #550).
 pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, CreatureError> {
+    validate_creature_width(creature)?;
+
     let num_inputs = creature.input;
     let num_outputs = creature.output;
 
