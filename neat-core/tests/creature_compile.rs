@@ -708,8 +708,10 @@ fn compile_creature_rejects_too_many_nodes() {
     use neat_core::network::MAX_NODE_COUNT;
     use neat_core::{CreatureError, CreatureExport, NeuronExport};
 
-    // One node over the limit, all hidden so the output count stays 0.
-    let neurons = (0..=MAX_NODE_COUNT)
+    // One node over the limit: 1 input + (MAX_NODE_COUNT - 1) hidden + 1 output
+    // = MAX_NODE_COUNT + 1 nodes. Widths are >= 1 so the Issue #550 width
+    // check passes and the only rejection left is the node-count guard.
+    let mut neurons: Vec<NeuronExport> = (0..MAX_NODE_COUNT - 1)
         .map(|i| NeuronExport {
             neuron_type: "hidden".to_string(),
             uuid: format!("n{i}"),
@@ -717,10 +719,16 @@ fn compile_creature_rejects_too_many_nodes() {
             squash: None,
         })
         .collect();
+    neurons.push(NeuronExport {
+        neuron_type: "output".to_string(),
+        uuid: "output-0".to_string(),
+        bias: 0.0,
+        squash: None,
+    });
 
     let creature = CreatureExport {
-        input: 0,
-        output: 0,
+        input: 1,
+        output: 1,
         neurons,
         synapses: Vec::new(),
         semantic_version: None,
