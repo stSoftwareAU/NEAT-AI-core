@@ -11,14 +11,26 @@ resolver = "2"
 # Issue #251: retro-bumped 0.1.46 -> 0.2.0 to signal the #177 breaking change
 # (SynapseData::from_index u32 -> u16). Pre-1.0, a breaking change is a
 # major-equivalent (minor) bump. See RELEASING.md.
-version = "0.9.6"
+version = "0.9.7"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
 
+# Issue #546 (fleet decision stSoftwareAU/VibeCoding#4159): dev builds compile
+# as fast as possible. `line-tables-only` keeps panic/backtrace file:line and
+# drops the rest of the DWARF; `opt-level = 0` and incremental stay at cargo's
+# dev defaults. Stable Rust only — no nightly flags.
+[profile.dev]
+debug = "line-tables-only"
+
+# Release builds produce the most optimised artefact possible; compile time is
+# irrelevant. Declared workspace-wide, not scoped to one package. No
+# `target-cpu=native` here: the wasm bundles and downstream consumers must stay
+# portable, and a library's profiles never reach a consumer anyway — each binary
+# crate carries its own (see README "Build profiles").
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"
 codegen-units = 1
 
 [profile.release.package."*"]

@@ -291,3 +291,9 @@ flowchart TD
     G --> H[release.yml:<br/>cut v&lt;version&gt; tag + GitHub release]
     H --> I[Downstream discovers the bump]
 ```
+
+A release ships **source**, not a compiled artefact: this repo's
+`[profile.release]` (`opt-level = 3`, `lto = "fat"`, `codegen-units = 1`) governs
+its own builds only, because cargo takes profiles from the crate being built. A
+consumer that wants the same optimisation must declare it in its own manifest —
+see [Build profiles](README.md#build-profiles-issue-546) in the README.

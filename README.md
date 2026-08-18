@@ -137,6 +137,48 @@ job on every push and pull request, so a syntax or type error fails the build.
 Basic validity only — it is not a style or lint gate, and it requires
 [Deno](https://docs.deno.com/runtime/getting_started/installation/).
 
+### Build profiles (Issue #546)
+
+Fleet decision (`stSoftwareAU/VibeCoding#4159`): **dev builds compile as fast as
+possible; release builds produce the most optimised artefact possible and
+compile time is irrelevant.** Stable Rust only — no nightly, no `-Zthreads`, no
+Cranelift. The root `Cargo.toml` carries both profiles workspace-wide:
+
+| Profile | Settings | Why |
+|---------|----------|-----|
+| `[profile.dev]` | `debug = "line-tables-only"` (plus cargo's defaults: `opt-level = 0`, incremental on) | Keeps panic and backtrace `file:line`, drops the rest of the DWARF. Measured here: rebuild after a one-line edit **1.87s → 1.50s**, clean `cargo build --workspace --all-targets` **8.37s → 6.72s**, `target/debug` **1.4G → 1.1G**. |
+| `[profile.release]` | `opt-level = 3`, `lto = "fat"`, `codegen-units = 1` | One codegen unit per crate with fat LTO across the whole graph — the most optimised artefact, whatever it costs to compile. |
+
+**Cargo profiles come from the crate being built.** `neat-core` is a library, so
+its `[profile.*]` tables govern only this workspace's own tests, benches and
+`cargo build --release` — they never reach a consumer. Every binary crate
+downstream (the scorer, the Lamarck and backpropagation consumers, the private
+trainer) must carry the same release settings in its own manifest, or it links
+`neat-core` unoptimised no matter what is written here.
+
+```mermaid
+flowchart LR
+    P["root Cargo.toml<br/>[profile.dev] + [profile.release]"] --> W["this workspace's builds<br/>tests, benches, release"]
+    P -. "never inherited" .-> C["consumer binary crate"]
+    C --> O["consumer's own [profile.release]<br/>+ its own target-cpu choice"]
+```
+
+**`-C target-cpu=native` is consumer-owned and deliberately absent here.**
+Recommended for a binary built and run on the same host (the fleet pattern:
+`cargo build --release` on the machine that runs the artefact); never for a
+published crate and never for the `wasm32`/`wasm64` bundles, which must stay
+portable. Stable Cargo has no per-profile rustflags, so a consumer sets it in
+its own `.cargo/config.toml` under a target-scoped key —
+`[target.'cfg(not(target_arch = "wasm32"))'] rustflags = ["-C", "target-cpu=native"]`
+— or in the build invocation's `RUSTFLAGS`; note that an exported `RUSTFLAGS`
+**replaces** config rustflags entirely rather than adding to them.
+
+`tests/scripts/rust_build_profiles.bats` is the gate: it asserts the manifest's
+values and then splices the live `[profile.*]` tables into a throwaway crate to
+check the flags **cargo itself** passes rustc (`-C debuginfo=line-tables-only`;
+`-C opt-level=3 -C lto=fat -C codegen-units=1`), and fails if any build input
+under `.cargo/`, `scripts/` or `.github/workflows/` pins `target-cpu=native`.
+
 ## Cargo features
 
 | Feature | Default | Effect |
