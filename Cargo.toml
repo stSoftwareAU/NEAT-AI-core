@@ -16,9 +16,21 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
 
+# Issue #546 (fleet decision stSoftwareAU/VibeCoding#4159): dev builds compile
+# as fast as possible. `line-tables-only` keeps panic/backtrace file:line and
+# drops the rest of the DWARF; `opt-level = 0` and incremental stay at cargo's
+# dev defaults. Stable Rust only — no nightly flags.
+[profile.dev]
+debug = "line-tables-only"
+
+# Release builds produce the most optimised artefact possible; compile time is
+# irrelevant. Declared workspace-wide, not scoped to one package. No
+# `target-cpu=native` here: the wasm bundles and downstream consumers must stay
+# portable, and a library's profiles never reach a consumer anyway — each binary
+# crate carries its own (see README "Build profiles").
 [profile.release]
 opt-level = 3
-lto = true
+lto = "fat"
 codegen-units = 1
 
 [profile.release.package."*"]

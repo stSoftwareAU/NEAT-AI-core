@@ -114,6 +114,20 @@ expressible, and the synthetic tests catch header-overrun and undercover cases.
 - **`training_bin_stream`** (`neat-core/src/training_bin_stream.rs`) — **one** chunked `.bin` scan API: pipelined double-buffer reads on native hosts, sequential `File::read` chunks on the wasm family (same `for_each_read_chunk` callback). Used by **NEAT-AI-scorer** for production-sized forward-only scoring.
 - Root **`Cargo.toml`** is a **virtual workspace**; **`[workspace.package].version`** is what the PR **auto-bump** job edits; **`neat-core`** uses `version.workspace = true`.
 
+## Build profiles (Issue #546)
+
+Root `Cargo.toml` owns both profiles, workspace-wide: `[profile.dev]` carries
+`debug = "line-tables-only"` (fast rebuilds, panic `file:line` kept) and
+`[profile.release]` carries `opt-level = 3`, `lto = "fat"`, `codegen-units = 1`
+(most optimised artefact, compile time irrelevant). Stable Rust only — no
+nightly profile flags. Never add `-C target-cpu=native` to this repo: the
+`wasm32`/`wasm64` bundles and downstream consumers must stay portable, and
+because cargo takes profiles from the **crate being built**, a library's
+`[profile.*]` never reaches a consumer — each binary crate carries its own
+settings and its own target-cpu choice.
+`tests/scripts/rust_build_profiles.bats` is the gate; the rationale and the
+measured dev-build numbers are in [README "Build profiles"](README.md#build-profiles-issue-546).
+
 ## Ownership fence (Issue #544)
 
 Native training is split across two FFI surfaces, and this crate owns exactly
