@@ -191,6 +191,23 @@ this you **must**:
 - **Add a state-leak regression test** asserting the reused-buffer path is
   byte-identical to the fresh-allocation path across differently-sized inputs.
 
+## One width check for creature JSON (Issue #550)
+
+`validate_creature_width` (`neat-core/src/creature.rs`) is the single home of
+the rule that a `CreatureExport` must declare `input >= 1` and `output >= 1`.
+`input` is the authoritative observation count and **cannot be re-derived from
+`neurons`** (input neurons are not listed there), so the rule is enforced at
+every boundary — `parse_creature_json` (after serde), `compile_creature`
+(before any other validation) and `creature_to_json` / `creature_to_json_pretty`
+(a widthless creature is never *written*) — with the typed
+`CreatureError::InvalidInputCount { found }` / `InvalidOutputCount { found }`.
+There is no `#[serde(default)]` on either field and there never will be: a
+missing key is a serde error, not a silent zero. Adding a new entry point that
+accepts or emits creature JSON means calling the helper there; do not re-inline
+the comparison. `neat-core/tests/creature_width_contract.rs` pins the rule at
+all four sites (each was mutation-checked individually — dropping any one call
+fails its own tests).
+
 ## One activation rule for single-record work (Issue #441)
 
 `neuron_activation_scalar` (`neat-core/src/batch_scoring.rs`) is the single home
