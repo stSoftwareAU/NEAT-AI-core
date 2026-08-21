@@ -42,10 +42,27 @@ synapse {i}` / `at neuron {i}` shapes and the `neuronWireLabelForDiagnostics`
 labels (`input-{index}`, `output-{outputIndex}`, else the UUID) — NEAT-AI's
 error-message tests read this text.
 
-`creature_validate` itself **still returns the loud #559 stub**. The neuron half
-is #560, and running half a rule set would certify creatures this crate has not
-fully checked — the failure the stub exists to prevent. Wiring is a one-line
-change once #560 lands.
+### Merged with Develop — the entry point is now wired
+
+#560 landed on `Develop` while this branch was open, so the merge brings both
+halves together and the #559 stub goes:
+
+- The synapse half now walks the **same** `NeuronView` / endpoint resolution the
+  neuron half added (`neuron_views`, `resolve_synapse_endpoints`), rather than
+  the parallel `ResolvedCreature` this branch carried while it was the only half
+  in the file. That matters beyond de-duplication: memetic matching is by neuron
+  id, and the shared view is what derives an id for an export that carries only
+  UUIDs.
+- `creature_validate` runs the neuron rules, then this half, and returns the
+  `ValidationStats` both filled — the condition its own doc set ("once **both**
+  halves exist") is met. Exposing it over WASM and replaying the conformance
+  corpus stays with #562.
+- The #559 contract test that pinned the stub is replaced by entry-point
+  coverage: a valid creature returns stats, and a creature broken by a
+  *synapse*-half rule still reports that failure through the entry point.
+- The dangling-endpoint message is `resolve_synapse_endpoints`' landed wording
+  (`synapse to {uuid} does not name a neuron`); this branch's test was updated
+  to it rather than the shared helper being forked to keep `toUUID`.
 
 ### Duplicate-synapse parity (#556)
 

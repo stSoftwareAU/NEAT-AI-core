@@ -369,7 +369,7 @@ fn a_synapse_endpoint_naming_no_neuron_is_an_invalid_reference() {
     assert_eq!(failure.reason, reason::INVALID_SYNAPSE_REFERENCE);
     assert_eq!(
         failure.message,
-        "2) synapse toUUID ghost does not name a neuron"
+        "2) synapse to ghost does not name a neuron"
     );
     assert_eq!(failure.synapse_index, Some(2));
 }
