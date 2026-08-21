@@ -588,6 +588,51 @@ flowchart LR
     F --> H["host-only checks<br/>identity, neuron.validate(), debugWrite"]
 ```
 
+#### Synapse, forward-only and memetic rules (Issue #561)
+
+Rules 23–31 of that table are ported and callable on their own:
+
+```rust
+pub fn validate_synapse_and_memetic_rules(
+    creature: &CreatureExport,
+    options: &ValidateOptions,
+    stats: &mut ValidationStats,
+) -> Result<(), ValidationFailure>;
+```
+
+`stats` is the same object the neuron walk fills — this half adds the
+connection tally and leaves the neuron counters alone, exactly as the
+TypeScript threads one `stats` literal through both halves. It evaluates, first
+failure wins: the single synapse pass (no synapse into an input neuron; no self
+connection under `forward_only`; sorted by `(from, to)`; no duplicate pair; no
+`from > to` when `feedback_loop` is an explicit `Some(false)`), then the
+`connections` count, then — for a forward-only creature — `topology_ops`'
+`validate_topology`, `validate_structural_integrity` and `detect_cycles`, and
+finally the memetic cross-references.
+
+Two details a caller can trip over:
+
+- **`feedback_loop` is a tri-state.** `None` and `Some(true)` both allow a
+  recursive synapse; only `Some(false)` rejects one, and `forward_only: true`
+  forces that `Some(false)` whatever the caller asked for.
+- **Memetic entries match on neuron id, not index.** The synapse set is built
+  from `neurons[s.from].id -> neurons[s.to].id`, so a creature whose ids differ
+  from its positions still resolves.
+
+`creature_validate` does **not** call this yet: rules 1–22 are Issue #560, and
+running half a rule set would certify creatures this crate has not fully
+checked.
+
+```mermaid
+flowchart LR
+    W["synapse walk<br/>rules 23–27"] --> N["connections count<br/>rule 28"]
+    N --> FO{"forward_only?"}
+    FO -- yes --> T["topology_ops<br/>validate_topology →<br/>validate_structural_integrity →<br/>detect_cycles"]
+    FO -- no --> M["memetic rules<br/>rule 31"]
+    T --> M
+    M --> S["Ok(()) — stats.connections tallied"]
+```
+
 ## Related Repositories
 
 The NEAT-AI project is split across seven public repositories. Each focuses on one concern and composes with the others as shown below.

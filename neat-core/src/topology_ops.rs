@@ -76,6 +76,43 @@ pub const STRUCTURAL_IF_MISSING_NEGATIVE: i32 = 9;
 /// `memory access out of bounds` trap on malformed input.
 pub const STRUCTURAL_MALFORMED_BUFFER: i32 = 10;
 
+/// Human-readable label for a topology error code (Issue #561).
+///
+/// The Rust twin of NEAT-AI `src/wasm/TopologyErrorMessages.ts`
+/// (`topologyErrorMessage`), kept beside the codes it mirrors so the label and
+/// the constant cannot drift apart. An unrecognised code names itself rather
+/// than collapsing to "unknown".
+pub fn topology_error_message(error_code: i32) -> String {
+    match error_code {
+        SELF_CONNECTION => "Self-connection".to_string(),
+        BACKWARD_CONNECTION => "Backward connection".to_string(),
+        SORT_ERROR_FROM => "From indices not sorted".to_string(),
+        SORT_ERROR_TO => "To indices not sorted".to_string(),
+        DUPLICATE_CONNECTION => "Duplicate connection".to_string(),
+        MALFORMED_BUFFER => "Malformed input buffers".to_string(),
+        other => format!("unrecognised topology error code {other}"),
+    }
+}
+
+/// Human-readable label for a structural integrity error code (Issue #561).
+///
+/// The Rust twin of `structuralErrorMessage` — see [`topology_error_message`].
+pub fn structural_error_message(error_code: i32) -> String {
+    match error_code {
+        STRUCTURAL_SYNAPSE_TARGETS_INPUT => "Synapse targets input neuron".to_string(),
+        STRUCTURAL_CONSTANT_HAS_INWARD => "Constant neuron has inward connections".to_string(),
+        STRUCTURAL_HIDDEN_NO_INWARD => "Hidden neuron has no inward connections".to_string(),
+        STRUCTURAL_HIDDEN_NO_OUTWARD => "Hidden neuron has no outward connections".to_string(),
+        STRUCTURAL_BIAS_NOT_FINITE => "Non-finite bias".to_string(),
+        STRUCTURAL_IF_TOO_FEW_INWARD => "IF neuron has too few inward connections".to_string(),
+        STRUCTURAL_IF_MISSING_CONDITION => "IF neuron missing condition synapse".to_string(),
+        STRUCTURAL_IF_MISSING_POSITIVE => "IF neuron missing positive synapse".to_string(),
+        STRUCTURAL_IF_MISSING_NEGATIVE => "IF neuron missing negative synapse".to_string(),
+        STRUCTURAL_MALFORMED_BUFFER => "Malformed structural input buffers".to_string(),
+        other => format!("unrecognised structural error code {other}"),
+    }
+}
+
 /// Squash-type code for IF neurons — resolved from [`SquashType::If`].
 const IF_SQUASH: u8 = SquashType::If as u8;
 /// Synapse-type codes — resolved from [`SynapseType`] discriminants.
