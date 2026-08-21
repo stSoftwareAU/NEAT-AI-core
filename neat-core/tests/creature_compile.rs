@@ -717,6 +717,7 @@ fn compile_creature_rejects_too_many_nodes() {
     // check passes and the only rejection left is the node-count guard.
     let mut neurons: Vec<NeuronExport> = (0..MAX_NODE_COUNT - 1)
         .map(|i| NeuronExport {
+            id: None,
             neuron_type: "hidden".to_string(),
             uuid: format!("n{i}"),
             bias: 0.0,
@@ -724,6 +725,7 @@ fn compile_creature_rejects_too_many_nodes() {
         })
         .collect();
     neurons.push(NeuronExport {
+        id: None,
         neuron_type: "output".to_string(),
         uuid: "output-0".to_string(),
         bias: 0.0,
@@ -731,6 +733,7 @@ fn compile_creature_rejects_too_many_nodes() {
     });
 
     let creature = CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons,

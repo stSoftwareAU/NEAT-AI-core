@@ -29,6 +29,7 @@ fn synapse(from: &str, to: &str, weight: f64, synapse_type: Option<&str>) -> Syn
 
 fn neuron(neuron_type: &str, uuid: &str, bias: f64, squash: &str) -> NeuronExport {
     NeuronExport {
+        id: None,
         neuron_type: neuron_type.to_string(),
         uuid: uuid.to_string(),
         bias,
@@ -44,6 +45,7 @@ fn neuron(neuron_type: &str, uuid: &str, bias: f64, squash: &str) -> NeuronExpor
 /// trustworthy, so the creature must not compile.
 fn if_triple_from_one_constant() -> CreatureExport {
     CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons: vec![
@@ -179,6 +181,7 @@ fn compile_accepts_an_if_neuron_fed_by_three_distinct_constants() {
     // The canonical IF shape the duplicate repro was a corruption of: one
     // constant per branch, so the three pairs are distinct.
     let creature = CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons: vec![
