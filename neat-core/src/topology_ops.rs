@@ -20,6 +20,11 @@ use wasm_bindgen::prelude::*;
 
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
+// Issue #560 — the wiring invariants this module shares with
+// `creature_validate` have one home; see `topology_invariants`.
+use crate::topology_invariants::{
+    ConnectionIndex, IfFault, IfRoles, WiringFault, hidden_wiring_fault, if_neuron_fault,
+};
 
 // ===========================================================================
 // Topology validation error codes — must match TypeScript constants
@@ -115,10 +120,19 @@ pub fn structural_error_message(error_code: i32) -> String {
 
 /// Squash-type code for IF neurons — resolved from [`SquashType::If`].
 const IF_SQUASH: u8 = SquashType::If as u8;
+
 /// Synapse-type codes — resolved from [`SynapseType`] discriminants.
+///
+/// Test-only since Issue #560: the IF-role tally reads the wire codes through
+/// [`SynapseType::from`] rather than comparing them one by one, so these names
+/// survive only to keep the fixtures below readable.
+#[cfg(test)]
 const SYN_STANDARD: u8 = SynapseType::Standard as u8;
+#[cfg(test)]
 const SYN_CONDITION: u8 = SynapseType::Condition as u8;
+#[cfg(test)]
 const SYN_NEGATIVE: u8 = SynapseType::Negative as u8;
+#[cfg(test)]
 const SYN_POSITIVE: u8 = SynapseType::Positive as u8;
 
 /// Validate topology synapse ordering and forward-only constraints.
@@ -591,19 +605,7 @@ pub fn validate_structural_integrity(
         }
     }
 
-    let mut inward_count = vec![0u32; num_neurons];
-    let mut outward_count = vec![0u32; num_neurons];
-
-    for i in 0..num_synapses {
-        let from = from_indices[i] as usize;
-        let to = to_indices[i] as usize;
-        if from < num_neurons {
-            outward_count[from] += 1;
-        }
-        if to < num_neurons {
-            inward_count[to] += 1;
-        }
-    }
+    let connections = ConnectionIndex::build(from_indices, to_indices, num_neurons);
 
     let output_start = num_neurons - output_count;
 
@@ -619,56 +621,51 @@ pub fn validate_structural_integrity(
         }
 
         if is_const {
-            if inward_count[i] > 0 {
+            if connections.inward_count(i) > 0 {
                 return vec![STRUCTURAL_CONSTANT_HAS_INWARD, i as i32];
             }
             continue;
         }
 
         if !is_output {
-            if inward_count[i] == 0 {
-                return vec![STRUCTURAL_HIDDEN_NO_INWARD, i as i32];
-            }
-            if outward_count[i] == 0 {
-                return vec![STRUCTURAL_HIDDEN_NO_OUTWARD, i as i32];
+            let fault =
+                hidden_wiring_fault(connections.inward_count(i), connections.outward_count(i));
+            match fault {
+                Some(WiringFault::NoInward) => {
+                    return vec![STRUCTURAL_HIDDEN_NO_INWARD, i as i32];
+                }
+                Some(WiringFault::NoOutward) => {
+                    return vec![STRUCTURAL_HIDDEN_NO_OUTWARD, i as i32];
+                }
+                None => {}
             }
         }
 
         if i < squash_types.len() && squash_types[i] == IF_SQUASH {
-            if inward_count[i] < 3 {
-                return vec![STRUCTURAL_IF_TOO_FEW_INWARD, i as i32];
-            }
+            let inward = connections.inward_synapses(i);
+            // A synapse index past `synapse_types` carries no role at all —
+            // unlike an absent JSON `type`, which reads as positive.
+            let roles = IfRoles::tally(inward.iter().filter_map(|s| {
+                synapse_types
+                    .get(*s as usize)
+                    .copied()
+                    .map(SynapseType::from)
+            }));
 
-            let mut has_condition = false;
-            let mut has_positive = false;
-            let mut has_negative = false;
-
-            for s in 0..num_synapses {
-                if to_indices[s] as usize != i {
-                    continue;
+            match if_neuron_fault(inward.len(), roles) {
+                Some(IfFault::TooFewInward { .. }) => {
+                    return vec![STRUCTURAL_IF_TOO_FEW_INWARD, i as i32];
                 }
-                if s < synapse_types.len() {
-                    let st = synapse_types[s];
-                    if st == SYN_CONDITION {
-                        has_condition = true;
-                    }
-                    if st == SYN_POSITIVE || st == SYN_STANDARD {
-                        has_positive = true;
-                    }
-                    if st == SYN_NEGATIVE {
-                        has_negative = true;
-                    }
+                Some(IfFault::MissingCondition) => {
+                    return vec![STRUCTURAL_IF_MISSING_CONDITION, i as i32];
                 }
-            }
-
-            if !has_condition {
-                return vec![STRUCTURAL_IF_MISSING_CONDITION, i as i32];
-            }
-            if !has_positive {
-                return vec![STRUCTURAL_IF_MISSING_POSITIVE, i as i32];
-            }
-            if !has_negative {
-                return vec![STRUCTURAL_IF_MISSING_NEGATIVE, i as i32];
+                Some(IfFault::MissingPositive) => {
+                    return vec![STRUCTURAL_IF_MISSING_POSITIVE, i as i32];
+                }
+                Some(IfFault::MissingNegative) => {
+                    return vec![STRUCTURAL_IF_MISSING_NEGATIVE, i as i32];
+                }
+                None => {}
             }
         }
     }
@@ -769,12 +766,23 @@ mod tests {
         assert_eq!(IF_SQUASH, 34);
     }
 
+    /// The wire codes and the enum the IF-role tally reads must agree in both
+    /// directions, since the tally now converts rather than compares.
     #[test]
-    fn synapse_type_constants_match_enum() {
-        assert_eq!(SYN_STANDARD, SynapseType::Standard as u8);
-        assert_eq!(SYN_CONDITION, SynapseType::Condition as u8);
-        assert_eq!(SYN_NEGATIVE, SynapseType::Negative as u8);
-        assert_eq!(SYN_POSITIVE, SynapseType::Positive as u8);
+    fn synapse_type_codes_round_trip_through_the_enum() {
+        for expected in [
+            SynapseType::Standard,
+            SynapseType::Condition,
+            SynapseType::Negative,
+            SynapseType::Positive,
+        ] {
+            assert_eq!(SynapseType::from(expected as u8), expected);
+        }
+
+        assert_eq!(SYN_STANDARD, 0);
+        assert_eq!(SYN_CONDITION, 1);
+        assert_eq!(SYN_NEGATIVE, 2);
+        assert_eq!(SYN_POSITIVE, 3);
     }
 
     // -----------------------------------------------------------------------
