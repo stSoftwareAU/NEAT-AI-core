@@ -34,11 +34,20 @@
 //! a missing key is a serde error, a zero is a typed error, and neither is
 //! ever written back out.
 //!
+//! **Duplicate-synapse rule (Issue #556).** NEAT-AI's TypeScript loader keys
+//! synapses by `(fromUUID, toUUID)` and keeps only one copy of a repeated
+//! pair, so a creature carrying the same pair twice scored differently under
+//! the two engines — this crate applied and summed every copy.
+//! [`validate_no_duplicate_synapses`] is the single home of that rule and
+//! [`compile_creature`] calls it, failing closed with
+//! [`CreatureError::DuplicateSynapse`] rather than producing a number
+//! TypeScript would never agree with.
+//!
 //! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
-//! #550 (observation-width contract).
+//! #550 (observation-width contract), #556 (duplicate-synapse rule).
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::loss::MSE_TILE_LANES;
 use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData, hot_synapse_soa};
@@ -157,6 +166,20 @@ pub enum CreatureError {
         /// The `output` value that was found.
         found: usize,
     },
+    /// Two or more synapses shared the same `(fromUUID, toUUID)` pair (Issue #556).
+    ///
+    /// NEAT-AI's TypeScript loader keys synapses by that pair and keeps only
+    /// one, while this crate would apply every copy — the same JSON then
+    /// scores differently under the two engines. Which copy TypeScript keeps
+    /// depends on its map insertion order, so there is no value Rust could
+    /// safely reproduce: [`validate_no_duplicate_synapses`] fails closed
+    /// instead.
+    DuplicateSynapse {
+        /// `fromUUID` of the repeated pair.
+        from_uuid: String,
+        /// `toUUID` of the repeated pair.
+        to_uuid: String,
+    },
 }
 
 impl std::fmt::Display for CreatureError {
@@ -183,6 +206,9 @@ impl std::fmt::Display for CreatureError {
             }
             CreatureError::InvalidOutputCount { found } => {
                 write!(f, "Must have at least one output neurons was: {found}")
+            }
+            CreatureError::DuplicateSynapse { from_uuid, to_uuid } => {
+                write!(f, "Duplicate synapse from {from_uuid} to {to_uuid}")
             }
         }
     }
@@ -361,6 +387,36 @@ pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), Creature
     Ok(())
 }
 
+/// Reject a creature carrying the same `(fromUUID, toUUID)` pair twice.
+///
+/// NEAT-AI's TypeScript loader keys synapses by that pair, so only one copy
+/// survives the load; this crate resolves each synapse independently and would
+/// apply — and sum — all of them. The same JSON then scores differently under
+/// the two engines (Issue #556: `rust_scorer` 0.356183 against
+/// `Creature.scoreDir` 0.353147 on a production-shaped creature).
+///
+/// Which copy TypeScript keeps falls out of its map insertion order, so there
+/// is no value this crate could reproduce and no safe way to dedupe. The rule
+/// is therefore to fail closed with [`CreatureError::DuplicateSynapse`],
+/// naming the first pair that repeats in declaration order.
+///
+/// [`compile_creature`] calls this before building the network. Consumers that
+/// assemble a [`CreatureExport`] in Rust, or feed one straight into their own
+/// scorer, should call it at their own boundary.
+pub fn validate_no_duplicate_synapses(creature: &CreatureExport) -> Result<(), CreatureError> {
+    let mut seen: HashSet<(&str, &str)> = HashSet::with_capacity(creature.synapses.len());
+    for synapse in &creature.synapses {
+        let pair = (synapse.from_uuid.as_str(), synapse.to_uuid.as_str());
+        if !seen.insert(pair) {
+            return Err(CreatureError::DuplicateSynapse {
+                from_uuid: synapse.from_uuid.clone(),
+                to_uuid: synapse.to_uuid.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Parse a creature JSON string into a `CreatureExport` struct.
 ///
 /// After serde deserialisation the result is passed through
@@ -405,9 +461,12 @@ pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, Crea
 /// The observation-width contract ([`validate_creature_width`]) is checked
 /// before anything else, so a hand-built `CreatureExport { input: 0, .. }`
 /// fails exactly as loudly as one that came through [`parse_creature_json`]
-/// (Issue #550).
+/// (Issue #550). A repeated `(fromUUID, toUUID)` pair is then rejected by
+/// [`validate_no_duplicate_synapses`] rather than summed, because TypeScript
+/// keeps only one copy of it (Issue #556).
 pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, CreatureError> {
     validate_creature_width(creature)?;
+    validate_no_duplicate_synapses(creature)?;
 
     let num_inputs = creature.input;
     let num_outputs = creature.output;

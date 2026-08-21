@@ -59,6 +59,7 @@ pub use creature::{
     CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature, creature_to_json,
     creature_to_json_pretty, parse_creature_json, parse_squash_name, parse_synapse_type,
     squash_name_from, synapse_type_name_from, validate_creature_width,
+    validate_no_duplicate_synapses,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
 pub use squash::SquashType;

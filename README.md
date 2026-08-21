@@ -434,6 +434,39 @@ flowchart LR
     S -. "input &lt; 1 / output &lt; 1" .-> X
 ```
 
+### Duplicate `(fromUUID, toUUID)` synapses are rejected (Issue #556)
+
+NEAT-AI's TypeScript loader keys synapses by the `(fromUUID, toUUID)` pair, so
+a creature carrying that pair twice loses every copy but one before it is
+scored. `compile_creature` used to resolve each synapse independently and
+**sum** them, so the same JSON scored differently under the two engines —
+observed in production as `rust_scorer` 0.356183 against `Creature.scoreDir`
+0.353147, with the minimal repro an `IF` neuron fed three times (condition /
+positive / negative) by one constant neuron.
+
+Which copy TypeScript keeps falls out of its map insertion order, so there is
+no value this crate could reproduce and no safe way to dedupe.
+`validate_no_duplicate_synapses` is the single home of the rule and
+`compile_creature` calls it right after `validate_creature_width`: a repeated
+pair is `CreatureError::DuplicateSynapse { from_uuid, to_uuid }`, naming the
+first pair that repeats in declaration order. Distinct pairs that share one
+endpoint — fan-out from a source, fan-in to a target — are untouched.
+
+Consumers that assemble a `CreatureExport` in Rust rather than parsing one
+should call `validate_no_duplicate_synapses` at their own boundary
+(NEAT-AI-Forests already guards this itself).
+
+```mermaid
+flowchart LR
+    J["creature JSON<br/>same (from, to) twice"] --> T["NEAT-AI TypeScript<br/>keyed by (from, to)"]
+    J --> R["compile_creature"]
+    T --> K["keeps one copy<br/>insertion-order dependent"]
+    R --> V["validate_no_duplicate_synapses"]
+    V -. "repeated pair" .-> X["Err(DuplicateSynapse)<br/>fail closed"]
+    V --> C["CompiledNetwork<br/>every pair distinct"]
+    K -. "divergent score" .-> X
+```
+
 ## Related Repositories
 
 The NEAT-AI project is split across seven public repositories. Each focuses on one concern and composes with the others as shown below.
