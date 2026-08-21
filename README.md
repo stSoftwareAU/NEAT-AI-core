@@ -574,9 +574,9 @@ failure's neuron/synapse index is what lets the host run those against the same
 neuron the shared rules stopped on.
 
 Both halves of the table are ported, so `creature_validate` evaluates every
-rule and returns `ValidationStats` for a creature that breaks none of them.
-Exposing it over the WASM boundary and replaying the TypeScript conformance
-corpus is Issue #562.
+rule and returns `ValidationStats` for a creature that breaks none of them. It
+is reachable natively and over the WASM boundary, and replayed against the
+TypeScript conformance corpus — Issue #562, below.
 
 ### Neuron rules ported (Issue #560)
 
@@ -674,6 +674,84 @@ flowchart LR
     T --> M
     M --> S["Ok(()) — stats.connections tallied"]
 ```
+
+#### Both consumers, and conformance (Issue #562)
+
+The ported rules are now reachable by both consumer kinds, and proven to agree
+with the TypeScript they replace.
+
+**Rust consumers** call `creature_validate` straight off the crate root
+(NEAT-AI-Forests and friends); the entry point carries worked doctests for a
+valid creature and a rejected one, and `cargo test --doc` is part of the gate.
+
+**NEAT-AI** calls the same code over the WASM boundary as
+`creature_validate(request: string) -> string`. The ABI is **JSON in, JSON
+out** — the existing exports split between packed byte buffers
+(`propagate_topological`) and scalar arguments, and neither fits a whole
+creature in and a structured failure out:
+
+```jsonc
+// in
+{ "creature": { /* CreatureExport */ },
+  "options": { "neurons": 3, "connections": 2, "feedbackLoop": false, "forwardOnly": true } }
+
+// out — one of
+{ "ok": true,  "stats": { "input": 1, "constant": 0, "hidden": 1, "output": 1, "connections": 2 } }
+{ "ok": false, "failure": { "class": "ValidationError", "reason": "NO_INWARD_CONNECTIONS",
+                            "message": "hidden neuron h1 has no inward connections",
+                            "neuronIndex": 1, "synapseIndex": null, "malformed": false } }
+```
+
+Keys the creature carries beyond `CreatureExport` are ignored, but an **unknown
+option key is a failure** — silently ignoring `forwardonly` would validate a
+production creature under the wrong rules and call it healthy. The creature is
+deserialised with serde alone, deliberately not through `parse_creature_json`,
+whose width check would shadow rules 2 and 3.
+
+**Malformed input cannot panic.** A panic in WASM aborts the module and
+`catch_unwind` is unavailable there, so the boundary is built not to panic:
+anything that is not a request comes back as an ordinary structured failure
+carrying `"malformed": true` and a `MALFORMED_REQUEST:` message — the JSON twin
+of `topology_ops`' `MALFORMED_BUFFER`. Two faults are refused before a rule
+runs: a payload serde cannot read, and a creature declaring more than
+`MAX_REQUEST_NEURONS` neurons (the ceiling `compile_creature` already enforces),
+because the walk allocates one entry per neuron before the first rule. The whole
+ABI lives in `neat-core/src/creature_validate_json.rs`, so it is covered by
+`cargo test` rather than only in a browser; `wasm_exports.rs` is a rename over
+it.
+
+```mermaid
+flowchart LR
+    JS["NEAT-AI TypeScript"] -->|request JSON| W["wasm_exports<br/>creature_validate"]
+    RS["Rust consumers"] -->|CreatureExport| V["creature_validate"]
+    W --> J["creature_validate_json"]
+    J -->|"not a request,<br/>or too many neurons"| MF["failure<br/>malformed: true"]
+    J --> V
+    V -->|"Ok(stats)"| OK["ok: true + stats"]
+    V -->|"Err(failure)"| ERR["ok: false + class,<br/>reason, message, indices"]
+```
+
+**Conformance.** NEAT-AI's language-neutral corpus (NEAT-AI#3801) is vendored
+under `neat-core/tests/fixtures/creature_validate/` — bytes, source commit and
+checksums recorded there — and replayed by
+`neat-core/tests/creature_validate_conformance.rs`. Every replayed case must
+produce the same error class, the same `reason` and the same message text; the
+happy paths must produce the same five counters.
+
+Ten of the 47 cases describe something the wire shape cannot express, all of
+them consequences of the input format Issue #559 fixed rather than of a rule
+that was dropped: a non-integer count or id serde rejects at the parse
+boundary, an input neuron carrying its own id (inputs are implicit), an output
+neuron's declared id (ids are derived), and the host-only `neuron.index` check.
+None is skipped — each is declared in the runner with why it diverges *and*
+what this crate does instead, and that behaviour is asserted too, so a stale
+declaration or a changed outcome fails the test.
+
+**What stays host-side** is unchanged: `neuron.creature !== creature`,
+`neuron.index`, `neuron.validate()` and the `debugWrite` diagnostics dump all
+read JavaScript object identity or the host filesystem. The failure's
+`neuronIndex` / `synapseIndex` is what lets NEAT-AI run those against the same
+neuron the shared rules stopped on.
 
 ## Related Repositories
 
