@@ -40,6 +40,7 @@ pub mod squash_simd;
 pub mod synapse_type;
 pub mod topological_backprop;
 pub mod topology_export;
+pub mod topology_invariants;
 pub mod topology_ops;
 pub mod training_bin_stream;
 pub mod training_data;

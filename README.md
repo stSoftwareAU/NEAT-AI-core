@@ -573,10 +573,54 @@ dump all depend on JavaScript object identity or the host filesystem. The
 failure's neuron/synapse index is what lets the host run those against the same
 neuron the shared rules stopped on.
 
-Until the rule bodies land, `creature_validate` returns a
+Until *all* the rule bodies land, `creature_validate` returns a
 `Validation` / `OTHER` failure saying so rather than an empty `Ok`: an
 unconditional `Ok` would report the very creature this work exists to catch as
 valid.
+
+### Neuron rules ported (Issue #560)
+
+Rules 1–22 — everything `CreatureValidate.ts` evaluates before its synapse walk
+— now run in Rust, in the TypeScript's own order, with the message text
+reproduced verbatim so NEAT-AI's error-message tests keep passing across the
+boundary. Rules 23–31 (synapses, `forwardOnly`, memetic) are Issue #561, so the
+entry point runs the neuron half and then still reports the un-ported half.
+
+Two derivations make the port work on the index-free, id-optional export form:
+
+| Derivation | Rule |
+|------------|------|
+| Indices — `0..input` are the implicit input neurons, `input + i` is `neurons[i]` (as `compile_creature` derives them) | the walk position every rule reads |
+| Ids — input `= index`, output `= -(outputIndex + 1)`, everything else its exported `id` or a deterministic hash of its UUID | rules 4–7, mirroring NEAT-AI's loader, which assigns ids *before* `creatureValidate` runs |
+
+Without the id derivation every modern export — NEAT-AI writes UUIDs, not ids —
+would fail rule 4. Because inputs and outputs take derived ids, rules 7, 10 and
+21 cannot fail for a `CreatureExport`, and rule 19 is unreachable in both stacks
+behind rule 8; all four are ported and covered anyway so the two files stay
+line-for-line comparable.
+
+**One implementation per invariant.** `creature_validate` and
+`validate_structural_integrity` ask the same wiring questions but answer them
+differently — a TypeScript message here, a numeric code and neuron index there —
+so neither can call the other. What they share now lives in
+`neat-core/src/topology_invariants.rs`: `ConnectionIndex` (inward/outward degree
+and the inward synapse list, built once in `O(neurons + synapses)` so no caller
+rescans the synapse list per neuron), `hidden_wiring_fault` and
+`if_neuron_fault`. Mutating any of the three fails tests on **both** sides.
+
+```mermaid
+flowchart TD
+    CE["CreatureExport"] --> D["derive indices + ids"]
+    D --> W["neuron walk<br/>rules 1-22"]
+    D --> CI["ConnectionIndex"]
+    CI --> W
+    CI --> VSI["validate_structural_integrity"]
+    SI["topology_invariants<br/>hidden_wiring_fault / if_neuron_fault"] --> W
+    SI --> VSI
+    W -->|"first violated rule"| F["Err(ValidationFailure)<br/>TypeScript message"]
+    VSI -->|"first violated rule"| C["[code, neuron index]"]
+    W -->|"rules 1-22 pass"| N["Err — rules 23-31 not ported (#561)"]
+```
 
 ```mermaid
 flowchart LR
