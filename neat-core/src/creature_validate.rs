@@ -7,11 +7,12 @@
 //! both stacks read — Rust consumers call [`creature_validate`] natively, and
 //! NEAT-AI calls the same code over the existing WASM boundary.
 //!
-//! **Rules 1–22 — the neuron half — are ported** (Issue #560). The synapse,
-//! forward-only and memetic rules (23–31) are Issue #561, so
-//! [`creature_validate`] still refuses to certify any creature: it runs every
-//! neuron rule and then reports the un-ported half rather than returning an
-//! `Ok` it cannot stand behind. See [the entry point](creature_validate).
+//! **Every rule is ported.** Rules 1–22, the neuron half, landed with Issue
+//! #560; rules 23–31 — the synapse walk, the forward-only leg and the memetic
+//! cross-references — land with Issue #561, so [`creature_validate`] now
+//! evaluates the whole table and returns [`ValidationStats`] for a creature
+//! that breaks none of it. Exposing it over the WASM boundary and proving
+//! conformance against the TypeScript corpus is Issue #562.
 //!
 //! # Options
 //!
@@ -162,6 +163,28 @@
 //! code and a neuron index there, the TypeScript message here), so neither
 //! calls the other; what they share is the logic, not the answer.
 //!
+//! # The synapse half (Issue #561)
+//!
+//! [`validate_synapse_and_memetic_rules`] is rules 23–31. Two things about it
+//! are worth knowing before reading the code:
+//!
+//! - **The forward-only leg reuses [`crate::topology_ops`]** —
+//!   `validate_topology`, `validate_structural_integrity` and `detect_cycles`
+//!   — rather than restating any of those invariants, and keeps the
+//!   TypeScript's `WASM ... at synapse {i}` / `at neuron {i}` message shapes so
+//!   NEAT-AI's `TopologyErrorMessages.ts` labels still line up.
+//! - **Memetic entries match on neuron id, not index** — the synapse set is
+//!   built from `views[from].id -> views[to].id`, using the same derived ids as
+//!   the table above, exactly as the TypeScript builds it.
+//!
+//! Rule 26 only catches duplicates that are *adjacent* after sorting, which is
+//! sufficient here but not for the same reason as Issue #556: a duplicate that
+//! is separated by another pair necessarily creates the sort regression rule 25
+//! stops on first, so the creature is still rejected — under `SORT_FAILURE`
+//! rather than `INVALID_CONNECTION`. Nothing slips through either path;
+//! [`crate::validate_no_duplicate_synapses`] is order-independent and rejects
+//! it too.
+//!
 //! # What stays host-side (NEAT-AI#3802)
 //!
 //! These checks depend on JavaScript object identity or on the host
@@ -183,10 +206,14 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::creature::{CreatureExport, parse_synapse_type};
+use crate::creature::{CreatureExport, MemeticExport, parse_squash_name, parse_synapse_type};
 use crate::synapse_type::SynapseType;
 use crate::topology_invariants::{
     ConnectionIndex, IfFault, IfRoles, WiringFault, hidden_wiring_fault, if_neuron_fault,
+};
+use crate::topology_ops::{
+    STRUCTURAL_VALID, VALID, detect_cycles, structural_error_message, topology_error_message,
+    validate_structural_integrity, validate_topology,
 };
 
 /// Largest neuron id NEAT-AI accepts — `int32` max, mirroring
@@ -534,15 +561,9 @@ impl ValidateOptions {
 /// First failure wins: the first violated rule is returned and no later rule
 /// runs, matching the TypeScript `throw`.
 ///
-/// # Half ported (Issue #560)
-///
-/// Rules 1–22, the neuron half, run and report exactly as the TypeScript does.
-/// Rules 23–31 — the synapse walk, the forward-only checks and the memetic
-/// block — are Issue #561, so a creature that breaks none of the neuron rules
-/// still comes back as a [`FailureClass::Validation`] / [`reason::OTHER`]
-/// failure saying which half is missing, rather than as an `Ok` this build
-/// cannot stand behind. A consumer wiring the entry point up early fails
-/// loudly instead of certifying the invalid creature this work exists to catch.
+/// Both halves run, in the TypeScript's order: the neuron rules 1–22 (Issue
+/// #560) fill the neuron counters, then the synapse, forward-only and memetic
+/// rules 23–31 (Issue #561) add [`ValidationStats::connections`].
 ///
 /// # Errors
 ///
@@ -551,19 +572,17 @@ pub fn creature_validate(
     creature: &CreatureExport,
     options: &ValidateOptions,
 ) -> Result<ValidationStats, ValidationFailure> {
-    let _stats = validate_neuron_rules(creature, options)?;
+    let mut stats = validate_neuron_rules(creature, options)?;
+    validate_synapse_and_memetic_rules(creature, options, &mut stats)?;
 
-    Err(ValidationFailure::validation(
-        reason::OTHER,
-        "creature_validate synapse, forward-only and memetic rule bodies are not \
-         ported yet (Issue #561): no creature can be certified valid by this build",
-    ))
+    Ok(stats)
 }
 
 /// Rules 1–22 — everything the TypeScript evaluates before it reaches
 /// `creature.synapses.forEach` (Issue #560).
 ///
-/// `stats.connections` stays `0`: the synapse walk that fills it is Issue #561.
+/// `stats.connections` stays `0`: [`validate_synapse_and_memetic_rules`] is
+/// what fills it.
 fn validate_neuron_rules(
     creature: &CreatureExport,
     options: &ValidateOptions,
@@ -1090,6 +1109,321 @@ fn hidden_bias_failure(id: i64, bias: Option<f64>) -> Option<ValidationFailure> 
         ));
     }
     None
+}
+
+// ===========================================================================
+// Issue #561 — the synapse, forward-only and memetic half.
+// ===========================================================================
+
+/// Rules 23–27: a single pass over the synapses, tallying
+/// [`ValidationStats::connections`].
+fn synapse_walk(
+    views: &[NeuronView<'_>],
+    from_indices: &[u32],
+    to_indices: &[u32],
+    options: &ValidateOptions,
+    stats: &mut ValidationStats,
+) -> Result<(), ValidationFailure> {
+    let mut last_from: i64 = -1;
+    let mut last_to: i64 = -1;
+
+    for (index, (&from_index, &to_index)) in from_indices.iter().zip(to_indices).enumerate() {
+        stats.connections += 1;
+        let synapse_index = index as u32;
+        let label = |at: u32| views[at as usize].wire_label(at as usize);
+
+        if views[to_index as usize].kind == NeuronKind::Input {
+            return Err(ValidationFailure::topology(
+                reason::INVALID_CONNECTION,
+                format!("{index}) connection points to an input node"),
+            )
+            .at_synapse(synapse_index));
+        }
+
+        if options.forward_only && from_index == to_index {
+            let from_label = label(from_index);
+            return Err(ValidationFailure::validation(
+                reason::SELF_CONNECTION,
+                format!("{index}) Self connection synapse {from_label} -> {from_label}"),
+            )
+            .at_synapse(synapse_index));
+        }
+
+        let from = i64::from(from_index);
+        let to = i64::from(to_index);
+
+        if from < last_from {
+            return Err(ValidationFailure::topology(
+                reason::SORT_FAILURE,
+                format!("{index}) synapses not sorted"),
+            )
+            .at_synapse(synapse_index));
+        } else if from > last_from {
+            // Belt and braces with the `from == last_from` guard below, and
+            // kept because the TypeScript keeps it: a new `from` starts its
+            // `to` ordering afresh.
+            last_to = -1;
+        }
+
+        if from == last_from {
+            if to < last_to {
+                return Err(ValidationFailure::topology(
+                    reason::SORT_FAILURE,
+                    format!("{index}) synapses not sorted {from}->{to} last to: {last_to}"),
+                )
+                .at_synapse(synapse_index));
+            } else if to == last_to {
+                // Issue #556 — the same "one ordered (from, to) pair, at most
+                // once" invariant as `validate_no_duplicate_synapses`, reported
+                // under the TypeScript's own class and reason.
+                let (from_label, to_label) = (label(from_index), label(to_index));
+                return Err(ValidationFailure::topology(
+                    reason::INVALID_CONNECTION,
+                    format!("{index}) duplicate synapse {from_label} -> {to_label}"),
+                )
+                .at_synapse(synapse_index));
+            }
+        }
+
+        if from > to && options.rejects_recursive_synapses() {
+            let (from_label, to_label) = (label(from_index), label(to_index));
+            return Err(ValidationFailure::validation(
+                reason::RECURSIVE_SYNAPSE,
+                format!("{index}) Recursive synapse {from_label} -> {to_label}"),
+            )
+            .at_synapse(synapse_index));
+        }
+
+        last_from = from;
+        last_to = to;
+    }
+
+    Ok(())
+}
+
+/// Rules 29–30: the extra leg a forward-only creature runs, delegating to
+/// [`crate::topology_ops`] rather than reimplementing any of it.
+///
+/// The three calls and their message shapes are the TypeScript's, including
+/// the `WASM ...` wording: NEAT-AI's `TopologyErrorMessages.ts` labels and its
+/// error-message tests read this exact text, and the messages crossed the WASM
+/// boundary long before the rules did.
+fn forward_only_rules(
+    views: &[NeuronView<'_>],
+    from_indices: &[u32],
+    to_indices: &[u32],
+    synapse_types: &[SynapseType],
+    input: usize,
+    output: usize,
+) -> Result<(), ValidationFailure> {
+    let topology = validate_topology(from_indices, to_indices);
+    if topology[0] != VALID {
+        return Err(ValidationFailure::topology(
+            reason::INVALID_CONNECTION,
+            format!(
+                "WASM topology validation failed: {} at synapse {}",
+                topology_error_message(topology[0]),
+                topology[1]
+            ),
+        )
+        .at_synapse(topology[1].max(0) as u32));
+    }
+
+    let is_constant: Vec<u8> = views
+        .iter()
+        .map(|view| u8::from(view.kind == NeuronKind::Constant))
+        .collect();
+    let biases: Vec<f64> = views
+        .iter()
+        .map(|view| view.bias.unwrap_or_default())
+        .collect();
+    // A squash name this crate does not know is not one of the ported rules —
+    // NEAT-AI checks it host-side in `neuron.validate()` — so an unknown name
+    // maps to a sentinel that is simply "not IF" rather than being reported
+    // here under a rule that does not exist.
+    let squash_types: Vec<u8> = views
+        .iter()
+        .map(|view| {
+            parse_squash_name(view.squash.unwrap_or("IDENTITY"))
+                .map_or(u8::MAX, |squash| squash as u8)
+        })
+        .collect();
+    let synapse_types: Vec<u8> = synapse_types.iter().map(|kind| *kind as u8).collect();
+
+    let structural = validate_structural_integrity(
+        from_indices,
+        to_indices,
+        &is_constant,
+        &squash_types,
+        &biases,
+        input as u32,
+        output as u32,
+        &synapse_types,
+    );
+    if structural[0] != STRUCTURAL_VALID {
+        return Err(ValidationFailure::validation(
+            reason::OTHER,
+            format!(
+                "WASM structural validation failed: {} at neuron {}",
+                structural_error_message(structural[0]),
+                structural[1]
+            ),
+        )
+        .at_neuron(structural[1].max(0) as u32));
+    }
+
+    if detect_cycles(from_indices, to_indices, views.len() as u32, input as u32) != 0 {
+        return Err(ValidationFailure::topology(
+            reason::INVALID_CONNECTION,
+            "Forward-only creature contains cycles",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Rule 31: every memetic bias and weight resolves to a real neuron, and every
+/// weight entry names a synapse that exists.
+///
+/// The match is on **neuron ids**, not indices: the synapse set is built from
+/// `views[from].id -> views[to].id`, exactly as the TypeScript builds it, so a
+/// creature whose ids differ from its indices still resolves. A neuron with no
+/// id contributes nothing to either lookup — rule 4 is what rejects a missing
+/// id, and this half must not report it under the wrong rule.
+///
+/// A key that is not an integer cannot match any id and is reported as "not
+/// found", which is the outcome TypeScript's `Number(key)` reaches for every
+/// non-integer key too.
+fn memetic_rules(
+    views: &[NeuronView<'_>],
+    from_indices: &[u32],
+    to_indices: &[u32],
+    memetic: &MemeticExport,
+) -> Result<(), ValidationFailure> {
+    let known_ids: HashSet<i64> = views.iter().filter_map(|view| view.id).collect();
+
+    let mut pairs: HashSet<String> = HashSet::with_capacity(from_indices.len());
+    for (&from_index, &to_index) in from_indices.iter().zip(to_indices) {
+        if let (Some(from_id), Some(to_id)) =
+            (views[from_index as usize].id, views[to_index as usize].id)
+        {
+            pairs.insert(format!("{from_id}->{to_id}"));
+        }
+    }
+
+    let known = |key: &str| -> bool { key.parse::<i64>().is_ok_and(|id| known_ids.contains(&id)) };
+
+    for neuron_id in memetic.biases.keys() {
+        if !known(neuron_id) {
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!("Neuron with id {neuron_id} not found in the creature."),
+            ));
+        }
+    }
+
+    for (synapse_id, weights) in &memetic.weights {
+        if !known(synapse_id) {
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!("Synapse with id {synapse_id} not found in the creature."),
+            ));
+        }
+
+        for (index, entry) in weights.iter().enumerate() {
+            let Some(to_id) = entry.to_id else {
+                // TypeScript interpolates the absent field as `undefined`.
+                return Err(ValidationFailure::validation(
+                    reason::MEMETIC,
+                    format!("Memetic from id {synapse_id} to id undefined is invalid."),
+                ));
+            };
+            if entry.weight.is_none() {
+                return Err(ValidationFailure::validation(
+                    reason::MEMETIC,
+                    format!(
+                        "Memetic from id {synapse_id} to id {to_id} has invalid weight at index {index}."
+                    ),
+                ));
+            }
+            if !known_ids.contains(&to_id) {
+                return Err(ValidationFailure::validation(
+                    reason::MEMETIC,
+                    format!("Memetic from id {synapse_id} has no valid neuron."),
+                ));
+            }
+            if !pairs.contains(&format!("{synapse_id}->{to_id}")) {
+                return Err(ValidationFailure::validation(
+                    reason::MEMETIC,
+                    format!("Memetic from id {synapse_id} to id {to_id} has no matching synapses."),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Rules 23–31 — the synapse, forward-only and memetic half of
+/// [`creature_validate`] (Issue #561).
+///
+/// These are the rules NEAT-AI's `creatureValidate` evaluates *after* the
+/// neuron walk, in the same order and first-failure-wins:
+///
+/// 1. the single synapse pass (rules 23–27), tallying
+///    [`ValidationStats::connections`] as it goes;
+/// 2. the [`ValidateOptions::expected_connections`] count (rule 28);
+/// 3. for a forward-only creature, [`crate::topology_ops`]'s
+///    `validate_topology`, `validate_structural_integrity` and `detect_cycles`
+///    (rules 29–30);
+/// 4. the memetic cross-references (rule 31).
+///
+/// `stats` is the same object the neuron walk fills, threaded through the way
+/// the TypeScript threads its single `stats` literal: this half **adds** the
+/// connection tally and leaves the neuron counters alone. Callers running this
+/// half on its own pass a `ValidationStats::default()`.
+///
+/// # Errors
+///
+/// Returns the [`ValidationFailure`] for the first violated rule.
+pub fn validate_synapse_and_memetic_rules(
+    creature: &CreatureExport,
+    options: &ValidateOptions,
+    stats: &mut ValidationStats,
+) -> Result<(), ValidationFailure> {
+    let views = neuron_views(creature);
+    let (from_indices, to_indices, synapse_types) = resolve_synapse_endpoints(creature)?;
+
+    synapse_walk(&views, &from_indices, &to_indices, options, stats)?;
+
+    if let Some(expected) = options.expected_connections()
+        && creature.synapses.len() != expected
+    {
+        return Err(ValidationFailure::validation(
+            reason::OTHER,
+            format!(
+                "Synapses length: {} expected: {expected}",
+                creature.synapses.len()
+            ),
+        ));
+    }
+
+    if options.forward_only {
+        forward_only_rules(
+            &views,
+            &from_indices,
+            &to_indices,
+            &synapse_types,
+            creature.input,
+            creature.output,
+        )?;
+    }
+
+    if let Some(memetic) = creature.memetic.as_ref() {
+        memetic_rules(&views, &from_indices, &to_indices, memetic)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1943,5 +2277,140 @@ mod tests {
         assert_eq!(number_text(Some(f64::INFINITY)), "Infinity");
         assert_eq!(number_text(Some(f64::NEG_INFINITY)), "-Infinity");
         assert_eq!(number_text(None), "undefined");
+    }
+}
+
+#[cfg(test)]
+mod synapse_half_tests {
+    //! Issue #561 — the parts of the synapse half the public entry point
+    //! cannot reach, because an earlier rule always stops the creature first.
+    //!
+    //! Every rule reachable through [`validate_synapse_and_memetic_rules`] is
+    //! covered by `tests/creature_validate_synapse_rules.rs` instead.
+
+    use super::*;
+
+    fn view<'a>(
+        kind: NeuronKind,
+        declared_type: &'a str,
+        uuid: &'a str,
+        id: i64,
+    ) -> NeuronView<'a> {
+        NeuronView {
+            id: Some(id),
+            kind,
+            declared_type,
+            uuid: Some(uuid),
+            bias: Some(0.5),
+            squash: Some("IDENTITY"),
+        }
+    }
+
+    fn input_view() -> NeuronView<'static> {
+        NeuronView {
+            id: Some(0),
+            kind: NeuronKind::Input,
+            declared_type: "input",
+            uuid: None,
+            bias: Some(0.0),
+            squash: None,
+        }
+    }
+
+    /// `input-0`, hidden `h`, output `o` — indices `0`, `1`, `2`.
+    fn views() -> Vec<NeuronView<'static>> {
+        vec![
+            input_view(),
+            view(NeuronKind::Hidden, "hidden", "h", 1),
+            view(NeuronKind::Output, "output", "o", -1),
+        ]
+    }
+
+    /// Run the forward-only leg over the fixture above and the given edges.
+    fn forward_only(edges: &[(u32, u32)]) -> Result<(), ValidationFailure> {
+        let from: Vec<u32> = edges.iter().map(|(from, _)| *from).collect();
+        let to: Vec<u32> = edges.iter().map(|(_, to)| *to).collect();
+        let types = vec![SynapseType::Standard; edges.len()];
+
+        forward_only_rules(&views(), &from, &to, &types, 1, 1)
+    }
+
+    /// The synapse walk rejects a backward synapse under `forward_only` before
+    /// the forward-only leg runs, so this is the only way to see the leg
+    /// report a `topology_ops` error code — and it must carry the label and
+    /// synapse index NEAT-AI's `TopologyErrorMessages.ts` formats around.
+    #[test]
+    fn the_forward_only_leg_reports_a_topology_error_code_with_its_synapse_index() {
+        let failure = forward_only(&[(0, 1), (1, 2), (2, 1)]).expect_err("backward connection");
+
+        assert_eq!(failure.class, FailureClass::Topology);
+        assert_eq!(failure.reason, reason::INVALID_CONNECTION);
+        assert_eq!(
+            failure.message,
+            "WASM topology validation failed: Backward connection at synapse 2"
+        );
+        assert_eq!(failure.synapse_index, Some(2));
+    }
+
+    /// The topology check runs before structural integrity, so a creature
+    /// breaking both reports the topology failure — the TypeScript's order.
+    #[test]
+    fn the_topology_check_runs_before_structural_integrity() {
+        // `h` is a dead end (structural) *and* `o -> h` runs backwards.
+        let failure = forward_only(&[(0, 1), (2, 1)]).expect_err("both legs fail");
+
+        assert!(
+            failure
+                .message
+                .starts_with("WASM topology validation failed"),
+            "topology is reported first, was: {}",
+            failure.message
+        );
+    }
+
+    /// The cycle check is kept for parity with the TypeScript but is defence
+    /// in depth: a topology-valid edge list has `from < to` everywhere, so it
+    /// is acyclic by construction, and a cyclic list is stopped by the
+    /// topology check above rather than slipping through unreported.
+    #[test]
+    fn a_cycle_never_reaches_the_cycle_check_unreported() {
+        assert_eq!(validate_topology(&[0, 1], &[1, 2])[0], VALID);
+        assert_eq!(
+            detect_cycles(&[0, 1], &[1, 2], 3, 1),
+            0,
+            "sorted forward is a DAG"
+        );
+
+        assert_eq!(
+            detect_cycles(&[1, 2], &[2, 1], 3, 1),
+            1,
+            "the cycle is real"
+        );
+        assert!(
+            forward_only(&[(1, 2), (2, 1)]).is_err(),
+            "and the leg rejects it, whichever check gets there first"
+        );
+    }
+
+    /// The synapse walk labels neurons with the same
+    /// `neuronWireLabelForDiagnostics` port the neuron half uses, so a
+    /// duplicate synapse reports the TypeScript's text.
+    #[test]
+    fn the_synapse_walk_labels_a_duplicate_with_the_wire_label() {
+        let mut stats = ValidationStats::default();
+        let failure = synapse_walk(
+            &views(),
+            &[0, 1, 1],
+            &[1, 2, 2],
+            &ValidateOptions::default(),
+            &mut stats,
+        )
+        .expect_err("the third synapse repeats the second");
+
+        assert_eq!(failure.class, FailureClass::Topology);
+        assert_eq!(failure.reason, reason::INVALID_CONNECTION);
+        assert_eq!(failure.message, "2) duplicate synapse h -> output-0");
+        assert_eq!(failure.synapse_index, Some(2));
+        assert_eq!(stats.connections, 3, "every synapse walked is tallied");
     }
 }

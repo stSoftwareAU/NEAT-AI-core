@@ -573,18 +573,18 @@ dump all depend on JavaScript object identity or the host filesystem. The
 failure's neuron/synapse index is what lets the host run those against the same
 neuron the shared rules stopped on.
 
-Until *all* the rule bodies land, `creature_validate` returns a
-`Validation` / `OTHER` failure saying so rather than an empty `Ok`: an
-unconditional `Ok` would report the very creature this work exists to catch as
-valid.
+Both halves of the table are ported, so `creature_validate` evaluates every
+rule and returns `ValidationStats` for a creature that breaks none of them.
+Exposing it over the WASM boundary and replaying the TypeScript conformance
+corpus is Issue #562.
 
 ### Neuron rules ported (Issue #560)
 
 Rules 1–22 — everything `CreatureValidate.ts` evaluates before its synapse walk
 — now run in Rust, in the TypeScript's own order, with the message text
 reproduced verbatim so NEAT-AI's error-message tests keep passing across the
-boundary. Rules 23–31 (synapses, `forwardOnly`, memetic) are Issue #561, so the
-entry point runs the neuron half and then still reports the un-ported half.
+boundary. Rules 23–31 (synapses, `forwardOnly`, memetic) are Issue #561 and run
+straight after them.
 
 Two derivations make the port work on the index-free, id-optional export form:
 
@@ -619,7 +619,7 @@ flowchart TD
     SI --> VSI
     W -->|"first violated rule"| F["Err(ValidationFailure)<br/>TypeScript message"]
     VSI -->|"first violated rule"| C["[code, neuron index]"]
-    W -->|"rules 1-22 pass"| N["Err — rules 23-31 not ported (#561)"]
+    W -->|"rules 1-22 pass"| N["synapse walk<br/>rules 23-31 (#561)"]
 ```
 
 ```mermaid
@@ -630,6 +630,49 @@ flowchart LR
     V -->|"first violated rule"| F["Err(ValidationFailure)<br/>class + reason + message + index"]
     F --> T["NEAT-AI rehydrates<br/>TopologyError / ValidationError"]
     F --> H["host-only checks<br/>identity, neuron.validate(), debugWrite"]
+```
+
+#### Synapse, forward-only and memetic rules (Issue #561)
+
+Rules 23–31 of that table run behind `creature_validate` and are callable on
+their own:
+
+```rust
+pub fn validate_synapse_and_memetic_rules(
+    creature: &CreatureExport,
+    options: &ValidateOptions,
+    stats: &mut ValidationStats,
+) -> Result<(), ValidationFailure>;
+```
+
+`stats` is the same object the neuron walk fills — this half adds the
+connection tally and leaves the neuron counters alone, exactly as the
+TypeScript threads one `stats` literal through both halves. It evaluates, first
+failure wins: the single synapse pass (no synapse into an input neuron; no self
+connection under `forward_only`; sorted by `(from, to)`; no duplicate pair; no
+`from > to` when `feedback_loop` is an explicit `Some(false)`), then the
+`connections` count, then — for a forward-only creature — `topology_ops`'
+`validate_topology`, `validate_structural_integrity` and `detect_cycles`, and
+finally the memetic cross-references.
+
+Two details a caller can trip over:
+
+- **`feedback_loop` is a tri-state.** `None` and `Some(true)` both allow a
+  recursive synapse; only `Some(false)` rejects one, and `forward_only: true`
+  forces that `Some(false)` whatever the caller asked for.
+- **Memetic entries match on neuron id, not index.** The synapse set is built
+  from `neurons[s.from].id -> neurons[s.to].id` using the same derived ids as
+  the neuron half, so a creature whose ids differ from its positions still
+  resolves.
+
+```mermaid
+flowchart LR
+    W["synapse walk<br/>rules 23–27"] --> N["connections count<br/>rule 28"]
+    N --> FWD{"forward_only?"}
+    FWD -- yes --> T["topology_ops<br/>validate_topology →<br/>validate_structural_integrity →<br/>detect_cycles"]
+    FWD -- no --> M["memetic rules<br/>rule 31"]
+    T --> M
+    M --> S["Ok(()) — stats.connections tallied"]
 ```
 
 ## Related Repositories

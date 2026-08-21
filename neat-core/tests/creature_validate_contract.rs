@@ -240,26 +240,40 @@ fn an_unlisted_reason_on_a_topology_failure_fails_loud() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Entry point — contract only; no rule body has been ported yet.
+// 4. Entry point — both halves of the rule table run behind it.
 // ---------------------------------------------------------------------------
 
-/// Until the rule bodies land, `creature_validate` certifies nothing: it
-/// returns a structured `OTHER` failure rather than an empty `Ok`, so a
-/// consumer that wires it up early cannot mistake "not implemented" for
-/// "valid". The porting issues replace this test with the real rule coverage.
+/// Both halves are ported (#560, #561), so the entry point certifies a valid
+/// creature and returns the stats both halves filled — the neuron counters
+/// from the neuron walk, `connections` from the synapse walk.
 #[test]
-fn the_entry_point_refuses_to_certify_a_creature_until_the_rules_are_ported() {
+fn the_entry_point_runs_both_halves_and_returns_their_stats() {
     let creature = neat_core::stump_creature();
-    let failure = creature_validate(&creature, &ValidateOptions::default())
-        .expect_err("the contract stub must not report a creature valid");
+    let stats = creature_validate(&creature, &ValidateOptions::default())
+        .expect("the stump fixture breaks no rule");
 
-    assert_eq!(failure.class, FailureClass::Validation);
-    assert_eq!(failure.reason, reason::OTHER);
-    assert!(
-        failure.message.contains("not ported"),
-        "message should say why nothing was checked, was: {}",
-        failure.message
+    assert_eq!(
+        stats.neurons() as usize,
+        creature.input + creature.neurons.len()
     );
+    assert_eq!(stats.connections as usize, creature.synapses.len());
+}
+
+/// And a creature broken by a rule in the *synapse* half still reports that
+/// half's failure through the entry point — the halves are wired in order,
+/// not just the neuron one.
+#[test]
+fn the_entry_point_reports_a_synapse_half_failure() {
+    let mut creature = neat_core::stump_creature();
+    let first = creature.synapses[0].clone();
+    creature.synapses.insert(1, first);
+
+    let failure = creature_validate(&creature, &ValidateOptions::default())
+        .expect_err("a duplicated synapse is not a valid creature");
+
+    assert_eq!(failure.class, FailureClass::Topology);
+    assert_eq!(failure.reason, reason::INVALID_CONNECTION);
+    assert_eq!(failure.synapse_index, Some(1));
 }
 
 // ---------------------------------------------------------------------------

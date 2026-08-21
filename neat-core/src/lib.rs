@@ -68,6 +68,7 @@ pub use creature::{
 // Issue #559 — the shared creature-validation contract.
 pub use creature_validate::{
     FailureClass, ValidateOptions, ValidationFailure, ValidationStats, creature_validate,
+    validate_synapse_and_memetic_rules,
 };
 // Issue #555 — canonical IF decision-tree fixtures and the graft helper.
 pub use decision_tree::{
@@ -118,8 +119,8 @@ pub use topology_ops::{
     STRUCTURAL_HIDDEN_NO_OUTWARD, STRUCTURAL_IF_MISSING_CONDITION, STRUCTURAL_IF_MISSING_NEGATIVE,
     STRUCTURAL_IF_MISSING_POSITIVE, STRUCTURAL_IF_TOO_FEW_INWARD, STRUCTURAL_SYNAPSE_TARGETS_INPUT,
     STRUCTURAL_VALID, VALID, compute_reverse_topological_order, detect_cycles,
-    scan_available_connections, validate_structural_integrity, validate_topology,
-    validate_topology_batch,
+    scan_available_connections, structural_error_message, topology_error_message,
+    validate_structural_integrity, validate_topology, validate_topology_batch,
 };
 pub use training_state::{
     accumulate_bias_persistent_4way, accumulate_bias_persistent_8way,
