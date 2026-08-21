@@ -43,11 +43,18 @@
 //! [`CreatureError::DuplicateSynapse`] rather than producing a number
 //! TypeScript would never agree with.
 //!
+//! **Validator extension (Issue #559).** [`NeuronExport::id`] and
+//! [`CreatureExport::memetic`] carry the two pieces
+//! [`crate::creature_validate::creature_validate`] needs and nothing else in
+//! this crate reads. Both are optional and skipped when absent, so a creature
+//! written before they existed parses and round trips byte-identically.
+//!
 //! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
-//! #550 (observation-width contract), #556 (duplicate-synapse rule).
+//! #550 (observation-width contract), #556 (duplicate-synapse rule),
+//! #559 (validation contract input format).
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::loss::MSE_TILE_LANES;
 use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData, hot_synapse_soa};
@@ -82,11 +89,30 @@ pub struct CreatureExport {
     /// When true, training rows are independent (no recurrent / feedback state).
     #[serde(rename = "forwardOnly", default)]
     pub forward_only: bool,
+    /// Optional memetic (local fine-tuning) record — Issue #559.
+    ///
+    /// Read by the `MEMETIC` rule of
+    /// [`crate::creature_validate::creature_validate`]; ignored by every other
+    /// entry point in this crate. Absent by default, and skipped on output, so
+    /// creatures written before the field existed round trip byte-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memetic: Option<MemeticExport>,
 }
 
 /// Neuron export format matching the TypeScript `NeuronExport` interface.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct NeuronExport {
+    /// Runtime integer neuron id — Issue #559 (NEAT-AI #1958).
+    ///
+    /// Optional, because NEAT-AI omits it from new exports in favour of
+    /// [`uuid`](Self::uuid); absent by default and skipped on output, so a
+    /// creature written without it round trips byte-identically. Signed:
+    /// output neurons carry **negative** ids (`-(outputIndex + 1)`). Read by
+    /// [`crate::creature_validate::creature_validate`], which needs it for the
+    /// neuron-id rules and to resolve the memetic keys; a non-integer id fails
+    /// in serde rather than reaching the validator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
     /// Neuron type: "hidden", "output", or "constant".
     #[serde(rename = "type")]
     pub neuron_type: String,
@@ -113,6 +139,47 @@ pub struct SynapseExport {
     /// Optional synapse type: "positive", "negative", or "condition".
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub synapse_type: Option<String>,
+}
+
+/// Memetic (local fine-tuning) record carried on a creature — Issue #559.
+///
+/// Mirrors NEAT-AI's `MemeticInterface` (`src/blackbox/MemeticInterface.ts`),
+/// but names only the two members
+/// [`crate::creature_validate::creature_validate`] reads. Everything else the
+/// record carries (`generation`, `score`, `ancestry`) is kept verbatim in
+/// [`extra`](Self::extra) rather than dropped, so a creature round trips
+/// through this crate without losing its fine-tuning history.
+///
+/// Both maps are keyed by the **JSON key text**, not by a parsed integer: the
+/// keys are neuron ids written as strings (TypeScript does `Number(neuronId)`
+/// when it reads them), and a key that is not a number at all is a `MEMETIC`
+/// validation failure rather than a parse error.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct MemeticExport {
+    /// Bias delta per neuron id.
+    #[serde(default)]
+    pub biases: BTreeMap<String, f64>,
+    /// Weight deltas per source neuron id.
+    #[serde(default)]
+    pub weights: BTreeMap<String, Vec<MemeticWeightExport>>,
+    /// Every other key on the TypeScript record, preserved verbatim.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// One memetic weight delta — NEAT-AI's `MemeticWeightInterface`.
+///
+/// Both fields are optional because the `MEMETIC` rule must be able to
+/// *report* an entry missing `toId` or `weight`; making them required would
+/// turn that validation failure into a serde error at the parse boundary.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct MemeticWeightExport {
+    /// Destination neuron id.
+    #[serde(rename = "toId", default, skip_serializing_if = "Option::is_none")]
+    pub to_id: Option<i64>,
+    /// The fine-tuned weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
 
 /// Errors that can occur when parsing, serialising, or compiling a creature.

@@ -139,9 +139,11 @@ fn minimal_one_input_one_output_one_synapse_roundtrips() {
 #[test]
 fn camelcase_field_names_are_symmetric_on_output() {
     let creature = CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons: vec![NeuronExport {
+            id: None,
             neuron_type: "output".to_string(),
             uuid: "output-0".to_string(),
             bias: 0.0,
@@ -201,9 +203,11 @@ fn optional_fields_absent_when_none() {
     // emit those keys at all — matches the TypeScript "optional field"
     // convention and avoids explicit `null` values in the canonical JSON.
     let creature = CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons: vec![NeuronExport {
+            id: None,
             neuron_type: "output".to_string(),
             uuid: "output-0".to_string(),
             bias: 0.0,

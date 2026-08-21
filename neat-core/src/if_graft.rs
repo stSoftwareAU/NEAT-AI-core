@@ -631,6 +631,7 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
     neurons.extend_from_slice(&creature.neurons[..position]);
     for constant in &spec.constants {
         neurons.push(NeuronExport {
+            id: None,
             neuron_type: "constant".to_string(),
             uuid: constant.uuid.clone(),
             bias: constant.bias,
@@ -638,6 +639,7 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
         });
     }
     neurons.push(NeuronExport {
+        id: None,
         neuron_type: "hidden".to_string(),
         uuid: spec.uuid.clone(),
         bias: spec.bias,
@@ -673,6 +675,7 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
     }
 
     CreatureExport {
+        memetic: None,
         input: creature.input,
         output: creature.output,
         neurons,

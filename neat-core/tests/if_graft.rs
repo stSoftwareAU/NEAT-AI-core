@@ -23,16 +23,19 @@ const TOL: f32 = 1e-6;
 /// IF creature — the graft has to add every role itself.
 fn base_creature() -> CreatureExport {
     CreatureExport {
+        memetic: None,
         input: 2,
         output: 1,
         neurons: vec![
             NeuronExport {
+                id: None,
                 neuron_type: "hidden".to_string(),
                 uuid: "hidden-1".to_string(),
                 bias: 0.0,
                 squash: Some("TANH".to_string()),
             },
             NeuronExport {
+                id: None,
                 neuron_type: "output".to_string(),
                 uuid: "output-0".to_string(),
                 bias: 0.0,

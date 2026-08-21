@@ -21,6 +21,7 @@ const ZERO_OUTPUT_JSON: &str = r#"{"input":1,"output":0,"neurons":[],"synapses":
 
 fn output_neuron() -> NeuronExport {
     NeuronExport {
+        id: None,
         neuron_type: "output".to_string(),
         uuid: "output-0".to_string(),
         bias: 0.0,
@@ -32,6 +33,7 @@ fn output_neuron() -> NeuronExport {
 /// rejection can only come from the width rule.
 fn creature_with_widths(input: usize, output: usize) -> CreatureExport {
     CreatureExport {
+        memetic: None,
         input,
         output,
         neurons: vec![output_neuron()],
@@ -165,6 +167,7 @@ fn compile_rejects_directly_built_zero_output() {
     // Zero declared outputs with zero output neurons used to pass the
     // declared-vs-typed check (`0 == 0`). It must now be a typed rejection.
     let creature = CreatureExport {
+        memetic: None,
         input: 1,
         output: 0,
         neurons: Vec::new(),

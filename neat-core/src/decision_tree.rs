@@ -164,6 +164,7 @@ pub const RESIDUAL_CASES: &[DecisionCase] = &[
 
 fn constant_neuron(uuid: &str) -> NeuronExport {
     NeuronExport {
+        id: None,
         neuron_type: "constant".to_string(),
         uuid: uuid.to_string(),
         bias: 1.0,
@@ -173,6 +174,7 @@ fn constant_neuron(uuid: &str) -> NeuronExport {
 
 fn if_neuron(uuid: &str, neuron_type: &str) -> NeuronExport {
     NeuronExport {
+        id: None,
         neuron_type: neuron_type.to_string(),
         uuid: uuid.to_string(),
         bias: 0.0,
@@ -224,6 +226,7 @@ pub fn stump_creature() -> CreatureExport {
     neurons.push(if_neuron("output-0", "output"));
 
     CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons,
@@ -271,6 +274,7 @@ pub fn depth2_tree_creature() -> CreatureExport {
     synapses.push(edge("low", "output-0", 1.0, SynapseType::Negative));
 
     CreatureExport {
+        memetic: None,
         input: 2,
         output: 1,
         neurons,
@@ -285,9 +289,11 @@ pub fn depth2_tree_creature() -> CreatureExport {
 /// The base that [`residual_correction_creature`] grafts a correction onto.
 pub fn linear_base_creature() -> CreatureExport {
     CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons: vec![NeuronExport {
+            id: None,
             neuron_type: "output".to_string(),
             uuid: "output-0".to_string(),
             bias: 0.0,
@@ -320,6 +326,7 @@ pub fn residual_correction_creature() -> CreatureExport {
     let mut neurons: Vec<NeuronExport> = [&condition_one, &positive_one, &negative_one]
         .iter()
         .map(|uuid| NeuronExport {
+            id: None,
             neuron_type: "constant".to_string(),
             uuid: (*uuid).clone(),
             bias: crate::if_graft::GRAFT_CONSTANT_BIAS,
@@ -328,6 +335,7 @@ pub fn residual_correction_creature() -> CreatureExport {
         .collect();
     neurons.push(if_neuron(node, "hidden"));
     neurons.push(NeuronExport {
+        id: None,
         neuron_type: "output".to_string(),
         uuid: "output-0".to_string(),
         bias: 0.0,
@@ -359,6 +367,7 @@ pub fn residual_correction_creature() -> CreatureExport {
     ];
 
     CreatureExport {
+        memetic: None,
         input: 1,
         output: 1,
         neurons,
