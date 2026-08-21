@@ -145,12 +145,12 @@
 //!
 //! Where the TypeScript interpolates `neuron.ID()` the message carries the
 //! integer id verbatim. Where it interpolates
-//! `neuronWireLabelForDiagnostics(neuron, indx)` — rules 11, 16, 17, 18 — this
+//! `neuronWireLabelForDiagnostics(neuron, index)` — rules 11, 16, 17, 18 — this
 //! port reproduces `src/neuron/NeuronSerialization.ts` branch for branch, since
 //! NEAT-AI's error-message tests assert on that text: `input-N` for an input,
 //! `output-N` for an output carrying its negative id, otherwise the wire UUID,
-//! and `non-output-negative-id-{id}@index-{indx}` /
-//! `missing-uuid@index-{indx}` when there is no UUID to use.
+//! and `non-output-negative-id-{id}@index-{index}` /
+//! `missing-uuid@index-{index}` when there is no UUID to use.
 //!
 //! # Shared invariants
 //!
@@ -682,7 +682,7 @@ impl NeuronView<'_> {
         self.uuid.filter(|uuid| !uuid.is_empty())
     }
 
-    /// Rust's `neuronWireLabelForDiagnostics(neuron, indx)`.
+    /// Rust's `neuronWireLabelForDiagnostics(neuron, index)`.
     ///
     /// NEAT-AI's error-message tests assert on this text, so it reproduces
     /// `src/neuron/NeuronSerialization.ts` branch for branch: `input-N` for an
@@ -822,13 +822,13 @@ fn resolve_synapse_endpoints(
     let mut to = Vec::with_capacity(creature.synapses.len());
     let mut types = Vec::with_capacity(creature.synapses.len());
 
-    for (indx, synapse) in creature.synapses.iter().enumerate() {
+    for (index, synapse) in creature.synapses.iter().enumerate() {
         let dangling = |endpoint: &str, uuid: &str| {
             ValidationFailure::topology(
                 reason::INVALID_SYNAPSE_REFERENCE,
-                format!("{indx}) synapse {endpoint} {uuid} does not name a neuron"),
+                format!("{index}) synapse {endpoint} {uuid} does not name a neuron"),
             )
-            .at_synapse(indx as u32)
+            .at_synapse(index as u32)
         };
 
         from.push(resolve(&synapse.from_uuid).ok_or_else(|| dangling("from", &synapse.from_uuid))?);
@@ -856,8 +856,8 @@ fn walk_neurons(
     let mut outputs_seen = 0usize;
     let mut computational_seen_hidden = false;
 
-    for (indx, neuron) in views.iter().enumerate() {
-        let at = |failure: ValidationFailure| failure.at_neuron(indx as u32);
+    for (index, neuron) in views.iter().enumerate() {
+        let at = |failure: ValidationFailure| failure.at_neuron(index as u32);
 
         // Rule 4 — every neuron has an id.
         let Some(id) = neuron.id else {
@@ -886,7 +886,7 @@ fn walk_neurons(
 
         if neuron.kind == NeuronKind::Input {
             // Rule 7 — an input neuron is identified by its own index.
-            if id != indx as i64 {
+            if id != index as i64 {
                 return Err(at(ValidationFailure::validation(
                     reason::OTHER,
                     format!("{id}) invalid input neuron id: {id}"),
@@ -911,7 +911,7 @@ fn walk_neurons(
         }
 
         // Rule 10 — inputs come first.
-        if neuron.kind == NeuronKind::Input && indx > input {
+        if neuron.kind == NeuronKind::Input && index > input {
             return Err(at(ValidationFailure::validation(
                 reason::OTHER,
                 format!("{id}) input neuron after the maximum input neurons"),
@@ -919,13 +919,13 @@ fn walk_neurons(
         }
 
         // Rule 11 — inside the computational slice, constants precede hiddens.
-        if indx >= input && indx < views.len() - output {
+        if index >= input && index < views.len() - output {
             if neuron.kind == NeuronKind::Constant && computational_seen_hidden {
                 return Err(at(ValidationFailure::validation(
                     reason::NEURON_ORDER,
                     format!(
                         "{}) type constant after hidden neuron; required order is input, constant, hidden, output",
-                        neuron.wire_label(indx)
+                        neuron.wire_label(index)
                     ),
                 )));
             }
@@ -936,8 +936,8 @@ fn walk_neurons(
 
         // Rule 12 — an `IF` neuron decides between two branches, so it needs a
         // condition, a positive and a negative input.
-        if neuron.squash == Some("IF") && indx > 2 {
-            let inward = connections.inward_synapses(indx);
+        if neuron.squash == Some("IF") && index > 2 {
+            let inward = connections.inward_synapses(index);
             let roles = IfRoles::tally(
                 inward
                     .iter()
@@ -963,8 +963,8 @@ fn walk_neurons(
             }
         }
 
-        let inward = connections.inward_count(indx);
-        let outward = connections.outward_count(indx);
+        let inward = connections.inward_count(index);
+        let outward = connections.outward_count(index);
 
         match neuron.kind {
             NeuronKind::Input => {
@@ -1002,7 +1002,7 @@ fn walk_neurons(
                         reason::NO_OUTWARD_CONNECTIONS,
                         format!(
                             "constants neuron {} has no outward connections",
-                            neuron.wire_label(indx)
+                            neuron.wire_label(index)
                         ),
                     )));
                 }
@@ -1023,7 +1023,7 @@ fn walk_neurons(
                         wiring_reason,
                         format!(
                             "hidden neuron {} has no {direction} connections",
-                            neuron.wire_label(indx)
+                            neuron.wire_label(index)
                         ),
                     )));
                 }
