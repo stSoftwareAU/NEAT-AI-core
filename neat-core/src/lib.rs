@@ -20,10 +20,12 @@
 pub mod accumulate;
 pub mod batch_scoring;
 pub mod creature;
+pub mod decision_tree;
 pub mod derivative;
 pub mod elastic_distribution;
 pub mod error;
 pub mod fused_error;
+pub mod if_graft;
 pub mod loss;
 pub mod network;
 pub mod parallel_scoring;
@@ -60,6 +62,15 @@ pub use creature::{
     creature_to_json_pretty, parse_creature_json, parse_squash_name, parse_synapse_type,
     squash_name_from, synapse_type_name_from, validate_creature_width,
     validate_no_duplicate_synapses,
+};
+// Issue #555 — canonical IF decision-tree fixtures and the graft helper.
+pub use decision_tree::{
+    DecisionCase, depth2_tree_creature, linear_base_creature, residual_correction_creature,
+    stump_creature,
+};
+pub use if_graft::{
+    GraftError, IfCorrectionSpec, IfNodeSpec, graft_if_correction, graft_if_node, graft_if_tree,
+    validate_creature_topology,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
 pub use squash::SquashType;

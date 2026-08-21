@@ -194,18 +194,21 @@ fn validate_config(config: &TrainingDataConfig) -> Result<(), TrainingDataError>
 /// into their input/output buffers via [`parse_record_into`] (Issue #385).
 #[cfg(test)]
 fn parse_f32_values(bytes: &[u8]) -> Vec<f32> {
+    le_f32_values(bytes).collect()
+}
+
+/// Iterate the little-endian `f32` values in `bytes`.
+///
+/// A trailing 1..3 bytes cannot form a value and is ignored; callers hand this
+/// helper whole records only.
+#[inline]
+fn le_f32_values(bytes: &[u8]) -> impl Iterator<Item = f32> + '_ {
     bytes
         .as_chunks::<4>()
         .0
         .iter()
-        .map(f32_from_le_chunk)
-        .collect()
-}
-
-/// Decode a single little-endian `f32` from a 4-byte chunk.
-#[inline]
-fn f32_from_le_chunk(chunk: &[u8; 4]) -> f32 {
-    f32::from_le_bytes(*chunk)
+        .copied()
+        .map(f32::from_le_bytes)
 }
 
 /// Split a record's bytes into its input and output byte sub-slices.
@@ -222,15 +225,9 @@ fn split_record_bytes<'a>(bytes: &'a [u8], config: &TrainingDataConfig) -> (&'a 
 fn parse_record(bytes: &[u8], config: &TrainingDataConfig) -> TrainingRecord {
     let (input_bytes, output_bytes) = split_record_bytes(bytes, config);
     let mut inputs = Vec::with_capacity(config.num_inputs);
-    inputs.extend(input_bytes.as_chunks::<4>().0.iter().map(f32_from_le_chunk));
+    inputs.extend(le_f32_values(input_bytes));
     let mut outputs = Vec::with_capacity(config.num_outputs);
-    outputs.extend(
-        output_bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(f32_from_le_chunk),
-    );
+    outputs.extend(le_f32_values(output_bytes));
     TrainingRecord { inputs, outputs }
 }
 
@@ -245,17 +242,9 @@ fn parse_record(bytes: &[u8], config: &TrainingDataConfig) -> TrainingRecord {
 fn parse_record_into(bytes: &[u8], config: &TrainingDataConfig, record: &mut TrainingRecord) {
     let (input_bytes, output_bytes) = split_record_bytes(bytes, config);
     record.inputs.clear();
-    record
-        .inputs
-        .extend(input_bytes.as_chunks::<4>().0.iter().map(f32_from_le_chunk));
+    record.inputs.extend(le_f32_values(input_bytes));
     record.outputs.clear();
-    record.outputs.extend(
-        output_bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(f32_from_le_chunk),
-    );
+    record.outputs.extend(le_f32_values(output_bytes));
 }
 
 // ---------------------------------------------------------------------------
