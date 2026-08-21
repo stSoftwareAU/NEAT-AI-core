@@ -25,6 +25,23 @@
 //! `forwardonly` would otherwise validate a production creature under the
 //! wrong rules and call it healthy.
 //!
+//! ## Two creature shapes, one set of rules (NEAT-AI#3803)
+//!
+//! A request names **exactly one** creature, in one of two shapes; naming both
+//! or neither is a boundary fault:
+//!
+//! | Key | Shape | Use it when |
+//! |-----|-------|-------------|
+//! | `creature` | the export wire form: index-free, UUID-wired, input neurons implicit | the caller has a creature file |
+//! | `runtimeCreature` | [`crate::creature_validate_runtime::RuntimeCreature`]: every neuron listed, synapses wired by position | the caller holds a creature in memory |
+//!
+//! The export form cannot carry an input neuron's own id or position, a
+//! non-finite or absent bias, a non-integer id or width, or a malformed memetic
+//! record — so a host asking about one of those defects over `creature` is told
+//! its creature is healthy, or told its payload is malformed, when the rules
+//! would have named the fault. `runtimeCreature` is the shape that can carry
+//! them; both run the same rules, so the answer does not depend on the shape.
+//!
 //! The creature is deserialised with serde alone — deliberately *not* through
 //! [`crate::parse_creature_json`], whose width check would shadow rules 2 and 3
 //! and answer `InvalidInputCount` where NEAT-AI expects
@@ -70,6 +87,7 @@ use crate::creature::CreatureExport;
 use crate::creature_validate::{
     ValidateOptions, ValidationFailure, ValidationStats, creature_validate,
 };
+use crate::creature_validate_runtime::{RuntimeCreature, creature_validate_runtime};
 use crate::network::MAX_NODE_COUNT;
 
 /// Message prefix every boundary fault leads with.
@@ -114,10 +132,18 @@ impl From<RequestOptions> for ValidateOptions {
 }
 
 /// A whole request: the creature, and the options to validate it under.
+///
+/// The creature is described in **exactly one** of two shapes — `creature`,
+/// the export wire form, or `runtimeCreature`, the in-memory form a host holds
+/// (NEAT-AI#3803). Naming both, or neither, is a boundary fault: a request that
+/// cannot say which creature it means must not be answered with a verdict.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ValidateRequest {
-    creature: CreatureExport,
+    #[serde(default)]
+    creature: Option<CreatureExport>,
+    #[serde(default, rename = "runtimeCreature")]
+    runtime_creature: Option<RuntimeCreature>,
     #[serde(default)]
     options: RequestOptions,
 }
@@ -259,17 +285,34 @@ fn validate_request(request: &str) -> ValidateResponse {
         Err(error) => return ValidateResponse::malformed(error),
     };
 
-    let declared = request
-        .creature
-        .input
-        .saturating_add(request.creature.neurons.len());
-    if declared > MAX_REQUEST_NEURONS {
-        return ValidateResponse::malformed(format!(
-            "creature declares {declared} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}"
-        ));
-    }
+    let options = request.options.into();
+    let outcome = match (&request.creature, &request.runtime_creature) {
+        (Some(creature), None) => {
+            let declared = creature.input.saturating_add(creature.neurons.len());
+            if let Some(refusal) = refuse_oversized(declared) {
+                return refusal;
+            }
+            creature_validate(creature, &options)
+        }
+        (None, Some(runtime)) => {
+            if let Some(refusal) = refuse_oversized(runtime.neurons.len()) {
+                return refusal;
+            }
+            creature_validate_runtime(runtime, &options)
+        }
+        (Some(_), Some(_)) => {
+            return ValidateResponse::malformed(
+                "a request names both `creature` and `runtimeCreature`; it must name exactly one",
+            );
+        }
+        (None, None) => {
+            return ValidateResponse::malformed(
+                "a request names neither `creature` nor `runtimeCreature`; it must name exactly one",
+            );
+        }
+    };
 
-    match creature_validate(&request.creature, &request.options.into()) {
+    match outcome {
         Ok(stats) => ValidateResponse {
             ok: true,
             stats: Some(stats.into()),
@@ -281,6 +324,16 @@ fn validate_request(request: &str) -> ValidateResponse {
             failure: Some(failure.into()),
         },
     }
+}
+
+/// Refuse a creature bigger than the boundary will walk, before the per-neuron
+/// allocation a declared count of `17179869180` would abort on.
+fn refuse_oversized(declared: usize) -> Option<ValidateResponse> {
+    (declared > MAX_REQUEST_NEURONS).then(|| {
+        ValidateResponse::malformed(format!(
+            "creature declares {declared} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -316,6 +369,104 @@ mod tests {
             r#"{"ok":false,"failure":{"class":"TopologyError","reason":"INVALID_NEURON_TYPE",
 "message":"1000001) Invalid type: banana","neuronIndex":1,"synapseIndex":null,"malformed":false}}"#
                 .replace('\n', "")
+        );
+    }
+
+    #[test]
+    fn a_runtime_creature_is_validated_by_the_same_rules() {
+        let answer = creature_validate_json(
+            r#"{ "runtimeCreature": { "input": 1, "output": 1,
+                 "neurons": [ { "type": "input", "id": 0, "uuid": "input-0" },
+                              { "type": "output", "id": -1, "uuid": "output-0", "bias": 0.0, "squash": "IDENTITY" } ],
+                 "synapses": [ { "from": 0, "to": 1, "weight": 1.0 } ] } }"#,
+        );
+
+        assert_eq!(
+            answer,
+            r#"{"ok":true,"stats":{"input":1,"constant":0,"hidden":0,"output":1,"connections":1}}"#
+        );
+    }
+
+    #[test]
+    fn a_defect_the_export_form_cannot_carry_is_named_through_the_runtime_shape() {
+        // The same creature, described both ways: an input neuron whose id is
+        // not its index. The export form derives `id == index` and answers
+        // "healthy"; the runtime form carries the defect and rule 7 names it.
+        let export = creature_validate_json(
+            r#"{ "creature": { "input": 2, "output": 1,
+                 "neurons": [ { "type": "output", "uuid": "output-0", "bias": 0.0, "squash": "IDENTITY" } ],
+                 "synapses": [ { "fromUUID": "input-0", "toUUID": "output-0", "weight": 1.0 },
+                               { "fromUUID": "input-1", "toUUID": "output-0", "weight": 1.0 } ] } }"#,
+        );
+        assert!(export.contains(r#""ok":true"#), "{export}");
+
+        let runtime = creature_validate_json(
+            r#"{ "runtimeCreature": { "input": 2, "output": 1,
+                 "neurons": [ { "type": "input", "id": 0, "uuid": "input-0" },
+                              { "type": "input", "id": 5, "uuid": "input-1" },
+                              { "type": "output", "id": -1, "uuid": "output-0", "bias": 0.0, "squash": "IDENTITY" } ],
+                 "synapses": [ { "from": 0, "to": 2, "weight": 1.0 },
+                               { "from": 1, "to": 2, "weight": 1.0 } ] } }"#,
+        );
+        assert!(
+            runtime.contains(r#""message":"5) invalid input neuron id: 5""#),
+            "{runtime}"
+        );
+        assert!(runtime.contains(r#""malformed":false"#), "{runtime}");
+    }
+
+    #[test]
+    fn a_request_names_exactly_one_creature() {
+        let both = creature_validate_json(
+            r#"{ "creature": { "input": 1, "output": 1, "neurons": [], "synapses": [] },
+                 "runtimeCreature": { "input": 1, "output": 1, "neurons": [], "synapses": [] } }"#,
+        );
+        assert!(both.contains(MALFORMED_REQUEST), "{both}");
+        assert!(both.contains("must name exactly one"), "{both}");
+
+        let neither = creature_validate_json(r#"{ "options": { "forwardOnly": true } }"#);
+        assert!(neither.contains(MALFORMED_REQUEST), "{neither}");
+        assert!(neither.contains("must name exactly one"), "{neither}");
+    }
+
+    #[test]
+    fn an_absurd_declared_width_reaches_the_rules_rather_than_an_allocation() {
+        let neurons: Vec<String> = (0..3)
+            .map(|index| format!(r#"{{ "type": "input", "id": {index} }}"#))
+            .collect();
+        let request = format!(
+            r#"{{ "runtimeCreature": {{ "input": {}, "output": 1, "neurons": [{}], "synapses": [] }} }}"#,
+            MAX_REQUEST_NEURONS + 1,
+            neurons.join(",")
+        );
+        // The declared width is absurd but the payload is small: the walk runs
+        // over the neurons that are actually listed, so this reaches the rules
+        // and is answered as a miscount rather than as an allocation.
+        let answer = creature_validate_json(&request);
+        assert!(answer.contains(r#""ok":false"#), "{answer}");
+        assert!(answer.contains("input neurons found"), "{answer}");
+    }
+
+    #[test]
+    fn a_runtime_creature_past_the_ceiling_is_refused_before_the_rules() {
+        let neurons: Vec<String> = (0..=MAX_REQUEST_NEURONS)
+            .map(|index| format!(r#"{{"type":"input","id":{index}}}"#))
+            .collect();
+        let request = format!(
+            r#"{{ "runtimeCreature": {{ "input": 1, "output": 1, "neurons": [{}], "synapses": [] }} }}"#,
+            neurons.join(",")
+        );
+
+        let answer = creature_validate_json(&request);
+        assert!(
+            answer.contains(MALFORMED_REQUEST),
+            "{}",
+            &answer[..200.min(answer.len())]
+        );
+        assert!(
+            answer.contains("exceeding the maximum"),
+            "{}",
+            &answer[..200.min(answer.len())]
         );
     }
 
