@@ -262,6 +262,35 @@ this you **must**:
 - **Add a state-leak regression test** asserting the reused-buffer path is
   byte-identical to the fresh-allocation path across differently-sized inputs.
 
+## One IF decision-tree construction rule (Issue #555)
+
+`neat-core/src/if_graft.rs` is the single home of the rule that builds an `IF`
+node: which synapse carries which [`SynapseType`] role, that all three roles
+must be present, that the node's own constants come first, and where the node
+may sit so every edge still points forwards. `graft_if_node`,
+`graft_if_tree` and `graft_if_correction` all route through it, and every
+rejection is a typed `GraftError` with **no creature produced** — a caller never
+hand-edits neuron/synapse JSON to add a decision node, and NEAT-AI-Forests reads
+its interpretation of the roles from here rather than inventing one.
+
+`validate_creature_topology` is the gate at both ends. It **reuses**
+`validate_creature_width`, `validate_topology` and
+`validate_structural_integrity` — do not restate their rules here. The ordering
+gate runs only for `forwardOnly` creatures; a recurrent creature legitimately
+carries backward edges, which that gate rejects by design. The post-build check
+is deliberate defence in depth: it is unreachable while the pre-checks are
+complete, so it is exercised directly against synthetic creatures
+(`neat-core/tests/if_graft.rs`, AGENTS.md oracle rule 5) rather than through a
+graft.
+
+`neat-core/src/decision_tree.rs` holds the canonical fixtures and their
+documented expected outputs. `graft_if_correction` on `linear_base_creature()`
+must reproduce `residual_correction_creature()` exactly — that equality is what
+stops the helper and the fixture drifting apart, so change them together.
+`neat-core/tests/decision_tree_fixture.rs` checks every case against a
+hand-written reference tree (plain `if x > t` Rust, no shared kernel) through
+both the single-record and the batched scoring paths.
+
 ## One width check for creature JSON (Issue #550)
 
 `validate_creature_width` (`neat-core/src/creature.rs`) is the single home of
