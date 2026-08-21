@@ -191,6 +191,17 @@ fn edge(from: &str, to: &str, weight: f64, role: SynapseType) -> SynapseExport {
     }
 }
 
+/// Leave a fixture's synapse list in the canonical `(from, to)` order
+/// [`crate::creature_validate()`] rule 25 requires.
+///
+/// Each fixture is declared node by node so it reads as the tree it describes;
+/// that grouping is not the wire order, so the assembled creature is put
+/// through the same sort [`crate::if_graft`] applies to a grafted one.
+fn canonical(mut creature: CreatureExport) -> CreatureExport {
+    crate::if_graft::sort_synapses_canonically(&mut creature);
+    creature
+}
+
 /// The three shared `1.0` constants every fixture tree stands on.
 fn shared_constants() -> Vec<NeuronExport> {
     vec![
@@ -225,7 +236,7 @@ pub fn stump_creature() -> CreatureExport {
     let mut neurons = shared_constants();
     neurons.push(if_neuron("output-0", "output"));
 
-    CreatureExport {
+    canonical(CreatureExport {
         memetic: None,
         input: 1,
         output: 1,
@@ -239,7 +250,7 @@ pub fn stump_creature() -> CreatureExport {
         ),
         semantic_version: None,
         forward_only: true,
-    }
+    })
 }
 
 /// Depth-2 binary decision tree over two observations.
@@ -273,7 +284,7 @@ pub fn depth2_tree_creature() -> CreatureExport {
     synapses.push(edge("high", "output-0", 1.0, SynapseType::Positive));
     synapses.push(edge("low", "output-0", 1.0, SynapseType::Negative));
 
-    CreatureExport {
+    canonical(CreatureExport {
         memetic: None,
         input: 2,
         output: 1,
@@ -281,7 +292,7 @@ pub fn depth2_tree_creature() -> CreatureExport {
         synapses,
         semantic_version: None,
         forward_only: true,
-    }
+    })
 }
 
 /// Purely linear creature — `output-0 = 2 * input-0`, no `IF` node at all.
@@ -366,7 +377,7 @@ pub fn residual_correction_creature() -> CreatureExport {
         },
     ];
 
-    CreatureExport {
+    canonical(CreatureExport {
         memetic: None,
         input: 1,
         output: 1,
@@ -374,5 +385,5 @@ pub fn residual_correction_creature() -> CreatureExport {
         synapses,
         semantic_version: None,
         forward_only: true,
-    }
+    })
 }
