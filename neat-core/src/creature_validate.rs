@@ -121,8 +121,25 @@
 //! Two TypeScript checks are unreachable in the Rust shape because serde
 //! rejects the input earlier, and that is deliberate — a malformed file fails
 //! at the parse boundary instead of reaching the validator: a non-integer
-//! neuron `id` (rule 5) and a non-array memetic `weights` entry (rule 31) are
-//! [`crate::creature::CreatureError::Json`].
+//! neuron `id` (rule 5) and a non-array memetic `weights` **map value** (rule
+//! 31) are [`crate::creature::CreatureError::Json`].
+//!
+//! # Both memetic weight forms resolve (GRQ #4257)
+//!
+//! `memetic.weights` arrives in either of the two shapes NEAT-AI writes — see
+//! [`crate::creature::MemeticWeights`] — and rule 31 resolves whichever one the
+//! file carries:
+//!
+//! - the id-keyed map is resolved by **runtime neuron id**, as the TypeScript
+//!   resolves it host-side;
+//! - the UUID-keyed row array is resolved by **wire UUID** (`input-N`,
+//!   `output-N`, or the stable `uuid`) — the same vocabulary the synapses use,
+//!   through the same `WireIndex` the synapse endpoints resolve through.
+//!
+//! `biases` keys are read in both vocabularies for the same reason: the wire
+//! exporter keys them by UUID, the in-memory record by id. A key that resolves
+//! in neither is still `Validation` / `MEMETIC`, so accepting both forms never
+//! accepts a reference to a neuron that does not exist.
 //!
 //! # Runtime ids are derived, not required (Issue #560)
 //!
@@ -211,10 +228,13 @@
 //! checks and its diagnostics dump against the same neuron or synapse the
 //! shared rules stopped on.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
-use crate::creature::{CreatureExport, MemeticExport, parse_squash_name, parse_synapse_type};
+use crate::creature::{
+    CreatureExport, MemeticExport, MemeticWeightExport, MemeticWeightRowExport, MemeticWeights,
+    parse_squash_name, parse_synapse_type,
+};
 use crate::synapse_type::SynapseType;
 use crate::topology_invariants::{
     ConnectionIndex, IfFault, IfRoles, WiringFault, hidden_wiring_fault, if_neuron_fault,
@@ -687,7 +707,8 @@ fn validate_neuron_rules(
     }
 
     let views = neuron_views(creature);
-    let (from, to, synapse_types) = resolve_synapse_endpoints(creature)?;
+    let wire = WireIndex::build(creature);
+    let (from, to, synapse_types) = resolve_synapse_endpoints(creature, &wire)?;
     let connections = ConnectionIndex::build(&from, &to, total_neurons);
 
     walk_neurons(
@@ -876,6 +897,44 @@ fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
     views
 }
 
+/// The one home of the rule that turns a **wire UUID** into the index the
+/// rules walk over: `input-N` names an implicit input neuron, and every other
+/// UUID names a listed one.
+///
+/// Both the synapse endpoints and the memetic row form (GRQ #4257) are written
+/// in that same wire vocabulary, so both resolve through this rather than each
+/// restating the `input-N` special case.
+struct WireIndex<'a> {
+    /// Listed neurons by UUID, at their walk index (`input + i`).
+    uuid_to_index: HashMap<&'a str, u32>,
+    /// The declared observation width — the implicit `input-N` range.
+    input: usize,
+}
+
+impl<'a> WireIndex<'a> {
+    fn build(creature: &'a CreatureExport) -> Self {
+        let mut uuid_to_index: HashMap<&str, u32> = HashMap::with_capacity(creature.neurons.len());
+        for (i, neuron) in creature.neurons.iter().enumerate() {
+            uuid_to_index.insert(neuron.uuid.as_str(), (creature.input + i) as u32);
+        }
+
+        Self {
+            uuid_to_index,
+            input: creature.input,
+        }
+    }
+
+    /// The walk index this UUID names, or `None` when it names no neuron.
+    fn resolve(&self, uuid: &str) -> Option<u32> {
+        if let Some(index) = self.uuid_to_index.get(uuid) {
+            return Some(*index);
+        }
+        // Implicit input neurons are wired as `input-N`, never listed.
+        let index: usize = uuid.strip_prefix("input-")?.parse().ok()?;
+        (index < self.input).then_some(index as u32)
+    }
+}
+
 /// Resolve every synapse's `fromUUID` / `toUUID` to the neuron indices the
 /// rules use, keeping the declared synapse roles alongside.
 ///
@@ -887,20 +946,9 @@ fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
 #[allow(clippy::type_complexity)]
 fn resolve_synapse_endpoints(
     creature: &CreatureExport,
+    wire: &WireIndex<'_>,
 ) -> Result<(Vec<u32>, Vec<u32>, Vec<SynapseType>), ValidationFailure> {
-    let mut uuid_to_index: HashMap<&str, u32> = HashMap::with_capacity(creature.neurons.len());
-    for (i, neuron) in creature.neurons.iter().enumerate() {
-        uuid_to_index.insert(neuron.uuid.as_str(), (creature.input + i) as u32);
-    }
-
-    let resolve = |uuid: &str| -> Option<u32> {
-        if let Some(index) = uuid_to_index.get(uuid) {
-            return Some(*index);
-        }
-        // Implicit input neurons are wired as `input-N`, never listed.
-        let index: usize = uuid.strip_prefix("input-")?.parse().ok()?;
-        (index < creature.input).then_some(index as u32)
-    };
+    let resolve = |uuid: &str| wire.resolve(uuid);
 
     let mut from = Vec::with_capacity(creature.synapses.len());
     let mut to = Vec::with_capacity(creature.synapses.len());
@@ -1356,38 +1404,45 @@ fn forward_only_rules(
 }
 
 /// Rule 31: every memetic bias and weight resolves to a real neuron, and every
-/// weight entry names a synapse that exists.
+/// weight entry names a synapse that exists — in **either** valid weight form
+/// (GRQ #4257).
 ///
-/// The match is on **neuron ids**, not indices: the synapse set is built from
-/// `views[from].id -> views[to].id`, exactly as the TypeScript builds it, so a
-/// creature whose ids differ from its indices still resolves. A neuron with no
-/// id contributes nothing to either lookup — rule 4 is what rejects a missing
-/// id, and this half must not report it under the wrong rule.
+/// A memetic reference names a neuron in one of two vocabularies, and both are
+/// current: the runtime **id** written as a string, which is what NEAT-AI's
+/// in-memory record uses, or the **wire UUID**, which is what its wire exporter
+/// writes (`input-N`, `output-N`, or the stable `uuid`).
+/// [`resolve_memetic_reference`] is the single home of that either/or, and it
+/// resolves to the walk index so both forms share one synapse set. A reference
+/// that is neither is reported as "not found", the outcome TypeScript's
+/// `Number(key)` reaches for a non-numeric key too.
 ///
-/// A key that is not an integer cannot match any id and is reported as "not
-/// found", which is the outcome TypeScript's `Number(key)` reaches for every
-/// non-integer key too.
+/// A neuron with no id contributes nothing to the id half of the lookup — rule
+/// 4 is what rejects a missing id, and this half must not report it under the
+/// wrong rule.
 fn memetic_rules(
     views: &[NeuronView<'_>],
+    wire: &WireIndex<'_>,
     from_indices: &[u32],
     to_indices: &[u32],
     memetic: &MemeticExport,
 ) -> Result<(), ValidationFailure> {
-    let known_ids: HashSet<i64> = views.iter().filter_map(|view| view.id).collect();
-
-    let mut pairs: HashSet<String> = HashSet::with_capacity(from_indices.len());
-    for (&from_index, &to_index) in from_indices.iter().zip(to_indices) {
-        if let (Some(from_id), Some(to_id)) =
-            (views[from_index as usize].id, views[to_index as usize].id)
-        {
-            pairs.insert(format!("{from_id}->{to_id}"));
+    let mut id_to_index: HashMap<i64, u32> = HashMap::with_capacity(views.len());
+    for (index, view) in views.iter().enumerate() {
+        if let Some(id) = view.id {
+            id_to_index.insert(id, index as u32);
         }
     }
 
-    let known = |key: &str| -> bool { key.parse::<i64>().is_ok_and(|id| known_ids.contains(&id)) };
+    let pairs: HashSet<(u32, u32)> = from_indices
+        .iter()
+        .zip(to_indices)
+        .map(|(&from_index, &to_index)| (from_index, to_index))
+        .collect();
+
+    let resolve = |key: &str| resolve_memetic_reference(key, &id_to_index, wire);
 
     for neuron_id in memetic.biases.keys() {
-        if !known(neuron_id) {
+        if resolve(neuron_id).is_none() {
             return Err(ValidationFailure::validation(
                 reason::MEMETIC,
                 format!("Neuron with id {neuron_id} not found in the creature."),
@@ -1395,13 +1450,52 @@ fn memetic_rules(
         }
     }
 
-    for (synapse_id, weights) in &memetic.weights {
-        if !known(synapse_id) {
+    match &memetic.weights {
+        MemeticWeights::ById(by_id) => {
+            memetic_map_rules(by_id, &id_to_index, &pairs, &resolve)?;
+        }
+        MemeticWeights::Rows(rows) => {
+            memetic_row_rules(rows, &pairs, &resolve)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// The neuron a memetic key names — by runtime id, or by wire UUID.
+///
+/// The id half is tried first: the id-keyed form is the one TypeScript
+/// validates host-side, and its keys are integers. A key that names no id
+/// falls through to the wire vocabulary, which is how the exported form keys
+/// both its biases and its rows.
+fn resolve_memetic_reference(
+    key: &str,
+    id_to_index: &HashMap<i64, u32>,
+    wire: &WireIndex<'_>,
+) -> Option<u32> {
+    if let Ok(id) = key.parse::<i64>()
+        && let Some(index) = id_to_index.get(&id)
+    {
+        return Some(*index);
+    }
+    wire.resolve(key)
+}
+
+/// Rule 31 over the id-keyed map form — message for message what the
+/// TypeScript `for (const synapseId in memetic.weights)` loop reports.
+fn memetic_map_rules(
+    by_id: &BTreeMap<String, Vec<MemeticWeightExport>>,
+    id_to_index: &HashMap<i64, u32>,
+    pairs: &HashSet<(u32, u32)>,
+    resolve: &impl Fn(&str) -> Option<u32>,
+) -> Result<(), ValidationFailure> {
+    for (synapse_id, weights) in by_id {
+        let Some(from_index) = resolve(synapse_id) else {
             return Err(ValidationFailure::validation(
                 reason::MEMETIC,
                 format!("Synapse with id {synapse_id} not found in the creature."),
             ));
-        }
+        };
 
         for (index, entry) in weights.iter().enumerate() {
             let Some(to_id) = entry.to_id else {
@@ -1419,18 +1513,73 @@ fn memetic_rules(
                     ),
                 ));
             }
-            if !known_ids.contains(&to_id) {
+            let Some(&to_index) = id_to_index.get(&to_id) else {
                 return Err(ValidationFailure::validation(
                     reason::MEMETIC,
                     format!("Memetic from id {synapse_id} has no valid neuron."),
                 ));
-            }
-            if !pairs.contains(&format!("{synapse_id}->{to_id}")) {
+            };
+            if !pairs.contains(&(from_index, to_index)) {
                 return Err(ValidationFailure::validation(
                     reason::MEMETIC,
                     format!("Memetic from id {synapse_id} to id {to_id} has no matching synapses."),
                 ));
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Rule 31 over the UUID-keyed row form (GRQ #4257).
+///
+/// The checks and their wording are the map form's, in the same order — a row
+/// carries its own source, so the "not found" check that the map form runs once
+/// per key runs once per row here. A row has no key to name it, so every
+/// message ends in the row's index: that is the only locator an array offers.
+fn memetic_row_rules(
+    rows: &[MemeticWeightRowExport],
+    pairs: &HashSet<(u32, u32)>,
+    resolve: &impl Fn(&str) -> Option<u32>,
+) -> Result<(), ValidationFailure> {
+    for (index, row) in rows.iter().enumerate() {
+        let (Some(from_uuid), Some(to_uuid)) = (row.from_uuid.as_deref(), row.to_uuid.as_deref())
+        else {
+            // TypeScript interpolates an absent field as `undefined`.
+            let from_uuid = row.from_uuid.as_deref().unwrap_or("undefined");
+            let to_uuid = row.to_uuid.as_deref().unwrap_or("undefined");
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!("Memetic from id {from_uuid} to id {to_uuid} is invalid at index {index}."),
+            ));
+        };
+
+        if row.weight.is_none() {
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!(
+                    "Memetic from id {from_uuid} to id {to_uuid} has invalid weight at index {index}."
+                ),
+            ));
+        }
+
+        let Some(from_index) = resolve(from_uuid) else {
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!("Synapse with id {from_uuid} not found in the creature."),
+            ));
+        };
+        let Some(to_index) = resolve(to_uuid) else {
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!("Memetic from id {from_uuid} has no valid neuron."),
+            ));
+        };
+        if !pairs.contains(&(from_index, to_index)) {
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!("Memetic from id {from_uuid} to id {to_uuid} has no matching synapses."),
+            ));
         }
     }
 
@@ -1465,7 +1614,8 @@ pub fn validate_synapse_and_memetic_rules(
     stats: &mut ValidationStats,
 ) -> Result<(), ValidationFailure> {
     let views = neuron_views(creature);
-    let (from_indices, to_indices, synapse_types) = resolve_synapse_endpoints(creature)?;
+    let wire = WireIndex::build(creature);
+    let (from_indices, to_indices, synapse_types) = resolve_synapse_endpoints(creature, &wire)?;
 
     synapse_walk(&views, &from_indices, &to_indices, options, stats)?;
 
@@ -1493,7 +1643,7 @@ pub fn validate_synapse_and_memetic_rules(
     }
 
     if let Some(memetic) = creature.memetic.as_ref() {
-        memetic_rules(&views, &from_indices, &to_indices, memetic)?;
+        memetic_rules(&views, &wire, &from_indices, &to_indices, memetic)?;
     }
 
     Ok(())

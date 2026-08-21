@@ -660,10 +660,32 @@ Two details a caller can trip over:
 - **`feedback_loop` is a tri-state.** `None` and `Some(true)` both allow a
   recursive synapse; only `Some(false)` rejects one, and `forward_only: true`
   forces that `Some(false)` whatever the caller asked for.
-- **Memetic entries match on neuron id, not index.** The synapse set is built
-  from `neurons[s.from].id -> neurons[s.to].id` using the same derived ids as
-  the neuron half, so a creature whose ids differ from its positions still
-  resolves.
+- **Memetic entries match on neuron identity, not position.** A reference names
+  its neuron by runtime **id** or by wire **UUID** (see below), never by array
+  index, so a creature whose ids differ from its positions still resolves.
+
+##### Both memetic weight forms (GRQ #4257)
+
+`memetic.weights` is written by NEAT-AI in **two** shapes, and neither is
+legacy:
+
+| Form | Shape | Written by |
+|------|-------|------------|
+| `MemeticWeights::Rows` | `[{ "fromUUID": …, "toUUID": …, "weight": … }, …]` | `MemeticWireExport.ts` — any JSON that leaves the process |
+| `MemeticWeights::ById` | `{ "<fromId>": [{ "toId": …, "weight": … }, …] }` | the in-memory `MemeticWeightsInterface` `creatureValidate` sees host-side |
+
+`MemeticWeights` is the single home of that either/or: it dispatches on the
+JSON shape (so a value that is neither names both shapes it could have been),
+and serialises back in **whichever form was read**, keeping the byte-identical
+round trip. Rule 31 resolves the rows by wire UUID — `input-N`, `output-N`, or
+the stable `uuid`, the same vocabulary the synapses use — and the map by
+runtime id. `biases` keys are read in both vocabularies for the same reason. A
+reference that resolves in neither is still `Validation` / `MEMETIC`: accepting
+both forms never accepts a neuron that does not exist.
+
+Modelling only the map cost the fleet a whole Backprop stage — the GRQ-10
+sampler fittest creature carries the row form, and `neat_ai_backpropagation`
+exited 1 with `Creature JSON error: invalid type: sequence, expected a map`.
 
 ```mermaid
 flowchart LR

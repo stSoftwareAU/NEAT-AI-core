@@ -5,7 +5,9 @@
 //! verbatim: NEAT-AI's own error-message tests read this text, so a drifted
 //! string is a broken contract rather than cosmetic.
 
-use neat_core::creature::{MemeticExport, MemeticWeightExport};
+use std::collections::BTreeMap;
+
+use neat_core::creature::{MemeticExport, MemeticWeightExport, MemeticWeights};
 use neat_core::creature_validate::{
     FailureClass, ValidateOptions, ValidationStats, reason, validate_synapse_and_memetic_rules,
 };
@@ -385,9 +387,10 @@ fn memetic_creature(memetic: MemeticExport) -> CreatureExport {
 }
 
 fn weights(key: &str, entries: Vec<MemeticWeightExport>) -> MemeticExport {
-    let mut memetic = MemeticExport::default();
-    memetic.weights.insert(key.to_string(), entries);
-    memetic
+    MemeticExport {
+        weights: MemeticWeights::ById(BTreeMap::from([(key.to_string(), entries)])),
+        ..MemeticExport::default()
+    }
 }
 
 fn weight(to_id: i64, value: f64) -> MemeticWeightExport {
