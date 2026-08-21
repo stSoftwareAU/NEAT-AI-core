@@ -43,8 +43,15 @@
 //! [`CreatureError::DuplicateSynapse`] rather than producing a number
 //! TypeScript would never agree with.
 //!
+//! **Validator extension (Issue #559).** [`NeuronExport::id`] and
+//! [`CreatureExport::memetic`] carry the two pieces
+//! [`crate::creature_validate::creature_validate`] needs and nothing else in
+//! this crate reads. Both are optional and skipped when absent, so a creature
+//! written before they existed parses and round trips byte-identically.
+//!
 //! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
-//! #550 (observation-width contract), #556 (duplicate-synapse rule).
+//! #550 (observation-width contract), #556 (duplicate-synapse rule),
+//! #559 (validation contract input format).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
