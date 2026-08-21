@@ -18,6 +18,7 @@
 
 use wasm_bindgen::prelude::*;
 
+use crate::creature_validate_json::creature_validate_json;
 use crate::derivative::apply_derivative;
 use crate::error::apply_calculate_error;
 use crate::fused_error::apply_fused_error_distribution;
@@ -165,6 +166,31 @@ pub fn wasm_scan_max_bias(
 ) -> Vec<f64> {
     let (max, second_max) = scan_max_bias(weights, biases, exclude_idx, new_bias);
     vec![max, second_max]
+}
+
+// ---------------------------------------------------------------------------
+// creature_validate — JSON in, JSON out (Issue #562).
+//
+// The whole ABI, and why it is JSON rather than a packed buffer, is documented
+// on `crate::creature_validate_json`; this shim only renames it for JS. Both
+// halves of the contract live in that native module so the boundary is covered
+// by `cargo test` rather than only in a browser:
+//
+//   In:  { "creature": <CreatureExport>, "options"?: { neurons?, connections?,
+//         feedbackLoop?, forwardOnly? } }
+//   Out: { "ok": true,  "stats": { input, constant, hidden, output, connections } }
+//        { "ok": false, "failure": { class, reason, message, neuronIndex,
+//                                    synapseIndex, malformed } }
+//
+// Malformed input answers with `malformed: true` and a `MALFORMED_REQUEST:`
+// message — the JSON twin of `topology_ops`' `MALFORMED_BUFFER` — because a
+// panic here aborts the module and `catch_unwind` is unavailable on wasm.
+// ---------------------------------------------------------------------------
+
+/// JS `creature_validate(request: string) -> string`.
+#[wasm_bindgen(js_name = creature_validate)]
+pub fn wasm_creature_validate(request: &str) -> String {
+    creature_validate_json(request)
 }
 
 // ---------------------------------------------------------------------------

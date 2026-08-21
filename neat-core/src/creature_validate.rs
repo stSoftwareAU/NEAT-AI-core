@@ -9,10 +9,18 @@
 //!
 //! **Every rule is ported.** Rules 1–22, the neuron half, landed with Issue
 //! #560; rules 23–31 — the synapse walk, the forward-only leg and the memetic
-//! cross-references — land with Issue #561, so [`creature_validate`] now
+//! cross-references — landed with Issue #561, so [`creature_validate`]
 //! evaluates the whole table and returns [`ValidationStats`] for a creature
-//! that breaks none of it. Exposing it over the WASM boundary and proving
-//! conformance against the TypeScript corpus is Issue #562.
+//! that breaks none of it.
+//!
+//! **Both consumers reach it** (Issue #562). Rust callers use this function
+//! directly; NEAT-AI calls it over the WASM boundary through
+//! [`mod@crate::creature_validate_json`], which is where the JSON ABI and its
+//! cannot-panic contract are documented. The rules are replayed against
+//! NEAT-AI's own conformance corpus by
+//! `neat-core/tests/creature_validate_conformance.rs`, which asserts the same
+//! class, `reason` and message text for every case the wire shape can carry —
+//! and pins what this crate does with the ten it cannot.
 //!
 //! # Options
 //!
@@ -565,6 +573,63 @@ impl ValidateOptions {
 /// #560) fill the neuron counters, then the synapse, forward-only and memetic
 /// rules 23–31 (Issue #561) add [`ValidationStats::connections`].
 ///
+/// # Examples
+///
+/// A creature that breaks no rule answers with its counters:
+///
+/// ```
+/// use neat_core::{ValidateOptions, creature_validate, parse_creature_json};
+///
+/// let creature = parse_creature_json(
+///     r#"{
+///         "input": 1,
+///         "output": 1,
+///         "neurons": [
+///             { "type": "hidden", "uuid": "h1", "bias": 0.5, "squash": "IDENTITY" },
+///             { "type": "output", "uuid": "output-0", "bias": 0.0, "squash": "IDENTITY" }
+///         ],
+///         "synapses": [
+///             { "fromUUID": "input-0", "toUUID": "h1", "weight": 1.0 },
+///             { "fromUUID": "h1", "toUUID": "output-0", "weight": 1.0 }
+///         ]
+///     }"#,
+/// )?;
+///
+/// let stats = creature_validate(&creature, &ValidateOptions::default())?;
+/// assert_eq!((stats.input, stats.hidden, stats.output, stats.connections), (1, 1, 1, 2));
+/// assert_eq!(stats.neurons(), 3);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
+/// Drop the hidden neuron's outward synapse and the first violated rule comes
+/// back naming itself — class, `reason`, message and the neuron it stopped on:
+///
+/// ```
+/// use neat_core::{FailureClass, ValidateOptions, creature_validate, parse_creature_json};
+///
+/// let creature = parse_creature_json(
+///     r#"{
+///         "input": 1,
+///         "output": 1,
+///         "neurons": [
+///             { "type": "hidden", "uuid": "h1", "bias": 0.5, "squash": "IDENTITY" },
+///             { "type": "output", "uuid": "output-0", "bias": 0.0, "squash": "IDENTITY" }
+///         ],
+///         "synapses": [
+///             { "fromUUID": "input-0", "toUUID": "h1", "weight": 1.0 }
+///         ]
+///     }"#,
+/// )?;
+///
+/// let failure = creature_validate(&creature, &ValidateOptions::default())
+///     .expect_err("a hidden neuron nothing reads is invalid");
+/// assert_eq!(failure.class, FailureClass::Validation);
+/// assert_eq!(failure.reason, "NO_OUTWARD_CONNECTIONS");
+/// assert_eq!(failure.message, "hidden neuron h1 has no outward connections");
+/// assert_eq!(failure.neuron_index, Some(1));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+///
 /// # Errors
 ///
 /// Returns the [`ValidationFailure`] for the first violated rule.
@@ -938,7 +1003,15 @@ fn walk_neurons(
         }
 
         // Rule 11 — inside the computational slice, constants precede hiddens.
-        if index >= input && index < views.len() - output {
+        //
+        // `saturating_sub` is the JavaScript semantics, not a papering over
+        // (Issue #562): a creature declaring more outputs than it carries
+        // neurons makes the TypeScript `index < neurons.length - output`
+        // compare against a negative number, which is always false. In Rust
+        // the same subtraction underflows a `usize` — a panic that aborts the
+        // WASM module — so it saturates to `0` and the comparison is false the
+        // same way. Rule 22 is what reports the miscount.
+        if index >= input && index < views.len().saturating_sub(output) {
             if neuron.kind == NeuronKind::Constant && computational_seen_hidden {
                 return Err(at(ValidationFailure::validation(
                     reason::NEURON_ORDER,
@@ -2187,6 +2260,33 @@ mod tests {
             FailureClass::Topology,
             reason::INVALID_STATE,
             "Expected 2 output neurons found: 1",
+        );
+    }
+
+    /// Rule 11 must not panic when the declared output count exceeds the
+    /// neurons the creature carries (Issue #562).
+    ///
+    /// `neurons.length - output` is negative in JavaScript, so the slice test
+    /// is simply false; the same subtraction underflowed a `usize` here and
+    /// panicked — an abort, not a failure, once the validator is reachable
+    /// from WASM. Rule 22 is what reports the miscount.
+    #[test]
+    fn declaring_more_outputs_than_neurons_reports_rule_22_rather_than_panicking() {
+        let impossible = creature(
+            1,
+            5,
+            vec![
+                neuron("hidden", "h1", Some(7), 0.0),
+                neuron("output", "output-0", None, 0.0),
+            ],
+            vec![edge("input-0", "h1"), edge("h1", "output-0")],
+        );
+
+        assert_failure(
+            &rejects(&impossible),
+            FailureClass::Topology,
+            reason::INVALID_STATE,
+            "Expected 5 output neurons found: 1",
         );
     }
 

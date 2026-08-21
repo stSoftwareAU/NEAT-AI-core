@@ -21,6 +21,7 @@ pub mod accumulate;
 pub mod batch_scoring;
 pub mod creature;
 pub mod creature_validate;
+pub mod creature_validate_json;
 pub mod decision_tree;
 pub mod derivative;
 pub mod elastic_distribution;
@@ -69,6 +70,11 @@ pub use creature::{
 pub use creature_validate::{
     FailureClass, ValidateOptions, ValidationFailure, ValidationStats, creature_validate,
     validate_synapse_and_memetic_rules,
+};
+// Issue #562 — the JSON ABI the same rules cross the WASM boundary on.
+pub use creature_validate_json::{
+    MALFORMED_REQUEST, MAX_REQUEST_NEURONS, ValidateResponse, ValidationFailureJson,
+    ValidationStatsJson, creature_validate_json,
 };
 // Issue #555 — canonical IF decision-tree fixtures and the graft helper.
 pub use decision_tree::{

@@ -379,6 +379,11 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --lib --tests --all-features -- --test-threads=2
 
+      # Issue #562 — the public API's doctests (creature_validate) are a gate,
+      # not decoration: `--lib --tests` never compiles them.
+      - name: Run doctests
+        run: cargo test --workspace --doc --all-features
+
       - name: Build documentation
         env:
           RUSTDOCFLAGS: "-D warnings"
