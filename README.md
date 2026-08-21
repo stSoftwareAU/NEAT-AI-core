@@ -668,9 +668,9 @@ Two details a caller can trip over:
 ```mermaid
 flowchart LR
     W["synapse walk<br/>rules 23–27"] --> N["connections count<br/>rule 28"]
-    N --> FO{"forward_only?"}
-    FO -- yes --> T["topology_ops<br/>validate_topology →<br/>validate_structural_integrity →<br/>detect_cycles"]
-    FO -- no --> M["memetic rules<br/>rule 31"]
+    N --> FWD{"forward_only?"}
+    FWD -- yes --> T["topology_ops<br/>validate_topology →<br/>validate_structural_integrity →<br/>detect_cycles"]
+    FWD -- no --> M["memetic rules<br/>rule 31"]
     T --> M
     M --> S["Ok(()) — stats.connections tallied"]
 ```

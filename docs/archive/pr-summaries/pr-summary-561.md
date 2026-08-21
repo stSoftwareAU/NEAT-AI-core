@@ -85,12 +85,12 @@ the evidence is the test run and the mutation checks below.
 
 ```mermaid
 flowchart LR
-    C["CreatureExport"] --> R["resolve()<br/>implicit input-N first,<br/>UUID → index"]
+    C["CreatureExport"] --> R["neuron_views +<br/>resolve_synapse_endpoints<br/>(shared with the neuron half)"]
     R --> W["synapse walk<br/>rules 23–27"]
     W --> N["connections count<br/>rule 28"]
-    N --> FO{"forward_only?"}
-    FO -- yes --> T["topology_ops<br/>validate_topology →<br/>validate_structural_integrity →<br/>detect_cycles"]
-    FO -- no --> M["memetic rules<br/>rule 31"]
+    N --> FWD{"forward_only?"}
+    FWD -- yes --> T["topology_ops<br/>validate_topology →<br/>validate_structural_integrity →<br/>detect_cycles"]
+    FWD -- no --> M["memetic rules<br/>rule 31"]
     T --> M
     M --> S["Ok(()) — stats.connections tallied"]
     W -- "first violated rule" --> F["Err(ValidationFailure)"]
@@ -136,12 +136,16 @@ public entry point, each rule with a positive and a negative case:
   `toId`, a pair with no matching synapse, and the id-vs-index test that fails
   if matching were index-based.
 
-`neat-core/src/creature_validate.rs` unit tests — 4 tests for what the public
-walk makes unreachable, because an earlier rule always stops the creature first:
-the forward-only leg reporting a `topology_ops` error code with its synapse
-index, topology-before-structural ordering, the cycle check being defence in
-depth (a topology-valid edge list is a DAG; a cyclic one is rejected regardless),
-and every branch of the ported wire label.
+`neat-core/src/creature_validate.rs` unit tests (`synapse_half_tests`) — 4 tests
+for what the public walk makes unreachable, because an earlier rule always stops
+the creature first: the forward-only leg reporting a `topology_ops` error code
+with its synapse index, topology-before-structural ordering, the cycle check
+being defence in depth (a topology-valid edge list is a DAG; a cyclic one is
+rejected regardless), and the walk labelling a duplicate with the shared wire
+label.
 
-No existing test was modified or removed; the #559 contract test still asserts
-`creature_validate` refuses to certify anything.
+One existing test changed, and only because the merge above made it false: the
+#559 stub test is now `the_entry_point_runs_both_halves_and_returns_their_stats`
+plus `the_entry_point_reports_a_synapse_half_failure`. Its own doc comment
+anticipated this ("the porting issues replace this test with the real rule
+coverage").
