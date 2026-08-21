@@ -379,7 +379,7 @@ impl From<CreatureError> for GraftError {
 ///
 /// Mirrors [`crate::creature::compile_creature`] exactly: inputs take
 /// `0..input` under their `input-N` names, then the listed neurons follow in
-/// order (a listed neuron re-using an `input-N` name wins, as it does there).
+/// order (a listed neuron reusing an `input-N` name wins, as it does there).
 fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
     let mut map = HashMap::with_capacity(creature.input + creature.neurons.len());
     for i in 0..creature.input {
