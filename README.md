@@ -434,6 +434,64 @@ flowchart LR
     S -. "input &lt; 1 / output &lt; 1" .-> X
 ```
 
+### Canonical IF decision trees and the graft helper (Issue #555)
+
+`neat-core` owns the fleet's one interpretation of a decision tree built from
+the `IF` aggregate. **NEAT-AI-Forests and every other consumer read it from
+here** rather than inventing their own reading of the synapse roles.
+
+An `IF` neuron sums its `Condition` inputs. When that sum is **strictly**
+greater than zero it emits the sum of its `Positive` inputs, otherwise the sum
+of its `Negative` inputs; the neuron's bias is added either way. So a split test
+`x > t` is a condition sum of `x * 1.0 + 1.0 * (-t)`, with a constant neuron
+supplying the `1.0`. A creature may not carry two synapses between the same
+ordered pair of neurons, so one node cannot take all three roles from a single
+constant — each grafted node brings its own trio of `1.0` constants, leaving the
+threshold and the leaf values in the trainable **weights**.
+
+**Fixtures** — `neat-core/src/decision_tree.rs`, with documented expected
+outputs beside each builder:
+
+| Builder | Shape | Covers |
+|---------|-------|--------|
+| `stump_creature()` | `x > 0.5 ? 3.0 : 0.0` | single split, zero/default branch (`STUMP_CASES`) |
+| `depth2_tree_creature()` | root on `x0 > 0.5`, both children on `x1 > 0.25` | nested depth-2, all four leaves (`DEPTH2_CASES`) |
+| `linear_base_creature()` | `2x`, no `IF` at all | the pre-graft base |
+| `residual_correction_creature()` | `2x + (x > 0.75 ? 1.5 : 0)` | non-zero residual/correction leaf (`RESIDUAL_CASES`) |
+
+**Graft helper** — `neat-core/src/if_graft.rs`. A caller describes the node
+(`IfNodeSpec`, or `IfCorrectionSpec` for the common depth-1 correction) and
+`graft_if_node` / `graft_if_tree` / `graft_if_correction` return a **new**
+validated `CreatureExport`; the source is never mutated. Placement is chosen so
+the node is evaluated after every source and before every target, which is what
+preserves the `forwardOnly` reading order the compiled forward pass relies on.
+Every rejection is a typed `GraftError` and **no creature is produced** —
+unknown or duplicate UUID, a missing `IF` role, no outward edge, an edge to an
+input or a constant, a self edge, a duplicate edge, a non-finite weight or bias,
+or no position that keeps every edge pointing forwards. `graft_if_correction`
+on `linear_base_creature()` reproduces `residual_correction_creature()` exactly,
+which is how the helper and the fixture keep each other honest.
+
+`validate_creature_topology` is the shared gate both ends run: it reuses
+`validate_creature_width`, `validate_topology` and
+`validate_structural_integrity` rather than restating their rules. The ordering
+gate only runs for `forwardOnly` creatures, because a recurrent creature
+legitimately carries backward edges.
+
+```mermaid
+flowchart LR
+    B["base CreatureExport"] --> V["validate_creature_topology"]
+    S["IfNodeSpec / IfCorrectionSpec"] --> K{"names new?<br/>all three roles?<br/>edges resolve?"}
+    V --> K
+    K -- no --> E["Err(GraftError) — no creature"]
+    K -- yes --> P{"position after every source,<br/>before every target?"}
+    P -- none exists --> E
+    P -- yes --> G["build creature"]
+    G --> V2["validate_creature_topology"]
+    V2 -- fails --> E
+    V2 -- passes --> O["Ok(CreatureExport)"]
+```
+
 ## Related Repositories
 
 The NEAT-AI project is split across seven public repositories. Each focuses on one concern and composes with the others as shown below.

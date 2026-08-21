@@ -1478,8 +1478,11 @@ pub fn mse_mean_record(
 fn append_le_f32(bytes: &[u8], out: &mut Vec<f32>) {
     out.extend(
         bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])),
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .copied()
+            .map(f32::from_le_bytes),
     );
 }
 
