@@ -39,6 +39,11 @@ a serde error, which is the divergence
 `creature_validate_conformance.rs` declares for `memetic-weights-not-an-array`;
 and a creature that still cannot be parsed still fails the caller's stage.
 
+The `weights` field changes type, so this is **breaking** under `RELEASING.md`:
+the commit carries the `feat(creature)!:` marker and the breaking-change log
+records the `0.10.0` migration, which is what keeps `version-gate` from shipping
+it on a patch bump.
+
 ```mermaid
 flowchart LR
     J["memetic.weights JSON"] --> D{"shape?"}
@@ -55,26 +60,26 @@ flowchart LR
 
 Backend/library change — no web interface to screenshot.
 
-**The reported failure, reproduced and fixed.** A scratch binary against this
-crate's `parse_creature_json` + `creature_validate`, over the real GRQ-sampler
-creatures (deleted after the run):
+**The reported failure, reproduced and fixed.** A scratch test against this
+crate's `parse_creature_json` + `creature_validate`, over the real
+`GRQ-sampler/samples/GRQ-10-1.json` at the sampler tip — the creature named in
+GRQ#4257 — deleted after the run:
 
 ```
-# before
-FAIL GRQ-sampler/samples/GRQ-10-sloth.json  Creature JSON error: invalid type: sequence, expected a map at line 143217 column 13
-FAIL GRQ-sampler/samples/Enceladus.json     Creature JSON error: invalid type: sequence, expected a map at line 66484 column 13
+# before (this branch's merge base, Develop @ 4db5b9b)
+BASELINE ERROR: Creature JSON error: invalid type: sequence, expected a map at line 139268 column 13
 
 # after
-OK GRQ-10-sloth.json  weights=rows  valid (connections=24092)
-OK Enceladus.json     weights=rows  valid (connections=13266)
-OK GRQ-13-1.json      weights=rows  valid (connections=24214)
-OK GRQ-25-1.json      weights=rows  valid (connections=24214)
-OK GRQ-10-1.json      weights=no memetic  valid (connections=24216)
+rows=10  biases=5  neurons=2593
+validate ok: ValidationStats { input: 2511, constant: 275, hidden: 2317, output: 1, connections: 24216 }
 ```
 
-Those creatures also carry UUID-keyed `biases`, so `valid` is what proves the
-validator half was needed too — the parse fix alone would have left rule 31
-reporting `Neuron with id <uuid> not found in the creature.`
+That creature carries UUID-keyed `biases` (`neuron-913681343`,
+`9983497c-76c2-…`) and rows whose `fromUUID` is `input-226`, so `validate ok` is
+what proves the validator half was needed too — the parse fix alone would have
+left rule 31 reporting `Neuron with id <uuid> not found in the creature.` A
+`serde_json::Value` diff of the re-serialised creature shows the whole `memetic`
+block, rows included, surviving the round trip unchanged.
 
 **Mutation evidence** (AGENTS.md rule 2 — every mutation reverted before
 commit), all against `tests/creature_memetic_weight_forms.rs`:
