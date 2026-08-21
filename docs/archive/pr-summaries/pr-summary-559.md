@@ -32,8 +32,8 @@ What landed:
   and the order is contract, not implementation detail.
 - **Input format** — the validator reads the existing `CreatureExport`,
   extended by two optional fields.
-- **Host-side-only checks** — `neuron.creature !== creature`,
-  `neuron.index !== indx`, `neuron.validate()` and the `debugWrite` diagnostics
+- **Host-side-only checks** — `neuron.creature !== creature`, the
+  `neuron.index` vs loop-position check, `neuron.validate()` and the `debugWrite` diagnostics
   dump are documented as staying in TypeScript, with the failure's
   neuron/synapse index as the hook that lets the host run them against the same
   neuron.

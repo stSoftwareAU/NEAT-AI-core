@@ -124,7 +124,7 @@
 //! | TypeScript check | Why it stays |
 //! |------------------|--------------|
 //! | `neuron.creature !== creature` | object identity — a `CreatureExport` has no back-reference |
-//! | `neuron.index !== indx` | the export carries no `index`; position *is* the index here |
+//! | `neuron.index` vs its loop position | the export carries no `index`; position *is* the index here |
 //! | `neuron.validate()` | per-neuron host method over the live `Neuron` class |
 //! | `debugWrite(creature)` diagnostics dump | writes `creatureValidate.json` to the host diagnostics dir |
 //!

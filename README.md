@@ -567,8 +567,8 @@ index-free, so indices are derived exactly as `compile_creature` derives them:
 `0..input` are the implicit input neurons (`input-N`, `id == index`), and
 `input + i` is `neurons[i]`.
 
-**What stays host-side** (NEAT-AI#3802): `neuron.creature !== creature`,
-`neuron.index !== indx`, `neuron.validate()` and the `debugWrite` diagnostics
+**What stays host-side** (NEAT-AI#3802): `neuron.creature !== creature`, the
+`neuron.index` vs loop-position check, `neuron.validate()` and the `debugWrite` diagnostics
 dump all depend on JavaScript object identity or the host filesystem. The
 failure's neuron/synapse index is what lets the host run those against the same
 neuron the shared rules stopped on.
