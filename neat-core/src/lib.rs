@@ -61,10 +61,11 @@ pub mod wasm_arch;
 
 // Re-export key types for convenience
 pub use creature::{
-    CreatureError, CreatureExport, MemeticExport, MemeticWeightExport, NeuronExport, SynapseExport,
-    compile_creature, creature_to_json, creature_to_json_pretty, parse_creature_json,
-    parse_squash_name, parse_synapse_type, squash_name_from, synapse_type_name_from,
-    validate_creature_width, validate_no_duplicate_synapses,
+    CreatureError, CreatureExport, MemeticExport, MemeticWeightExport, MemeticWeightRowExport,
+    MemeticWeights, NeuronExport, SynapseExport, compile_creature, creature_to_json,
+    creature_to_json_pretty, parse_creature_json, parse_squash_name, parse_synapse_type,
+    squash_name_from, synapse_type_name_from, validate_creature_width,
+    validate_no_duplicate_synapses,
 };
 // Issue #559 — the shared creature-validation contract.
 pub use creature_validate::{

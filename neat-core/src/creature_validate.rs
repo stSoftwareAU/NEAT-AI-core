@@ -214,7 +214,9 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::creature::{CreatureExport, MemeticExport, parse_squash_name, parse_synapse_type};
+use crate::creature::{
+    CreatureExport, MemeticExport, MemeticWeights, parse_squash_name, parse_synapse_type,
+};
 use crate::synapse_type::SynapseType;
 use crate::topology_invariants::{
     ConnectionIndex, IfFault, IfRoles, WiringFault, hidden_wiring_fault, if_neuron_fault,
@@ -1364,9 +1366,11 @@ fn forward_only_rules(
 /// id contributes nothing to either lookup — rule 4 is what rejects a missing
 /// id, and this half must not report it under the wrong rule.
 ///
-/// A key that is not an integer cannot match any id and is reported as "not
-/// found", which is the outcome TypeScript's `Number(key)` reaches for every
-/// non-integer key too.
+/// A key resolves as a neuron id (TypeScript's `Number(key)`) **or** as a wire
+/// UUID, because both forms reach this crate: `MemeticWireExport.ts` writes
+/// UUID keys for JSON that leaves the process and `NormaliseCreatureExport.ts`
+/// converts them back to ids on the way in (GRQ#4257). A key that resolves as
+/// neither is reported as "not found".
 fn memetic_rules(
     views: &[NeuronView<'_>],
     from_indices: &[u32],
@@ -1384,10 +1388,37 @@ fn memetic_rules(
         }
     }
 
-    let known = |key: &str| -> bool { key.parse::<i64>().is_ok_and(|id| known_ids.contains(&id)) };
+    let mut uuid_to_id: HashMap<&str, i64> = HashMap::with_capacity(views.len());
+    for view in views {
+        if let (Some(uuid), Some(id)) = (view.stable_uuid(), view.id) {
+            uuid_to_id.insert(uuid, id);
+        }
+    }
+    let input_count = views
+        .iter()
+        .take_while(|view| view.kind == NeuronKind::Input)
+        .count();
+
+    // Implicit input neurons are labelled `input-N`, never listed, and their id
+    // is their index — the mapping `NormaliseCreatureExport.ts` pre-populates.
+    let resolve = |key: &str| -> Option<i64> {
+        if let Ok(id) = key.parse::<i64>()
+            && known_ids.contains(&id)
+        {
+            return Some(id);
+        }
+        if let Some(index) = key
+            .strip_prefix("input-")
+            .and_then(|index| index.parse::<usize>().ok())
+            && index < input_count
+        {
+            return views[index].id;
+        }
+        uuid_to_id.get(key).copied()
+    };
 
     for neuron_id in memetic.biases.keys() {
-        if !known(neuron_id) {
+        if resolve(neuron_id).is_none() {
             return Err(ValidationFailure::validation(
                 reason::MEMETIC,
                 format!("Neuron with id {neuron_id} not found in the creature."),
@@ -1395,43 +1426,100 @@ fn memetic_rules(
         }
     }
 
-    for (synapse_id, weights) in &memetic.weights {
-        if !known(synapse_id) {
-            return Err(ValidationFailure::validation(
-                reason::MEMETIC,
-                format!("Synapse with id {synapse_id} not found in the creature."),
-            ));
-        }
+    match &memetic.weights {
+        MemeticWeights::ById(by_id) => {
+            for (synapse_key, weights) in by_id {
+                let Some(from_id) = resolve(synapse_key) else {
+                    return Err(ValidationFailure::validation(
+                        reason::MEMETIC,
+                        format!("Synapse with id {synapse_key} not found in the creature."),
+                    ));
+                };
 
-        for (index, entry) in weights.iter().enumerate() {
-            let Some(to_id) = entry.to_id else {
-                // TypeScript interpolates the absent field as `undefined`.
-                return Err(ValidationFailure::validation(
-                    reason::MEMETIC,
-                    format!("Memetic from id {synapse_id} to id undefined is invalid."),
-                ));
-            };
-            if entry.weight.is_none() {
-                return Err(ValidationFailure::validation(
-                    reason::MEMETIC,
-                    format!(
-                        "Memetic from id {synapse_id} to id {to_id} has invalid weight at index {index}."
-                    ),
-                ));
-            }
-            if !known_ids.contains(&to_id) {
-                return Err(ValidationFailure::validation(
-                    reason::MEMETIC,
-                    format!("Memetic from id {synapse_id} has no valid neuron."),
-                ));
-            }
-            if !pairs.contains(&format!("{synapse_id}->{to_id}")) {
-                return Err(ValidationFailure::validation(
-                    reason::MEMETIC,
-                    format!("Memetic from id {synapse_id} to id {to_id} has no matching synapses."),
-                ));
+                for (index, entry) in weights.iter().enumerate() {
+                    let Some(to_id) = entry.to_id else {
+                        // TypeScript interpolates the absent field as `undefined`.
+                        return Err(ValidationFailure::validation(
+                            reason::MEMETIC,
+                            format!("Memetic from id {from_id} to id undefined is invalid."),
+                        ));
+                    };
+                    memetic_entry(
+                        from_id,
+                        Some(to_id),
+                        &to_id.to_string(),
+                        entry.weight,
+                        index,
+                        &known_ids,
+                        &pairs,
+                    )?;
+                }
             }
         }
+        MemeticWeights::Rows(rows) => {
+            for (index, row) in rows.iter().enumerate() {
+                let from_key = row.from_uuid.as_deref().unwrap_or("undefined");
+                let Some(from_id) = resolve(from_key) else {
+                    return Err(ValidationFailure::validation(
+                        reason::MEMETIC,
+                        format!("Synapse with id {from_key} not found in the creature."),
+                    ));
+                };
+
+                let Some(to_key) = row.to_uuid.as_deref() else {
+                    return Err(ValidationFailure::validation(
+                        reason::MEMETIC,
+                        format!("Memetic from id {from_id} to id undefined is invalid."),
+                    ));
+                };
+                let to_id = resolve(to_key);
+                let to_text = to_id.map_or_else(|| to_key.to_string(), |id| id.to_string());
+                memetic_entry(
+                    from_id, to_id, &to_text, row.weight, index, &known_ids, &pairs,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// The per-entry half of rule 31, shared by both `weights` forms.
+///
+/// `to_id` is the resolved destination, `to_text` how the message names it —
+/// the resolved id when there is one, otherwise the key as written. The order
+/// of the three checks is TypeScript's: weight, then neuron, then synapse.
+#[allow(clippy::too_many_arguments)]
+fn memetic_entry(
+    from_id: i64,
+    to_id: Option<i64>,
+    to_text: &str,
+    weight: Option<f64>,
+    index: usize,
+    known_ids: &HashSet<i64>,
+    pairs: &HashSet<String>,
+) -> Result<(), ValidationFailure> {
+    if weight.is_none() {
+        return Err(ValidationFailure::validation(
+            reason::MEMETIC,
+            format!(
+                "Memetic from id {from_id} to id {to_text} has invalid weight at index {index}."
+            ),
+        ));
+    }
+
+    let Some(to_id) = to_id.filter(|id| known_ids.contains(id)) else {
+        return Err(ValidationFailure::validation(
+            reason::MEMETIC,
+            format!("Memetic from id {from_id} has no valid neuron."),
+        ));
+    };
+
+    if !pairs.contains(&format!("{from_id}->{to_id}")) {
+        return Err(ValidationFailure::validation(
+            reason::MEMETIC,
+            format!("Memetic from id {from_id} to id {to_id} has no matching synapses."),
+        ));
     }
 
     Ok(())

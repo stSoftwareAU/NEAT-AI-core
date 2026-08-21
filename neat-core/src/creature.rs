@@ -49,9 +49,13 @@
 //! this crate reads. Both are optional and skipped when absent, so a creature
 //! written before they existed parses and round trips byte-identically.
 //!
+//! **Memetic wire forms (GRQ#4257).** `memetic.weights` has two valid shapes
+//! — a UUID-keyed array of rows and an id-keyed map — and NEAT-AI writes both,
+//! so [`MemeticWeights`] models both and preserves whichever one was read.
+//!
 //! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
 //! #550 (observation-width contract), #556 (duplicate-synapse rule),
-//! #559 (validation contract input format).
+//! #559 (validation contract input format), GRQ#4257 (memetic wire forms).
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -150,21 +154,104 @@ pub struct SynapseExport {
 /// [`extra`](Self::extra) rather than dropped, so a creature round trips
 /// through this crate without losing its fine-tuning history.
 ///
-/// Both maps are keyed by the **JSON key text**, not by a parsed integer: the
-/// keys are neuron ids written as strings (TypeScript does `Number(neuronId)`
-/// when it reads them), and a key that is not a number at all is a `MEMETIC`
-/// validation failure rather than a parse error.
+/// `biases` is keyed by the **JSON key text**, not by a parsed value: a key is
+/// either a neuron id written as a string (TypeScript does `Number(neuronId)`
+/// when it reads them) or the neuron's wire UUID — `MemeticWireExport.ts`
+/// writes the UUID for any JSON that leaves the process. A key that resolves
+/// to neither is a `MEMETIC` validation failure rather than a parse error.
+///
+/// `weights` carries whichever of the two valid forms the JSON used; see
+/// [`MemeticWeights`].
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct MemeticExport {
-    /// Bias delta per neuron id.
+    /// Bias delta per neuron, keyed by neuron id text or wire UUID.
     #[serde(default)]
     pub biases: BTreeMap<String, f64>,
-    /// Weight deltas per source neuron id.
+    /// Weight deltas, in whichever valid form the JSON carried them.
     #[serde(default)]
-    pub weights: BTreeMap<String, Vec<MemeticWeightExport>>,
+    pub weights: MemeticWeights,
     /// Every other key on the TypeScript record, preserved verbatim.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The two valid wire forms of `memetic.weights` — GRQ#4257.
+///
+/// NEAT-AI writes both and **neither is legacy**:
+/// `src/creature/MemeticWireExport.ts` serialises weights as a flat array of
+/// `{fromUUID, toUUID, weight}` rows for any JSON that leaves the process,
+/// while `src/architecture/NormaliseCreatureExport.ts` reads that array back
+/// into the id-keyed map (`{"<fromId>": [{toId, weight}, …]}`) the in-memory
+/// creature uses — and accepts either on the way in. Modelling only the map
+/// made every creature carrying the row form fail to parse (`invalid type:
+/// sequence, expected a map`), which is what exited the GRQ Backprop stage 1.
+///
+/// The variant a creature was read in is the variant it is written back out
+/// in, so this crate never rewrites one valid form into the other.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum MemeticWeights {
+    /// The row form: `[{fromUUID, toUUID, weight}, …]`, keyed by wire UUID.
+    Rows(Vec<MemeticWeightRowExport>),
+    /// The id-keyed map form: `{"<fromId>": [{toId, weight}, …]}`. Keys are
+    /// the JSON key text, resolved the same way [`MemeticExport::biases`] keys
+    /// are.
+    ById(BTreeMap<String, Vec<MemeticWeightExport>>),
+}
+
+impl Default for MemeticWeights {
+    /// An absent `weights` key reads as an empty map, which is the shape this
+    /// crate has always written for one.
+    fn default() -> Self {
+        MemeticWeights::ById(BTreeMap::new())
+    }
+}
+
+impl MemeticWeights {
+    /// The rows, when the creature carried the row form.
+    pub fn rows(&self) -> Option<&[MemeticWeightRowExport]> {
+        match self {
+            MemeticWeights::Rows(rows) => Some(rows),
+            MemeticWeights::ById(_) => None,
+        }
+    }
+
+    /// The id-keyed map, when the creature carried the map form.
+    pub fn by_id(&self) -> Option<&BTreeMap<String, Vec<MemeticWeightExport>>> {
+        match self {
+            MemeticWeights::ById(map) => Some(map),
+            MemeticWeights::Rows(_) => None,
+        }
+    }
+
+    /// Whether the record carries no weight deltas at all, in either form.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            MemeticWeights::Rows(rows) => rows.is_empty(),
+            MemeticWeights::ById(map) => map.is_empty(),
+        }
+    }
+}
+
+/// One memetic weight delta in the row form — NEAT-AI's
+/// `MemeticWeightWireRow` (`src/creature/MemeticWireExport.ts`).
+///
+/// Every field is optional for the same reason
+/// [`MemeticWeightExport`]'s are: the `MEMETIC` rule must be able to *report*
+/// an incomplete row, and a required field would turn that validation failure
+/// into a serde error at the parse boundary. Absent fields are skipped on
+/// output, so a row round trips as it arrived.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct MemeticWeightRowExport {
+    /// Wire UUID of the source neuron (e.g. `input-3`).
+    #[serde(rename = "fromUUID", default, skip_serializing_if = "Option::is_none")]
+    pub from_uuid: Option<String>,
+    /// Wire UUID of the destination neuron.
+    #[serde(rename = "toUUID", default, skip_serializing_if = "Option::is_none")]
+    pub to_uuid: Option<String>,
+    /// The fine-tuned weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
 
 /// One memetic weight delta — NEAT-AI's `MemeticWeightInterface`.

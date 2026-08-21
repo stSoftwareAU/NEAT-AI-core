@@ -562,7 +562,11 @@ parses, extended by two optional fields — `NeuronExport::id` (signed: output
 neurons carry negative ids, NEAT-AI #1958) and `CreatureExport::memetic`
 (`biases`, `weights`, with every other key preserved verbatim). Both default to
 absent and are skipped on output, so existing `parse_creature_json` callers and
-already-written creature files round trip byte-identically. The export form is
+already-written creature files round trip byte-identically. `memetic.weights`
+arrives in either of the two forms NEAT-AI writes — the UUID-keyed array of
+`{fromUUID, toUUID, weight}` rows or the id-keyed map
+`{"<fromId>": [{toId, weight}, …]}` — modelled by the `MemeticWeights` enum,
+which preserves whichever form was read (GRQ#4257). The export form is
 index-free, so indices are derived exactly as `compile_creature` derives them:
 `0..input` are the implicit input neurons (`input-N`, `id == index`), and
 `input + i` is `neurons[i]`.
@@ -663,7 +667,10 @@ Two details a caller can trip over:
 - **Memetic entries match on neuron id, not index.** The synapse set is built
   from `neurons[s.from].id -> neurons[s.to].id` using the same derived ids as
   the neuron half, so a creature whose ids differ from its positions still
-  resolves.
+  resolves. A key — a bias key, or a key of the id-keyed `weights` map —
+  resolves as id text *or* as a wire UUID (`input-N` or `neuron.uuid`), and the
+  row form of `weights` resolves both its endpoints the same way, so both wire
+  forms reach the same rule (GRQ#4257).
 
 ```mermaid
 flowchart LR

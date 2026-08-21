@@ -355,7 +355,11 @@ fn the_memetic_block_round_trips_including_keys_the_validator_does_not_read() {
 
     assert_eq!(memetic.biases.get("-1"), Some(&0.75));
     assert_eq!(
-        memetic.weights.get("0").map(Vec::as_slice),
+        memetic
+            .weights
+            .by_id()
+            .and_then(|by_id| by_id.get("0"))
+            .map(Vec::as_slice),
         Some(
             [MemeticWeightExport {
                 to_id: Some(-1),
@@ -388,7 +392,13 @@ fn a_memetic_weight_missing_its_fields_still_parses_so_the_rule_can_report_it() 
     }"#;
 
     let creature = parse_creature_json(json).expect("parses");
-    let weights = &creature.memetic.as_ref().expect("memetic").weights["0"];
+    let weights = &creature
+        .memetic
+        .as_ref()
+        .expect("memetic")
+        .weights
+        .by_id()
+        .expect("the id-keyed form")["0"];
 
     assert_eq!(weights[0].to_id, None);
     assert_eq!(weights[0].weight, None);

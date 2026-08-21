@@ -135,6 +135,42 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.10.0` — `MemeticExport::weights` is a two-form enum (GRQ#4257)
+
+`MemeticExport::weights` changes type from
+`BTreeMap<String, Vec<MemeticWeightExport>>` to the new `MemeticWeights` enum.
+NEAT-AI writes `memetic.weights` two ways and **both are current**: a
+UUID-keyed array of `{fromUUID, toUUID, weight}` rows
+(`src/creature/MemeticWireExport.ts`, the form every creature that leaves a
+NEAT-AI process carries) and the id-keyed map
+(`{"<fromId>": [{toId, weight}, …]}`). Modelling only the map made every
+sampler creature carrying the row form fail to parse — `invalid type:
+sequence, expected a map` — which exited the GRQ Backprop stage 1.
+
+The enum is deliberately not flattened into one canonical shape: a creature is
+written back out in the form it was read, so this crate never rewrites one
+valid form into the other. `MemeticExport::biases` keys and the map form's keys
+now also resolve as wire UUIDs, not just as id text.
+
+**Migration** — reach the map through `by_id()` (or match, and handle rows):
+
+```rust
+// Before (0.9.x)
+let entries = memetic.weights.get("0");
+
+// After (0.10.0) — `None` when the creature carried the row form
+let entries = memetic.weights.by_id().and_then(|by_id| by_id.get("0"));
+
+// or handle both forms explicitly
+match &memetic.weights {
+    MemeticWeights::Rows(rows) => { /* {fromUUID, toUUID, weight} */ }
+    MemeticWeights::ById(by_id) => { /* {"<fromId>": [{toId, weight}]} */ }
+}
+```
+
+`MemeticWeightExport` is unchanged; the row form has its own
+`MemeticWeightRowExport`.
+
 ### `0.8.0` — `get_training_state_num_neurons` / `get_training_state_num_synapses` removed (Issue #424)
 
 The public `neat_core::get_training_state_num_neurons` and
