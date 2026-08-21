@@ -525,6 +525,69 @@ flowchart LR
     V2 -- passes --> O["Ok(CreatureExport)"]
 ```
 
+### Creature validation contract (Issue #559)
+
+`neat-core/src/creature_validate.rs` is the Rust home of NEAT-AI's
+`src/architecture/CreatureValidate.ts` — the fleet's one definition of a valid
+creature. NEAT-AI-Forests shipped an invalid creature that `Creature.validate()`
+would have caught; the fix is a single definition Rust consumers call natively
+and NEAT-AI calls over the existing WASM boundary.
+
+**This issue lands the contract only** — the types, the error model, the rule
+order and the input format — so the two rule ports can be worked in parallel
+against a fixed interface.
+
+```rust
+pub fn creature_validate(creature: &CreatureExport, options: &ValidateOptions)
+    -> Result<ValidationStats, ValidationFailure>;
+```
+
+| Piece | What it fixes |
+|-------|---------------|
+| `ValidateOptions` | `forward_only` forces `feedback_loop` to `Some(false)`; otherwise only an explicit `Some(false)` rejects `from > to`. `neurons: Some(0)` is **skipped** (TypeScript truthiness) while `connections: Some(0)` **is** checked (`Number.isInteger`) |
+| `ValidationStats` | the `stats` object `creatureValidate` returns: `input`, `constant`, `hidden`, `output`, `connections` |
+| `ValidationFailure` | `class` (`TopologyError` / `ValidationError`), the verbatim `reason`, the human-readable `message`, and the `neuron_index` / `synapse_index` it stopped on |
+| `VALIDATION_REASONS` / `TOPOLOGY_REASONS` | the `ValidationErrorName` and `TopologyErrorReason` unions verbatim, so NEAT-AI rehydrates the right error type with no translation table |
+
+The reason lists are the single home of the permitted `reason` values and are
+checked at **compile time**: each list is internally distinct and the two are
+disjoint, so a name copied into the wrong union fails the build. The failure
+constructors reject a reason outside their class rather than sending NEAT-AI a
+string it cannot rehydrate. Rule evaluation order is part of the contract — the
+numbered table in the module documentation is what both ports implement, first
+failure wins.
+
+**Input format.** A creature arrives as the `CreatureExport` this crate already
+parses, extended by two optional fields — `NeuronExport::id` (signed: output
+neurons carry negative ids, NEAT-AI #1958) and `CreatureExport::memetic`
+(`biases`, `weights`, with every other key preserved verbatim). Both default to
+absent and are skipped on output, so existing `parse_creature_json` callers and
+already-written creature files round trip byte-identically. The export form is
+index-free, so indices are derived exactly as `compile_creature` derives them:
+`0..input` are the implicit input neurons (`input-N`, `id == index`), and
+`input + i` is `neurons[i]`.
+
+**What stays host-side** (NEAT-AI#3802): `neuron.creature !== creature`,
+`neuron.index !== indx`, `neuron.validate()` and the `debugWrite` diagnostics
+dump all depend on JavaScript object identity or the host filesystem. The
+failure's neuron/synapse index is what lets the host run those against the same
+neuron the shared rules stopped on.
+
+Until the rule bodies land, `creature_validate` returns a
+`Validation` / `OTHER` failure saying so rather than an empty `Ok`: an
+unconditional `Ok` would report the very creature this work exists to catch as
+valid.
+
+```mermaid
+flowchart LR
+    C["CreatureExport<br/>+ id, + memetic"] --> V["creature_validate"]
+    O["ValidateOptions<br/>forward_only → feedback_loop = false"] --> V
+    V -->|"no rule broken"| S["Ok(ValidationStats)"]
+    V -->|"first violated rule"| F["Err(ValidationFailure)<br/>class + reason + message + index"]
+    F --> T["NEAT-AI rehydrates<br/>TopologyError / ValidationError"]
+    F --> H["host-only checks<br/>identity, neuron.validate(), debugWrite"]
+```
+
 ## Related Repositories
 
 The NEAT-AI project is split across seven public repositories. Each focuses on one concern and composes with the others as shown below.

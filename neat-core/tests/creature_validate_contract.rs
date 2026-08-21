@@ -212,7 +212,8 @@ fn failure_carries_class_reason_message_and_the_offending_index() {
 /// line reads the same as the TypeScript one it mirrors.
 #[test]
 fn failure_display_names_the_typescript_error_class_and_reason() {
-    let failure = ValidationFailure::validation(reason::NO_INWARD_CONNECTIONS, "hidden-2 is orphaned");
+    let failure =
+        ValidationFailure::validation(reason::NO_INWARD_CONNECTIONS, "hidden-2 is orphaned");
 
     assert_eq!(
         failure.to_string(),
@@ -283,7 +284,10 @@ fn a_creature_without_id_or_memetic_parses_and_serialises_unchanged() {
 
     let json = creature_to_json(&creature).expect("serialises");
     assert!(!json.contains("\"id\""), "no id key was emitted: {json}");
-    assert!(!json.contains("memetic"), "no memetic key was emitted: {json}");
+    assert!(
+        !json.contains("memetic"),
+        "no memetic key was emitted: {json}"
+    );
     assert_eq!(
         parse_creature_json(&json).expect("re-parses"),
         creature,
@@ -309,8 +313,8 @@ fn negative_output_neuron_ids_round_trip() {
     assert_eq!(creature.neurons[0].id, Some(2));
     assert_eq!(creature.neurons[1].id, Some(-1));
 
-    let round_tripped = parse_creature_json(&creature_to_json(&creature).expect("serialises"))
-        .expect("re-parses");
+    let round_tripped =
+        parse_creature_json(&creature_to_json(&creature).expect("serialises")).expect("re-parses");
     assert_eq!(round_tripped, creature);
 }
 
@@ -346,10 +350,13 @@ fn the_memetic_block_round_trips_including_keys_the_validator_does_not_read() {
             .as_slice()
         )
     );
-    assert_eq!(memetic.extra.get("generation").and_then(|v| v.as_i64()), Some(12));
+    assert_eq!(
+        memetic.extra.get("generation").and_then(|v| v.as_i64()),
+        Some(12)
+    );
 
-    let round_tripped = parse_creature_json(&creature_to_json(&creature).expect("serialises"))
-        .expect("re-parses");
+    let round_tripped =
+        parse_creature_json(&creature_to_json(&creature).expect("serialises")).expect("re-parses");
     assert_eq!(round_tripped, creature, "generation and score survive");
 }
 
