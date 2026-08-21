@@ -254,8 +254,12 @@ fn test_compile_creature_softmax_alias_matches_logistic() {
 
 #[test]
 fn test_compile_creature_with_if_neuron() {
+    // Issue #556 — the positive and negative branches used to share the pair
+    // (input-1, if-node), which NEAT-AI TypeScript collapses to one synapse.
+    // A third input carries the negative branch so every (from, to) pair is
+    // distinct; the branch-selection behaviour under test is unchanged.
     let json = r#"{
-            "input": 2,
+            "input": 3,
             "output": 1,
             "neurons": [
                 {"type": "hidden", "uuid": "if-node", "bias": 0.0, "squash": "IF"},
@@ -264,7 +268,7 @@ fn test_compile_creature_with_if_neuron() {
             "synapses": [
                 {"fromUUID": "input-0", "toUUID": "if-node", "weight": 1.0, "type": "condition"},
                 {"fromUUID": "input-1", "toUUID": "if-node", "weight": 1.0, "type": "positive"},
-                {"fromUUID": "input-1", "toUUID": "if-node", "weight": -1.0, "type": "negative"},
+                {"fromUUID": "input-2", "toUUID": "if-node", "weight": -1.0, "type": "negative"},
                 {"fromUUID": "if-node", "toUUID": "output-0", "weight": 1.0}
             ]
         }"#;
@@ -273,12 +277,12 @@ fn test_compile_creature_with_if_neuron() {
     let mut network = compile_creature(&creature).unwrap();
 
     // Condition input-0 = 1.0 > 0, so positive branch: input-1 * 1.0 = 3.0
-    let output_positive = network.activate(&[1.0, 3.0], 1);
+    let output_positive = network.activate(&[1.0, 3.0, 3.0], 1);
     assert!((output_positive[0] - 3.0).abs() < 1e-5);
 
-    // Condition input-0 = -1.0 <= 0, so negative branch: input-1 * -1.0 = -3.0
+    // Condition input-0 = -1.0 <= 0, so negative branch: input-2 * -1.0 = -3.0
     network.reset_state();
-    let output_negative = network.activate(&[-1.0, 3.0], 1);
+    let output_negative = network.activate(&[-1.0, 3.0, 3.0], 1);
     assert!((output_negative[0] - (-3.0)).abs() < 1e-5);
 }
 
