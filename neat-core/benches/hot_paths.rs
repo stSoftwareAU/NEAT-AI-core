@@ -24,7 +24,9 @@ use neat_core::simd::{
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
 use neat_core::topological_backprop::{PropagateInput, propagate_topological_loop};
-use neat_core::topology_ops::{compute_reverse_topological_order, scan_available_connections};
+use neat_core::topology_ops::{
+    compute_reverse_topological_order, detect_cycles, scan_available_connections,
+};
 use neat_core::unsquash::apply_unsquash;
 
 /// Deterministic network/backprop fixtures, shared with the `bench_fixtures`
@@ -387,6 +389,23 @@ fn bench_topology_ops(c: &mut Criterion) {
                 });
             },
         );
+
+        // The forward-only leg of `creature_validate`, and `TypedTopology`'s
+        // own `detectCycles` (NEAT-AI#3832). The relaxation pass used to
+        // rescan the whole synapse list per dequeued neuron, so this group is
+        // where the quadratic term would come back — throughput is neurons
+        // plus synapses because a linear walk is the contract.
+        group.bench_function(BenchmarkId::new("detect_cycles", spec.label), |b| {
+            b.iter(|| {
+                let out = detect_cycles(
+                    black_box(&from_indices),
+                    black_box(&to_indices),
+                    black_box(num_neurons),
+                    black_box(num_inputs),
+                );
+                black_box(out);
+            });
+        });
     }
     group.finish();
 }

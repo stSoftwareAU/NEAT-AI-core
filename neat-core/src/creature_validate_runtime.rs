@@ -134,7 +134,7 @@ pub struct RuntimeSynapse {
 /// Read a bias: a number, a `"NaN"` / `"Infinity"` / `"-Infinity"` sentinel, or
 /// `undefined` for anything else — including a value of the wrong type, which
 /// is no more a bias than an absent one and is rule 8's to report.
-fn bias_value(bias: Option<&Value>) -> Option<f64> {
+pub(crate) fn bias_value(bias: Option<&Value>) -> Option<f64> {
     match bias {
         Some(Value::Number(number)) => number.as_f64(),
         Some(Value::String(text)) => match text.as_str() {
@@ -254,7 +254,7 @@ fn resolve_endpoints(
 /// array, an entry that is not an object, a missing `toId` — each is a rule 31
 /// failure reported in NEAT-AI's own words, not a parse error that would tell
 /// the host nothing about its creature.
-fn memetic_view(memetic: &Value) -> crate::creature_validate::MemeticView<'_> {
+pub(crate) fn memetic_view(memetic: &Value) -> crate::creature_validate::MemeticView<'_> {
     let record: Option<&Map<String, Value>> = memetic.as_object();
 
     let member = |name: &str| -> Vec<(&str, &Value)> {
