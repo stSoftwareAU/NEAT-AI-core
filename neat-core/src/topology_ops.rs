@@ -678,6 +678,15 @@ pub fn validate_structural_integrity(
 /// Uses Kahn's algorithm on non-input neurons. Self-loops are explicitly
 /// detected as cycles.
 ///
+/// # Cost
+///
+/// Linear in neurons plus synapses (NEAT-AI#3832). The relaxation pass reads
+/// an outward adjacency built once up front; it used to rescan the whole
+/// synapse list for every dequeued neuron, which is `O(neurons × synapses)` —
+/// 10.8 ms of the 10.9 ms `creature_validate` spent on a 4 272-neuron,
+/// 22 928-synapse production creature, and the same cost again on every
+/// `TypedTopology.detectCycles` call from the host.
+///
 /// # Returns
 /// `0` if acyclic, `1` if a cycle is detected.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
@@ -721,6 +730,8 @@ pub fn detect_cycles(
         }
     }
 
+    let outward = OutwardEdges::build(from_indices, to_indices, n, input_count);
+
     let mut queue: Vec<usize> = Vec::new();
     for i in input_count..n {
         if in_degree[i] == 0 {
@@ -736,11 +747,8 @@ pub fn detect_cycles(
         head += 1;
         processed += 1;
 
-        for s in 0..from_indices.len() {
-            if from_indices[s] as usize != idx {
-                continue;
-            }
-            let to = to_indices[s] as usize;
+        for &target in outward.targets(idx) {
+            let to = target as usize;
             if to == idx || to < input_count || to >= n {
                 continue;
             }
@@ -753,6 +761,75 @@ pub fn detect_cycles(
 
     let non_input_count = n - input_count;
     if processed < non_input_count { 1 } else { 0 }
+}
+
+/// The targets of every synapse leaving a non-input neuron, grouped by source.
+///
+/// A compressed-row adjacency over `input_count..num_neurons`, which is
+/// exactly the range Kahn's queue can hold. Edges leaving an input neuron, or
+/// a source past `num_neurons`, are left out: the queue never dequeues one, so
+/// the relaxation pass could never have reached them, and leaving them out
+/// keeps the in-degree bookkeeping identical to the rescan this replaces.
+struct OutwardEdges {
+    /// `starts[s]..starts[s + 1]` slices [`Self::edge_targets`] for the source
+    /// at walk index `s + first_source`.
+    starts: Vec<u32>,
+    /// `to` endpoints, grouped by source and otherwise in synapse order.
+    edge_targets: Vec<u32>,
+    /// The walk index `starts[0]` describes — the first non-input neuron.
+    first_source: usize,
+}
+
+impl OutwardEdges {
+    /// Group `from`/`to` by source, for the sources in `first_source..num_neurons`.
+    fn build(
+        from_indices: &[u32],
+        to_indices: &[u32],
+        num_neurons: usize,
+        first_source: usize,
+    ) -> Self {
+        let source_count = num_neurons - first_source;
+        let mut starts = vec![0u32; source_count + 1];
+
+        let in_range = |from: u32| {
+            let from = from as usize;
+            (first_source..num_neurons).contains(&from)
+        };
+
+        for &from in from_indices {
+            if in_range(from) {
+                // Counting pass: offset by one so the prefix sum below lands
+                // each source's start without a second shift.
+                starts[from as usize - first_source + 1] += 1;
+            }
+        }
+        for s in 0..source_count {
+            starts[s + 1] += starts[s];
+        }
+
+        let mut edge_targets = vec![0u32; starts[source_count] as usize];
+        let mut cursor = starts.clone();
+        for (&from, &to) in from_indices.iter().zip(to_indices) {
+            if in_range(from) {
+                let slot = from as usize - first_source;
+                edge_targets[cursor[slot] as usize] = to;
+                cursor[slot] += 1;
+            }
+        }
+
+        Self {
+            starts,
+            edge_targets,
+            first_source,
+        }
+    }
+
+    /// Every `to` endpoint leaving `source`, which must be a source this index
+    /// covers — the caller only ever asks about a neuron it dequeued.
+    fn targets(&self, source: usize) -> &[u32] {
+        let slot = source - self.first_source;
+        &self.edge_targets[self.starts[slot] as usize..self.starts[slot + 1] as usize]
+    }
 }
 
 #[cfg(test)]
