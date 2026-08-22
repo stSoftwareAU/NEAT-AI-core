@@ -620,6 +620,11 @@ pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), Creature
 /// is therefore to fail closed with [`CreatureError::DuplicateSynapse`],
 /// naming the first pair that repeats in declaration order.
 ///
+/// The ordered pair is the whole key — the synapse **role** plays no part in
+/// it. Many synapses may carry the same role into one neuron as long as their
+/// sources differ; only an exact repeat of `(fromUUID, toUUID)` is rejected
+/// (Issue #572).
+///
 /// [`compile_creature`] calls this before building the network. Consumers that
 /// assemble a [`CreatureExport`] in Rust, or feed one straight into their own
 /// scorer, should call it at their own boundary.
