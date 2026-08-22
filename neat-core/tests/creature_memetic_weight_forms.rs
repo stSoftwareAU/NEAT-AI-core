@@ -14,7 +14,7 @@
 //! otherwise — so rule 31 resolves them exactly as
 //! `resolve_synapse_endpoints` resolves a synapse endpoint.
 
-use neat_core::creature::{MemeticWeightRowExport, MemeticWeights};
+use neat_core::creature::{MemeticExport, MemeticWeightRowExport, MemeticWeights};
 use neat_core::creature_validate::{ValidateOptions, creature_validate, reason};
 use neat_core::{CreatureExport, creature_to_json, parse_creature_json};
 
@@ -376,4 +376,137 @@ fn a_hand_built_creature_can_carry_the_row_form() {
 
     creature_validate(&creature, &ValidateOptions::default())
         .expect("input-1 -> h is a real synapse");
+}
+
+// ---------------------------------------------------------------------------
+// 4. NEAT-AI #3812 — the empty array, and an ancestry snapshot's own weights.
+// ---------------------------------------------------------------------------
+
+/// `"weights": []` is the shape that fires most often: a creature evolved
+/// without a memetic pass still exports the row array, just an empty one, so
+/// the map-only model rejected essentially every evolved creature. An empty
+/// array carries no weights at all — it parses, and it reaches rule 31 with
+/// nothing to resolve rather than dying at the parse boundary.
+#[test]
+fn an_empty_row_array_parses_to_no_weights() {
+    let json = wire_form("[]");
+
+    let creature = parse(&json);
+    let rows = creature
+        .memetic
+        .as_ref()
+        .expect("memetic block")
+        .weights
+        .rows()
+        .expect("the array form was read");
+
+    assert!(rows.is_empty(), "no rows to resolve: {rows:?}");
+    creature_validate(&creature, &ValidateOptions::default())
+        .expect("an empty weight list resolves vacuously");
+
+    let written = creature_to_json(&creature).expect("serialises");
+    assert!(
+        written.contains(r#""weights":[]"#),
+        "written back as the empty array it arrived as: {written}"
+    );
+}
+
+/// The empty array and the empty map make the same statement — this creature
+/// carries no memetic weights — so every observable must agree: both parse,
+/// both hold zero entries, both validate, and the rest of the memetic record
+/// is untouched by which shape carried the nothing.
+#[test]
+fn the_empty_row_array_and_the_empty_map_agree_on_carrying_no_weights() {
+    let from_array = parse(&wire_form("[]"));
+    let from_map = parse(&wire_form("{}"));
+
+    let array_memetic = from_array.memetic.as_ref().expect("memetic block");
+    let map_memetic = from_map.memetic.as_ref().expect("memetic block");
+
+    assert!(
+        array_memetic
+            .weights
+            .rows()
+            .expect("the array form was read")
+            .is_empty()
+    );
+    assert!(
+        map_memetic
+            .weights
+            .by_id()
+            .expect("the map form was read")
+            .is_empty()
+    );
+
+    assert_eq!(array_memetic.biases, map_memetic.biases);
+    assert_eq!(array_memetic.extra, map_memetic.extra);
+
+    for creature in [&from_array, &from_map] {
+        creature_validate(creature, &ValidateOptions::default())
+            .expect("neither shape has a weight to resolve");
+    }
+}
+
+/// An ancestry snapshot is another memetic record — TypeScript's
+/// `MemeticWireData.ancestry` is `MemeticWireData[]` — so it carries `weights`
+/// in the same two shapes. Reading a snapshot back as a [`MemeticExport`] is
+/// how a consumer walks the fine-tuning history, and the row form must survive
+/// that read for the same reason the top-level record does.
+#[test]
+fn an_ancestry_snapshot_carries_the_row_form() {
+    let json = wire_form("[]").replace(
+        "\"score\": -0.25",
+        "\"score\": -0.25, \"ancestry\": [
+           { \"generation\": 6, \"weights\": [{ \"fromUUID\": \"h\", \"toUUID\": \"output-0\", \"weight\": 0.5 }] },
+           { \"generation\": 5, \"weights\": [] },
+           { \"generation\": 4, \"weights\": { \"0\": [{ \"toId\": 2, \"weight\": -0.5 }] } }
+         ]",
+    );
+
+    let creature = parse(&json);
+    let ancestry = creature.memetic.as_ref().expect("memetic block").extra["ancestry"].clone();
+
+    let snapshots: Vec<MemeticExport> =
+        serde_json::from_value(ancestry).expect("every snapshot reads back as a memetic record");
+
+    let rows = snapshots[0].weights.rows().expect("the row form");
+    assert_eq!(rows[0].from_uuid.as_deref(), Some("h"));
+    assert_eq!(rows[0].to_uuid.as_deref(), Some("output-0"));
+    assert_eq!(rows[0].weight, Some(0.5));
+
+    assert!(
+        snapshots[1]
+            .weights
+            .rows()
+            .expect("the row form")
+            .is_empty(),
+        "an empty ancestry weight list is empty, not an error"
+    );
+    assert_eq!(
+        snapshots[2].weights.by_id().expect("the map form")["0"][0].to_id,
+        Some(2),
+        "and the map form still reads in an ancestry snapshot"
+    );
+
+    assert_eq!(
+        parse(&creature_to_json(&creature).expect("serialises")),
+        creature,
+        "the whole history round trips"
+    );
+}
+
+/// A snapshot whose `weights` is neither shape fails loud when it is read,
+/// naming both forms — the tolerance is to the two valid shapes, not to
+/// anything at all.
+#[test]
+fn an_ancestry_snapshot_whose_weights_are_neither_form_fails_loud() {
+    let error = serde_json::from_value::<MemeticExport>(serde_json::json!({
+        "generation": 6,
+        "weights": 3
+    }))
+    .expect_err("a number is neither form");
+
+    let text = error.to_string();
+    assert!(text.contains("fromUUID"), "names the row form: {text}");
+    assert!(text.contains("map"), "names the map form: {text}");
 }
