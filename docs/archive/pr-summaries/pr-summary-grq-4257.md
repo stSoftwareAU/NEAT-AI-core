@@ -74,6 +74,22 @@ rows=10  biases=5  neurons=2593
 validate ok: ValidationStats { input: 2511, constant: 275, hidden: 2317, output: 1, connections: 24216 }
 ```
 
+**The stage itself, end to end.** The same `neat_ai_backpropagation` 0.1.22
+binary, rebuilt against each side, over that creature and 32 synthesised
+`.bin` records:
+
+```console
+# before — sibling neat-core at Develop
+$ neat_ai_backpropagation train GRQ-10-1.json /tmp/bp-data --epochs 1 --max-records 32 …
+error: Creature JSON error: invalid type: sequence, expected a map at line 139268 column 13
+EXIT=1
+
+# after — sibling neat-core on this branch
+$ neat_ai_backpropagation train GRQ-10-1.json /tmp/bp-data --epochs 1 --max-records 32 …
+train: baseline_mse=1.015693731845 best_mse=1.015182269401 accepted_epochs=1
+EXIT=0
+```
+
 That creature carries UUID-keyed `biases` (`neuron-913681343`,
 `9983497c-76c2-…`) and rows whose `fromUUID` is `input-226`, so `validate ok` is
 what proves the validator half was needed too — the parse fix alone would have
@@ -94,7 +110,10 @@ commit), all against `tests/creature_memetic_weight_forms.rs`:
 **Gates.** `./quality.sh` green (fmt, clippy `-D warnings`, `cargo test
 --workspace` 229 + suites, doctests, rustdoc, release build). The consumer
 builds against this checkout: `cargo build --release` in
-NEAT-AI-Backpropagation is green.
+NEAT-AI-Backpropagation is green, and it never reads `memetic.weights` from
+Rust, so the breaking field-type change needs no code change there — only the
+`neat-core.expected-version` baseline bump its CI gate wants after the
+`0.10.0` release (tracked in stSoftwareAU/GRQ#4259).
 `cargo check -p neat-core --target wasm32-unknown-unknown` could not run here —
 `the wasm32-unknown-unknown target may not be installed` — and the change is
 target-agnostic (serde, `std::collections`, `std::fmt`; no `arch` or SIMD code
