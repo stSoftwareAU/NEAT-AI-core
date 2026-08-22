@@ -135,7 +135,7 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
-### `0.10.0` — `MemeticExport::weights` is a two-form enum (GRQ#4257)
+### `0.10.0` — `MemeticExport::weights` is a two-form enum
 
 `MemeticExport::weights` changes type from
 `BTreeMap<String, Vec<MemeticWeightExport>>` to the new `MemeticWeights` enum.
@@ -143,9 +143,9 @@ NEAT-AI writes `memetic.weights` two ways and **both are current**: a
 UUID-keyed array of `{fromUUID, toUUID, weight}` rows
 (`src/creature/MemeticWireExport.ts`, the form every creature that leaves a
 NEAT-AI process carries) and the id-keyed map
-(`{"<fromId>": [{toId, weight}, …]}`). Modelling only the map made every
-sampler creature carrying the row form fail to parse — `invalid type: sequence,
-expected a map` — which exited the GRQ Backprop stage 1.
+(`{"<fromId>": [{toId, weight}, …]}`). Modelling only the map caused
+production creatures carrying the row form to fail parsing with
+`invalid type: sequence, expected a map`, which exited a production backpropagation stage.
 
 The enum is deliberately not flattened into one canonical shape: a creature is
 written back out in the form it was read, so this crate never rewrites one
@@ -170,6 +170,41 @@ match &memetic.weights {
 
 `MemeticWeightExport` is unchanged; the row form has its own
 `MemeticWeightRowExport`.
+
+### `0.9.0` — struct-of-arrays hot synapse fields (Issue #533)
+
+`CompiledNetwork` gains two public fields — `hot_weights: Vec<f32>` and
+`hot_from: Vec<u16>` — a parallel struct-of-arrays view built by `hot_synapse_soa`
+at every construction path. The interleaved gather kernels
+(`weighted_sum_interleaved` / `weighted_sum_interleaved_8`) now take those two
+slices instead of `&[SynapseData]`.
+
+**Migration** — callers constructing `CompiledNetwork` literals must supply
+the two fields; `hot_synapse_soa` is exported for that:
+
+```rust
+// Before (0.8.x)
+let net = CompiledNetwork {
+    synapses: vec![...],
+    neurons: vec![...],
+    // ...
+};
+
+// After (0.9.0)
+let net = CompiledNetwork {
+    synapses: vec![...],
+    neurons: vec![...],
+    hot_weights: hot_synapse_soa(&synapses).0,
+    hot_from: hot_synapse_soa(&synapses).1,
+    // ...
+};
+```
+
+The fields are public and must stay in sync with `synapses`; `debug_assert_hot_soa`
+runs at every interleaved entry point and panics in debug builds if they drift.
+Consumers only using the aggregated and single-record paths are unaffected — those
+paths still take the full `SynapseData` and the struct-of-arrays view never
+changes their results, only the bandwidth to the interleaved hot path.
 
 ### `0.8.0` — `get_training_state_num_neurons` / `get_training_state_num_synapses` removed (Issue #424)
 

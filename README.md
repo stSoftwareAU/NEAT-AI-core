@@ -664,7 +664,7 @@ Two details a caller can trip over:
   its neuron by runtime **id** or by wire **UUID** (see below), never by array
   index, so a creature whose ids differ from its positions still resolves.
 
-##### Both memetic weight forms (GRQ #4257)
+##### Both memetic weight forms
 
 `memetic.weights` is written by NEAT-AI in **two** shapes, and neither is
 legacy:
@@ -683,9 +683,10 @@ runtime id. `biases` keys are read in both vocabularies for the same reason. A
 reference that resolves in neither is still `Validation` / `MEMETIC`: accepting
 both forms never accepts a neuron that does not exist.
 
-Modelling only the map cost the fleet a whole Backprop stage — the GRQ-10
-sampler fittest creature carries the row form, and `neat_ai_backpropagation`
-exited 1 with `Creature JSON error: invalid type: sequence, expected a map`.
+Modelling only the map caused a production failure where a sampler creature
+carrying the row form could not parse, exiting with `Creature JSON error:
+invalid type: sequence, expected a map`. Supporting both forms resolved the
+issue.
 
 ```mermaid
 flowchart LR
