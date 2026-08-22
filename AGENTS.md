@@ -267,8 +267,10 @@ this you **must**:
 `neat-core/src/if_graft.rs` is the single home of the rule that builds an `IF`
 node: which synapse carries which [`SynapseType`] role, that all three roles
 must be present, that the node's own constants come first, and where the node
-may sit so every edge still points forwards. `graft_if_node`,
-`graft_if_tree` and `graft_if_correction` all route through it, and every
+may sit so every edge still points forwards. `graft_if_node`, `graft_if_nodes`,
+`graft_if_tree`, `graft_relay_node` and `graft_if_correction` all route through
+one internal `NodePlan` — add a node kind there, never a second copy of the
+placement rules — and every
 rejection is a typed `GraftError` with **no creature produced** — a caller never
 hand-edits neuron/synapse JSON to add a decision node, and NEAT-AI-Forests reads
 its interpretation of the roles from here rather than inventing one.
