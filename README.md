@@ -539,8 +539,8 @@ outputs beside each builder:
 
 **Graft helper** — `neat-core/src/if_graft.rs`. A caller describes the node
 (`IfNodeSpec`, or `IfCorrectionSpec` for the common depth-1 correction) and
-`graft_if_node` / `graft_if_tree` / `graft_if_correction` return a **new**
-validated `CreatureExport`; the source is never mutated. Placement is chosen so
+`graft_if_node` / `graft_if_nodes` / `graft_if_tree` / `graft_if_correction`
+return a **new** validated `CreatureExport`; the source is never mutated. Placement is chosen so
 the node is evaluated after every source and before every target, which is what
 preserves the `forwardOnly` reading order the compiled forward pass relies on.
 Every rejection is a typed `GraftError` and **no creature is produced** —
@@ -549,6 +549,16 @@ input or a constant, a self edge, a duplicate edge, a non-finite weight or bias,
 or no position that keeps every edge pointing forwards. `graft_if_correction`
 on `linear_base_creature()` reproduces `residual_correction_creature()` exactly,
 which is how the helper and the fixture keep each other honest.
+
+**Whole trees and both-branch corrections** (NEAT-AI-Forests #48) —
+`graft_if_nodes` grafts a post-order batch as one all-or-nothing change, where a
+node may leave its outward edge to a later node in the same batch (the nested
+child feeding a parent that does not exist yet); only the assembled creature is
+validated. `IfNodeSpec::with_target_role` emits a **typed** outward edge, which
+is how a correction reaches one named branch of an `IF` destination, and
+`graft_relay_node` adds the IDENTITY relay that carries the same value into the
+other branch — a creature may not hold two synapses between the same ordered
+pair, so the second branch needs a second source.
 
 `validate_creature_topology` is the shared gate both ends run: it reuses
 `validate_creature_width`, `validate_topology` and

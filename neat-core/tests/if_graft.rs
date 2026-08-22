@@ -8,8 +8,8 @@ use neat_core::decision_tree::{
     RESIDUAL_THRESHOLD, RESIDUAL_VALUE, linear_base_creature, residual_correction_creature,
 };
 use neat_core::if_graft::{
-    GraftError, IfCorrectionSpec, IfNodeSpec, graft_if_correction, graft_if_node, graft_if_tree,
-    validate_creature_topology,
+    GraftError, IfCorrectionSpec, IfNodeSpec, RelaySpec, graft_if_correction, graft_if_node,
+    graft_if_nodes, graft_if_tree, graft_relay_node, validate_creature_topology,
 };
 use neat_core::topology_ops::{
     BACKWARD_CONNECTION, DUPLICATE_CONNECTION, STRUCTURAL_HIDDEN_NO_OUTWARD,
@@ -666,4 +666,326 @@ fn grafted_synapses_are_in_canonical_from_to_order() {
         keys, sorted,
         "synapses are not in canonical (from, to) order"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Typed outward edges, batched grafts and the identity relay
+// (NEAT-AI-Forests #48) — the two shapes a consumer could not express with
+// `graft_if_node` alone: a child feeding its parent's branch, and a correction
+// entering both branches of an `IF` target.
+// ---------------------------------------------------------------------------
+
+/// Three inputs and an `IF` **output** — the production champion's shape. An
+/// untyped edge into it would feed the positive branch only, so a correction
+/// that must apply on both sides needs typed outward edges.
+fn if_output_creature() -> CreatureExport {
+    CreatureExport {
+        memetic: None,
+        input: 3,
+        output: 1,
+        neurons: vec![NeuronExport {
+            id: None,
+            neuron_type: "output".to_string(),
+            uuid: "output-0".to_string(),
+            bias: 0.0,
+            squash: Some("IF".to_string()),
+        }],
+        synapses: vec![
+            SynapseExport {
+                from_uuid: "input-0".to_string(),
+                to_uuid: "output-0".to_string(),
+                weight: 1.0,
+                synapse_type: Some("condition".to_string()),
+            },
+            SynapseExport {
+                from_uuid: "input-1".to_string(),
+                to_uuid: "output-0".to_string(),
+                weight: 2.0,
+                synapse_type: Some("positive".to_string()),
+            },
+            SynapseExport {
+                from_uuid: "input-2".to_string(),
+                to_uuid: "output-0".to_string(),
+                weight: -1.0,
+                synapse_type: Some("negative".to_string()),
+            },
+        ],
+        semantic_version: None,
+        forward_only: true,
+    }
+}
+
+/// The correction node used against [`if_output_creature`]: `input-1 > 0.5`
+/// contributes `0.75`, otherwise `-0.25`.
+fn correction_spec(target_role: SynapseType) -> IfNodeSpec {
+    IfNodeSpec::new("corr", 0.0)
+        .with_constant("corr-one", 1.0)
+        .with_constant("corr-pos", 1.0)
+        .with_constant("corr-neg", 1.0)
+        .with_condition("input-1", 1.0)
+        .with_condition("corr-one", -0.5)
+        .with_positive("corr-pos", 0.75)
+        .with_negative("corr-neg", -0.25)
+        .with_target_role("output-0", 1.0, target_role)
+}
+
+/// What the correction node itself emits for a record — derived from the spec
+/// above, not from the graft, so a wiring fault moves only one side.
+fn correction_value(record: &[f32]) -> f32 {
+    if record[1] > 0.5 { 0.75 } else { -0.25 }
+}
+
+#[test]
+fn a_typed_outward_edge_reaches_the_named_branch_of_an_if_target() {
+    let base = if_output_creature();
+    let grafted = graft_if_node(&base, &correction_spec(SynapseType::Positive))
+        .expect("typed graft succeeds");
+    assert_valid(&grafted, "a graft with a typed outward edge");
+
+    let edge = grafted
+        .synapses
+        .iter()
+        .find(|s| s.from_uuid == "corr" && s.to_uuid == "output-0")
+        .expect("outward edge present");
+    assert_eq!(edge.synapse_type.as_deref(), Some("positive"));
+
+    // The condition of the output is `input-0`, so the positive branch is the
+    // one taken when `input-0 > 0`: there the correction lands, and only there.
+    let above = [1.0f32, 1.0, 1.0];
+    let below = [-1.0f32, 1.0, 1.0];
+    assert!(
+        (activate(&grafted, &above) - (activate(&base, &above) + correction_value(&above))).abs()
+            <= TOL
+    );
+    assert!((activate(&grafted, &below) - activate(&base, &below)).abs() <= TOL);
+}
+
+#[test]
+fn an_outward_edge_with_no_role_stays_untyped() {
+    let grafted = graft_if_node(&base_creature(), &valid_spec()).expect("graft succeeds");
+    let edge = grafted
+        .synapses
+        .iter()
+        .find(|s| s.from_uuid == "if-1" && s.to_uuid == "output-0")
+        .expect("outward edge present");
+    assert_eq!(edge.synapse_type, None);
+}
+
+#[test]
+fn rejects_an_explicit_role_on_an_inbound_edge() {
+    let mut spec = valid_spec();
+    spec.condition[0].role = SynapseType::Negative;
+    let err = graft_if_node(&base_creature(), &spec).expect_err("must be rejected");
+    assert!(
+        matches!(err, GraftError::InboundEdgeHasRole { ref from, ref to } if from == "input-0" && to == "if-1"),
+        "unexpected error: {err}"
+    );
+}
+
+/// A child that only its parent reads, described before that parent.
+fn child_spec() -> IfNodeSpec {
+    IfNodeSpec::new("child", 0.0)
+        .with_constant("child-one", 1.0)
+        .with_constant("child-pos", 1.0)
+        .with_constant("child-neg", 1.0)
+        .with_condition("input-0", 1.0)
+        .with_condition("child-one", -0.25)
+        .with_positive("child-pos", 3.0)
+        .with_negative("child-neg", 1.0)
+}
+
+/// The parent whose positive branch reads `child`.
+fn parent_spec() -> IfNodeSpec {
+    IfNodeSpec::new("parent", 0.0)
+        .with_constant("parent-one", 1.0)
+        .with_constant("parent-neg", 1.0)
+        .with_condition("input-1", 1.0)
+        .with_condition("parent-one", -0.1)
+        .with_positive("child", 1.0)
+        .with_negative("parent-neg", 0.0)
+        .with_target("output-0", 1.0)
+}
+
+/// The tree the two specs above describe, evaluated independently of the graft.
+fn tree_value(record: &[f32]) -> f32 {
+    if record[1] > 0.1 {
+        if record[0] > 0.25 { 3.0 } else { 1.0 }
+    } else {
+        0.0
+    }
+}
+
+#[test]
+fn a_batched_graft_wires_a_child_into_its_parents_branch() {
+    let base = base_creature();
+    let grafted =
+        graft_if_nodes(&base, &[child_spec(), parent_spec()]).expect("batched graft succeeds");
+    assert_valid(&grafted, "a batched nested-tree graft");
+
+    let order: Vec<&str> = grafted.neurons.iter().map(|n| n.uuid.as_str()).collect();
+    let pos = |u: &str| order.iter().position(|o| *o == u).expect("neuron present");
+    assert!(pos("child") < pos("parent"), "order was {order:?}");
+
+    let edge = grafted
+        .synapses
+        .iter()
+        .find(|s| s.from_uuid == "child" && s.to_uuid == "parent")
+        .expect("child feeds its parent");
+    assert_eq!(edge.synapse_type.as_deref(), Some("positive"));
+
+    for record in [
+        [0.5f32, 0.5],
+        [0.1, 0.5],
+        [0.5, 0.0],
+        [0.1, 0.0],
+        [0.26, 0.11],
+    ] {
+        let delta = activate(&grafted, &record) - activate(&base, &record);
+        assert!(
+            (delta - tree_value(&record)).abs() <= TOL,
+            "record {record:?}: delta {delta} vs expected {}",
+            tree_value(&record)
+        );
+    }
+}
+
+#[test]
+fn a_batched_graft_still_refuses_a_node_nothing_ever_reads() {
+    // `child` has no target and no later node names it as a branch source.
+    let err = graft_if_nodes(&base_creature(), &[child_spec()]).expect_err("must be rejected");
+    assert!(matches!(err, GraftError::NoTargets), "unexpected: {err}");
+}
+
+#[test]
+fn a_batched_graft_is_all_or_nothing() {
+    let base = base_creature();
+    let broken = parent_spec().with_target("no-such-neuron", 1.0);
+    let err = graft_if_nodes(&base, &[child_spec(), broken]).expect_err("second node is invalid");
+    assert!(
+        matches!(err, GraftError::UnknownTargetUuid(ref u) if u == "no-such-neuron"),
+        "unexpected: {err}"
+    );
+    assert_eq!(base, base_creature(), "the source creature was mutated");
+}
+
+#[test]
+fn a_batched_graft_of_nothing_returns_the_creature_unchanged() {
+    let base = base_creature();
+    assert_eq!(graft_if_nodes(&base, &[]).expect("empty batch"), base);
+}
+
+/// A creature carrying four bias-1 constants, all read by the output, where a
+/// graft reads only the first three.
+fn four_constant_creature() -> CreatureExport {
+    let mut neurons: Vec<NeuronExport> = ["c-a", "c-b", "c-c", "c-d"]
+        .iter()
+        .map(|uuid| NeuronExport {
+            id: None,
+            neuron_type: "constant".to_string(),
+            uuid: (*uuid).to_string(),
+            bias: 1.0,
+            squash: None,
+        })
+        .collect();
+    neurons.push(NeuronExport {
+        id: None,
+        neuron_type: "output".to_string(),
+        uuid: "output-0".to_string(),
+        bias: 0.0,
+        squash: Some("IDENTITY".to_string()),
+    });
+    let mut synapses = vec![SynapseExport {
+        from_uuid: "input-0".to_string(),
+        to_uuid: "output-0".to_string(),
+        weight: 1.0,
+        synapse_type: None,
+    }];
+    synapses.extend(
+        ["c-a", "c-b", "c-c", "c-d"]
+            .iter()
+            .map(|uuid| SynapseExport {
+                from_uuid: (*uuid).to_string(),
+                to_uuid: "output-0".to_string(),
+                weight: 0.0,
+                synapse_type: None,
+            }),
+    );
+    CreatureExport {
+        memetic: None,
+        input: 2,
+        output: 1,
+        neurons,
+        synapses,
+        semantic_version: None,
+        forward_only: true,
+    }
+}
+
+#[test]
+fn a_grafted_node_is_listed_after_every_constant_the_creature_carries() {
+    // Its sources reach `c-c` only, but listing the node there would leave
+    // `c-d` after a hidden neuron, which rule 11 refuses.
+    let spec = IfNodeSpec::new("if-1", 0.0)
+        .with_condition("input-0", 1.0)
+        .with_condition("c-a", -0.25)
+        .with_positive("c-b", 2.0)
+        .with_negative("c-c", 0.0)
+        .with_target("output-0", 1.0);
+    let grafted = graft_if_node(&four_constant_creature(), &spec).expect("graft succeeds");
+    assert_valid(&grafted, "a graft onto a creature with a trailing constant");
+
+    let order: Vec<&str> = grafted.neurons.iter().map(|n| n.uuid.as_str()).collect();
+    let pos = |u: &str| order.iter().position(|o| *o == u).expect("neuron present");
+    assert!(pos("c-d") < pos("if-1"), "order was {order:?}");
+}
+
+#[test]
+fn a_relay_carries_a_second_typed_edge_into_the_same_target() {
+    let base = if_output_creature();
+    // The correction enters the positive branch directly and the negative one
+    // through the relay, so it applies whichever branch the output takes.
+    let grafted = graft_if_node(&base, &correction_spec(SynapseType::Positive))
+        .expect("typed graft succeeds");
+    let relay = RelaySpec::new("corr-relay", 0.0)
+        .with_source("corr", 1.0)
+        .with_target_role("output-0", 1.0, SynapseType::Negative);
+    let grafted = graft_relay_node(&grafted, &relay).expect("relay graft succeeds");
+    assert_valid(&grafted, "a graft wired into both branches of an IF output");
+
+    let node = grafted
+        .neurons
+        .iter()
+        .find(|n| n.uuid == "corr-relay")
+        .expect("relay present");
+    assert_eq!(node.squash.as_deref(), Some("IDENTITY"));
+    assert_eq!(node.neuron_type, "hidden");
+
+    for record in [[1.0f32, 1.0, 1.0], [-1.0, 1.0, 1.0], [-1.0, 0.0, 0.0]] {
+        let delta = activate(&grafted, &record) - activate(&base, &record);
+        assert!(
+            (delta - correction_value(&record)).abs() <= TOL,
+            "record {record:?}: delta {delta} vs expected {}",
+            correction_value(&record)
+        );
+    }
+}
+
+#[test]
+fn a_relay_with_no_source_or_no_target_is_refused() {
+    let base = graft_if_node(
+        &if_output_creature(),
+        &correction_spec(SynapseType::Positive),
+    )
+    .expect("typed graft succeeds");
+    let sourceless = RelaySpec::new("corr-relay", 0.0).with_target("output-0", 1.0);
+    assert!(matches!(
+        graft_relay_node(&base, &sourceless).expect_err("must be rejected"),
+        GraftError::NoSources
+    ));
+
+    let targetless = RelaySpec::new("corr-relay", 0.0).with_source("corr", 1.0);
+    assert!(matches!(
+        graft_relay_node(&base, &targetless).expect_err("must be rejected"),
+        GraftError::NoTargets
+    ));
 }
