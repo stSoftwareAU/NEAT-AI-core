@@ -216,9 +216,26 @@ mod neuron_flag {
 /// The one home of the layout arithmetic: the host sizes its buffer with the
 /// same formula, and a request of any other length is refused rather than
 /// read short.
+///
+/// Sized for a request that exists — a creature the caller is holding. The
+/// boundary cannot assume that of the counts it reads out of a *buffer*, so it
+/// computes the same length in a wider type instead, so a header claiming
+/// more synapses than any buffer could hold is refused rather than wrapped.
 #[must_use]
 pub const fn packed_request_len(neuron_count: usize, synapse_count: usize) -> usize {
     synapse_section_offset(neuron_count) + synapse_count * 9
+}
+
+/// [`packed_request_len`] in a width no target can overflow.
+///
+/// A header can claim `u32::MAX` synapses, and `u32::MAX * 9` does not fit a
+/// `usize` on wasm32 — it would wrap, agree with a short buffer's length, and
+/// send the reads below off the end of it. Sixty-four bits hold the largest
+/// length the counts can express (about 39 GB) with room to spare, so the
+/// comparison against `buffer.len()` is decided before any offset is built.
+const fn packed_request_len_wide(neuron_count: u64, synapse_count: u64) -> u64 {
+    let unaligned = PACKED_HEADER_BYTES as u64 + neuron_count * 19;
+    unaligned.next_multiple_of(4) + synapse_count * 9
 }
 
 /// Offset of the first per-synapse array, four-aligned so the `u32` endpoint
@@ -458,21 +475,27 @@ impl PackedRequest {
             ));
         }
 
-        let neuron_count = read_u32(buffer, 8) as usize;
-        let synapse_count = read_u32(buffer, 12) as usize;
-        if neuron_count > MAX_REQUEST_NEURONS {
+        let declared_neurons = u64::from(read_u32(buffer, 8));
+        let declared_synapses = u64::from(read_u32(buffer, 12));
+        if declared_neurons > MAX_REQUEST_NEURONS as u64 {
             return Err(format!(
-                "creature declares {neuron_count} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}"
+                "creature declares {declared_neurons} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}"
             ));
         }
 
-        let expected = packed_request_len(neuron_count, synapse_count);
-        if buffer.len() != expected {
+        // Decided in 64 bits, before a single offset is built from the counts:
+        // a buffer of the agreed length bounds every read below.
+        let expected = packed_request_len_wide(declared_neurons, declared_synapses);
+        if buffer.len() as u64 != expected {
             return Err(format!(
-                "a request for {neuron_count} neurons and {synapse_count} synapses is {expected} bytes, this one is {}",
+                "a request for {declared_neurons} neurons and {declared_synapses} synapses is {expected} bytes, this one is {}",
                 buffer.len()
             ));
         }
+
+        // The buffer is that long, so both counts fit the address space.
+        let neuron_count = declared_neurons as usize;
+        let synapse_count = declared_synapses as usize;
 
         let option_bits = read_u32(buffer, 16);
         let options = ValidateOptions {
@@ -906,6 +929,38 @@ mod tests {
 
         assert!(answer.contains(MALFORMED_REQUEST));
         assert!(answer.contains("bytes, this one is"));
+    }
+
+    /// A synapse count no buffer could hold is refused on its arithmetic, not
+    /// on a wrapped length.
+    ///
+    /// `u32::MAX * 9` does not fit a `usize` on wasm32. Computed there it
+    /// wraps to 4 294 967 247 — 48 bytes short of nothing — and a header-only
+    /// buffer padded to that would have been *accepted*, sending every read
+    /// below off the end of it. The length is settled in 64 bits, so the count
+    /// is refused whatever the target's pointer width.
+    #[test]
+    fn a_synapse_count_no_buffer_could_hold_is_refused() {
+        let mut buffer = vec![0u8; PACKED_HEADER_BYTES];
+        write_u32(&mut buffer, 0, PACKED_MAGIC);
+        write_u32(&mut buffer, 4, PACKED_VERSION);
+        write_u32(&mut buffer, 8, 0);
+        write_u32(&mut buffer, 12, u32::MAX);
+
+        let answer = creature_validate_packed(&buffer, "");
+
+        assert!(answer.contains(MALFORMED_REQUEST), "{answer}");
+        assert!(answer.contains("38654705703 bytes"), "{answer}");
+
+        // The length itself, asserted in a value no 32-bit width can hold:
+        // 48 header bytes plus nine per synapse. This is the assertion that
+        // stays honest on a wasm32 host, where the `usize` form wraps and the
+        // check above would agree with a buffer that is nowhere near this long.
+        assert_eq!(
+            packed_request_len_wide(0, u64::from(u32::MAX)),
+            38_654_705_703
+        );
+        assert!(packed_request_len_wide(0, u64::from(u32::MAX)) > u64::from(u32::MAX));
     }
 
     #[test]
