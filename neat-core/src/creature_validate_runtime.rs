@@ -64,8 +64,9 @@ use serde_json::{Map, Value};
 
 use crate::creature::parse_synapse_type;
 use crate::creature_validate::{
-    MemeticEntry, MemeticWeights, NeuronKind, NeuronView, ValidateOptions, ValidationFailure,
-    ValidationStats, is_js_integer, reason, validate_declared_widths, validate_prepared,
+    MemeticEntry, MemeticWeightEntries, MemeticWeightsView, NeuronKind, NeuronView,
+    ValidateOptions, ValidationFailure, ValidationStats, is_js_integer, reason,
+    validate_declared_widths, validate_prepared,
 };
 use crate::synapse_type::SynapseType;
 
@@ -184,6 +185,7 @@ pub fn creature_validate_runtime(
 
     validate_prepared(
         &views,
+        None,
         input,
         output,
         &from,
@@ -270,20 +272,24 @@ fn memetic_view(memetic: &Value) -> crate::creature_validate::MemeticView<'_> {
 
     crate::creature_validate::MemeticView {
         biases: member("biases").into_iter().map(|(key, _)| key).collect(),
-        weights: member("weights")
-            .into_iter()
-            .map(|(key, value)| (key, weights_view(value)))
-            .collect(),
+        weights: MemeticWeightsView::ById(
+            member("weights")
+                .into_iter()
+                .map(|(key, value)| (key, weights_view(value)))
+                .collect(),
+        ),
     }
 }
 
-/// One `weights` value: the deltas it lists, or "not an array at all".
-fn weights_view(value: &Value) -> MemeticWeights<'_> {
+/// One `weights` value: the deltas it lists, or "not an array at all". A host
+/// record is always id-keyed, so this is the only shape the runtime form ever
+/// carries — see [`MemeticWeightsView::ById`].
+fn weights_view(value: &Value) -> MemeticWeightEntries<'_> {
     let Some(entries) = value.as_array() else {
-        return MemeticWeights::NotAnArray;
+        return MemeticWeightEntries::NotAnArray;
     };
 
-    MemeticWeights::Entries(
+    MemeticWeightEntries::Entries(
         entries
             .iter()
             .map(|entry| {
