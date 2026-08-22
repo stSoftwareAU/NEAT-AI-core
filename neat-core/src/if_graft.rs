@@ -16,6 +16,11 @@
 //! source creature is never mutated — a graft either returns a new, validated
 //! [`CreatureExport`] or it returns an error.
 //!
+//! What comes back is a creature the shared validator accepts, not merely one
+//! that compiles: the constants a graft introduces are listed ahead of every
+//! hidden neuron and the whole synapse list is left in canonical
+//! `(from, to)` order, which are [`crate::creature_validate()`] rules 11 and 25.
+//!
 //! ```mermaid
 //! flowchart LR
 //!     A["IfNodeSpec"] --> B{"names new?<br/>roles present?<br/>edges resolve?"}
@@ -110,8 +115,9 @@ pub struct IfNodeSpec {
     pub uuid: String,
     /// Bias added to whichever branch the condition selects.
     pub bias: f64,
-    /// Constant neurons introduced by this graft, placed immediately before the
-    /// node so its own edges may reference them.
+    /// Constant neurons introduced by this graft, listed ahead of every hidden
+    /// neuron — where `creature_validate` rule 11 requires them — so the node's
+    /// own edges may reference them.
     pub constants: Vec<ConstantSpec>,
     /// Inbound edges summed to decide the branch (`> 0` selects positive).
     pub condition: Vec<GraftEdge>,
@@ -471,8 +477,11 @@ pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), Graft
 /// Returns a **new** creature; the input is never modified. Placement is chosen
 /// so the node is evaluated after every source and before every target, which
 /// preserves the `forwardOnly` reading order the compiled forward pass relies
-/// on. The result is put through [`validate_creature_topology`] before it is
-/// returned, so a malformed creature is never emitted.
+/// on; any constants the spec declares are listed ahead of every hidden neuron,
+/// and the synapse list comes back in canonical `(from, to)` order, so the
+/// result satisfies [`crate::creature_validate()`] as well. The creature is put
+/// through [`validate_creature_topology`] before it is returned, so a malformed
+/// creature is never emitted.
 ///
 /// # Errors
 ///
@@ -623,12 +632,26 @@ pub fn graft_if_node(
     }
 }
 
-/// Assemble the grafted creature: constants then the node at `position`, with
-/// the branch synapses (condition, positive, negative) and outward edges
-/// appended in that order.
+/// Assemble the grafted creature: the constants ahead of every hidden neuron,
+/// the node at `position`, and the whole synapse list left in canonical
+/// `(from, to)` order.
+///
+/// Both placements are what [`crate::creature_validate()`] requires of a valid
+/// creature — neurons listed `input, constant, hidden, output` (rule 11) and
+/// synapses sorted ascending by resolved index (rule 25) — so a grafted
+/// creature satisfies the shared validator, not merely the compiler.
 fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) -> CreatureExport {
+    // A constant may never follow a hidden neuron, so the constants go in front
+    // of the first non-constant rather than beside the node, which can legally
+    // sit after several hidden neurons.
+    let constants_at = creature
+        .neurons
+        .iter()
+        .position(|n| n.neuron_type != "constant")
+        .unwrap_or(creature.neurons.len())
+        .min(position);
     let mut neurons = Vec::with_capacity(creature.neurons.len() + spec.constants.len() + 1);
-    neurons.extend_from_slice(&creature.neurons[..position]);
+    neurons.extend_from_slice(&creature.neurons[..constants_at]);
     for constant in &spec.constants {
         neurons.push(NeuronExport {
             id: None,
@@ -638,6 +661,7 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
             squash: None,
         });
     }
+    neurons.extend_from_slice(&creature.neurons[constants_at..position]);
     neurons.push(NeuronExport {
         id: None,
         neuron_type: "hidden".to_string(),
@@ -674,7 +698,7 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
         });
     }
 
-    CreatureExport {
+    let mut grafted = CreatureExport {
         memetic: None,
         input: creature.input,
         output: creature.output,
@@ -682,7 +706,27 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
         synapses,
         semantic_version: creature.semantic_version.clone(),
         forward_only: creature.forward_only,
-    }
+    };
+    sort_synapses_canonically(&mut grafted);
+    grafted
+}
+
+/// Leave a creature's synapse list in canonical wire order — ascending by
+/// `(from index, to index)`, the order [`crate::creature_validate()`] rule 25
+/// requires.
+///
+/// Appending a graft's synapses to the base creature's list leaves them out of
+/// order, so the assembled creature is re-sorted rather than emitted piecemeal.
+/// An endpoint naming no neuron sorts last (`u32::MAX`) instead of being
+/// dropped, so the validator still reports it rather than the graft quietly
+/// reordering a broken creature. The sort is stable, so synapses sharing a pair
+/// keep their relative order and remain reportable as duplicates.
+pub(crate) fn sort_synapses_canonically(creature: &mut CreatureExport) {
+    let map = index_map(creature);
+    let resolve = |uuid: &str| -> usize { map.get(uuid).copied().unwrap_or(usize::MAX) };
+    creature
+        .synapses
+        .sort_by_key(|s| (resolve(&s.from_uuid), resolve(&s.to_uuid)));
 }
 
 /// Graft a sequence of `IF` nodes, each able to reference the ones before it.

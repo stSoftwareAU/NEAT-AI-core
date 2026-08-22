@@ -13,8 +13,8 @@ use neat_core::decision_tree::{
     depth2_tree_creature, linear_base_creature, residual_correction_creature, stump_creature,
 };
 use neat_core::{
-    CreatureExport, SynapseType, compile_creature, creature_to_json, mse_sum_batch_packed,
-    parse_creature_json,
+    CreatureExport, SynapseType, ValidateOptions, compile_creature, creature_to_json,
+    creature_validate, mse_sum_batch_packed, parse_creature_json,
 };
 
 /// f32 tolerance for a handful of adds — the fixtures are exact in f32, but the
@@ -293,4 +293,30 @@ fn stripping_synapse_roles_changes_the_branch_output() {
         (intact - broken).abs() > TOL,
         "dropping synapse roles must change the output ({intact} vs {broken})"
     );
+}
+
+/// Every canonical fixture is a **valid** creature by the shared definition
+/// (Issue #562), not merely one that compiles: a consumer that gates its own
+/// output on `creature_validate` must be able to start from one of these.
+#[test]
+fn every_canonical_fixture_satisfies_creature_validate() {
+    for (what, creature) in [
+        ("stump", stump_creature()),
+        ("depth-2 tree", depth2_tree_creature()),
+        ("linear base", linear_base_creature()),
+        ("residual correction", residual_correction_creature()),
+    ] {
+        let options = ValidateOptions {
+            neurons: None,
+            connections: None,
+            feedback_loop: None,
+            forward_only: creature.forward_only,
+        };
+        if let Err(failure) = creature_validate(&creature, &options) {
+            panic!(
+                "the {what} fixture is not a valid creature: {} ({}): {}",
+                failure.class, failure.reason, failure.message
+            );
+        }
+    }
 }

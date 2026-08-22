@@ -87,8 +87,23 @@
 //!
 //! # Input format
 //!
-//! A creature reaches the validator as a [`CreatureExport`] — the JSON wire
-//! shape this crate already parses — not as a second, validator-only struct.
+//! A creature reaches the validator in one of two shapes, and both run the
+//! rules below through one shared seam so neither can drift from the
+//! other:
+//!
+//! | Shape | Entry point | What it is |
+//! |-------|-------------|------------|
+//! | export | [`creature_validate`] | the [`CreatureExport`] wire form this crate already parses — index-free, UUID-wired, input neurons implicit |
+//! | runtime | [`crate::creature_validate_runtime::creature_validate_runtime`] | every neuron listed and synapses wired by position, as a host holds a creature in memory (NEAT-AI#3803) |
+//!
+//! The rest of this section describes the **export** shape, whose derivations
+//! are what put rules 4, 7, 10 and 21 (and, through serde, rules 2, 3, 5 and
+//! the malformed half of 31) out of reach; the runtime shape carries those
+//! defects instead of deriving them away, and its own module documents it.
+//!
+//! The export form reaches the validator as a [`CreatureExport`] — the JSON
+//! wire shape this crate already parses — not as a second, validator-only
+//! struct.
 //! Two fields were added for the rules above, both optional and both skipped
 //! when absent, so every existing [`crate::creature::parse_creature_json`]
 //! caller and every already-written creature file is unaffected:
@@ -228,7 +243,7 @@
 //! checks and its diagnostics dump against the same neuron or synapse the
 //! shared rules stopped on.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::creature::{
@@ -657,23 +672,48 @@ pub fn creature_validate(
     creature: &CreatureExport,
     options: &ValidateOptions,
 ) -> Result<ValidationStats, ValidationFailure> {
-    let mut stats = validate_neuron_rules(creature, options)?;
-    validate_synapse_and_memetic_rules(creature, options, &mut stats)?;
+    validate_declared_widths(
+        creature.input + creature.neurons.len(),
+        creature.input as f64,
+        creature.output as f64,
+        options,
+    )?;
 
-    Ok(stats)
+    let views = neuron_views(creature);
+    let wire = WireIndex::build(creature);
+    let (from, to, synapse_types) = resolve_synapse_endpoints(creature, &wire)?;
+    let memetic = creature.memetic.as_ref().map(MemeticView::from_export);
+
+    validate_prepared(
+        &views,
+        Some(&wire),
+        creature.input,
+        creature.output,
+        &from,
+        &to,
+        &synapse_types,
+        options,
+        memetic.as_ref(),
+    )
 }
 
-/// Rules 1–22 — everything the TypeScript evaluates before it reaches
-/// `creature.synapses.forEach` (Issue #560).
+/// Rules 1–3 — the counts the walk trusts afterwards.
 ///
-/// `stats.connections` stays `0`: [`validate_synapse_and_memetic_rules`] is
-/// what fills it.
-fn validate_neuron_rules(
-    creature: &CreatureExport,
+/// `input` and `output` arrive as `f64` because the runtime shape can carry a
+/// width JavaScript would reject as a non-integer (`1.5`), which the export
+/// form types as `usize` and rejects at the parse boundary. They are rendered
+/// with [`number_text`], so the message is the TypeScript's whichever shape
+/// asked.
+///
+/// # Errors
+///
+/// Returns the [`ValidationFailure`] for the first violated rule.
+pub(crate) fn validate_declared_widths(
+    total_neurons: usize,
+    input: f64,
+    output: f64,
     options: &ValidateOptions,
-) -> Result<ValidationStats, ValidationFailure> {
-    let total_neurons = creature.input + creature.neurons.len();
-
+) -> Result<(), ValidationFailure> {
     // Rule 1 — `if (options && options.neurons)`, a truthiness test.
     if let Some(expected) = options.expected_neurons()
         && total_neurons != expected
@@ -685,26 +725,55 @@ fn validate_neuron_rules(
     }
 
     // Rules 2 and 3 — a creature with no observations or no targets is not a
-    // creature. `input` / `output` are `usize` here, so the TypeScript
-    // `Number.isInteger` half of each test is unrepresentable.
-    if creature.input < 1 {
-        return Err(ValidationFailure::validation(
-            reason::OTHER,
-            format!(
-                "Must have at least one input neurons was: {}",
-                creature.input
-            ),
-        ));
+    // creature. `Number.isInteger(...) === false || ... < 1` in both halves.
+    let width_fault = |declared: f64, role: &str| {
+        (!is_js_integer(declared) || declared < 1.0).then(|| {
+            ValidationFailure::validation(
+                reason::OTHER,
+                format!(
+                    "Must have at least one {role} neurons was: {}",
+                    number_text(Some(declared))
+                ),
+            )
+        })
+    };
+    if let Some(failure) = width_fault(input, "input") {
+        return Err(failure);
     }
-    if creature.output < 1 {
-        return Err(ValidationFailure::validation(
-            reason::OTHER,
-            format!(
-                "Must have at least one output neurons was: {}",
-                creature.output
-            ),
-        ));
+    if let Some(failure) = width_fault(output, "output") {
+        return Err(failure);
     }
+
+    Ok(())
+}
+
+/// `Number.isInteger(value)` — finite, and with nothing after the point.
+pub(crate) fn is_js_integer(value: f64) -> bool {
+    value.is_finite() && value.fract() == 0.0
+}
+
+/// Rules 1–22 — everything the TypeScript evaluates before it reaches
+/// `creature.synapses.forEach` (Issue #560).
+///
+/// `stats.connections` stays `0`: [`validate_synapse_and_memetic_rules`] is
+/// what fills it. [`creature_validate`] derives the views once and runs both
+/// halves over them, so this half stands alone only for the tests that pin it.
+#[cfg(test)]
+fn validate_neuron_rules(
+    creature: &CreatureExport,
+    options: &ValidateOptions,
+) -> Result<ValidationStats, ValidationFailure> {
+    let total_neurons = creature.input + creature.neurons.len();
+
+    // Rules 1–3. `input` / `output` are `usize` here, so the TypeScript
+    // `Number.isInteger` half of rules 2 and 3 is unrepresentable in this
+    // shape; the runtime shape is where a non-integer width can reach them.
+    validate_declared_widths(
+        total_neurons,
+        creature.input as f64,
+        creature.output as f64,
+        options,
+    )?;
 
     let views = neuron_views(creature);
     let wire = WireIndex::build(creature);
@@ -726,27 +795,37 @@ fn validate_neuron_rules(
 /// walk runs over this derived view rather than over `creature.neurons`
 /// directly — see the *Input format* section of the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct NeuronView<'a> {
+pub(crate) struct NeuronView<'a> {
     /// Runtime integer id, derived as NEAT-AI's loader derives it
-    /// ([`derived_neuron_id`]). `None` only when no id can be derived at all.
-    id: Option<i64>,
+    /// ([`derived_neuron_id`]). `None` when no id can be derived at all, and
+    /// also when the host declared one that is not an integer — see
+    /// [`non_integer_id`](Self::non_integer_id).
+    pub(crate) id: Option<i64>,
+    /// The id exactly as the host declared it, when that was a number but not
+    /// an integer (rule 5's `Number.isInteger` half).
+    ///
+    /// Only the runtime shape ([`mod@crate::creature_validate_runtime`]) can
+    /// carry one: the export form types `id` as an integer, so serde rejects
+    /// `-1.5` at the parse boundary and this stays `None`.
+    pub(crate) non_integer_id: Option<f64>,
     /// The four types the rules branch on, plus [`NeuronKind::Invalid`].
-    kind: NeuronKind,
+    pub(crate) kind: NeuronKind,
     /// The `type` string as declared, reproduced verbatim in messages.
-    declared_type: &'a str,
+    pub(crate) declared_type: &'a str,
     /// The wire UUID; `None` for the implicit input neurons, which are labelled
     /// `input-N` from their index.
-    uuid: Option<&'a str>,
-    /// `None` is TypeScript's `undefined` bias — unreachable from JSON, where
-    /// `bias` is a required number.
-    bias: Option<f64>,
+    pub(crate) uuid: Option<&'a str>,
+    /// `None` is TypeScript's `undefined` bias — unreachable from the export
+    /// form, where `bias` is a required number, and expressible from the
+    /// runtime shape.
+    pub(crate) bias: Option<f64>,
     /// Activation function name, absent for constants and implicit inputs.
-    squash: Option<&'a str>,
+    pub(crate) squash: Option<&'a str>,
 }
 
 /// A neuron type as the rules read it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NeuronKind {
+pub(crate) enum NeuronKind {
     /// One of the implicit `0..input` neurons.
     Input,
     /// A `constant` neuron.
@@ -770,14 +849,29 @@ impl NeuronKind {
             _ => NeuronKind::Invalid,
         }
     }
+
+    /// Read the `type` of a neuron the host listed itself.
+    ///
+    /// The runtime shape lists every neuron, input neurons included, so
+    /// `"input"` is a legitimate type here — the one difference from
+    /// [`NeuronKind::from_declared`], where an entry claiming to be an input
+    /// is invalid because the export form makes inputs implicit.
+    pub(crate) fn from_declared_runtime(declared_type: &str) -> Self {
+        match declared_type {
+            "input" => NeuronKind::Input,
+            other => NeuronKind::from_declared(other),
+        }
+    }
 }
 
 impl NeuronView<'_> {
-    /// `neuron.ID()` — `String(this.id)`, so a missing id reads `undefined`.
+    /// `neuron.ID()` — `String(this.id)`, so a missing id reads `undefined`
+    /// and a non-integer id reads as JavaScript would print it.
     fn id_text(&self) -> String {
-        match self.id {
-            Some(id) => id.to_string(),
-            None => "undefined".to_string(),
+        match (self.id, self.non_integer_id) {
+            (Some(id), _) => id.to_string(),
+            (None, Some(raw)) => number_text(Some(raw)),
+            (None, None) => "undefined".to_string(),
         }
     }
 
@@ -865,6 +959,7 @@ fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
     for index in 0..creature.input {
         views.push(NeuronView {
             id: Some(index as i64),
+            non_integer_id: None,
             kind: NeuronKind::Input,
             declared_type: "input",
             uuid: None,
@@ -886,6 +981,7 @@ fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
 
         views.push(NeuronView {
             id,
+            non_integer_id: None,
             kind,
             declared_type: &neuron.neuron_type,
             uuid: Some(neuron.uuid.as_str()),
@@ -904,7 +1000,11 @@ fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
 /// Both the synapse endpoints and the memetic row form (GRQ #4257) are written
 /// in that same wire vocabulary, so both resolve through this rather than each
 /// restating the `input-N` special case.
-struct WireIndex<'a> {
+///
+/// `pub(crate)` only because it appears in [`validate_prepared`]'s signature
+/// (`Option<&WireIndex<'_>>`) — the runtime shape passes `None` and never
+/// names the type itself.
+pub(crate) struct WireIndex<'a> {
     /// Listed neurons by UUID, at their walk index (`input + i`).
     uuid_to_index: HashMap<&'a str, u32>,
     /// The declared observation width — the implicit `input-N` range.
@@ -991,16 +1091,27 @@ fn walk_neurons(
     for (index, neuron) in views.iter().enumerate() {
         let at = |failure: ValidationFailure| failure.at_neuron(index as u32);
 
-        // Rule 4 — every neuron has an id.
-        let Some(id) = neuron.id else {
+        // Rule 4 — every neuron has an id. A non-integer id *is* an id, so it
+        // reaches rule 5 rather than being reported as missing.
+        if neuron.id.is_none() && neuron.non_integer_id.is_none() {
             return Err(at(ValidationFailure::validation(
                 reason::OTHER,
                 format!("{}) no id", neuron.id_text()),
             )));
-        };
+        }
 
-        // Rule 5 — ids fit int32. Negative ids are legal: an output neuron's
-        // id is `-(outputIndex + 1)` (NEAT-AI #1958).
+        // Rule 5 — an id is an integer that fits int32. Negative ids are legal:
+        // an output neuron's id is `-(outputIndex + 1)` (NEAT-AI #1958).
+        if neuron.non_integer_id.is_some() {
+            let id_text = neuron.id_text();
+            return Err(at(ValidationFailure::validation(
+                reason::OTHER,
+                format!("{id_text}) invalid neuron id: {id_text}"),
+            )));
+        }
+        let id = neuron
+            .id
+            .expect("rules 4 and 5 leave only a neuron carrying an integer id");
         if id > MAX_NEURON_ID {
             return Err(at(ValidationFailure::validation(
                 reason::OTHER,
@@ -1421,10 +1532,10 @@ fn forward_only_rules(
 /// wrong rule.
 fn memetic_rules(
     views: &[NeuronView<'_>],
-    wire: &WireIndex<'_>,
+    wire: Option<&WireIndex<'_>>,
     from_indices: &[u32],
     to_indices: &[u32],
-    memetic: &MemeticExport,
+    memetic: &MemeticView<'_>,
 ) -> Result<(), ValidationFailure> {
     let mut id_to_index: HashMap<i64, u32> = HashMap::with_capacity(views.len());
     for (index, view) in views.iter().enumerate() {
@@ -1441,7 +1552,7 @@ fn memetic_rules(
 
     let resolve = |key: &str| resolve_memetic_reference(key, &id_to_index, wire);
 
-    for neuron_id in memetic.biases.keys() {
+    for neuron_id in &memetic.biases {
         if resolve(neuron_id).is_none() {
             return Err(ValidationFailure::validation(
                 reason::MEMETIC,
@@ -1451,10 +1562,10 @@ fn memetic_rules(
     }
 
     match &memetic.weights {
-        MemeticWeights::ById(by_id) => {
+        MemeticWeightsView::ById(by_id) => {
             memetic_map_rules(by_id, &id_to_index, &pairs, &resolve)?;
         }
-        MemeticWeights::Rows(rows) => {
+        MemeticWeightsView::Rows(rows) => {
             memetic_row_rules(rows, &pairs, &resolve)?;
         }
     }
@@ -1467,24 +1578,28 @@ fn memetic_rules(
 /// The id half is tried first: the id-keyed form is the one TypeScript
 /// validates host-side, and its keys are integers. A key that names no id
 /// falls through to the wire vocabulary, which is how the exported form keys
-/// both its biases and its rows.
+/// both its biases and its rows. The runtime shape carries no wire
+/// vocabulary of its own — a host's in-memory record is always id-keyed — so
+/// its callers pass `None` and only the id half ever resolves.
 fn resolve_memetic_reference(
     key: &str,
     id_to_index: &HashMap<i64, u32>,
-    wire: &WireIndex<'_>,
+    wire: Option<&WireIndex<'_>>,
 ) -> Option<u32> {
     if let Ok(id) = key.parse::<i64>()
         && let Some(index) = id_to_index.get(&id)
     {
         return Some(*index);
     }
-    wire.resolve(key)
+    wire.and_then(|wire| wire.resolve(key))
 }
 
-/// Rule 31 over the id-keyed map form — message for message what the
-/// TypeScript `for (const synapseId in memetic.weights)` loop reports.
+/// Rule 31 over the id-or-uuid-keyed map form — message for message what the
+/// TypeScript `for (const synapseId in memetic.weights)` loop reports. Shared
+/// by the export `ById` form and every runtime host record, which is what
+/// [`MemeticWeightEntries`] is the neutral shape for.
 fn memetic_map_rules(
-    by_id: &BTreeMap<String, Vec<MemeticWeightExport>>,
+    by_id: &[(&str, MemeticWeightEntries<'_>)],
     id_to_index: &HashMap<i64, u32>,
     pairs: &HashSet<(u32, u32)>,
     resolve: &impl Fn(&str) -> Option<u32>,
@@ -1497,23 +1612,33 @@ fn memetic_map_rules(
             ));
         };
 
-        for (index, entry) in weights.iter().enumerate() {
-            let Some(to_id) = entry.to_id else {
+        // `Array.isArray(memeticWeights)` — a record's weights are a list of
+        // deltas or they are nothing this rule can read.
+        let MemeticWeightEntries::Entries(entries) = weights else {
+            return Err(ValidationFailure::validation(
+                reason::MEMETIC,
+                format!("Synapse with id {synapse_id} has invalid weights."),
+            ));
+        };
+
+        for (index, entry) in entries.iter().enumerate() {
+            if !entry.to_id_present {
                 // TypeScript interpolates the absent field as `undefined`.
                 return Err(ValidationFailure::validation(
                     reason::MEMETIC,
                     format!("Memetic from id {synapse_id} to id undefined is invalid."),
                 ));
-            };
-            if entry.weight.is_none() {
+            }
+            let to_id_text = &entry.to_id_text;
+            if !entry.weight_present {
                 return Err(ValidationFailure::validation(
                     reason::MEMETIC,
                     format!(
-                        "Memetic from id {synapse_id} to id {to_id} has invalid weight at index {index}."
+                        "Memetic from id {synapse_id} to id {to_id_text} has invalid weight at index {index}."
                     ),
                 ));
             }
-            let Some(&to_index) = id_to_index.get(&to_id) else {
+            let Some(&to_index) = entry.to_id.as_ref().and_then(|id| id_to_index.get(id)) else {
                 return Err(ValidationFailure::validation(
                     reason::MEMETIC,
                     format!("Memetic from id {synapse_id} has no valid neuron."),
@@ -1522,7 +1647,9 @@ fn memetic_map_rules(
             if !pairs.contains(&(from_index, to_index)) {
                 return Err(ValidationFailure::validation(
                     reason::MEMETIC,
-                    format!("Memetic from id {synapse_id} to id {to_id} has no matching synapses."),
+                    format!(
+                        "Memetic from id {synapse_id} to id {to_id_text} has no matching synapses."
+                    ),
                 ));
             }
         }
@@ -1586,6 +1713,106 @@ fn memetic_row_rules(
     Ok(())
 }
 
+/// The memetic record as rule 31 reads it — the neutral form every request
+/// shape maps onto.
+///
+/// The export form types `weights` as either of the two valid shapes (GRQ
+/// #4257 — [`crate::creature::MemeticWeights`]), so serde rejects a malformed
+/// record before the rule sees it; the runtime shape
+/// ([`mod@crate::creature_validate_runtime`]) carries whatever the host holds
+/// in memory, so a `weights` entry that is not an array, or missing `toId` or
+/// `weight`, reaches rule 31 and is reported in NEAT-AI's own words. Only the
+/// export form can carry the UUID-keyed row shape — a host's in-memory
+/// `MemeticWeightsInterface` is always id-keyed.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(crate) struct MemeticView<'a> {
+    /// The `biases` keys, in iteration order.
+    pub(crate) biases: Vec<&'a str>,
+    /// The `weights` value, in whichever of the two valid shapes it carries.
+    pub(crate) weights: MemeticWeightsView<'a>,
+}
+
+/// `memetic.weights`, in the shape rule 31 reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum MemeticWeightsView<'a> {
+    /// The id-or-uuid-keyed map — the export `ById` form, and the only shape
+    /// a runtime host record carries.
+    ById(Vec<(&'a str, MemeticWeightEntries<'a>)>),
+    /// The UUID-keyed row array — the export `Rows` form (GRQ #4257).
+    Rows(&'a [MemeticWeightRowExport]),
+}
+
+impl Default for MemeticWeightsView<'_> {
+    fn default() -> Self {
+        Self::ById(Vec::new())
+    }
+}
+
+/// The value stored under one `weights` map key.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum MemeticWeightEntries<'a> {
+    /// The value is not an array — `Array.isArray(...)` is false.
+    NotAnArray,
+    /// The deltas, in order.
+    Entries(Vec<MemeticEntry<'a>>),
+}
+
+/// One memetic weight delta, as the rule reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct MemeticEntry<'a> {
+    /// `toId` when it is an integer that could name a neuron.
+    pub(crate) to_id: Option<i64>,
+    /// `toId` as JavaScript prints it — `undefined` when the field is absent.
+    pub(crate) to_id_text: std::borrow::Cow<'a, str>,
+    /// Whether the entry carries a `toId` field at all.
+    pub(crate) to_id_present: bool,
+    /// Whether the entry carries a `weight` field at all.
+    pub(crate) weight_present: bool,
+}
+
+impl<'a> MemeticView<'a> {
+    /// The export form's typed record, in the neutral shape.
+    fn from_export(memetic: &'a MemeticExport) -> Self {
+        Self {
+            biases: memetic.biases.keys().map(String::as_str).collect(),
+            weights: match &memetic.weights {
+                MemeticWeights::ById(by_id) => MemeticWeightsView::ById(
+                    by_id
+                        .iter()
+                        .map(|(key, entries)| {
+                            (key.as_str(), MemeticWeightEntries::from_export(entries))
+                        })
+                        .collect(),
+                ),
+                MemeticWeights::Rows(rows) => MemeticWeightsView::Rows(rows.as_slice()),
+            },
+        }
+    }
+}
+
+impl<'a> MemeticWeightEntries<'a> {
+    /// The export form's typed deltas, in the neutral shape. Always
+    /// `Entries`: serde already rejected a non-array `weights` value at the
+    /// parse boundary, so the export form cannot carry `NotAnArray`.
+    fn from_export(entries: &'a [MemeticWeightExport]) -> Self {
+        Self::Entries(
+            entries
+                .iter()
+                .map(|entry| MemeticEntry {
+                    to_id: entry.to_id,
+                    to_id_text: entry
+                        .to_id
+                        .map_or(std::borrow::Cow::Borrowed("undefined"), |id| {
+                            std::borrow::Cow::Owned(id.to_string())
+                        }),
+                    to_id_present: entry.to_id.is_some(),
+                    weight_present: entry.weight.is_some(),
+                })
+                .collect(),
+        )
+    }
+}
+
 /// Rules 23–31 — the synapse, forward-only and memetic half of
 /// [`creature_validate`] (Issue #561).
 ///
@@ -1616,37 +1843,113 @@ pub fn validate_synapse_and_memetic_rules(
     let views = neuron_views(creature);
     let wire = WireIndex::build(creature);
     let (from_indices, to_indices, synapse_types) = resolve_synapse_endpoints(creature, &wire)?;
+    let memetic = creature.memetic.as_ref().map(MemeticView::from_export);
 
-    synapse_walk(&views, &from_indices, &to_indices, options, stats)?;
+    synapse_half(
+        &views,
+        Some(&wire),
+        creature.input,
+        creature.output,
+        &from_indices,
+        &to_indices,
+        &synapse_types,
+        options,
+        memetic.as_ref(),
+        stats,
+    )
+}
+
+/// Rules 23–31 over already-derived views — the half
+/// [`validate_synapse_and_memetic_rules`] and [`validate_prepared`] share.
+///
+/// `wire` is `Some` only for the export shape: the runtime shape has no wire
+/// UUID vocabulary of its own, so its memetic references resolve by id alone
+/// (see [`resolve_memetic_reference`]).
+#[allow(clippy::too_many_arguments)]
+fn synapse_half(
+    views: &[NeuronView<'_>],
+    wire: Option<&WireIndex<'_>>,
+    input: usize,
+    output: usize,
+    from_indices: &[u32],
+    to_indices: &[u32],
+    synapse_types: &[SynapseType],
+    options: &ValidateOptions,
+    memetic: Option<&MemeticView<'_>>,
+    stats: &mut ValidationStats,
+) -> Result<(), ValidationFailure> {
+    synapse_walk(views, from_indices, to_indices, options, stats)?;
 
     if let Some(expected) = options.expected_connections()
-        && creature.synapses.len() != expected
+        && from_indices.len() != expected
     {
         return Err(ValidationFailure::validation(
             reason::OTHER,
             format!(
                 "Synapses length: {} expected: {expected}",
-                creature.synapses.len()
+                from_indices.len()
             ),
         ));
     }
 
     if options.forward_only {
         forward_only_rules(
-            &views,
-            &from_indices,
-            &to_indices,
-            &synapse_types,
-            creature.input,
-            creature.output,
+            views,
+            from_indices,
+            to_indices,
+            synapse_types,
+            input,
+            output,
         )?;
     }
 
-    if let Some(memetic) = creature.memetic.as_ref() {
-        memetic_rules(&views, &wire, &from_indices, &to_indices, memetic)?;
+    if let Some(memetic) = memetic {
+        memetic_rules(views, wire, from_indices, to_indices, memetic)?;
     }
 
     Ok(())
+}
+
+/// Rules 4–31 over derived views — the seam every request shape meets at.
+///
+/// Rules 1–3 read the creature's declared widths, so each entry point checks
+/// those itself and hands the walk what it derived: the export form derives
+/// implicit input neurons and resolves UUIDs
+/// ([`creature_validate`]), while the runtime form is already indexed
+/// ([`mod@crate::creature_validate_runtime`]). Everything after that is one
+/// implementation, so the two shapes cannot drift apart.
+///
+/// # Errors
+///
+/// Returns the [`ValidationFailure`] for the first violated rule.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_prepared(
+    views: &[NeuronView<'_>],
+    wire: Option<&WireIndex<'_>>,
+    input: usize,
+    output: usize,
+    from_indices: &[u32],
+    to_indices: &[u32],
+    synapse_types: &[SynapseType],
+    options: &ValidateOptions,
+    memetic: Option<&MemeticView<'_>>,
+) -> Result<ValidationStats, ValidationFailure> {
+    let connections = ConnectionIndex::build(from_indices, to_indices, views.len());
+    let mut stats = walk_neurons(views, input, output, &connections, synapse_types)?;
+    synapse_half(
+        views,
+        wire,
+        input,
+        output,
+        from_indices,
+        to_indices,
+        synapse_types,
+        options,
+        memetic,
+        &mut stats,
+    )?;
+
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -1978,6 +2281,7 @@ mod tests {
     fn input_view(id: i64) -> NeuronView<'static> {
         NeuronView {
             id: Some(id),
+            non_integer_id: None,
             kind: NeuronKind::Input,
             declared_type: "input",
             uuid: None,
@@ -1989,6 +2293,7 @@ mod tests {
     fn output_view(id: i64) -> NeuronView<'static> {
         NeuronView {
             id: Some(id),
+            non_integer_id: None,
             kind: NeuronKind::Output,
             declared_type: "output",
             uuid: Some("out"),
@@ -2548,6 +2853,7 @@ mod synapse_half_tests {
     ) -> NeuronView<'a> {
         NeuronView {
             id: Some(id),
+            non_integer_id: None,
             kind,
             declared_type,
             uuid: Some(uuid),
@@ -2559,6 +2865,7 @@ mod synapse_half_tests {
     fn input_view() -> NeuronView<'static> {
         NeuronView {
             id: Some(0),
+            non_integer_id: None,
             kind: NeuronKind::Input,
             declared_type: "input",
             uuid: None,

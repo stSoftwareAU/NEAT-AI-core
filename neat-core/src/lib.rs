@@ -22,6 +22,7 @@ pub mod batch_scoring;
 pub mod creature;
 pub mod creature_validate;
 pub mod creature_validate_json;
+pub mod creature_validate_runtime;
 pub mod decision_tree;
 pub mod derivative;
 pub mod elastic_distribution;
@@ -76,6 +77,10 @@ pub use creature_validate::{
 pub use creature_validate_json::{
     MALFORMED_REQUEST, MAX_REQUEST_NEURONS, ValidateResponse, ValidationFailureJson,
     ValidationStatsJson, creature_validate_json,
+};
+// NEAT-AI#3803 — the runtime creature shape a host holds in memory.
+pub use creature_validate_runtime::{
+    RuntimeCreature, RuntimeNeuron, RuntimeSynapse, creature_validate_runtime,
 };
 // Issue #555 — canonical IF decision-tree fixtures and the graft helper.
 pub use decision_tree::{

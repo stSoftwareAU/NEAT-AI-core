@@ -15,7 +15,10 @@ use neat_core::topology_ops::{
     BACKWARD_CONNECTION, DUPLICATE_CONNECTION, STRUCTURAL_HIDDEN_NO_OUTWARD,
     STRUCTURAL_IF_MISSING_CONDITION, STRUCTURAL_SYNAPSE_TARGETS_INPUT,
 };
-use neat_core::{CreatureExport, NeuronExport, SynapseExport, SynapseType, compile_creature};
+use neat_core::{
+    CreatureExport, NeuronExport, SynapseExport, SynapseType, ValidateOptions, compile_creature,
+    creature_validate,
+};
 
 const TOL: f32 = 1e-6;
 
@@ -544,4 +547,123 @@ fn gate_rejects_a_widthless_creature() {
     creature.input = 0;
     let err = validate_creature_topology(&creature).expect_err("rejected");
     assert!(matches!(err, GraftError::Creature(_)));
+}
+
+// ---------------------------------------------------------------------------
+// The shared definition of a valid creature (Issue #562) — what the helper
+// hands a consumer has to satisfy `creature_validate`, not merely compile.
+// ---------------------------------------------------------------------------
+
+/// The options a consumer gates a grafted creature with: counts change by
+/// construction, and the creature's own `forwardOnly` decides the ordering
+/// rules.
+fn validate_options(creature: &CreatureExport) -> ValidateOptions {
+    ValidateOptions {
+        neurons: None,
+        connections: None,
+        feedback_loop: None,
+        forward_only: creature.forward_only,
+    }
+}
+
+fn assert_valid(creature: &CreatureExport, what: &str) {
+    if let Err(failure) = creature_validate(creature, &validate_options(creature)) {
+        panic!(
+            "{what} is not a valid creature: {} ({}): {}",
+            failure.class, failure.reason, failure.message
+        );
+    }
+}
+
+#[test]
+fn every_grafted_creature_satisfies_creature_validate() {
+    assert_valid(
+        &graft_if_node(&base_creature(), &valid_spec()).expect("graft succeeds"),
+        "a single grafted node",
+    );
+
+    let second = IfNodeSpec::new("if-2", 0.0)
+        .with_constant("if-2-one", 1.0)
+        .with_constant("if-2-pos", 1.0)
+        .with_constant("if-2-neg", 1.0)
+        .with_condition("if-1", 1.0)
+        .with_condition("if-2-one", -1.0)
+        .with_positive("if-2-pos", 5.0)
+        .with_negative("if-2-neg", 0.0)
+        .with_target("output-0", 1.0);
+    assert_valid(
+        &graft_if_tree(&base_creature(), &[valid_spec(), second]).expect("tree graft succeeds"),
+        "a grafted tree",
+    );
+
+    let spec = IfCorrectionSpec {
+        uuid: "residual-0".to_string(),
+        feature_uuid: "input-0".to_string(),
+        threshold: RESIDUAL_THRESHOLD,
+        positive_value: RESIDUAL_VALUE,
+        negative_value: 0.0,
+        target_uuid: "output-0".to_string(),
+        target_weight: 1.0,
+    };
+    assert_valid(
+        &graft_if_correction(&linear_base_creature(), &spec).expect("graft succeeds"),
+        "a grafted depth-1 correction",
+    );
+}
+
+#[test]
+fn a_graft_off_a_hidden_source_keeps_its_constants_ahead_of_every_hidden_neuron() {
+    // The node's condition reads `hidden-1`, so the node itself must follow it —
+    // but a constant may never follow a hidden neuron (rule 11), so the three
+    // constants this graft introduces still belong at the front.
+    let spec = IfNodeSpec::new("if-1", 0.0)
+        .with_constant("if-1-one", 1.0)
+        .with_constant("if-1-pos", 1.0)
+        .with_constant("if-1-neg", 1.0)
+        .with_condition("hidden-1", 1.0)
+        .with_condition("if-1-one", -0.1)
+        .with_positive("if-1-pos", 1.0)
+        .with_negative("if-1-neg", 0.0)
+        .with_target("output-0", 1.0);
+    let grafted = graft_if_node(&base_creature(), &spec).expect("graft succeeds");
+    assert_valid(&grafted, "a graft whose condition reads a hidden neuron");
+
+    let order: Vec<&str> = grafted.neurons.iter().map(|n| n.uuid.as_str()).collect();
+    let pos = |u: &str| order.iter().position(|o| *o == u).expect("neuron present");
+    for c in ["if-1-one", "if-1-pos", "if-1-neg"] {
+        assert!(
+            pos(c) < pos("hidden-1"),
+            "constant {c} after a hidden neuron: {order:?}"
+        );
+    }
+    assert!(pos("hidden-1") < pos("if-1"), "order was {order:?}");
+}
+
+#[test]
+fn grafted_synapses_are_in_canonical_from_to_order() {
+    let grafted = graft_if_node(&base_creature(), &valid_spec()).expect("graft succeeds");
+    let index: std::collections::HashMap<&str, usize> = grafted
+        .neurons
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.uuid.as_str(), grafted.input + i))
+        .collect();
+    let resolve = |uuid: &str| -> usize {
+        index.get(uuid).copied().unwrap_or_else(|| {
+            uuid.strip_prefix("input-")
+                .and_then(|n| n.parse::<usize>().ok())
+                .expect("every endpoint resolves")
+        })
+    };
+    let keys: Vec<(usize, usize)> = grafted
+        .synapses
+        .iter()
+        .map(|s| (resolve(&s.from_uuid), resolve(&s.to_uuid)))
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    assert_eq!(
+        keys, sorted,
+        "synapses are not in canonical (from, to) order"
+    );
 }

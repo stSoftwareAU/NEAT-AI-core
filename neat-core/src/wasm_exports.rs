@@ -178,6 +178,9 @@ pub fn wasm_scan_max_bias(
 //
 //   In:  { "creature": <CreatureExport>, "options"?: { neurons?, connections?,
 //         feedbackLoop?, forwardOnly? } }
+//        { "runtimeCreature": <RuntimeCreature>, "options"?: ... } — the
+//        in-memory shape a host holds (NEAT-AI#3803); a request names exactly
+//        one of the two creature keys
 //   Out: { "ok": true,  "stats": { input, constant, hidden, output, connections } }
 //        { "ok": false, "failure": { class, reason, message, neuronIndex,
 //                                    synapseIndex, malformed } }
