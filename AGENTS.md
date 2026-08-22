@@ -308,7 +308,7 @@ the comparison. `neat-core/tests/creature_width_contract.rs` pins the rule at
 all four sites (each was mutation-checked individually — dropping any one call
 fails its own tests).
 
-## `serde_json` keeps `float_roundtrip` (GRQ #4261)
+## `serde_json` keeps `float_roundtrip` (PR #571)
 
 `neat-core/Cargo.toml` builds `serde_json` with `features = ["float_roundtrip"]`
 and that is load-bearing, not tidying. The default number parser is a fast

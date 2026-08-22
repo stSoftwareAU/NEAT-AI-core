@@ -467,7 +467,7 @@ flowchart LR
     K -. "divergent score" .-> X
 ```
 
-### Creature weights parse to the exact `f64` (GRQ #4261)
+### Creature weights parse to the exact `f64`
 
 `serde_json`'s **default** number parser is a fast approximation that can land
 1 ULP from the `f64` a decimal literal names; the exact algorithm is behind its
@@ -480,7 +480,7 @@ gap above, nothing failed: the number was just marginally wrong.
 `neat-core` therefore builds `serde_json` with `float_roundtrip` **always on**
 (`neat-core/Cargo.toml`). It is not a Cargo feature of this crate and must not
 become one — a consumer that turned it off would get the silent drift back.
-Round-tripping the production GRQ-10 sampler creature (24,232 synapses) is the
+Round-tripping a production trainer sampler creature (24,232 synapses) is the
 measure: exactly one synapse weight differed before
 (`2.2985736498644322e-8` loaded as `2.298573649864432e-8`), none after, and
 `parse -> serialise -> parse` is now an identity as the `creature.rs` module
