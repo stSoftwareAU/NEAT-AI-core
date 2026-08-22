@@ -96,8 +96,8 @@ pub use decision_tree::{
     stump_creature,
 };
 pub use if_graft::{
-    GraftError, IfCorrectionSpec, IfNodeSpec, graft_if_correction, graft_if_node, graft_if_tree,
-    validate_creature_topology,
+    GraftEdge, GraftError, IfCorrectionSpec, IfNodeSpec, RelaySpec, graft_if_correction,
+    graft_if_node, graft_if_nodes, graft_if_tree, graft_relay_node, validate_creature_topology,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
 pub use squash::SquashType;

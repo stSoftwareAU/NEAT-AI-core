@@ -42,6 +42,23 @@
 //! three (`<uuid>-condition-one`, `<uuid>-positive-one`, `<uuid>-negative-one`),
 //! each with bias [`GRAFT_CONSTANT_BIAS`], leaving the thresholds and leaf
 //! values in the trainable **weights**.
+//!
+//! ## Whole trees, and corrections that enter both branches
+//!
+//! Two shapes need more than one node at a time, so a consumer used to write
+//! them out by hand (NEAT-AI-Forests #48):
+//!
+//! * a **nested tree**, whose child exists only to feed the parent that does
+//!   not exist yet. [`graft_if_nodes`] takes the whole post-order batch: a node
+//!   may leave its outward edge to a later node in the same batch, and only the
+//!   assembled creature is validated. It is still all or nothing — the first
+//!   rejection returns a [`GraftError`] and no partial creature escapes.
+//! * a correction entering **both branches of an `IF` destination**. An untyped
+//!   edge into an `IF` neuron feeds one branch, so the node takes the other with
+//!   a typed outward edge ([`IfNodeSpec::with_target_role`]); the second, equal
+//!   edge comes through an IDENTITY [`RelaySpec`] ([`graft_relay_node`]),
+//!   because a creature may not carry two synapses between the same ordered
+//!   pair of neurons.
 
 use std::collections::{HashMap, HashSet};
 
@@ -63,24 +80,47 @@ pub const GRAFT_CONSTANT_BIAS: f64 = 1.0;
 
 /// One weighted edge of a grafted node.
 ///
-/// `uuid` names the **source** neuron for a branch edge
+/// `uuid` names the **source** neuron for an inbound edge
 /// ([`IfNodeSpec::with_condition`] / [`with_positive`](IfNodeSpec::with_positive)
-/// / [`with_negative`](IfNodeSpec::with_negative)) and the **destination**
-/// neuron for an outward edge ([`IfNodeSpec::with_target`]).
+/// / [`with_negative`](IfNodeSpec::with_negative) / [`RelaySpec::with_source`])
+/// and the **destination** neuron for an outward edge
+/// ([`IfNodeSpec::with_target`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GraftEdge {
     /// UUID of the neuron at the other end of the edge.
     pub uuid: String,
     /// Connection weight.
     pub weight: f64,
+    /// Role the emitted synapse carries.
+    ///
+    /// [`SynapseType::Standard`] emits an **untyped** synapse — the additive
+    /// edge a point-wise neuron takes. The three `IF` roles emit their role
+    /// string, which is how an outward edge reaches one named branch of an `IF`
+    /// destination; an untyped edge into an `IF` neuron feeds the positive
+    /// branch only (NEAT-AI-Forests #48).
+    ///
+    /// Only **outward** edges carry a role: an inbound edge takes its role from
+    /// the branch it is listed under, so one set here is refused with
+    /// [`GraftError::InboundEdgeHasRole`] rather than silently ignored.
+    pub role: SynapseType,
 }
 
 impl GraftEdge {
-    /// Build an edge from a UUID and a weight.
+    /// Build an untyped edge from a UUID and a weight.
     pub fn new(uuid: impl Into<String>, weight: f64) -> Self {
         Self {
             uuid: uuid.into(),
             weight,
+            role: SynapseType::Standard,
+        }
+    }
+
+    /// Build an outward edge that carries `role`.
+    pub fn with_role(uuid: impl Into<String>, weight: f64, role: SynapseType) -> Self {
+        Self {
+            uuid: uuid.into(),
+            weight,
+            role,
         }
     }
 }
@@ -172,10 +212,82 @@ impl IfNodeSpec {
         self
     }
 
-    /// Add an outward edge from the node to an existing neuron.
+    /// Add an untyped outward edge from the node to an existing neuron.
     #[must_use]
     pub fn with_target(mut self, uuid: impl Into<String>, weight: f64) -> Self {
         self.targets.push(GraftEdge::new(uuid, weight));
+        self
+    }
+
+    /// Add an outward edge carrying `role` — the way into one named branch of
+    /// an `IF` destination (NEAT-AI-Forests #48).
+    #[must_use]
+    pub fn with_target_role(
+        mut self,
+        uuid: impl Into<String>,
+        weight: f64,
+        role: SynapseType,
+    ) -> Self {
+        self.targets.push(GraftEdge::with_role(uuid, weight, role));
+        self
+    }
+}
+
+/// Description of an **IDENTITY relay** to graft onto a creature: a hidden
+/// neuron that passes its inbound sum on unchanged.
+///
+/// A creature may not carry two synapses between the same ordered pair of
+/// neurons, so a node whose value must reach *two* branches of one `IF`
+/// destination needs a second source. The relay is that source: the node feeds
+/// one branch directly and the relay carries the same value into the other
+/// (NEAT-AI-Forests #48).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelaySpec {
+    /// UUID for the new relay; must not already exist in the creature.
+    pub uuid: String,
+    /// Bias added to the relayed sum — `0.0` for a pass-through.
+    pub bias: f64,
+    /// Untyped inbound edges, summed into the relay.
+    pub sources: Vec<GraftEdge>,
+    /// Outward edges from the relay to existing non-input, non-constant
+    /// neurons, each optionally carrying a role.
+    pub targets: Vec<GraftEdge>,
+}
+
+impl RelaySpec {
+    /// Start a specification for a relay with the given UUID and bias.
+    pub fn new(uuid: impl Into<String>, bias: f64) -> Self {
+        Self {
+            uuid: uuid.into(),
+            bias,
+            sources: Vec::new(),
+            targets: Vec::new(),
+        }
+    }
+
+    /// Add an inbound edge the relay sums.
+    #[must_use]
+    pub fn with_source(mut self, uuid: impl Into<String>, weight: f64) -> Self {
+        self.sources.push(GraftEdge::new(uuid, weight));
+        self
+    }
+
+    /// Add an untyped outward edge from the relay to an existing neuron.
+    #[must_use]
+    pub fn with_target(mut self, uuid: impl Into<String>, weight: f64) -> Self {
+        self.targets.push(GraftEdge::new(uuid, weight));
+        self
+    }
+
+    /// Add an outward edge carrying `role`.
+    #[must_use]
+    pub fn with_target_role(
+        mut self,
+        uuid: impl Into<String>,
+        weight: f64,
+        role: SynapseType,
+    ) -> Self {
+        self.targets.push(GraftEdge::with_role(uuid, weight, role));
         self
     }
 }
@@ -251,7 +363,32 @@ pub enum GraftError {
     /// No `negative` edge was supplied.
     MissingNegativeSynapse,
     /// No outward edge was supplied, so the node could not influence anything.
+    ///
+    /// In a batched graft ([`graft_if_nodes`]) a node may leave `targets` empty
+    /// **provided** a later node in the same batch names it as a branch source;
+    /// this is what a node nothing ever reads returns.
     NoTargets,
+    /// No inbound edge was supplied, so the node would emit only its bias.
+    NoSources,
+    /// An inbound edge carried an explicit role. An inbound edge takes its role
+    /// from the branch it is listed under, so an explicit one is refused rather
+    /// than ignored.
+    InboundEdgeHasRole {
+        /// Source neuron UUID.
+        from: String,
+        /// Destination neuron UUID — the grafted node.
+        to: String,
+    },
+    /// The creature lists a constant after the latest position the node can
+    /// take, so no placement satisfies both the forward-only reading order and
+    /// the `input, constant, hidden, output` neuron order
+    /// ([`crate::creature_validate()`] rule 11).
+    ConstantAfterPosition {
+        /// The constant that cannot precede the node.
+        constant: String,
+        /// The target that forced the earliest possible position.
+        target: String,
+    },
     /// Two synapses would connect the same ordered pair of neurons.
     DuplicateEdge {
         /// Source neuron UUID.
@@ -329,6 +466,15 @@ impl std::fmt::Display for GraftError {
             GraftError::MissingPositiveSynapse => write!(f, "IF node has no positive synapse"),
             GraftError::MissingNegativeSynapse => write!(f, "IF node has no negative synapse"),
             GraftError::NoTargets => write!(f, "Grafted node has no outward connection"),
+            GraftError::NoSources => write!(f, "Grafted node has no inward connection"),
+            GraftError::InboundEdgeHasRole { from, to } => write!(
+                f,
+                "Inbound synapse from {from} to {to} sets a role; an inbound edge takes its role from the branch it is listed under"
+            ),
+            GraftError::ConstantAfterPosition { constant, target } => write!(
+                f,
+                "No position leaves constant {constant} ahead of the node and the node ahead of target {target}"
+            ),
             GraftError::DuplicateEdge { from, to } => {
                 write!(f, "Duplicate synapse from {from} to {to}")
             }
@@ -472,53 +618,30 @@ pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), Graft
     Ok(())
 }
 
-/// Graft one `IF` node (and any constants it declares) onto a creature.
+/// One node to place: everything the placement rules and the builder need,
+/// whatever kind of node the caller described.
 ///
-/// Returns a **new** creature; the input is never modified. Placement is chosen
-/// so the node is evaluated after every source and before every target, which
-/// preserves the `forwardOnly` reading order the compiled forward pass relies
-/// on; any constants the spec declares are listed ahead of every hidden neuron,
-/// and the synapse list comes back in canonical `(from, to)` order, so the
-/// result satisfies [`crate::creature_validate()`] as well. The creature is put
-/// through [`validate_creature_topology`] before it is returned, so a malformed
-/// creature is never emitted.
-///
-/// # Errors
-///
-/// Returns a [`GraftError`] when the base creature is already malformed, when
-/// the specification names an unknown or duplicate neuron, when any `IF` role
-/// is missing, when a weight or bias is not finite, or when no position exists
-/// that keeps every edge pointing forwards.
-pub fn graft_if_node(
-    creature: &CreatureExport,
-    spec: &IfNodeSpec,
-) -> Result<CreatureExport, GraftError> {
-    validate_creature_topology(creature)?;
-    let map = index_map(creature);
+/// Both an `IF` node ([`IfNodeSpec`]) and an IDENTITY relay ([`RelaySpec`])
+/// reduce to this, so the name, finiteness, duplicate-edge, placement and
+/// ordering rules have one home rather than one copy per node kind.
+struct NodePlan<'a> {
+    /// UUID of the new neuron.
+    uuid: &'a str,
+    /// Bias of the new neuron.
+    bias: f64,
+    /// Activation of the new neuron.
+    squash: SquashType,
+    /// Constants the node introduces alongside itself.
+    constants: &'a [ConstantSpec],
+    /// Inbound edges paired with the role each will carry.
+    inbound: Vec<(&'a GraftEdge, SynapseType)>,
+    /// Outward edges; each carries its own [`GraftEdge::role`].
+    targets: &'a [GraftEdge],
+}
 
-    // Names this graft introduces must be new, and unique among themselves.
-    let mut introduced: HashSet<&str> = HashSet::with_capacity(spec.constants.len() + 1);
-    let new_names =
-        std::iter::once(spec.uuid.as_str()).chain(spec.constants.iter().map(|c| c.uuid.as_str()));
-    for uuid in new_names {
-        if map.contains_key(uuid) || !introduced.insert(uuid) {
-            return Err(GraftError::DuplicateUuid(uuid.to_string()));
-        }
-    }
-
-    if !spec.bias.is_finite() {
-        return Err(GraftError::NonFiniteBias {
-            uuid: spec.uuid.clone(),
-        });
-    }
-    for constant in &spec.constants {
-        if !constant.bias.is_finite() {
-            return Err(GraftError::NonFiniteBias {
-                uuid: constant.uuid.clone(),
-            });
-        }
-    }
-
+/// Reduce an [`IfNodeSpec`] to a [`NodePlan`], applying the `IF`-only rules:
+/// all three roles present, and no inbound edge naming a role of its own.
+fn if_plan(spec: &IfNodeSpec) -> Result<NodePlan<'_>, GraftError> {
     if spec.condition.is_empty() {
         return Err(GraftError::MissingConditionSynapse);
     }
@@ -528,7 +651,84 @@ pub fn graft_if_node(
     if spec.negative.is_empty() {
         return Err(GraftError::MissingNegativeSynapse);
     }
-    if spec.targets.is_empty() {
+    let mut inbound =
+        Vec::with_capacity(spec.condition.len() + spec.positive.len() + spec.negative.len());
+    for (role, edges) in [
+        (SynapseType::Condition, &spec.condition),
+        (SynapseType::Positive, &spec.positive),
+        (SynapseType::Negative, &spec.negative),
+    ] {
+        for edge in edges {
+            inbound.push((edge, role));
+        }
+    }
+    Ok(NodePlan {
+        uuid: &spec.uuid,
+        bias: spec.bias,
+        squash: SquashType::If,
+        constants: &spec.constants,
+        inbound,
+        targets: &spec.targets,
+    })
+}
+
+/// Reduce a [`RelaySpec`] to a [`NodePlan`]: an IDENTITY neuron whose inbound
+/// edges are all untyped.
+fn relay_plan(spec: &RelaySpec) -> NodePlan<'_> {
+    NodePlan {
+        uuid: &spec.uuid,
+        bias: spec.bias,
+        squash: SquashType::Identity,
+        constants: &[],
+        inbound: spec
+            .sources
+            .iter()
+            .map(|edge| (edge, SynapseType::Standard))
+            .collect(),
+        targets: &spec.targets,
+    }
+}
+
+/// Check a plan against the creature, choose the node's position, and build the
+/// resulting creature — everything but the final validation.
+///
+/// `require_targets` is `false` only inside [`graft_if_nodes`], where a node may
+/// leave its outward edge to a later node in the same batch; a node nothing
+/// reads is still refused, by that later node's absence.
+fn place_and_build(
+    creature: &CreatureExport,
+    plan: &NodePlan<'_>,
+    require_targets: bool,
+) -> Result<CreatureExport, GraftError> {
+    let map = index_map(creature);
+
+    // Names this graft introduces must be new, and unique among themselves.
+    let mut introduced: HashSet<&str> = HashSet::with_capacity(plan.constants.len() + 1);
+    let new_names =
+        std::iter::once(plan.uuid).chain(plan.constants.iter().map(|c| c.uuid.as_str()));
+    for uuid in new_names {
+        if map.contains_key(uuid) || !introduced.insert(uuid) {
+            return Err(GraftError::DuplicateUuid(uuid.to_string()));
+        }
+    }
+
+    if !plan.bias.is_finite() {
+        return Err(GraftError::NonFiniteBias {
+            uuid: plan.uuid.to_string(),
+        });
+    }
+    for constant in plan.constants {
+        if !constant.bias.is_finite() {
+            return Err(GraftError::NonFiniteBias {
+                uuid: constant.uuid.clone(),
+            });
+        }
+    }
+
+    if plan.inbound.is_empty() {
+        return Err(GraftError::NoSources);
+    }
+    if require_targets && plan.targets.is_empty() {
         return Err(GraftError::NoTargets);
     }
 
@@ -536,35 +736,39 @@ pub fn graft_if_node(
     let mut earliest = 0usize;
     let mut latest_source: Option<&str> = None;
     let mut seen_sources: HashSet<&str> = HashSet::new();
-    for edges in [&spec.condition, &spec.positive, &spec.negative] {
-        for edge in edges {
-            if edge.uuid == spec.uuid {
-                return Err(GraftError::SelfEdge(spec.uuid.clone()));
-            }
-            if !edge.weight.is_finite() {
-                return Err(GraftError::NonFiniteWeight {
-                    from: edge.uuid.clone(),
-                    to: spec.uuid.clone(),
-                    weight: edge.weight,
-                });
-            }
-            if !seen_sources.insert(edge.uuid.as_str()) {
-                return Err(GraftError::DuplicateEdge {
-                    from: edge.uuid.clone(),
-                    to: spec.uuid.clone(),
-                });
-            }
-            if introduced.contains(edge.uuid.as_str()) {
-                // A constant this graft introduces is placed before the node.
-                continue;
-            }
-            let index = *map
-                .get(edge.uuid.as_str())
-                .ok_or_else(|| GraftError::UnknownSourceUuid(edge.uuid.clone()))?;
-            if index >= creature.input && index - creature.input + 1 > earliest {
-                earliest = index - creature.input + 1;
-                latest_source = Some(edge.uuid.as_str());
-            }
+    for (edge, _) in &plan.inbound {
+        if edge.role != SynapseType::Standard {
+            return Err(GraftError::InboundEdgeHasRole {
+                from: edge.uuid.clone(),
+                to: plan.uuid.to_string(),
+            });
+        }
+        if edge.uuid == plan.uuid {
+            return Err(GraftError::SelfEdge(plan.uuid.to_string()));
+        }
+        if !edge.weight.is_finite() {
+            return Err(GraftError::NonFiniteWeight {
+                from: edge.uuid.clone(),
+                to: plan.uuid.to_string(),
+                weight: edge.weight,
+            });
+        }
+        if !seen_sources.insert(edge.uuid.as_str()) {
+            return Err(GraftError::DuplicateEdge {
+                from: edge.uuid.clone(),
+                to: plan.uuid.to_string(),
+            });
+        }
+        if introduced.contains(edge.uuid.as_str()) {
+            // A constant this graft introduces is placed before the node.
+            continue;
+        }
+        let index = *map
+            .get(edge.uuid.as_str())
+            .ok_or_else(|| GraftError::UnknownSourceUuid(edge.uuid.clone()))?;
+        if index >= creature.input && index - creature.input + 1 > earliest {
+            earliest = index - creature.input + 1;
+            latest_source = Some(edge.uuid.as_str());
         }
     }
 
@@ -572,20 +776,20 @@ pub fn graft_if_node(
     let mut latest = creature.neurons.len();
     let mut earliest_target: Option<&str> = None;
     let mut seen_targets: HashSet<&str> = HashSet::new();
-    for edge in &spec.targets {
-        if edge.uuid == spec.uuid {
-            return Err(GraftError::SelfEdge(spec.uuid.clone()));
+    for edge in plan.targets {
+        if edge.uuid == plan.uuid {
+            return Err(GraftError::SelfEdge(plan.uuid.to_string()));
         }
         if !edge.weight.is_finite() {
             return Err(GraftError::NonFiniteWeight {
-                from: spec.uuid.clone(),
+                from: plan.uuid.to_string(),
                 to: edge.uuid.clone(),
                 weight: edge.weight,
             });
         }
         if !seen_targets.insert(edge.uuid.as_str()) {
             return Err(GraftError::DuplicateEdge {
-                from: spec.uuid.clone(),
+                from: plan.uuid.to_string(),
                 to: edge.uuid.clone(),
             });
         }
@@ -608,6 +812,24 @@ pub fn graft_if_node(
         }
     }
 
+    // A constant may never follow a hidden neuron, so the node is listed after
+    // every constant the creature already carries — not merely after the last
+    // one it reads, which would leave a later constant behind a hidden neuron
+    // ([`crate::creature_validate()`] rule 11).
+    let last_constant = creature
+        .neurons
+        .iter()
+        .rposition(|n| n.neuron_type == "constant");
+    if let Some(last) = last_constant {
+        earliest = earliest.max(last + 1);
+        if last + 1 > latest {
+            return Err(GraftError::ConstantAfterPosition {
+                constant: creature.neurons[last].uuid.clone(),
+                target: earliest_target.unwrap_or_default().to_string(),
+            });
+        }
+    }
+
     if earliest > latest {
         return Err(GraftError::ForwardOrderViolation {
             source: latest_source.unwrap_or_default().to_string(),
@@ -615,7 +837,13 @@ pub fn graft_if_node(
         });
     }
 
-    let grafted = build_grafted(creature, spec, earliest);
+    Ok(build_grafted(creature, plan, earliest))
+}
+
+/// Report a creature that failed a shared gate as [`GraftError::MalformedResult`]
+/// — the graft was well formed but what it assembled was not, so the creature is
+/// never returned.
+fn validated(grafted: CreatureExport) -> Result<CreatureExport, GraftError> {
     match validate_creature_topology(&grafted) {
         Ok(()) => Ok(grafted),
         Err(GraftError::MalformedTopology { code, index }) => Err(GraftError::MalformedResult {
@@ -632,6 +860,95 @@ pub fn graft_if_node(
     }
 }
 
+/// Graft one `IF` node (and any constants it declares) onto a creature.
+///
+/// Returns a **new** creature; the input is never modified. Placement is chosen
+/// so the node is evaluated after every source and before every target, which
+/// preserves the `forwardOnly` reading order the compiled forward pass relies
+/// on; any constants the spec declares are listed ahead of every hidden neuron,
+/// and the synapse list comes back in canonical `(from, to)` order, so the
+/// result satisfies [`crate::creature_validate()`] as well. The creature is put
+/// through [`validate_creature_topology`] before it is returned, so a malformed
+/// creature is never emitted.
+///
+/// # Errors
+///
+/// Returns a [`GraftError`] when the base creature is already malformed, when
+/// the specification names an unknown or duplicate neuron, when any `IF` role
+/// is missing, when a weight or bias is not finite, or when no position exists
+/// that keeps every edge pointing forwards.
+pub fn graft_if_node(
+    creature: &CreatureExport,
+    spec: &IfNodeSpec,
+) -> Result<CreatureExport, GraftError> {
+    validate_creature_topology(creature)?;
+    let plan = if_plan(spec)?;
+    validated(place_and_build(creature, &plan, true)?)
+}
+
+/// Graft an IDENTITY relay — a hidden neuron that passes its inbound sum on.
+///
+/// The way to reach a second branch of a destination the source already feeds:
+/// a creature may not carry two synapses between the same ordered pair, so the
+/// relay supplies the second, distinct source (NEAT-AI-Forests #48). Same
+/// placement, ordering and validation contract as [`graft_if_node`].
+///
+/// # Errors
+///
+/// Returns a [`GraftError`] when the relay names an unknown or duplicate
+/// neuron, when it has no inbound or no outward edge, when a weight or bias is
+/// not finite, or when no position exists that keeps every edge pointing
+/// forwards.
+pub fn graft_relay_node(
+    creature: &CreatureExport,
+    spec: &RelaySpec,
+) -> Result<CreatureExport, GraftError> {
+    validate_creature_topology(creature)?;
+    let plan = relay_plan(spec);
+    validated(place_and_build(creature, &plan, true)?)
+}
+
+/// Graft a batch of `IF` nodes as one all-or-nothing change, where a node may
+/// feed another node in the same batch.
+///
+/// Unlike [`graft_if_tree`], which validates after every node and so needs each
+/// one to be complete on its own, a node here may leave `targets` empty
+/// **provided** a later node in the batch names it as a branch source — the
+/// post-order shape a nested decision tree has, where the child exists to feed
+/// the parent that does not exist yet (NEAT-AI-Forests #48). Only the assembled
+/// creature is validated, and it is validated once.
+///
+/// All or nothing: the first failure returns its [`GraftError`] and no partial
+/// creature escapes. An empty batch returns the validated base creature.
+///
+/// # Errors
+///
+/// Returns the first [`GraftError`] any node produces, [`GraftError::NoTargets`]
+/// for a node nothing in the batch ever reads, or the base creature's own
+/// validation error.
+pub fn graft_if_nodes(
+    creature: &CreatureExport,
+    specs: &[IfNodeSpec],
+) -> Result<CreatureExport, GraftError> {
+    validate_creature_topology(creature)?;
+    let mut current = creature.clone();
+    for (i, spec) in specs.iter().enumerate() {
+        // A later node naming this one as a branch source supplies its outward
+        // edge, so this node may carry none of its own.
+        let fed_to_a_later_node = specs[i + 1..].iter().any(|later| {
+            later
+                .condition
+                .iter()
+                .chain(&later.positive)
+                .chain(&later.negative)
+                .any(|edge| edge.uuid == spec.uuid)
+        });
+        let plan = if_plan(spec)?;
+        current = place_and_build(&current, &plan, !fed_to_a_later_node)?;
+    }
+    validated(current)
+}
+
 /// Assemble the grafted creature: the constants ahead of every hidden neuron,
 /// the node at `position`, and the whole synapse list left in canonical
 /// `(from, to)` order.
@@ -640,7 +957,11 @@ pub fn graft_if_node(
 /// creature — neurons listed `input, constant, hidden, output` (rule 11) and
 /// synapses sorted ascending by resolved index (rule 25) — so a grafted
 /// creature satisfies the shared validator, not merely the compiler.
-fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) -> CreatureExport {
+fn build_grafted(
+    creature: &CreatureExport,
+    plan: &NodePlan<'_>,
+    position: usize,
+) -> CreatureExport {
     // A constant may never follow a hidden neuron, so the constants go in front
     // of the first non-constant rather than beside the node, which can legally
     // sit after several hidden neurons.
@@ -650,9 +971,9 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
         .position(|n| n.neuron_type != "constant")
         .unwrap_or(creature.neurons.len())
         .min(position);
-    let mut neurons = Vec::with_capacity(creature.neurons.len() + spec.constants.len() + 1);
+    let mut neurons = Vec::with_capacity(creature.neurons.len() + plan.constants.len() + 1);
     neurons.extend_from_slice(&creature.neurons[..constants_at]);
-    for constant in &spec.constants {
+    for constant in plan.constants {
         neurons.push(NeuronExport {
             id: None,
             neuron_type: "constant".to_string(),
@@ -665,36 +986,28 @@ fn build_grafted(creature: &CreatureExport, spec: &IfNodeSpec, position: usize) 
     neurons.push(NeuronExport {
         id: None,
         neuron_type: "hidden".to_string(),
-        uuid: spec.uuid.clone(),
-        bias: spec.bias,
-        squash: Some(squash_name_from(SquashType::If).to_string()),
+        uuid: plan.uuid.to_string(),
+        bias: plan.bias,
+        squash: Some(squash_name_from(plan.squash).to_string()),
     });
     neurons.extend_from_slice(&creature.neurons[position..]);
 
     let mut synapses = creature.synapses.clone();
-    synapses.reserve(
-        spec.condition.len() + spec.positive.len() + spec.negative.len() + spec.targets.len(),
-    );
-    for (role, edges) in [
-        (SynapseType::Condition, &spec.condition),
-        (SynapseType::Positive, &spec.positive),
-        (SynapseType::Negative, &spec.negative),
-    ] {
-        for edge in edges {
-            synapses.push(SynapseExport {
-                from_uuid: edge.uuid.clone(),
-                to_uuid: spec.uuid.clone(),
-                weight: edge.weight,
-                synapse_type: synapse_type_name_from(role).map(str::to_string),
-            });
-        }
-    }
-    for edge in &spec.targets {
+    synapses.reserve(plan.inbound.len() + plan.targets.len());
+    for (edge, role) in &plan.inbound {
         synapses.push(SynapseExport {
-            from_uuid: spec.uuid.clone(),
+            from_uuid: edge.uuid.clone(),
+            to_uuid: plan.uuid.to_string(),
+            weight: edge.weight,
+            synapse_type: synapse_type_name_from(*role).map(str::to_string),
+        });
+    }
+    for edge in plan.targets {
+        synapses.push(SynapseExport {
+            from_uuid: plan.uuid.to_string(),
             to_uuid: edge.uuid.clone(),
             weight: edge.weight,
-            synapse_type: None,
+            synapse_type: synapse_type_name_from(edge.role).map(str::to_string),
         });
     }
 
