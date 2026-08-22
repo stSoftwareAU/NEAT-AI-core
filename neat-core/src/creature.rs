@@ -10,6 +10,19 @@
 //! serialisations of the same `CreatureExport` produce byte-identical JSON
 //! (serde emits fields in declaration order).
 //!
+//! **Exact float parsing (GRQ #4261).** "Preserves every field" includes the
+//! last bit of every `f64`. `serde_json`'s *default* number parser is a fast
+//! approximation that can land 1 ULP from the value the literal names, so a
+//! weight such as `2.2985736498644322e-8` loaded as its neighbour
+//! `2.298573649864432e-8` and the round trip above was not an identity. That
+//! is also a cross-engine parity gap: JavaScript `JSON.parse` is exact, so the
+//! Rust engines trained and scored a *slightly different network* from the one
+//! NEAT-AI's TypeScript loaded, silently. `neat-core` therefore builds
+//! `serde_json` with its `float_roundtrip` feature — the exact algorithm,
+//! agreeing with `f64::from_str` on every input. The feature is **not
+//! optional**: dropping it reintroduces the drift with nothing failing loudly.
+//! `neat-core/tests/creature_float_roundtrip.rs` is the gate.
+//!
 //! The `#[serde(rename = "...")]` attributes (`semanticVersion`, `forwardOnly`,
 //! `fromUUID`, `toUUID`, `type`) apply symmetrically on both input and output,
 //! so the canonical TypeScript camelCase shape is preserved.
@@ -60,7 +73,7 @@
 //! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
 //! #550 (observation-width contract), #556 (duplicate-synapse rule),
 //! #559 (validation contract input format), GRQ #4257 (both memetic weight
-//! forms).
+//! forms), GRQ #4261 (exact float parsing).
 
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -631,6 +644,10 @@ pub fn validate_no_duplicate_synapses(creature: &CreatureExport) -> Result<(), C
 /// [`CreatureError::InvalidInputCount`] / [`CreatureError::InvalidOutputCount`]
 /// rather than a struct with a zero width. A missing `input` / `output` key or
 /// a negative literal is a [`CreatureError::Json`] error (Issue #550).
+///
+/// Every weight and bias parses to **exactly** the `f64` its literal names —
+/// the same value `f64::from_str` and JavaScript `JSON.parse` produce — via
+/// `serde_json`'s `float_roundtrip` feature (GRQ #4261, module docs above).
 pub fn parse_creature_json(json: &str) -> Result<CreatureExport, CreatureError> {
     let creature: CreatureExport = serde_json::from_str(json)?;
     validate_creature_width(&creature)?;

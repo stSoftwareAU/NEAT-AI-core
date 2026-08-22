@@ -308,6 +308,19 @@ the comparison. `neat-core/tests/creature_width_contract.rs` pins the rule at
 all four sites (each was mutation-checked individually — dropping any one call
 fails its own tests).
 
+## `serde_json` keeps `float_roundtrip` (PR #571)
+
+`neat-core/Cargo.toml` builds `serde_json` with `features = ["float_roundtrip"]`
+and that is load-bearing, not tidying. The default number parser is a fast
+approximation that can land **1 ULP** from the `f64` a literal names, while
+JavaScript `JSON.parse` and `f64::from_str` are exact — so without the feature a
+creature weight loaded here differs from the one NEAT-AI's TypeScript loaded and
+the two engines score different networks. Nothing fails when that happens; the
+number is simply wrong, which is why a dependency-hygiene sweep must never drop
+the feature as unused, and why it is not exposed as a crate feature a consumer
+could switch off. `neat-core/tests/creature_float_roundtrip.rs` is the gate —
+removing the feature turns all five of its tests red.
+
 ## One activation rule for single-record work (Issue #441)
 
 `neuron_activation_scalar` (`neat-core/src/batch_scoring.rs`) is the single home

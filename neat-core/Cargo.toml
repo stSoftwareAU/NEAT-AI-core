@@ -17,7 +17,12 @@ crate-type = ["cdylib", "rlib"]
 # Native builds omit wasm-bindgen; WASM targets link it for `accumulate` exports.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# GRQ #4261 - `float_roundtrip` is not optional. serde_json's default number
+# parser is a fast approximation that can land 1 ULP away from the f64 the
+# literal names, so a creature weight loaded here differed from the one
+# JavaScript `JSON.parse` gives NEAT-AI and the two engines scored different
+# networks. The feature selects the exact algorithm, matching `f64::from_str`.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 # Issue #179 - opt-in data-parallel record scoring. `rayon` is native-only
 # (it is not wasm-friendly), so it is declared under a `cfg(not(wasm32))`

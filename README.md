@@ -467,6 +467,44 @@ flowchart LR
     K -. "divergent score" .-> X
 ```
 
+### Creature weights parse to the exact `f64`
+
+`serde_json`'s **default** number parser is a fast approximation that can land
+1 ULP from the `f64` a decimal literal names; the exact algorithm is behind its
+opt-in `float_roundtrip` feature. JavaScript `JSON.parse` — and Rust's own
+`f64::from_str` — are always exact, so without that feature the Rust engines
+(Backpropagation, scorer, Lamarck) trained and scored a *slightly different
+network* from the one NEAT-AI's TypeScript loaded. Unlike the duplicate-synapse
+gap above, nothing failed: the number was just marginally wrong.
+
+`neat-core` therefore builds `serde_json` with `float_roundtrip` **always on**
+(`neat-core/Cargo.toml`). It is not a Cargo feature of this crate and must not
+become one — a consumer that turned it off would get the silent drift back.
+Round-tripping a production trainer sampler creature (24,232 synapses) is the
+measure: exactly one synapse weight differed before
+(`2.2985736498644322e-8` loaded as `2.298573649864432e-8`), none after, and
+`parse -> serialise -> parse` is now an identity as the `creature.rs` module
+docs have always claimed. The cost is ~0.7 ms on a one-off 3 MB creature load
+(5.4 ms → 6.1 ms best-of-25, release build).
+
+`neat-core/tests/creature_float_roundtrip.rs` is the gate: ten literals the
+fast parser gets wrong across the exponent range, every `f64` field on the wire
+(synapse weight, neuron bias, `memetic` weights and biases), the round-trip
+contract, and a 4,000-value sweep asserting that the shortest-form text of
+**any** finite `f64` parses back to that same `f64`. The oracles are the bit
+pattern the sweep started from and `f64::from_str` — neither shares a code path
+with `serde_json`.
+
+```mermaid
+flowchart LR
+    J["creature JSON<br/>weight: 2.2985736498644322e-8"] --> T["TypeScript JSON.parse<br/>exact"]
+    J --> R["parse_creature_json"]
+    R --> F{"serde_json<br/>float_roundtrip?"}
+    F -- "off (was)" --> D["…4432e-8 — 1 ULP low<br/>silent parity gap"]
+    F -- "on (now)" --> E["…44322e-8 — exact"]
+    T --> E
+```
+
 ### Canonical IF decision trees and the graft helper (Issue #555)
 
 `neat-core` owns the fleet's one interpretation of a decision tree built from
