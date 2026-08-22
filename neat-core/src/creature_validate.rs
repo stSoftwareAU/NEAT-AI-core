@@ -83,7 +83,10 @@
 //! [`crate::creature::validate_no_duplicate_synapses`] (Issue #556) — one
 //! ordered `(from, to)` pair, at most once — reported here under the
 //! TypeScript's own class and reason (`TopologyError` / `INVALID_CONNECTION`,
-//! *not* `DUPLICATE_SYNAPSE`, which `creatureValidate` never raises).
+//! *not* `DUPLICATE_SYNAPSE`, which `creatureValidate` never raises). The
+//! synapse **role** plays no part in either rule: rule 12 wants one edge of
+//! each role and rule 26 wants each pair once, so an `IF` neuron fed two
+//! `positive` edges from two different sources breaks neither (Issue #572).
 //!
 //! # Input format
 //!

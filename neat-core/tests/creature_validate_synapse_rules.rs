@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 
 use neat_core::creature::{MemeticExport, MemeticWeightExport, MemeticWeights};
 use neat_core::creature_validate::{
-    FailureClass, ValidateOptions, ValidationStats, reason, validate_synapse_and_memetic_rules,
+    FailureClass, ValidateOptions, ValidationStats, creature_validate, reason,
+    validate_synapse_and_memetic_rules,
 };
 use neat_core::{
     CreatureExport, NeuronExport, SynapseExport, stump_creature, validate_no_duplicate_synapses,
@@ -230,6 +231,95 @@ fn a_non_adjacent_duplicate_pair_is_still_rejected_by_both_paths() {
         validate_no_duplicate_synapses(&creature).is_err(),
         "Issue #556's pair check rejects the same creature regardless of order"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Rule 26 — the role plays no part in it (Issue #572).
+// ---------------------------------------------------------------------------
+
+/// An `IF` neuron fed **two synapses of each role**, one per distinct constant:
+/// six inward pairs, none of them repeated. Rule 12 wants one of each role and
+/// rule 26 wants each `(from, to)` pair at most once — both hold here, so the
+/// creature is legal even though three roles each arrive twice.
+fn doubled_role_if_creature() -> CreatureExport {
+    CreatureExport {
+        input: 1,
+        output: 1,
+        neurons: vec![
+            constant("k-cond-a", 1),
+            constant("k-cond-b", 2),
+            constant("k-pos-a", 3),
+            constant("k-pos-b", 4),
+            constant("k-neg-a", 5),
+            constant("k-neg-b", 6),
+            neuron("hidden", "if-0", 7),
+            neuron("output", "o", -1),
+        ],
+        synapses: vec![
+            role_edge("k-cond-a", "if-0", "condition"),
+            role_edge("k-cond-b", "if-0", "condition"),
+            role_edge("k-pos-a", "if-0", "positive"),
+            role_edge("k-pos-b", "if-0", "positive"),
+            role_edge("k-neg-a", "if-0", "negative"),
+            role_edge("k-neg-b", "if-0", "negative"),
+            edge("if-0", "o"),
+        ],
+        semantic_version: None,
+        forward_only: false,
+        memetic: None,
+    }
+}
+
+/// A constant carries no squash (rule 15) and the `bias = 1.0` the `IF`
+/// branches read as their value.
+fn constant(uuid: &str, id: i64) -> NeuronExport {
+    NeuronExport {
+        id: Some(id),
+        neuron_type: "constant".to_string(),
+        uuid: uuid.to_string(),
+        bias: 1.0,
+        squash: None,
+    }
+}
+
+fn role_edge(from: &str, to: &str, role: &str) -> SynapseExport {
+    SynapseExport {
+        synapse_type: Some(role.to_string()),
+        ..edge(from, to)
+    }
+}
+
+/// The whole entry point, not just this half: a repeated role must clear the
+/// `IF` rule as well as the duplicate one. GRQ #4277 reads as though same-role
+/// fan-in into one neuron were forbidden — it is not; only an exact repeat of
+/// the ordered `(from, to)` pair is.
+#[test]
+fn same_role_fan_in_from_distinct_sources_breaks_no_rule() {
+    let mut creature = doubled_role_if_creature();
+    creature.neurons[6].squash = Some("IF".to_string());
+
+    let stats = creature_validate(&creature, &ValidateOptions::default())
+        .expect("repeated roles from distinct sources are a legal creature");
+
+    assert_eq!(stats.constant, 6);
+    assert_eq!(stats.connections, 7, "one tally per synapse walked");
+}
+
+/// The same creature with one of those pairs repeated: same role, same source,
+/// same target — and now rule 26 stops it.
+#[test]
+fn repeating_one_pair_of_that_creature_is_still_a_duplicate() {
+    let mut creature = doubled_role_if_creature();
+    creature
+        .synapses
+        .insert(1, role_edge("k-cond-a", "if-0", "condition"));
+
+    let failure = run_err(&creature, &ValidateOptions::default());
+
+    assert_eq!(failure.class, FailureClass::Topology);
+    assert_eq!(failure.reason, reason::INVALID_CONNECTION);
+    assert_eq!(failure.message, "1) duplicate synapse k-cond-a -> if-0");
+    assert_eq!(failure.synapse_index, Some(1));
 }
 
 // ---------------------------------------------------------------------------

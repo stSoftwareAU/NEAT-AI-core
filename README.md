@@ -452,6 +452,13 @@ pair is `CreatureError::DuplicateSynapse { from_uuid, to_uuid }`, naming the
 first pair that repeats in declaration order. Distinct pairs that share one
 endpoint — fan-out from a source, fan-in to a target — are untouched.
 
+The ordered pair is the **whole** key: the synapse *role* plays no part in it.
+Many synapses may carry the same role into one neuron — two `condition` edges
+into an `IF` neuron are what a decision stump is built from — as long as their
+sources differ. Only an exact repeat of `(fromUUID, toUUID)` is rejected, which
+is also why an `IF` neuron needs up to three separate constants (each with
+`bias = 1`) rather than one constant wired three times (Issue #572).
+
 Consumers that assemble a `CreatureExport` in Rust rather than parsing one
 should call `validate_no_duplicate_synapses` at their own boundary
 (NEAT-AI-Forests already guards this itself).

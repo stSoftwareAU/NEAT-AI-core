@@ -142,6 +142,27 @@ fn compile_reports_the_first_repeated_pair_in_declaration_order() {
     }
 }
 
+/// What repeats is the **pair**, not the role: two `positive` synapses from the
+/// same constant are still `("c", "if-0")` twice, and are rejected for exactly
+/// the reason a mixed-role repeat is.
+#[test]
+fn compile_rejects_a_repeated_pair_that_shares_one_role() {
+    let mut creature = if_triple_from_one_constant();
+    creature.synapses = vec![
+        synapse("c", "if-0", 1.0, Some("positive")),
+        synapse("c", "if-0", 2.0, Some("positive")),
+        synapse("if-0", "output-0", 1.0, None),
+    ];
+    match compile_creature(&creature) {
+        Err(CreatureError::DuplicateSynapse { from_uuid, to_uuid }) => {
+            assert_eq!(from_uuid, "c");
+            assert_eq!(to_uuid, "if-0");
+        }
+        Err(other) => panic!("expected DuplicateSynapse, got {other:?}"),
+        Ok(_) => panic!("a repeated (from, to) pair must not compile"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance — the rule must not reject legitimate topologies
 // ---------------------------------------------------------------------------
@@ -208,6 +229,51 @@ fn compile_accepts_an_if_neuron_fed_by_three_distinct_constants() {
     assert!(
         (output[0] - 4.5).abs() < 1e-5,
         "expected 4.5, got {}",
+        output[0]
+    );
+}
+
+/// A **repeated role** into one neuron is legal as long as the sources differ:
+/// the rule keys on the ordered `(from, to)` pair alone and never reads the
+/// role. Two `positive` synapses into the same `IF` neuron therefore compile,
+/// and both contribute to the branch they name.
+#[test]
+fn compile_accepts_repeated_roles_into_one_neuron_when_the_sources_differ() {
+    let creature = CreatureExport {
+        memetic: None,
+        input: 1,
+        output: 1,
+        neurons: vec![
+            neuron("constant", "k-cond", 1.0, "IDENTITY"),
+            neuron("constant", "k-pos-a", 1.0, "IDENTITY"),
+            neuron("constant", "k-pos-b", 1.0, "IDENTITY"),
+            neuron("constant", "k-neg", 1.0, "IDENTITY"),
+            neuron("hidden", "if-0", 0.5, "IF"),
+            neuron("output", "output-0", 0.0, "IDENTITY"),
+        ],
+        synapses: vec![
+            synapse("k-cond", "if-0", 1.0, Some("condition")),
+            synapse("k-pos-a", "if-0", 2.0, Some("positive")),
+            synapse("k-pos-b", "if-0", 3.0, Some("positive")),
+            synapse("k-neg", "if-0", -4.0, Some("negative")),
+            synapse("if-0", "output-0", 1.0, None),
+        ],
+        semantic_version: None,
+        forward_only: true,
+    };
+    assert!(
+        validate_no_duplicate_synapses(&creature).is_ok(),
+        "distinct sources make distinct pairs, whatever the roles say"
+    );
+    let mut network = compile_creature(&creature).expect("repeated roles must compile");
+
+    // Each constant activates at its own bias of 1.0. condition = 1.0 * 1.0 =
+    // 1.0 > 0, so the positive branch is taken and *both* positive synapses
+    // contribute: 1.0 * 2.0 + 1.0 * 3.0 + bias 0.5 = 5.5.
+    let output = network.activate(&[0.0], 1);
+    assert!(
+        (output[0] - 5.5).abs() < 1e-5,
+        "expected 5.5, got {}",
         output[0]
     );
 }
