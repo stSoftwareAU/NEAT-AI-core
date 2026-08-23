@@ -1716,6 +1716,101 @@ fn memetic_row_rules(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Rule 31's inverse — pruning a memetic record back to live structure
+// ---------------------------------------------------------------------------
+
+impl CreatureExport {
+    /// Drop every memetic reference this creature no longer carries.
+    ///
+    /// Rule 31 refuses a creature whose memetic biases or weights name a neuron
+    /// or a synapse that is gone, so **any** pass that removes structure must
+    /// prune the record with it. That prune lives here, beside the rule it is
+    /// the inverse of, so the two cannot drift and no downstream repo has to
+    /// re-derive the resolution vocabulary rule 31 reads — runtime id first,
+    /// then wire UUID (NEAT-AI-Lamarck#197).
+    ///
+    /// A no-op on a creature with no memetic record, and on every pure-append
+    /// edit — adding structure leaves every existing key resolvable, so nothing
+    /// is dropped. Idempotent.
+    ///
+    /// What survives: [`MemeticExport::extra`] verbatim (`generation`, `score`,
+    /// `ancestry` — the fine-tuning history the record exists to carry), every
+    /// bias whose neuron is still listed, every weight whose synapse still
+    /// exists, and the record itself even when emptied. Clearing the record
+    /// (`memetic = None`) is a different fact and is never what this does.
+    pub fn prune_memetic(&mut self) {
+        let Some(mut memetic) = self.memetic.take() else {
+            return;
+        };
+        memetic.prune_to(self);
+        self.memetic = Some(memetic);
+    }
+}
+
+impl MemeticExport {
+    /// Drop every reference that does not resolve against `creature`.
+    ///
+    /// [`CreatureExport::prune_memetic`] is this against the creature that
+    /// carries the record; use `prune_to` when the record is held separately.
+    ///
+    /// Only **dangling** references are dropped — a reference naming a neuron
+    /// or synapse that no longer exists. A *malformed* row or entry (missing
+    /// `toUUID`, `toId` or `weight`) is a defect in the record as supplied, not
+    /// something a removal caused, so it is left for rule 31 to report in
+    /// NEAT-AI's own words rather than quietly deleted here.
+    pub fn prune_to(&mut self, creature: &CreatureExport) {
+        let views = neuron_views(creature);
+        let wire = WireIndex::build(creature);
+
+        let mut id_to_index: HashMap<i64, u32> = HashMap::with_capacity(views.len());
+        for (index, view) in views.iter().enumerate() {
+            if let Some(id) = view.id {
+                id_to_index.insert(id, index as u32);
+            }
+        }
+        let pairs: HashSet<(u32, u32)> = creature
+            .synapses
+            .iter()
+            .filter_map(|synapse| {
+                Some((
+                    wire.resolve(&synapse.from_uuid)?,
+                    wire.resolve(&synapse.to_uuid)?,
+                ))
+            })
+            .collect();
+        let resolve = |key: &str| resolve_memetic_reference(key, &id_to_index, Some(&wire));
+
+        self.biases.retain(|key, _| resolve(key).is_some());
+
+        match &mut self.weights {
+            MemeticWeights::Rows(rows) => rows.retain(|row| {
+                let (Some(from_uuid), Some(to_uuid)) =
+                    (row.from_uuid.as_deref(), row.to_uuid.as_deref())
+                else {
+                    return true; // malformed, not dangling — rule 31 reports it
+                };
+                match (resolve(from_uuid), resolve(to_uuid)) {
+                    (Some(from), Some(to)) => pairs.contains(&(from, to)),
+                    _ => false,
+                }
+            }),
+            MemeticWeights::ById(by_id) => by_id.retain(|key, entries| {
+                let Some(from) = resolve(key) else {
+                    return false;
+                };
+                entries.retain(|entry| match entry.to_id {
+                    None => true, // malformed, not dangling
+                    Some(to_id) => id_to_index
+                        .get(&to_id)
+                        .is_some_and(|&to| pairs.contains(&(from, to))),
+                });
+                true
+            }),
+        }
+    }
+}
+
 /// The memetic record as rule 31 reads it — the neutral form every request
 /// shape maps onto.
 ///
