@@ -743,6 +743,43 @@ carrying the row form could not parse, exiting with `Creature JSON error:
 invalid type: sequence, expected a map`. Supporting both forms resolved the
 issue.
 
+##### Pruning — rule 31's inverse (NEAT-AI-Lamarck#197)
+
+Rule 31 refuses a creature whose memetic record names structure that is gone,
+so **any** consumer pass that removes a neuron or a synapse must prune the
+record with it. That prune lives here, beside the rule:
+
+| Call | Use |
+|------|-----|
+| `CreatureExport::prune_memetic()` | prune the record the creature carries |
+| `MemeticExport::prune_to(&creature)` | prune a record held separately |
+
+Both drop **only dangling** references — a bias whose neuron is gone, a weight
+whose synapse is gone — resolved through the same id-or-UUID vocabulary rule 31
+reads. Everything else survives: `MemeticExport::extra` (`generation`, `score`,
+`ancestry`) verbatim, every still-resolving delta, and the record itself even
+when it empties. A *malformed* row or entry (missing `toUUID`, `toId` or
+`weight`) is a defect in the record as supplied rather than something a removal
+caused, so it is left for rule 31 to report instead of being silently deleted.
+Adding structure resolves every existing key, so a prune after a pure append is
+a no-op; the operation is idempotent.
+
+Without a shared prune every downstream repo hand-rolls one, and the blunt
+version (`memetic = None`) throws away the fine-tuning history the record
+exists to carry — which is what NEAT-AI-Lamarck#197 hit when an unpruned
+synapse removal made rule 31 refuse the rewire and a whole candidate strategy
+silently produced nothing.
+
+```mermaid
+flowchart LR
+    R["consumer removes a<br/>neuron or synapse"] --> P["CreatureExport::prune_memetic()"]
+    P --> K["kept: extra, resolving<br/>biases and weights"]
+    P --> D["dropped: dangling<br/>references only"]
+    K --> V{"creature_validate<br/>rule 31"}
+    D --> V
+    V --> OK["Ok — the record still<br/>describes real structure"]
+```
+
 ```mermaid
 flowchart LR
     W["synapse walk<br/>rules 23–27"] --> N["connections count<br/>rule 28"]
