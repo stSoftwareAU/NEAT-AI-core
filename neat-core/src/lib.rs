@@ -22,6 +22,7 @@ pub mod batch_scoring;
 pub mod creature;
 pub mod creature_validate;
 pub mod creature_validate_json;
+pub mod creature_validate_packed;
 pub mod creature_validate_runtime;
 pub mod decision_tree;
 pub mod derivative;
@@ -77,6 +78,13 @@ pub use creature_validate::{
 pub use creature_validate_json::{
     MALFORMED_REQUEST, MAX_REQUEST_NEURONS, ValidateResponse, ValidationFailureJson,
     ValidationStatsJson, creature_validate_json,
+};
+// NEAT-AI#3832 — the packed ABI the same rules cross the boundary on when the
+// creature is large enough for the JSON wire form to dominate the rules.
+pub use creature_validate_packed::{
+    ENDPOINT_NONE, KIND_OTHER, PACKED_HEADER_BYTES, PACKED_MAGIC, PACKED_VERSION,
+    PackedValidateResponse, SQUASH_UNKNOWN, creature_validate_packed, encode_packed_request,
+    packed_request_len, squash_code_for,
 };
 // NEAT-AI#3803 — the runtime creature shape a host holds in memory.
 pub use creature_validate_runtime::{

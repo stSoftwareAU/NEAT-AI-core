@@ -618,6 +618,36 @@ Allocation count for one call at production shape (4,127 neurons / 2,461 inputs
 The count is now independent of neuron count — asserted permanently by
 `reverse_topological_order_allocation_count_does_not_scale_with_neurons`.
 
+## Cycle detection: rescan → outward adjacency (NEAT-AI#3832)
+
+`detect_cycles` ran Kahn's algorithm with a **rescan**: for every dequeued
+neuron it walked the whole synapse list looking for the ones leaving it, so the
+relaxation pass was `O(neurons × synapses)`. It now builds an outward
+compressed-row adjacency once and reads each source's targets directly, which
+makes the walk linear in neurons plus synapses. The answer is unchanged —
+`detect_cycles_linear_parity.rs` replays 20 000 random topologies against the
+rescan kept verbatim as the oracle, including the shapes where the two could
+plausibly have diverged (duplicated pairs, sources past the last neuron,
+synapses into and out of inputs, unsorted lists).
+
+This is the forward-only leg of `creature_validate`, and it is also
+`TypedTopology.detectCycles` on the host: on GRQ's 4 272-neuron, 22 928-synapse
+production creature it was **10.75 ms of the 10.8 ms** the whole rule set spent.
+
+**Measured 2026-08-22**, Apple M4 Pro (12 cores, 24 GB, macOS 26.5.2 arm64),
+rustc 1.97.1, Criterion 0.8.2, `--release` bench profile. New benchmark in the
+existing `topology_ops` group; times are Criterion's mean `[lower, upper]`.
+
+| Shape | Before (rescan) | After (adjacency) | Change |
+| --- | --- | --- | --- |
+| `n1666_21513` (100 inputs) | 8.538 ms `[8.527, 8.548]` | 80.26 µs `[80.07, 80.47]` | **−99.1%** (106×) |
+| `n4127_21513` (2,461 inputs) | 8.986 ms `[8.968, 9.003]` | 47.42 µs `[47.33, 47.51]` | **−99.5%** (189×) |
+
+The second shape is faster than the first despite carrying more neurons: with
+2,461 of its 4,127 neurons as inputs, the adjacency covers only the 1,666
+sources Kahn's queue can dequeue. Under the rescan the same shape was *slower*,
+because the rescan's cost was set by the synapse list, not by the queue.
+
 ## Reproducing
 
 ```bash

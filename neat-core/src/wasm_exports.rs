@@ -19,6 +19,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::creature_validate_json::creature_validate_json;
+use crate::creature_validate_packed::creature_validate_packed;
 use crate::derivative::apply_derivative;
 use crate::error::apply_calculate_error;
 use crate::fused_error::apply_fused_error_distribution;
@@ -194,6 +195,31 @@ pub fn wasm_scan_max_bias(
 #[wasm_bindgen(js_name = creature_validate)]
 pub fn wasm_creature_validate(request: &str) -> String {
     creature_validate_json(request)
+}
+
+// ---------------------------------------------------------------------------
+// creature_validate_packed — packed buffer in, JSON out (NEAT-AI#3832).
+//
+// The same rules over the typed arrays a host already holds, because the JSON
+// wire form costs more than the rules on a large creature: 850 KB and 3.5 ms
+// of `JSON.stringify` before a rule has looked at anything, on a creature
+// validated after every mutation, breed and discovery step. The layout, and
+// why the buffer carries no strings, are documented on
+// `crate::creature_validate_packed`; this shim only renames it for JS.
+//
+//   In:  the packed request buffer, and the memetic record as JSON ("" for a
+//        creature carrying none)
+//   Out: { "ok": true,  "stats": { input, constant, hidden, output, connections } }
+//        { "ok": false, "detailRequired": true } — a rule was broken; ask
+//        `creature_validate` for the class, reason and message
+//        { "ok": false, "failure": { …, "malformed": true } } — the buffer was
+//        never a request, which is never a verdict on the creature
+// ---------------------------------------------------------------------------
+
+/// JS `creature_validate_packed(request: Uint8Array, memetic: string) -> string`.
+#[wasm_bindgen(js_name = creature_validate_packed)]
+pub fn wasm_creature_validate_packed(request: &[u8], memetic: &str) -> String {
+    creature_validate_packed(request, memetic)
 }
 
 // ---------------------------------------------------------------------------
