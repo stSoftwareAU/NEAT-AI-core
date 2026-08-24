@@ -54,7 +54,9 @@
 //! [`validate_no_duplicate_synapses`] is the single home of that rule and
 //! [`compile_creature`] calls it, failing closed with
 //! [`CreatureError::DuplicateSynapse`] rather than producing a number
-//! TypeScript would never agree with.
+//! TypeScript would never agree with. An `IF` target is exempt: it sums each
+//! role separately, so a repeated pair into one is a distinct role NEAT-AI
+//! keeps too, and both engines agree (NEAT-AI #3873).
 //!
 //! **Validator extension (Issue #559).** [`NeuronExport::id`] and
 //! [`CreatureExport::memetic`] carry the two pieces
@@ -620,17 +622,35 @@ pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), Creature
 /// is therefore to fail closed with [`CreatureError::DuplicateSynapse`],
 /// naming the first pair that repeats in declaration order.
 ///
-/// The ordered pair is the whole key — the synapse **role** plays no part in
-/// it. Many synapses may carry the same role into one neuron as long as their
-/// sources differ; only an exact repeat of `(fromUUID, toUUID)` is rejected
-/// (Issue #572).
+/// For every squash but `IF`, the ordered pair is the whole key — the synapse
+/// **role** plays no part in it. Many synapses may carry the same role into one
+/// neuron as long as their sources differ; only an exact repeat of
+/// `(fromUUID, toUUID)` is rejected (Issue #572).
+///
+/// An `IF` target is exempt (NEAT-AI #3873). `IF` keeps a separate sum per role
+/// — `condition`, `positive` and `negative` — so NEAT-AI keys its synapses into
+/// one by `(fromUUID, toUUID, type)` and a source may legitimately feed the
+/// same `IF` once per role. Nothing diverges there: NEAT-AI sums repeats of a
+/// role into a single row on load, this crate adds each row into that role's
+/// sum, and both engines arrive at the same number. The divergence the rule
+/// guards against needs one shared sum, which an `IF` does not have.
 ///
 /// [`compile_creature`] calls this before building the network. Consumers that
 /// assemble a [`CreatureExport`] in Rust, or feed one straight into their own
 /// scorer, should call it at their own boundary.
 pub fn validate_no_duplicate_synapses(creature: &CreatureExport) -> Result<(), CreatureError> {
+    let if_targets: HashSet<&str> = creature
+        .neurons
+        .iter()
+        .filter(|neuron| neuron.squash.as_deref() == Some("IF"))
+        .map(|neuron| neuron.uuid.as_str())
+        .collect();
+
     let mut seen: HashSet<(&str, &str)> = HashSet::with_capacity(creature.synapses.len());
     for synapse in &creature.synapses {
+        if if_targets.contains(synapse.to_uuid.as_str()) {
+            continue;
+        }
         let pair = (synapse.from_uuid.as_str(), synapse.to_uuid.as_str());
         if !seen.insert(pair) {
             return Err(CreatureError::DuplicateSynapse {

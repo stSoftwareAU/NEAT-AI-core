@@ -10,6 +10,11 @@
 //! there is no safe value for Rust to reproduce. The contract is therefore to
 //! **fail closed**: a repeated pair is a typed
 //! [`CreatureError::DuplicateSynapse`], never a silent divergence.
+//!
+//! An `IF` target is exempt (NEAT-AI #3873). It keeps a separate sum per role,
+//! so NEAT-AI keys its inward synapses by `(from, to, type)` and one source may
+//! feed it once per role. Repeats of a role sum in NEAT-AI on load and sum here
+//! at activation, so both engines agree and there is nothing to fail closed on.
 
 use std::error::Error;
 
@@ -37,12 +42,14 @@ fn neuron(neuron_type: &str, uuid: &str, bias: f64, squash: &str) -> NeuronExpor
     }
 }
 
-/// The issue's minimal repro: one constant neuron feeding an `IF` neuron three
-/// times — condition, positive and negative — so all three synapses share the
-/// pair `("c", "if-0")`.
+/// One constant neuron feeding an `IF` neuron three times — condition,
+/// positive and negative — so all three synapses share the pair
+/// `("c", "if-0")`.
 ///
-/// Rust summed all three branches; TypeScript kept one. Neither number is
-/// trustworthy, so the creature must not compile.
+/// This was Issue #556's minimal repro, when TypeScript kept one copy of the
+/// pair. NEAT-AI #3873 keys an `IF`'s inward synapses by `(from, to, type)`, so
+/// the three roles are three distinct synapses in both engines and this is now
+/// a legal topology.
 fn if_triple_from_one_constant() -> CreatureExport {
     CreatureExport {
         memetic: None,
@@ -68,15 +75,24 @@ fn if_triple_from_one_constant() -> CreatureExport {
 // Rejection
 // ---------------------------------------------------------------------------
 
-#[test]
-fn compile_rejects_an_if_neuron_fed_three_times_by_one_constant() {
-    match compile_creature(&if_triple_from_one_constant()) {
-        Err(CreatureError::DuplicateSynapse { from_uuid, to_uuid }) => {
-            assert_eq!(from_uuid, "c");
-            assert_eq!(to_uuid, "if-0");
-        }
-        Err(other) => panic!("expected DuplicateSynapse, got {other:?}"),
-        Ok(_) => panic!("a repeated (from, to) pair must not compile"),
+/// A plain `(from, to)` duplicate into a non-`IF` target, for the tests that
+/// only need something the rule rejects.
+fn duplicate_pair_into_identity() -> CreatureExport {
+    CreatureExport {
+        memetic: None,
+        input: 1,
+        output: 1,
+        neurons: vec![
+            neuron("hidden", "h", 0.0, "IDENTITY"),
+            neuron("output", "output-0", 0.0, "IDENTITY"),
+        ],
+        synapses: vec![
+            synapse("input-0", "h", 1.0, None),
+            synapse("h", "output-0", 1.0, None),
+            synapse("h", "output-0", 2.0, None),
+        ],
+        semantic_version: None,
+        forward_only: true,
     }
 }
 
@@ -108,13 +124,13 @@ fn compile_rejects_a_repeated_pair_with_identical_weight_and_type() {
 
 #[test]
 fn duplicate_error_display_names_both_endpoints() {
-    let err = compile_creature(&if_triple_from_one_constant())
+    let err = compile_creature(&duplicate_pair_into_identity())
         .err()
         .expect("a repeated (from, to) pair must not compile");
     let text = err.to_string();
-    assert!(text.contains('c'), "message must name the source: {text}");
+    assert!(text.contains('h'), "message must name the source: {text}");
     assert!(
-        text.contains("if-0"),
+        text.contains("output-0"),
         "message must name the target: {text}"
     );
     // A structural failure, not a JSON one: no serde source chain.
@@ -123,8 +139,9 @@ fn duplicate_error_display_names_both_endpoints() {
 
 #[test]
 fn compile_reports_the_first_repeated_pair_in_declaration_order() {
-    // Two independent duplicate pairs; the earlier repeat is the one reported,
-    // so the message points at the first place a reader should look.
+    // The `("c", "if-0")` repeats are legal roles into an `IF` (#3873); the
+    // repeat into the `IDENTITY` output is the one the rule reports, and the
+    // message points at the first place a reader should look.
     let mut creature = if_triple_from_one_constant();
     creature.synapses = vec![
         synapse("c", "if-0", 1.0, Some("condition")),
@@ -142,30 +159,48 @@ fn compile_reports_the_first_repeated_pair_in_declaration_order() {
     }
 }
 
-/// What repeats is the **pair**, not the role: two `positive` synapses from the
-/// same constant are still `("c", "if-0")` twice, and are rejected for exactly
-/// the reason a mixed-role repeat is.
-#[test]
-fn compile_rejects_a_repeated_pair_that_shares_one_role() {
-    let mut creature = if_triple_from_one_constant();
-    creature.synapses = vec![
-        synapse("c", "if-0", 1.0, Some("positive")),
-        synapse("c", "if-0", 2.0, Some("positive")),
-        synapse("if-0", "output-0", 1.0, None),
-    ];
-    match compile_creature(&creature) {
-        Err(CreatureError::DuplicateSynapse { from_uuid, to_uuid }) => {
-            assert_eq!(from_uuid, "c");
-            assert_eq!(to_uuid, "if-0");
-        }
-        Err(other) => panic!("expected DuplicateSynapse, got {other:?}"),
-        Ok(_) => panic!("a repeated (from, to) pair must not compile"),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Acceptance — the rule must not reject legitimate topologies
 // ---------------------------------------------------------------------------
+
+/// One source feeding an `IF` once per role is the topology NEAT-AI #3873
+/// introduced. `IF` sums each role apart, so the three synapses never share a
+/// sum and there is no divergence for the rule to guard against.
+#[test]
+fn compile_accepts_an_if_fed_once_per_role_by_one_source() {
+    let mut network = compile_creature(&if_triple_from_one_constant())
+        .expect("an IF may be fed once per role by one source (#3873)");
+    let output = network.activate(&[1.0], 1);
+    // condition = 1.0 > 0, so the IF takes its positive branch: weight 2.0.
+    assert!(
+        (output[0] - 2.0).abs() < 1e-5,
+        "expected the positive branch, got {}",
+        output[0]
+    );
+}
+
+/// Two `positive` synapses from one source into an `IF` are an exact
+/// `(from, to, type)` repeat. NEAT-AI sums them into one row on load and this
+/// crate adds both into the positive sum, so the two engines agree — accepted
+/// rather than failed closed.
+#[test]
+fn compile_accepts_a_repeated_role_into_an_if_and_sums_it() {
+    let mut creature = if_triple_from_one_constant();
+    creature.synapses = vec![
+        synapse("c", "if-0", 1.0, Some("condition")),
+        synapse("c", "if-0", 2.0, Some("positive")),
+        synapse("c", "if-0", 3.0, Some("positive")),
+        synapse("if-0", "output-0", 1.0, None),
+    ];
+    let mut network =
+        compile_creature(&creature).expect("a repeated role into an IF sums in both engines");
+    let output = network.activate(&[1.0], 1);
+    assert!(
+        (output[0] - 5.0).abs() < 1e-5,
+        "expected the summed positive branch 2.0 + 3.0, got {}",
+        output[0]
+    );
+}
 
 #[test]
 fn compile_accepts_distinct_pairs_that_share_one_endpoint() {
@@ -305,19 +340,22 @@ fn compile_accepts_a_creature_with_no_synapses_at_all() {
 fn validate_no_duplicate_synapses_answers_for_a_hand_built_creature() {
     // Consumers that build a `CreatureExport` in Rust — never touching
     // `parse_creature_json` — can apply the same rule at their own boundary.
-    let duplicated = if_triple_from_one_constant();
+    let duplicated = duplicate_pair_into_identity();
     match validate_no_duplicate_synapses(&duplicated) {
         Err(CreatureError::DuplicateSynapse { from_uuid, to_uuid }) => {
-            assert_eq!(from_uuid, "c");
-            assert_eq!(to_uuid, "if-0");
+            assert_eq!(from_uuid, "h");
+            assert_eq!(to_uuid, "output-0");
         }
         other => panic!("expected DuplicateSynapse, got {other:?}"),
     }
 
     let mut cleaned = duplicated;
     cleaned.synapses = vec![
-        synapse("c", "if-0", 1.0, Some("condition")),
-        synapse("if-0", "output-0", 1.0, None),
+        synapse("input-0", "h", 1.0, None),
+        synapse("h", "output-0", 1.0, None),
     ];
     assert!(validate_no_duplicate_synapses(&cleaned).is_ok());
+
+    // The same boundary accepts the roles an `IF` reads apart (#3873).
+    assert!(validate_no_duplicate_synapses(&if_triple_from_one_constant()).is_ok());
 }
