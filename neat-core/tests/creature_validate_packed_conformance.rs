@@ -202,3 +202,66 @@ fn the_corpus_reaches_both_answers_through_the_packed_shape() {
     assert!(healthy >= 5, "only {healthy} corpus creatures passed");
     assert!(broken >= 20, "only {broken} corpus creatures were rejected");
 }
+
+// ---------------------------------------------------------------------------
+// Issue #577 — the role is part of the key in every request shape.
+// ---------------------------------------------------------------------------
+
+/// One constant feeding an `IF` neuron under all three roles, written in the
+/// runtime shape: three synapses sharing the pair `(1, 2)`.
+///
+/// The corpus predates the rule, so this is the case that proves the role
+/// buffer really is threaded through the packed layout and the runtime one —
+/// under `(from, to)` keying every shape would call the second synapse a
+/// duplicate.
+fn shared_source_if_case(target_squash: &str) -> Case {
+    Case {
+        name: format!("shared-source-if-{target_squash}"),
+        creature: json!({
+            "input": 1,
+            "output": 1,
+            "neurons": [
+                { "type": "input", "id": 0, "uuid": "input-0", "bias": 0.0 },
+                { "type": "constant", "id": 1, "uuid": "k", "bias": 1.0 },
+                { "type": "hidden", "id": 2, "uuid": "if-0", "bias": 0.0, "squash": target_squash },
+                { "type": "output", "id": -1, "uuid": "o", "bias": 0.0, "squash": "IDENTITY" }
+            ],
+            "synapses": [
+                { "from": 0, "to": 2, "weight": 1.0, "type": "condition" },
+                { "from": 1, "to": 2, "weight": 1.0, "type": "condition" },
+                { "from": 1, "to": 2, "weight": 2.0, "type": "negative" },
+                { "from": 1, "to": 2, "weight": 3.0, "type": "positive" },
+                { "from": 2, "to": 3, "weight": 1.0 }
+            ]
+        }),
+        options: None,
+    }
+}
+
+#[test]
+fn one_source_carries_every_role_into_an_if_target_through_both_shapes() {
+    let case = shared_source_if_case("IF");
+
+    let json = json_answer(&case);
+    assert!(json.ok, "the JSON shape rejected it: {:?}", json.failure);
+    let packed = packed_answer(&case);
+    assert!(packed.ok, "the packed shape disagreed with the JSON shape");
+    assert_eq!(
+        packed.stats, json.stats,
+        "the two shapes counted differently"
+    );
+}
+
+#[test]
+fn the_same_wiring_into_a_non_if_target_is_rejected_through_both_shapes() {
+    let case = shared_source_if_case("IDENTITY");
+
+    let json = json_answer(&case);
+    assert!(!json.ok, "a non-IF target reads no roles");
+    let failure = json.failure.expect("a rejected creature carries a failure");
+    assert_eq!(failure.reason, "DUPLICATE_SYNAPSE");
+
+    let packed = packed_answer(&case);
+    assert!(!packed.ok, "the packed shape disagreed with the JSON shape");
+    assert_eq!(packed.detail_required, Some(true));
+}
