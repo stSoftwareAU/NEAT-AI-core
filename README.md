@@ -434,30 +434,40 @@ flowchart LR
     S -. "input &lt; 1 / output &lt; 1" .-> X
 ```
 
-### Duplicate `(fromUUID, toUUID)` synapses are rejected (Issue #556)
+### Duplicate `(fromUUID, toUUID, type)` synapses are rejected (Issues #556, #577)
 
-NEAT-AI's TypeScript loader keys synapses by the `(fromUUID, toUUID)` pair, so
-a creature carrying that pair twice loses every copy but one before it is
-scored. `compile_creature` used to resolve each synapse independently and
+NEAT-AI's TypeScript loader keys synapses by the `(fromUUID, toUUID, type)`
+triple, so a creature carrying that triple twice loses every copy but one before
+it is scored. `compile_creature` used to resolve each synapse independently and
 **sum** them, so the same JSON scored differently under the two engines —
 observed in production as `rust_scorer` 0.356183 against `Creature.scoreDir`
-0.353147, with the minimal repro an `IF` neuron fed three times (condition /
-positive / negative) by one constant neuron.
+0.353147.
 
 Which copy TypeScript keeps falls out of its map insertion order, so there is
 no value this crate could reproduce and no safe way to dedupe.
 `validate_no_duplicate_synapses` is the single home of the rule and
 `compile_creature` calls it right after `validate_creature_width`: a repeated
-pair is `CreatureError::DuplicateSynapse { from_uuid, to_uuid }`, naming the
-first pair that repeats in declaration order. Distinct pairs that share one
+triple is `CreatureError::DuplicateSynapse { from_uuid, to_uuid }`, naming the
+first one that repeats in declaration order. Distinct pairs that share one
 endpoint — fan-out from a source, fan-in to a target — are untouched.
 
-The ordered pair is the **whole** key: the synapse *role* plays no part in it.
-Many synapses may carry the same role into one neuron — two `condition` edges
-into an `IF` neuron are what a decision stump is built from — as long as their
-sources differ. Only an exact repeat of `(fromUUID, toUUID)` is rejected, which
-is also why an `IF` neuron needs up to three separate constants (each with
-`bias = 1`) rather than one constant wired three times (Issue #572).
+**The role is part of the key, and only an `IF` target may use it**
+(Issue #577). An `IF` neuron keeps a sum per role, so one source may feed two of
+its branches: the contribution that must apply whichever way the node branches
+lands in both sums from one neuron, where it used to need an IDENTITY relay
+purely to be a second distinct source. Measured on a production creature, 455
+such relays had accumulated; removing 415 of them was worth **+4.96e-5** of
+score for behaviour identical to 1.5e-9. Every other squash sums its inward
+synapses regardless of role, so two synapses from one source there are exactly
+one with the summed weight — redundancy with no meaning, rejected as
+`CreatureError::TypedDuplicateSynapse { from_uuid, to_uuid }`. The two variants
+are deliberately distinct: a caller can tell "you repeated yourself" from "that
+target cannot mean what you wrote".
+
+Many synapses may still carry the same role into one neuron — two `condition`
+edges into an `IF` neuron are what a decision stump is built from — as long as
+their sources differ (Issue #572). The wire format is unchanged: `type` is
+already in the JSON, and every previously valid creature stays valid.
 
 Consumers that assemble a `CreatureExport` in Rust rather than parsing one
 should call `validate_no_duplicate_synapses` at their own boundary
@@ -465,13 +475,12 @@ should call `validate_no_duplicate_synapses` at their own boundary
 
 ```mermaid
 flowchart LR
-    J["creature JSON<br/>same (from, to) twice"] --> T["NEAT-AI TypeScript<br/>keyed by (from, to)"]
-    J --> R["compile_creature"]
-    T --> K["keeps one copy<br/>insertion-order dependent"]
-    R --> V["validate_no_duplicate_synapses"]
-    V -. "repeated pair" .-> X["Err(DuplicateSynapse)<br/>fail closed"]
-    V --> C["CompiledNetwork<br/>every pair distinct"]
-    K -. "divergent score" .-> X
+    J["creature JSON"] --> R["compile_creature"]
+    R --> V["validate_no_duplicate_synapses<br/>keyed by (from, to, type)"]
+    V -. "same triple twice" .-> X["Err(DuplicateSynapse)<br/>fail closed"]
+    V -. "two roles, non-IF target" .-> Y["Err(TypedDuplicateSynapse)<br/>fail closed"]
+    V -- "two roles, IF target" --> C["CompiledNetwork<br/>one sum per role"]
+    V --> C
 ```
 
 ### Creature weights parse to the exact `f64`
@@ -545,7 +554,9 @@ the node is evaluated after every source and before every target, which is what
 preserves the `forwardOnly` reading order the compiled forward pass relies on.
 Every rejection is a typed `GraftError` and **no creature is produced** —
 unknown or duplicate UUID, a missing `IF` role, no outward edge, an edge to an
-input or a constant, a self edge, a duplicate edge, a non-finite weight or bias,
+input or a constant, a self edge, a duplicate edge (same pair in the same role,
+or two roles into a target that is not an `IF` neuron), a non-finite weight or
+bias,
 or no position that keeps every edge pointing forwards. `graft_if_correction`
 on `linear_base_creature()` reproduces `residual_correction_creature()` exactly,
 which is how the helper and the fixture keep each other honest.
@@ -556,15 +567,16 @@ node may leave its outward edge to a later node in the same batch (the nested
 child feeding a parent that does not exist yet); only the assembled creature is
 validated. `IfNodeSpec::with_target_role` emits a **typed** outward edge, which
 is how a correction reaches one named branch of an `IF` destination, and
-`graft_relay_node` adds the IDENTITY relay that carries the same value into the
-other branch — a creature may not hold two synapses between the same ordered
-pair, so the second branch needs a second source.
+a node reaches **both** branches of one `IF` destination by listing it once per
+role (Issue #577) — the IDENTITY relay `graft_relay_node` adds is no longer
+needed for that, and remains only for a caller that wants the relayed sum
+itself.
 
 `validate_creature_topology` is the shared gate both ends run: it reuses
-`validate_creature_width`, `validate_topology` and
-`validate_structural_integrity` rather than restating their rules. The ordering
-gate only runs for `forwardOnly` creatures, because a recurrent creature
-legitimately carries backward edges.
+`validate_creature_width`, `validate_topology_typed`,
+`validate_structural_integrity` and `validate_no_duplicate_synapses` rather than
+restating their rules. The ordering gate only runs for `forwardOnly` creatures,
+because a recurrent creature legitimately carries backward edges.
 
 ```mermaid
 flowchart LR
@@ -704,10 +716,12 @@ pub fn validate_synapse_and_memetic_rules(
 connection tally and leaves the neuron counters alone, exactly as the
 TypeScript threads one `stats` literal through both halves. It evaluates, first
 failure wins: the single synapse pass (no synapse into an input neuron; no self
-connection under `forward_only`; sorted by `(from, to)`; no duplicate pair; no
+connection under `forward_only`; sorted by `(from, to, type)`; no duplicate
+triple, and a pair repeated only into an `IF` target; no
 `from > to` when `feedback_loop` is an explicit `Some(false)`), then the
 `connections` count, then — for a forward-only creature — `topology_ops`'
-`validate_topology`, `validate_structural_integrity` and `detect_cycles`, and
+`validate_topology_typed`, `validate_structural_integrity` and `detect_cycles`,
+and
 finally the memetic cross-references.
 
 Two details a caller can trip over:
@@ -784,7 +798,7 @@ flowchart LR
 flowchart LR
     W["synapse walk<br/>rules 23–27"] --> N["connections count<br/>rule 28"]
     N --> FWD{"forward_only?"}
-    FWD -- yes --> T["topology_ops<br/>validate_topology →<br/>validate_structural_integrity →<br/>detect_cycles"]
+    FWD -- yes --> T["topology_ops<br/>validate_topology_typed →<br/>validate_structural_integrity →<br/>detect_cycles"]
     FWD -- no --> M["memetic rules<br/>rule 31"]
     T --> M
     M --> S["Ok(()) — stats.connections tallied"]

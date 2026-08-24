@@ -47,14 +47,16 @@
 //! a missing key is a serde error, a zero is a typed error, and neither is
 //! ever written back out.
 //!
-//! **Duplicate-synapse rule (Issue #556).** NEAT-AI's TypeScript loader keys
-//! synapses by `(fromUUID, toUUID)` and keeps only one copy of a repeated
-//! pair, so a creature carrying the same pair twice scored differently under
-//! the two engines — this crate applied and summed every copy.
-//! [`validate_no_duplicate_synapses`] is the single home of that rule and
+//! **Duplicate-synapse rule (Issues #556, #577).** NEAT-AI's TypeScript loader
+//! keys synapses by `(fromUUID, toUUID, type)` and keeps only one copy of a
+//! repeated triple, so a creature carrying the same triple twice scored
+//! differently under the two engines — this crate applied and summed every
+//! copy. [`validate_no_duplicate_synapses`] is the single home of that rule and
 //! [`compile_creature`] calls it, failing closed with
 //! [`CreatureError::DuplicateSynapse`] rather than producing a number
-//! TypeScript would never agree with.
+//! TypeScript would never agree with. The role only widens the key for an `IF`
+//! target, which keeps a sum per role; anywhere else a repeated pair is
+//! [`CreatureError::TypedDuplicateSynapse`].
 //!
 //! **Validator extension (Issue #559).** [`NeuronExport::id`] and
 //! [`CreatureExport::memetic`] carry the two pieces
@@ -386,18 +388,34 @@ pub enum CreatureError {
         /// The `output` value that was found.
         found: usize,
     },
-    /// Two or more synapses shared the same `(fromUUID, toUUID)` pair (Issue #556).
+    /// Two or more synapses shared the same `(fromUUID, toUUID, type)` triple
+    /// (Issues #556, #577).
     ///
-    /// NEAT-AI's TypeScript loader keys synapses by that pair and keeps only
+    /// NEAT-AI's TypeScript loader keys synapses by that triple and keeps only
     /// one, while this crate would apply every copy — the same JSON then
     /// scores differently under the two engines. Which copy TypeScript keeps
     /// depends on its map insertion order, so there is no value Rust could
     /// safely reproduce: [`validate_no_duplicate_synapses`] fails closed
     /// instead.
     DuplicateSynapse {
+        /// `fromUUID` of the repeated triple.
+        from_uuid: String,
+        /// `toUUID` of the repeated triple.
+        to_uuid: String,
+    },
+    /// One source fed one target through **two different roles**, and that
+    /// target is not an `IF` neuron (Issue #577).
+    ///
+    /// Only an `IF` neuron keeps a sum per role; every other squash sums its
+    /// inward synapses regardless of role, so two synapses from one source are
+    /// exactly one with the summed weight. The pair therefore says nothing the
+    /// creature could not say with one synapse, and is rejected under its own
+    /// variant so a caller can tell it from a plain repeat
+    /// ([`CreatureError::DuplicateSynapse`]).
+    TypedDuplicateSynapse {
         /// `fromUUID` of the repeated pair.
         from_uuid: String,
-        /// `toUUID` of the repeated pair.
+        /// `toUUID` of the repeated pair — the non-`IF` target.
         to_uuid: String,
     },
 }
@@ -429,6 +447,13 @@ impl std::fmt::Display for CreatureError {
             }
             CreatureError::DuplicateSynapse { from_uuid, to_uuid } => {
                 write!(f, "Duplicate synapse from {from_uuid} to {to_uuid}")
+            }
+            CreatureError::TypedDuplicateSynapse { from_uuid, to_uuid } => {
+                write!(
+                    f,
+                    "Synapses from {from_uuid} to {to_uuid} carry different roles, \
+                     but {to_uuid} is not an 'IF' neuron"
+                )
             }
         }
     }
@@ -607,9 +632,21 @@ pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), Creature
     Ok(())
 }
 
-/// Reject a creature carrying the same `(fromUUID, toUUID)` pair twice.
+/// Whether a declared squash name is the `IF` activation — the one squash that
+/// keeps a separate sum per synapse role, and so the one target a source may
+/// feed through more than one role (Issue #577).
 ///
-/// NEAT-AI's TypeScript loader keys synapses by that pair, so only one copy
+/// Reads the name through [`parse_squash_name`] rather than comparing it to a
+/// literal, so it answers for every spelling that parser accepts and cannot
+/// drift from it. An unknown name is not `IF`.
+pub(crate) fn is_if_squash(squash: Option<&str>) -> bool {
+    squash.is_some_and(|name| matches!(parse_squash_name(name), Ok(SquashType::If)))
+}
+
+/// Reject a creature carrying the same `(fromUUID, toUUID, type)` triple twice,
+/// and a repeated pair whose target cannot read more than one role.
+///
+/// NEAT-AI's TypeScript loader keys synapses by that triple, so only one copy
 /// survives the load; this crate resolves each synapse independently and would
 /// apply — and sum — all of them. The same JSON then scores differently under
 /// the two engines (Issue #556: `rust_scorer` 0.356183 against
@@ -618,22 +655,51 @@ pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), Creature
 /// Which copy TypeScript keeps falls out of its map insertion order, so there
 /// is no value this crate could reproduce and no safe way to dedupe. The rule
 /// is therefore to fail closed with [`CreatureError::DuplicateSynapse`],
-/// naming the first pair that repeats in declaration order.
+/// naming the first triple that repeats in declaration order.
 ///
-/// The ordered pair is the whole key — the synapse **role** plays no part in
-/// it. Many synapses may carry the same role into one neuron as long as their
-/// sources differ; only an exact repeat of `(fromUUID, toUUID)` is rejected
-/// (Issue #572).
+/// **The role is part of the key, and only an `IF` target may use it**
+/// (Issue #577). An `IF` neuron keeps a sum per role, so one source may feed
+/// two of its branches — the contribution that must apply whichever way the
+/// node branches, which used to need an IDENTITY relay purely to be a second
+/// distinct source. Every other squash sums its inward synapses regardless of
+/// role, so two synapses from one source there are exactly one with the summed
+/// weight: that is [`CreatureError::TypedDuplicateSynapse`], a distinct
+/// variant so a caller can tell "you repeated yourself" from "that target
+/// cannot mean what you wrote". A target naming no listed neuron is not an
+/// `IF` neuron and is read as such — [`compile_creature`] reports the dangling
+/// reference itself.
+///
+/// Many synapses may still carry the same role into one neuron as long as
+/// their sources differ (Issue #572).
 ///
 /// [`compile_creature`] calls this before building the network. Consumers that
 /// assemble a [`CreatureExport`] in Rust, or feed one straight into their own
 /// scorer, should call it at their own boundary.
 pub fn validate_no_duplicate_synapses(creature: &CreatureExport) -> Result<(), CreatureError> {
-    let mut seen: HashSet<(&str, &str)> = HashSet::with_capacity(creature.synapses.len());
+    let if_targets: HashSet<&str> = creature
+        .neurons
+        .iter()
+        .filter(|neuron| is_if_squash(neuron.squash.as_deref()))
+        .map(|neuron| neuron.uuid.as_str())
+        .collect();
+
+    let mut seen: HashSet<(&str, &str, SynapseType)> =
+        HashSet::with_capacity(creature.synapses.len());
+    let mut pairs: HashSet<(&str, &str)> = HashSet::with_capacity(creature.synapses.len());
+
     for synapse in &creature.synapses {
-        let pair = (synapse.from_uuid.as_str(), synapse.to_uuid.as_str());
-        if !seen.insert(pair) {
+        let from = synapse.from_uuid.as_str();
+        let to = synapse.to_uuid.as_str();
+        let role = parse_synapse_type(synapse.synapse_type.as_deref());
+
+        if !seen.insert((from, to, role)) {
             return Err(CreatureError::DuplicateSynapse {
+                from_uuid: synapse.from_uuid.clone(),
+                to_uuid: synapse.to_uuid.clone(),
+            });
+        }
+        if !pairs.insert((from, to)) && !if_targets.contains(to) {
+            return Err(CreatureError::TypedDuplicateSynapse {
                 from_uuid: synapse.from_uuid.clone(),
                 to_uuid: synapse.to_uuid.clone(),
             });
@@ -690,9 +756,9 @@ pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, Crea
 /// The observation-width contract ([`validate_creature_width`]) is checked
 /// before anything else, so a hand-built `CreatureExport { input: 0, .. }`
 /// fails exactly as loudly as one that came through [`parse_creature_json`]
-/// (Issue #550). A repeated `(fromUUID, toUUID)` pair is then rejected by
-/// [`validate_no_duplicate_synapses`] rather than summed, because TypeScript
-/// keeps only one copy of it (Issue #556).
+/// (Issue #550). A repeated `(fromUUID, toUUID, type)` triple is then rejected
+/// by [`validate_no_duplicate_synapses`] rather than summed, because TypeScript
+/// keeps only one copy of it (Issues #556, #577).
 pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, CreatureError> {
     validate_creature_width(creature)?;
     validate_no_duplicate_synapses(creature)?;

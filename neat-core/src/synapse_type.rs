@@ -5,8 +5,12 @@
 
 /// Synapse type identifiers for aggregate functions (Issue #1125)
 /// These are used by IF squash function to categorise inputs
+///
+/// The role is part of a synapse's identity: a creature keys its synapses by
+/// `(from, to, type)` and sorts them the same way (Issue #577), so the enum is
+/// hashable and totally ordered by its discriminant.
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SynapseType {
     /// Standard synapse (no special type) - also used as "positive" for IF
     Standard = 0,

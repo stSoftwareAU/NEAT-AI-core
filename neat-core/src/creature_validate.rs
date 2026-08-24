@@ -71,8 +71,9 @@
 //! | 22 | counted outputs match the declared `output` | `Topology` / `INVALID_STATE` |
 //! | 23 | no synapse points at an input neuron | `Topology` / `INVALID_CONNECTION` |
 //! | 24 | no self connection (when `forward_only`) | `Validation` / `SELF_CONNECTION` |
-//! | 25 | synapses sorted by `(from, to)` | `Topology` / `SORT_FAILURE` |
-//! | 26 | no duplicate `(from, to)` pair | `Topology` / `INVALID_CONNECTION` |
+//! | 25 | synapses sorted by `(from, to, type)` | `Topology` / `SORT_FAILURE` |
+//! | 26 | no duplicate `(from, to, type)` triple | `Topology` / `INVALID_CONNECTION` |
+//! | 26b | a pair repeats only into an `IF` target | `Validation` / `DUPLICATE_SYNAPSE` |
 //! | 27 | no `from > to` when recursion is disallowed | `Validation` / `RECURSIVE_SYNAPSE` |
 //! | 28 | expected connection count (when set) | `Validation` / `OTHER` |
 //! | 29 | forward-only creatures are sorted, self-loop free and acyclic | `Topology` / `INVALID_CONNECTION` |
@@ -80,13 +81,24 @@
 //! | 31 | memetic biases / weights resolve to real neurons and synapses | `Validation` / `MEMETIC` |
 //!
 //! Rule 26 is the same notion of "duplicate" as
-//! [`crate::creature::validate_no_duplicate_synapses`] (Issue #556) — one
-//! ordered `(from, to)` pair, at most once — reported here under the
-//! TypeScript's own class and reason (`TopologyError` / `INVALID_CONNECTION`,
-//! *not* `DUPLICATE_SYNAPSE`, which `creatureValidate` never raises). The
-//! synapse **role** plays no part in either rule: rule 12 wants one edge of
-//! each role and rule 26 wants each pair once, so an `IF` neuron fed two
-//! `positive` edges from two different sources breaks neither (Issue #572).
+//! [`crate::creature::validate_no_duplicate_synapses`] (Issues #556, #577) —
+//! one ordered `(from, to, type)` triple, at most once — reported here under
+//! the TypeScript's own class and reason (`TopologyError` /
+//! `INVALID_CONNECTION`).
+//!
+//! The **role** widens that key only where a target reads it. An `IF` neuron
+//! keeps a sum per role, so one source may feed two of its branches — the
+//! contribution that must apply whichever way the node branches, which used to
+//! need an IDENTITY relay purely to be a second distinct source. Every other
+//! squash sums its inward synapses regardless of role, so a repeated pair there
+//! is redundancy with no meaning: rule 26b, `ValidationError` /
+//! `DUPLICATE_SYNAPSE`, the one place `creatureValidate` raises that reason.
+//! The two codes are deliberately distinct — a caller can tell "you repeated
+//! yourself" from "that target cannot mean what you wrote".
+//!
+//! Rule 12 is unaffected: it wants one edge of each role, so an `IF` neuron fed
+//! two `positive` edges from two different sources still breaks nothing
+//! (Issue #572).
 //!
 //! # Input format
 //!
@@ -222,9 +234,11 @@
 //!
 //! Rule 26 only catches duplicates that are *adjacent* after sorting, which is
 //! sufficient here but not for the same reason as Issue #556: a duplicate that
-//! is separated by another pair necessarily creates the sort regression rule 25
-//! stops on first, so the creature is still rejected — under `SORT_FAILURE`
-//! rather than `INVALID_CONNECTION`. Nothing slips through either path;
+//! is separated by another triple necessarily creates the sort regression rule
+//! 25 stops on first, so the creature is still rejected — under `SORT_FAILURE`
+//! rather than `INVALID_CONNECTION`. Sorting by `(from, to, type)` is what
+//! keeps that argument true once one pair may appear once per role
+//! (Issue #577). Nothing slips through either path;
 //! [`crate::validate_no_duplicate_synapses`] is order-independent and rejects
 //! it too.
 //!
@@ -251,7 +265,7 @@ use std::fmt;
 
 use crate::creature::{
     CreatureExport, MemeticExport, MemeticWeightExport, MemeticWeightRowExport, MemeticWeights,
-    parse_squash_name, parse_synapse_type,
+    is_if_squash, parse_squash_name, parse_synapse_type, synapse_type_name_from,
 };
 use crate::synapse_type::SynapseType;
 use crate::topology_invariants::{
@@ -259,7 +273,7 @@ use crate::topology_invariants::{
 };
 use crate::topology_ops::{
     STRUCTURAL_VALID, VALID, detect_cycles, structural_error_message, topology_error_message,
-    validate_structural_integrity, validate_topology,
+    validate_structural_integrity, validate_topology_typed,
 };
 
 /// Largest neuron id NEAT-AI accepts — `int32` max, mirroring
@@ -293,8 +307,9 @@ pub mod reason {
     pub const RECURSIVE_SYNAPSE: &str = "RECURSIVE_SYNAPSE";
     /// A self connection (`from == to`) in a forward-only creature.
     pub const SELF_CONNECTION: &str = "SELF_CONNECTION";
-    /// Union member kept verbatim; `creatureValidate` reports a repeated
-    /// `(from, to)` pair as [`INVALID_CONNECTION`] instead.
+    /// A `(from, to)` pair repeated into a target that reads no roles — rule
+    /// 26b (Issue #577). An exact repeat of the `(from, to, type)` triple is
+    /// [`INVALID_CONNECTION`] instead, as `creatureValidate` reports it.
     pub const DUPLICATE_SYNAPSE: &str = "DUPLICATE_SYNAPSE";
     /// A memetic bias or weight does not resolve to a neuron or synapse.
     pub const MEMETIC: &str = "MEMETIC";
@@ -312,7 +327,8 @@ pub mod reason {
     pub const INVALID_SYNAPSE_REFERENCE: &str = "INVALID_SYNAPSE_REFERENCE";
     /// A neuron that requires a squash has none.
     pub const MISSING_SQUASH: &str = "MISSING_SQUASH";
-    /// A synapse is wired somewhere it may not be — including a duplicate pair.
+    /// A synapse is wired somewhere it may not be — including a duplicate
+    /// `(from, to, type)` triple.
     pub const INVALID_CONNECTION: &str = "INVALID_CONNECTION";
     /// The creature's own bookkeeping disagrees with its neurons.
     pub const INVALID_STATE: &str = "INVALID_STATE";
@@ -322,7 +338,7 @@ pub mod reason {
     pub const MISSING_NEURON: &str = "MISSING_NEURON";
     /// A neuron has no UUID.
     pub const MISSING_NEURON_UUID: &str = "MISSING_NEURON_UUID";
-    /// Synapses are not sorted by `(from, to)`.
+    /// Synapses are not sorted by `(from, to, type)`.
     pub const SORT_FAILURE: &str = "SORT_FAILURE";
     /// Too many errors to keep reporting.
     pub const EXCESSIVE_ERRORS: &str = "EXCESSIVE_ERRORS";
@@ -1356,13 +1372,34 @@ fn synapse_walk(
     views: &[NeuronView<'_>],
     from_indices: &[u32],
     to_indices: &[u32],
+    synapse_types: &[SynapseType],
     options: &ValidateOptions,
     stats: &mut ValidationStats,
 ) -> Result<(), ValidationFailure> {
+    // Every request shape builds the three buffers together, so a mismatch is a
+    // caller bug rather than a creature defect — reported rather than walked
+    // around, because a short role buffer would silently unkey rule 26.
+    if synapse_types.len() != from_indices.len() {
+        return Err(ValidationFailure::topology(
+            reason::INVALID_STATE,
+            format!(
+                "Expected {} synapse types found: {}",
+                from_indices.len(),
+                synapse_types.len()
+            ),
+        ));
+    }
+
     let mut last_from: i64 = -1;
     let mut last_to: i64 = -1;
+    let mut last_type = SynapseType::Standard;
 
-    for (index, (&from_index, &to_index)) in from_indices.iter().zip(to_indices).enumerate() {
+    for (index, ((&from_index, &to_index), &role)) in from_indices
+        .iter()
+        .zip(to_indices)
+        .zip(synapse_types)
+        .enumerate()
+    {
         stats.connections += 1;
         let synapse_index = index as u32;
         let label = |at: u32| views[at as usize].wire_label(at as usize);
@@ -1408,15 +1445,44 @@ fn synapse_walk(
                 )
                 .at_synapse(synapse_index));
             } else if to == last_to {
-                // Issue #556 — the same "one ordered (from, to) pair, at most
-                // once" invariant as `validate_no_duplicate_synapses`, reported
-                // under the TypeScript's own class and reason.
+                // Rule 25's third leg (Issue #577): the role completes the sort
+                // key, so a pair that repeats does so in ascending role order.
+                if role < last_type {
+                    return Err(ValidationFailure::topology(
+                        reason::SORT_FAILURE,
+                        format!(
+                            "{index}) synapses not sorted {from}->{to} type: {} last type: {}",
+                            role_label(role),
+                            role_label(last_type)
+                        ),
+                    )
+                    .at_synapse(synapse_index));
+                }
                 let (from_label, to_label) = (label(from_index), label(to_index));
-                return Err(ValidationFailure::topology(
-                    reason::INVALID_CONNECTION,
-                    format!("{index}) duplicate synapse {from_label} -> {to_label}"),
-                )
-                .at_synapse(synapse_index));
+                if role == last_type {
+                    // Issues #556, #577 — the same "one ordered
+                    // (from, to, type) triple, at most once" invariant as
+                    // `validate_no_duplicate_synapses`, reported under the
+                    // TypeScript's own class and reason.
+                    return Err(ValidationFailure::topology(
+                        reason::INVALID_CONNECTION,
+                        format!("{index}) duplicate synapse {from_label} -> {to_label}"),
+                    )
+                    .at_synapse(synapse_index));
+                }
+                // Rule 26's second leg: a second role from one source only
+                // means anything where the roles are read separately, which is
+                // an `IF` neuron and nothing else. Its own reason, so a caller
+                // can tell it from the repeat above.
+                if !is_if_squash(views[to_index as usize].squash) {
+                    return Err(ValidationFailure::validation(
+                        reason::DUPLICATE_SYNAPSE,
+                        format!(
+                            "{index}) synapse {from_label} -> {to_label} repeats a source into a non-'IF' neuron"
+                        ),
+                    )
+                    .at_synapse(synapse_index));
+                }
             }
         }
 
@@ -1431,9 +1497,20 @@ fn synapse_walk(
 
         last_from = from;
         last_to = to;
+        // Only read when the next synapse repeats this pair, so it is simply
+        // the previous role rather than something reset per `from` or `to`.
+        last_type = role;
     }
 
     Ok(())
+}
+
+/// The wire name of a synapse role, as a sort-order message spells it.
+///
+/// [`crate::creature::synapse_type_name_from`] omits the untyped role, which is
+/// what the JSON does; a message has to name it, so it is spelled `standard`.
+fn role_label(role: SynapseType) -> &'static str {
+    synapse_type_name_from(role).unwrap_or("standard")
 }
 
 /// Rules 29–30: the extra leg a forward-only creature runs, delegating to
@@ -1451,7 +1528,12 @@ fn forward_only_rules(
     input: usize,
     output: usize,
 ) -> Result<(), ValidationFailure> {
-    let topology = validate_topology(from_indices, to_indices);
+    let synapse_types: Vec<u8> = synapse_types.iter().map(|kind| *kind as u8).collect();
+
+    // Typed, because a creature keys its synapses by `(from, to, type)`
+    // (Issue #577): the untyped gate would report the second role into an `IF`
+    // neuron as a duplicate connection.
+    let topology = validate_topology_typed(from_indices, to_indices, &synapse_types);
     if topology[0] != VALID {
         return Err(ValidationFailure::topology(
             reason::INVALID_CONNECTION,
@@ -1483,7 +1565,6 @@ fn forward_only_rules(
                 .map_or(u8::MAX, |squash| squash as u8)
         })
         .collect();
-    let synapse_types: Vec<u8> = synapse_types.iter().map(|kind| *kind as u8).collect();
 
     let structural = validate_structural_integrity(
         from_indices,
@@ -1976,7 +2057,14 @@ fn synapse_half(
     memetic: Option<&MemeticView<'_>>,
     stats: &mut ValidationStats,
 ) -> Result<(), ValidationFailure> {
-    synapse_walk(views, from_indices, to_indices, options, stats)?;
+    synapse_walk(
+        views,
+        from_indices,
+        to_indices,
+        synapse_types,
+        options,
+        stats,
+    )?;
 
     if let Some(expected) = options.expected_connections()
         && from_indices.len() != expected
@@ -3029,7 +3117,7 @@ mod synapse_half_tests {
     /// topology check above rather than slipping through unreported.
     #[test]
     fn a_cycle_never_reaches_the_cycle_check_unreported() {
-        assert_eq!(validate_topology(&[0, 1], &[1, 2])[0], VALID);
+        assert_eq!(validate_topology_typed(&[0, 1], &[1, 2], &[0, 0])[0], VALID);
         assert_eq!(
             detect_cycles(&[0, 1], &[1, 2], 3, 1),
             0,
@@ -3057,6 +3145,7 @@ mod synapse_half_tests {
             &views(),
             &[0, 1, 1],
             &[1, 2, 2],
+            &[SynapseType::Standard; 3],
             &ValidateOptions::default(),
             &mut stats,
         )

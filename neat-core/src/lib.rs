@@ -135,12 +135,13 @@ pub use topological_backprop::{
 pub use topology_export::{NodeKind, squash_name, synapse_type_name, to_dot, to_topology_json};
 pub use topology_ops::{
     BACKWARD_CONNECTION, DUPLICATE_CONNECTION, SELF_CONNECTION, SORT_ERROR_FROM, SORT_ERROR_TO,
-    STRUCTURAL_BIAS_NOT_FINITE, STRUCTURAL_CONSTANT_HAS_INWARD, STRUCTURAL_HIDDEN_NO_INWARD,
-    STRUCTURAL_HIDDEN_NO_OUTWARD, STRUCTURAL_IF_MISSING_CONDITION, STRUCTURAL_IF_MISSING_NEGATIVE,
-    STRUCTURAL_IF_MISSING_POSITIVE, STRUCTURAL_IF_TOO_FEW_INWARD, STRUCTURAL_SYNAPSE_TARGETS_INPUT,
-    STRUCTURAL_VALID, VALID, compute_reverse_topological_order, detect_cycles,
-    scan_available_connections, structural_error_message, topology_error_message,
+    SORT_ERROR_TYPE, STRUCTURAL_BIAS_NOT_FINITE, STRUCTURAL_CONSTANT_HAS_INWARD,
+    STRUCTURAL_HIDDEN_NO_INWARD, STRUCTURAL_HIDDEN_NO_OUTWARD, STRUCTURAL_IF_MISSING_CONDITION,
+    STRUCTURAL_IF_MISSING_NEGATIVE, STRUCTURAL_IF_MISSING_POSITIVE, STRUCTURAL_IF_TOO_FEW_INWARD,
+    STRUCTURAL_SYNAPSE_TARGETS_INPUT, STRUCTURAL_VALID, VALID, compute_reverse_topological_order,
+    detect_cycles, scan_available_connections, structural_error_message, topology_error_message,
     validate_structural_integrity, validate_topology, validate_topology_batch,
+    validate_topology_typed,
 };
 pub use training_state::{
     accumulate_bias_persistent_4way, accumulate_bias_persistent_8way,

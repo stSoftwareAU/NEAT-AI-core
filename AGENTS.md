@@ -276,8 +276,10 @@ hand-edits neuron/synapse JSON to add a decision node, and NEAT-AI-Forests reads
 its interpretation of the roles from here rather than inventing one.
 
 `validate_creature_topology` is the gate at both ends. It **reuses**
-`validate_creature_width`, `validate_topology` and
-`validate_structural_integrity` — do not restate their rules here. The ordering
+`validate_creature_width`, `validate_topology_typed`,
+`validate_structural_integrity` and `validate_no_duplicate_synapses` — do not
+restate their rules here. The last of those is what carries the Issue #577 rule
+that only an `IF` target may take two roles from one source. The ordering
 gate runs only for `forwardOnly` creatures; a recurrent creature legitimately
 carries backward edges, which that gate rejects by design. The post-build check
 is deliberate defence in depth: it is unreachable while the pre-checks are
