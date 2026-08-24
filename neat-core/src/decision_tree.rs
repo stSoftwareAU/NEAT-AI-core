@@ -191,7 +191,7 @@ fn edge(from: &str, to: &str, weight: f64, role: SynapseType) -> SynapseExport {
     }
 }
 
-/// Leave a fixture's synapse list in the canonical `(from, to)` order
+/// Leave a fixture's synapse list in the canonical `(from, to, type)` order
 /// [`crate::creature_validate()`] rule 25 requires.
 ///
 /// Each fixture is declared node by node so it reads as the tree it describes;

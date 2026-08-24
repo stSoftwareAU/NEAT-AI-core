@@ -323,6 +323,108 @@ fn repeating_one_pair_of_that_creature_is_still_a_duplicate() {
 }
 
 // ---------------------------------------------------------------------------
+// Rules 25 and 26 — the role completes the key, and only an `IF` target may
+// use it (Issue #577).
+// ---------------------------------------------------------------------------
+
+/// `k` (a constant) feeds `if-0` under all three roles, and `if-0` feeds the
+/// output: one source, three branches, no relay neuron and no constant per
+/// branch. Sorted by `(from, to, type)`, which is condition, negative,
+/// positive.
+fn shared_source_if_creature() -> CreatureExport {
+    let mut if_neuron = neuron("hidden", "if-0", 2);
+    if_neuron.squash = Some("IF".to_string());
+    CreatureExport {
+        input: 1,
+        output: 1,
+        neurons: vec![constant("k", 1), if_neuron, neuron("output", "o", -1)],
+        synapses: vec![
+            role_edge("k", "if-0", "condition"),
+            role_edge("k", "if-0", "negative"),
+            role_edge("k", "if-0", "positive"),
+            edge("if-0", "o"),
+        ],
+        semantic_version: None,
+        forward_only: true,
+        memetic: None,
+    }
+}
+
+#[test]
+fn one_source_may_carry_every_role_into_an_if_target() {
+    let creature = shared_source_if_creature();
+    let stats = run(&creature, &ValidateOptions::default());
+    assert_eq!(stats.connections, 4, "one tally per synapse walked");
+
+    // The whole entry point agrees, forward-only leg included: the index-level
+    // topology gate has to key the pair by role too, or it would call the
+    // second edge a duplicate connection.
+    let options = ValidateOptions {
+        forward_only: true,
+        ..ValidateOptions::default()
+    };
+    creature_validate(&creature, &options).expect("a forward-only creature is valid too");
+    assert!(
+        validate_no_duplicate_synapses(&creature).is_ok(),
+        "and so does the order-independent pair rule"
+    );
+}
+
+#[test]
+fn a_repeated_role_into_an_if_target_is_still_an_invalid_connection() {
+    let mut creature = shared_source_if_creature();
+    creature
+        .synapses
+        .insert(1, role_edge("k", "if-0", "condition"));
+
+    let failure = run_err(&creature, &ValidateOptions::default());
+
+    assert_eq!(failure.class, FailureClass::Topology);
+    assert_eq!(failure.reason, reason::INVALID_CONNECTION);
+    assert_eq!(failure.message, "1) duplicate synapse k -> if-0");
+    assert_eq!(failure.synapse_index, Some(1));
+}
+
+/// Rule 25's third leg: within a repeated pair the roles ascend, so the total
+/// order stays total.
+#[test]
+fn roles_out_of_order_within_one_pair_are_a_sort_failure() {
+    let mut creature = shared_source_if_creature();
+    creature.synapses.swap(0, 1);
+
+    let failure = run_err(&creature, &ValidateOptions::default());
+
+    assert_eq!(failure.class, FailureClass::Topology);
+    assert_eq!(failure.reason, reason::SORT_FAILURE);
+    assert_eq!(
+        failure.message,
+        "1) synapses not sorted 1->2 type: condition last type: negative"
+    );
+    assert_eq!(failure.synapse_index, Some(1));
+}
+
+/// The distinct code the issue asks for: "that target cannot mean what you
+/// wrote" is a `ValidationError` / `DUPLICATE_SYNAPSE`, not the
+/// `TopologyError` / `INVALID_CONNECTION` a plain repeat carries.
+#[test]
+fn two_roles_into_a_non_if_target_are_a_duplicate_synapse() {
+    let mut creature = shared_source_if_creature();
+    // The same wiring, but the target sums every inward synapse regardless of
+    // role, so the second edge says nothing the first does not.
+    creature.neurons[1].squash = Some("IDENTITY".to_string());
+
+    let failure = run_err(&creature, &ValidateOptions::default());
+
+    assert_eq!(failure.class, FailureClass::Validation);
+    assert_eq!(failure.reason, reason::DUPLICATE_SYNAPSE);
+    assert_eq!(
+        failure.message,
+        "1) synapse k -> if-0 repeats a source into a non-'IF' neuron"
+    );
+    assert_eq!(failure.synapse_index, Some(1));
+}
+
+// ---------------------------------------------------------------------------
 // Rule 27 — recursive synapse, `feedback_loop` tri-state.
 // ---------------------------------------------------------------------------
 

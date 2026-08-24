@@ -1,15 +1,23 @@
-//! Duplicate `(fromUUID, toUUID)` synapse rejection (Issue #556).
+//! Duplicate synapse rejection, keyed by `(fromUUID, toUUID, type)`
+//! (Issues #556, #577).
 //!
-//! NEAT-AI's TypeScript loader keys synapses by the `(from, to)` pair, so a
-//! creature carrying the same pair twice loses every copy but one before it is
-//! ever scored. `compile_creature` used to accept all copies and **sum** them,
-//! so the same JSON scored differently under the two engines — observed in
+//! NEAT-AI's TypeScript loader keys synapses by that triple, so a creature
+//! carrying the same triple twice loses every copy but one before it is ever
+//! scored. `compile_creature` used to accept all copies and **sum** them, so
+//! the same JSON scored differently under the two engines — observed in
 //! production as `rust_scorer` 0.356183 against `Creature.scoreDir` 0.353147.
 //!
 //! Which copy TypeScript keeps is an artefact of its map insertion order, so
 //! there is no safe value for Rust to reproduce. The contract is therefore to
-//! **fail closed**: a repeated pair is a typed
+//! **fail closed**: a repeated triple is a typed
 //! [`CreatureError::DuplicateSynapse`], never a silent divergence.
+//!
+//! The **role** is part of the key only where it changes the answer: an `IF`
+//! neuron keeps a separate sum per role, so one source may feed two of its
+//! branches. Every other squash sums its inward synapses regardless of role, so
+//! two synapses from one source are exactly one with the summed weight —
+//! meaningless redundancy, rejected as
+//! [`CreatureError::TypedDuplicateSynapse`] (Issue #577).
 
 use std::error::Error;
 
@@ -37,12 +45,14 @@ fn neuron(neuron_type: &str, uuid: &str, bias: f64, squash: &str) -> NeuronExpor
     }
 }
 
-/// The issue's minimal repro: one constant neuron feeding an `IF` neuron three
-/// times — condition, positive and negative — so all three synapses share the
-/// pair `("c", "if-0")`.
+/// One constant neuron feeding an `IF` neuron three times — condition,
+/// positive and negative — so all three synapses share the pair
+/// `("c", "if-0")` and differ only in their role.
 ///
-/// Rust summed all three branches; TypeScript kept one. Neither number is
-/// trustworthy, so the creature must not compile.
+/// Issue #556 rejected this shape because the key was the pair alone; under
+/// `(from, to, type)` keying (Issue #577) it is the canonical way to build an
+/// `IF` node without a constant per branch, so it compiles and each role lands
+/// in its own sum.
 fn if_triple_from_one_constant() -> CreatureExport {
     CreatureExport {
         memetic: None,
@@ -64,19 +74,62 @@ fn if_triple_from_one_constant() -> CreatureExport {
     }
 }
 
+/// The same creature with its `condition` edge written twice: an exact repeat
+/// of `("c", "if-0", condition)`, which no keying makes meaningful.
+fn repeated_condition_role() -> CreatureExport {
+    let mut creature = if_triple_from_one_constant();
+    creature
+        .synapses
+        .insert(1, synapse("c", "if-0", 4.0, Some("condition")));
+    creature
+}
+
 // ---------------------------------------------------------------------------
 // Rejection
 // ---------------------------------------------------------------------------
 
 #[test]
-fn compile_rejects_an_if_neuron_fed_three_times_by_one_constant() {
-    match compile_creature(&if_triple_from_one_constant()) {
+fn compile_rejects_a_repeated_role_from_one_source() {
+    match compile_creature(&repeated_condition_role()) {
         Err(CreatureError::DuplicateSynapse { from_uuid, to_uuid }) => {
             assert_eq!(from_uuid, "c");
             assert_eq!(to_uuid, "if-0");
         }
         Err(other) => panic!("expected DuplicateSynapse, got {other:?}"),
-        Ok(_) => panic!("a repeated (from, to) pair must not compile"),
+        Ok(_) => panic!("a repeated (from, to, type) triple must not compile"),
+    }
+}
+
+/// The other half of the Issue #577 rule: two roles from one source are only
+/// meaningful into an `IF` target. An IDENTITY neuron sums every inward synapse
+/// regardless of role, so the pair is redundancy with no meaning — and carries
+/// a **distinct** error, so a caller can tell "you repeated yourself" from
+/// "that target cannot mean what you wrote".
+#[test]
+fn compile_rejects_two_roles_from_one_source_into_a_non_if_target() {
+    let creature = CreatureExport {
+        memetic: None,
+        input: 1,
+        output: 1,
+        neurons: vec![
+            neuron("hidden", "h", 0.0, "IDENTITY"),
+            neuron("output", "output-0", 0.0, "IDENTITY"),
+        ],
+        synapses: vec![
+            synapse("input-0", "h", 1.0, Some("positive")),
+            synapse("input-0", "h", 2.0, Some("negative")),
+            synapse("h", "output-0", 1.0, None),
+        ],
+        semantic_version: None,
+        forward_only: true,
+    };
+    match compile_creature(&creature) {
+        Err(CreatureError::TypedDuplicateSynapse { from_uuid, to_uuid }) => {
+            assert_eq!(from_uuid, "input-0");
+            assert_eq!(to_uuid, "h");
+        }
+        Err(other) => panic!("expected TypedDuplicateSynapse, got {other:?}"),
+        Ok(_) => panic!("only an IF target may carry two roles from one source"),
     }
 }
 
@@ -108,9 +161,9 @@ fn compile_rejects_a_repeated_pair_with_identical_weight_and_type() {
 
 #[test]
 fn duplicate_error_display_names_both_endpoints() {
-    let err = compile_creature(&if_triple_from_one_constant())
+    let err = compile_creature(&repeated_condition_role())
         .err()
-        .expect("a repeated (from, to) pair must not compile");
+        .expect("a repeated (from, to, type) triple must not compile");
     let text = err.to_string();
     assert!(text.contains('c'), "message must name the source: {text}");
     assert!(
@@ -142,9 +195,10 @@ fn compile_reports_the_first_repeated_pair_in_declaration_order() {
     }
 }
 
-/// What repeats is the **pair**, not the role: two `positive` synapses from the
-/// same constant are still `("c", "if-0")` twice, and are rejected for exactly
-/// the reason a mixed-role repeat is.
+/// A repeat of one role is a repeat whatever the target is: two `positive`
+/// synapses from the same constant are `("c", "if-0", positive)` twice, and an
+/// `IF` neuron sums them into the one branch it would have summed a single
+/// synapse into.
 #[test]
 fn compile_rejects_a_repeated_pair_that_shares_one_role() {
     let mut creature = if_triple_from_one_constant();
@@ -166,6 +220,48 @@ fn compile_rejects_a_repeated_pair_that_shares_one_role() {
 // ---------------------------------------------------------------------------
 // Acceptance — the rule must not reject legitimate topologies
 // ---------------------------------------------------------------------------
+
+/// The Issue #577 payoff: one constant carries all three roles into an `IF`
+/// neuron, so the node needs neither three constants nor an IDENTITY relay to
+/// reach a second branch.
+#[test]
+fn compile_accepts_an_if_neuron_fed_three_times_by_one_constant() {
+    let creature = if_triple_from_one_constant();
+    assert!(
+        validate_no_duplicate_synapses(&creature).is_ok(),
+        "one source per role is one synapse per (from, to, type) key"
+    );
+    let mut network = compile_creature(&creature).expect("an IF target may repeat a source");
+
+    // `c` activates at its bias of 1.0, so condition = 1.0 * 1.0 > 0 and the
+    // positive branch is taken: 1.0 * 2.0 + bias 0.0 = 2.0, passed through
+    // `output-0` unchanged.
+    let output = network.activate(&[0.0], 1);
+    assert!(
+        (output[0] - 2.0).abs() < 1e-5,
+        "expected 2.0, got {}",
+        output[0]
+    );
+}
+
+/// The negative branch of the same creature, so the second role is proven to
+/// land in its own sum rather than being folded into the first.
+#[test]
+fn a_repeated_source_keeps_one_sum_per_role() {
+    let mut creature = if_triple_from_one_constant();
+    // Flip the condition weight so the condition sum is -1.0, not 1.0.
+    creature.synapses[0].weight = -1.0;
+    let mut network = compile_creature(&creature).expect("an IF target may repeat a source");
+
+    // condition = 1.0 * -1.0 <= 0, so the negative branch is taken:
+    // 1.0 * -3.0 + bias 0.0 = -3.0.
+    let output = network.activate(&[0.0], 1);
+    assert!(
+        (output[0] + 3.0).abs() < 1e-5,
+        "expected -3.0, got {}",
+        output[0]
+    );
+}
 
 #[test]
 fn compile_accepts_distinct_pairs_that_share_one_endpoint() {
@@ -234,9 +330,9 @@ fn compile_accepts_an_if_neuron_fed_by_three_distinct_constants() {
 }
 
 /// A **repeated role** into one neuron is legal as long as the sources differ:
-/// the rule keys on the ordered `(from, to)` pair alone and never reads the
-/// role. Two `positive` synapses into the same `IF` neuron therefore compile,
-/// and both contribute to the branch they name.
+/// the key is `(from, to, type)`, so distinct sources make distinct keys
+/// whatever the roles say. Two `positive` synapses into the same `IF` neuron
+/// therefore compile, and both contribute to the branch they name.
 #[test]
 fn compile_accepts_repeated_roles_into_one_neuron_when_the_sources_differ() {
     let creature = CreatureExport {
@@ -305,7 +401,7 @@ fn compile_accepts_a_creature_with_no_synapses_at_all() {
 fn validate_no_duplicate_synapses_answers_for_a_hand_built_creature() {
     // Consumers that build a `CreatureExport` in Rust — never touching
     // `parse_creature_json` — can apply the same rule at their own boundary.
-    let duplicated = if_triple_from_one_constant();
+    let duplicated = repeated_condition_role();
     match validate_no_duplicate_synapses(&duplicated) {
         Err(CreatureError::DuplicateSynapse { from_uuid, to_uuid }) => {
             assert_eq!(from_uuid, "c");

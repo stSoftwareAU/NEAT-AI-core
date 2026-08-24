@@ -19,7 +19,8 @@
 //! What comes back is a creature the shared validator accepts, not merely one
 //! that compiles: the constants a graft introduces are listed ahead of every
 //! hidden neuron and the whole synapse list is left in canonical
-//! `(from, to)` order, which are [`crate::creature_validate()`] rules 11 and 25.
+//! `(from, to, type)` order, which are [`crate::creature_validate()`] rules 11
+//! and 25.
 //!
 //! ```mermaid
 //! flowchart LR
@@ -28,7 +29,7 @@
 //!     B -- yes --> C{"placement:<br/>after every source,<br/>before every target"}
 //!     C -- impossible --> E
 //!     C -- ok --> D["build creature"]
-//!     D --> F{"validate_topology +<br/>validate_structural_integrity"}
+//!     D --> F{"validate_topology_typed +<br/>validate_structural_integrity +<br/>validate_no_duplicate_synapses"}
 //!     F -- fails --> E
 //!     F -- passes --> G["Ok(CreatureExport)"]
 //! ```
@@ -36,12 +37,20 @@
 //! ## Why a grafted node brings its own constant neurons
 //!
 //! An `IF` condition of the form `x > threshold` needs a constant `1.0` source
-//! to carry `-threshold`, and each leaf value needs one too. A creature may not
-//! hold two synapses between the same ordered pair of neurons, so the three
-//! roles cannot share one constant: [`IfCorrectionSpec`] therefore introduces
-//! three (`<uuid>-condition-one`, `<uuid>-positive-one`, `<uuid>-negative-one`),
-//! each with bias [`GRAFT_CONSTANT_BIAS`], leaving the thresholds and leaf
-//! values in the trainable **weights**.
+//! to carry `-threshold`, and each leaf value needs one too.
+//! [`IfCorrectionSpec`] gives each role its own constant
+//! (`<uuid>-condition-one`, `<uuid>-positive-one`, `<uuid>-negative-one`), each
+//! with bias [`GRAFT_CONSTANT_BIAS`], leaving the thresholds and leaf values in
+//! the trainable **weights**.
+//!
+//! ## One source, two roles (Issue #577)
+//!
+//! A creature keys its synapses by `(from, to, type)`, and an `IF` neuron keeps
+//! a sum per role, so **one source may feed two branches of an `IF` target**
+//! directly. What is still refused is a repeat that says nothing new: the same
+//! source in the same role ([`GraftError::DuplicateEdge`]), and two roles into
+//! a destination that sums every inward synapse regardless of role
+//! ([`GraftError::TypedDuplicateEdge`]).
 //!
 //! ## Whole trees, and corrections that enter both branches
 //!
@@ -53,23 +62,24 @@
 //!   may leave its outward edge to a later node in the same batch, and only the
 //!   assembled creature is validated. It is still all or nothing — the first
 //!   rejection returns a [`GraftError`] and no partial creature escapes.
-//! * a correction entering **both branches of an `IF` destination**. An untyped
-//!   edge into an `IF` neuron feeds one branch, so the node takes the other with
-//!   a typed outward edge ([`IfNodeSpec::with_target_role`]); the second, equal
-//!   edge comes through an IDENTITY [`RelaySpec`] ([`graft_relay_node`]),
-//!   because a creature may not carry two synapses between the same ordered
-//!   pair of neurons.
+//! * a correction entering **both branches of an `IF` destination**. The node
+//!   lists that destination twice, once per role
+//!   ([`IfNodeSpec::with_target_role`]), and both edges leave the node itself —
+//!   the IDENTITY [`RelaySpec`] ([`graft_relay_node`]) that used to supply the
+//!   second distinct source is no longer needed for it, and remains only for a
+//!   caller that genuinely wants a relay neuron.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::creature::{
-    CreatureError, CreatureExport, NeuronExport, SynapseExport, parse_squash_name,
+    CreatureError, CreatureExport, NeuronExport, SynapseExport, is_if_squash, parse_squash_name,
     parse_synapse_type, squash_name_from, synapse_type_name_from, validate_creature_width,
+    validate_no_duplicate_synapses,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 use crate::topology_ops::{
-    STRUCTURAL_VALID, VALID, validate_structural_integrity, validate_topology,
+    STRUCTURAL_VALID, VALID, validate_structural_integrity, validate_topology_typed,
 };
 
 /// Bias of every constant neuron a graft introduces.
@@ -236,11 +246,11 @@ impl IfNodeSpec {
 /// Description of an **IDENTITY relay** to graft onto a creature: a hidden
 /// neuron that passes its inbound sum on unchanged.
 ///
-/// A creature may not carry two synapses between the same ordered pair of
-/// neurons, so a node whose value must reach *two* branches of one `IF`
-/// destination needs a second source. The relay is that source: the node feeds
-/// one branch directly and the relay carries the same value into the other
-/// (NEAT-AI-Forests #48).
+/// Reaching two branches of one `IF` destination no longer needs one: a node
+/// may carry a typed outward edge per role into the same target (Issue #577).
+/// The relay remains for a caller that wants the neuron for its own sake — a
+/// shared sum several targets read, say — rather than as a way around the
+/// duplicate rule (NEAT-AI-Forests #48).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelaySpec {
     /// UUID for the new relay; must not already exist in the creature.
@@ -389,11 +399,24 @@ pub enum GraftError {
         /// The target that forced the earliest possible position.
         target: String,
     },
-    /// Two synapses would connect the same ordered pair of neurons.
+    /// Two synapses would connect the same ordered pair of neurons **in the
+    /// same role** — one synapse with the summed weight says the same thing.
     DuplicateEdge {
         /// Source neuron UUID.
         from: String,
         /// Destination neuron UUID.
+        to: String,
+    },
+    /// Two synapses would connect the same ordered pair in **different roles**,
+    /// and the destination is not an `IF` neuron (Issue #577).
+    ///
+    /// Only an `IF` neuron keeps a sum per role; every other squash sums its
+    /// inward synapses regardless of role, so the second edge would be
+    /// redundancy the destination cannot read.
+    TypedDuplicateEdge {
+        /// Source neuron UUID.
+        from: String,
+        /// Destination neuron UUID — the non-`IF` end.
         to: String,
     },
     /// A weight was `NaN` or infinite.
@@ -418,7 +441,7 @@ pub enum GraftError {
         /// The target that forced the earliest possible position.
         target: String,
     },
-    /// The creature failed [`validate_topology`]; `code` is one of the
+    /// The creature failed [`validate_topology_typed`]; `code` is one of the
     /// `topology_ops` topology codes.
     ///
     /// The creature synapse list carries no ordering contract (compilation
@@ -478,6 +501,10 @@ impl std::fmt::Display for GraftError {
             GraftError::DuplicateEdge { from, to } => {
                 write!(f, "Duplicate synapse from {from} to {to}")
             }
+            GraftError::TypedDuplicateEdge { from, to } => write!(
+                f,
+                "Synapses from {from} to {to} carry different roles, but {to} is not an 'IF' neuron"
+            ),
             GraftError::NonFiniteWeight { from, to, weight } => {
                 write!(f, "Non-finite weight {weight} from {from} to {to}")
             }
@@ -545,9 +572,13 @@ fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
 
 /// Run the fleet's shared width, topology and structural gates over a creature.
 ///
-/// Reuses [`validate_creature_width`], [`validate_topology`] and
-/// [`validate_structural_integrity`] rather than restating their rules, so a
-/// creature that passes here is one the compiler and the WASM consumers accept.
+/// Reuses [`validate_creature_width`], [`validate_topology_typed`],
+/// [`validate_structural_integrity`] and [`validate_no_duplicate_synapses`]
+/// rather than restating their rules, so a creature that passes here is one the
+/// compiler and the WASM consumers accept. The last of those is the order
+/// independent leg: it is what knows a repeated pair is only meaningful into an
+/// `IF` target (Issue #577), which the index gates are not told the squashes to
+/// answer.
 ///
 /// The ordering gate only runs for `forwardOnly` creatures: a recurrent creature
 /// legitimately carries backward edges, which that gate rejects by design.
@@ -589,7 +620,10 @@ pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), Graft
     let synapse_types: Vec<u8> = edges.iter().map(|e| e.2).collect();
 
     if creature.forward_only {
-        let codes = validate_topology(&from_indices, &to_indices);
+        // Typed, because a creature keys its synapses by `(from, to, type)`
+        // (Issue #577) and the untyped gate would call the second role into an
+        // `IF` neuron a duplicate connection.
+        let codes = validate_topology_typed(&from_indices, &to_indices, &synapse_types);
         if codes[0] != VALID {
             return Err(GraftError::MalformedTopology {
                 code: codes[0],
@@ -614,6 +648,13 @@ pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), Graft
             index: codes[1],
         });
     }
+
+    // The index gates read a sorted edge list; the UUID rule is order
+    // independent and is the one that knows what a *target* may mean, so it is
+    // what rejects a pair repeated into a neuron that reads no roles
+    // (Issue #577). Reused rather than restated — it is the single home of the
+    // rule.
+    validate_no_duplicate_synapses(creature)?;
 
     Ok(())
 }
@@ -733,10 +774,15 @@ fn place_and_build(
     }
 
     // Earliest position that still leaves every source before the new node.
+    // A source may be listed under more than one branch of an `IF` node — the
+    // node reads each role separately, so the second edge is not redundancy
+    // (Issue #577) — but never twice under the same branch.
+    let node_reads_roles = plan.squash == SquashType::If;
     let mut earliest = 0usize;
     let mut latest_source: Option<&str> = None;
-    let mut seen_sources: HashSet<&str> = HashSet::new();
-    for (edge, _) in &plan.inbound {
+    let mut seen_sources: HashSet<(&str, SynapseType)> = HashSet::new();
+    let mut source_uuids: HashSet<&str> = HashSet::new();
+    for (edge, role) in &plan.inbound {
         if edge.role != SynapseType::Standard {
             return Err(GraftError::InboundEdgeHasRole {
                 from: edge.uuid.clone(),
@@ -753,8 +799,14 @@ fn place_and_build(
                 weight: edge.weight,
             });
         }
-        if !seen_sources.insert(edge.uuid.as_str()) {
+        if !seen_sources.insert((edge.uuid.as_str(), *role)) {
             return Err(GraftError::DuplicateEdge {
+                from: edge.uuid.clone(),
+                to: plan.uuid.to_string(),
+            });
+        }
+        if !source_uuids.insert(edge.uuid.as_str()) && !node_reads_roles {
+            return Err(GraftError::TypedDuplicateEdge {
                 from: edge.uuid.clone(),
                 to: plan.uuid.to_string(),
             });
@@ -775,7 +827,8 @@ fn place_and_build(
     // Latest position that still leaves every target after the new node.
     let mut latest = creature.neurons.len();
     let mut earliest_target: Option<&str> = None;
-    let mut seen_targets: HashSet<&str> = HashSet::new();
+    let mut seen_targets: HashSet<(&str, SynapseType)> = HashSet::new();
+    let mut target_uuids: HashSet<&str> = HashSet::new();
     for edge in plan.targets {
         if edge.uuid == plan.uuid {
             return Err(GraftError::SelfEdge(plan.uuid.to_string()));
@@ -787,7 +840,7 @@ fn place_and_build(
                 weight: edge.weight,
             });
         }
-        if !seen_targets.insert(edge.uuid.as_str()) {
+        if !seen_targets.insert((edge.uuid.as_str(), edge.role)) {
             return Err(GraftError::DuplicateEdge {
                 from: plan.uuid.to_string(),
                 to: edge.uuid.clone(),
@@ -805,6 +858,19 @@ fn place_and_build(
         let position = index - creature.input;
         if creature.neurons[position].neuron_type == "constant" {
             return Err(GraftError::TargetIsConstant(edge.uuid.clone()));
+        }
+        // The node's value may enter two branches of one `IF` destination
+        // directly (Issue #577) — the IDENTITY relay that used to supply the
+        // second distinct source is no longer needed for that. Any other
+        // destination sums both edges into one number, so a second edge there
+        // is redundancy it cannot read.
+        if !target_uuids.insert(edge.uuid.as_str())
+            && !is_if_squash(creature.neurons[position].squash.as_deref())
+        {
+            return Err(GraftError::TypedDuplicateEdge {
+                from: plan.uuid.to_string(),
+                to: edge.uuid.clone(),
+            });
         }
         if position < latest {
             latest = position;
@@ -866,7 +932,7 @@ fn validated(grafted: CreatureExport) -> Result<CreatureExport, GraftError> {
 /// so the node is evaluated after every source and before every target, which
 /// preserves the `forwardOnly` reading order the compiled forward pass relies
 /// on; any constants the spec declares are listed ahead of every hidden neuron,
-/// and the synapse list comes back in canonical `(from, to)` order, so the
+/// and the synapse list comes back in canonical `(from, to, type)` order, so the
 /// result satisfies [`crate::creature_validate()`] as well. The creature is put
 /// through [`validate_creature_topology`] before it is returned, so a malformed
 /// creature is never emitted.
@@ -888,10 +954,10 @@ pub fn graft_if_node(
 
 /// Graft an IDENTITY relay — a hidden neuron that passes its inbound sum on.
 ///
-/// The way to reach a second branch of a destination the source already feeds:
-/// a creature may not carry two synapses between the same ordered pair, so the
-/// relay supplies the second, distinct source (NEAT-AI-Forests #48). Same
-/// placement, ordering and validation contract as [`graft_if_node`].
+/// A relay is no longer how a source reaches a second branch of an `IF`
+/// destination — a typed outward edge per role does that directly (Issue #577)
+/// — so this is for a caller that wants the relayed sum itself. Same placement,
+/// ordering and validation contract as [`graft_if_node`].
 ///
 /// # Errors
 ///
@@ -951,7 +1017,7 @@ pub fn graft_if_nodes(
 
 /// Assemble the grafted creature: the constants ahead of every hidden neuron,
 /// the node at `position`, and the whole synapse list left in canonical
-/// `(from, to)` order.
+/// `(from, to, type)` order.
 ///
 /// Both placements are what [`crate::creature_validate()`] requires of a valid
 /// creature — neurons listed `input, constant, hidden, output` (rule 11) and
@@ -1025,21 +1091,29 @@ fn build_grafted(
 }
 
 /// Leave a creature's synapse list in canonical wire order — ascending by
-/// `(from index, to index)`, the order [`crate::creature_validate()`] rule 25
-/// requires.
+/// `(from index, to index, type)`, the order [`crate::creature_validate()`]
+/// rule 25 requires.
+///
+/// The role is part of the key (Issue #577), so one source feeding two branches
+/// of an `IF` neuron still lands in a total order rather than in whichever
+/// order the graft happened to append the two edges.
 ///
 /// Appending a graft's synapses to the base creature's list leaves them out of
 /// order, so the assembled creature is re-sorted rather than emitted piecemeal.
 /// An endpoint naming no neuron sorts last (`u32::MAX`) instead of being
 /// dropped, so the validator still reports it rather than the graft quietly
-/// reordering a broken creature. The sort is stable, so synapses sharing a pair
-/// keep their relative order and remain reportable as duplicates.
+/// reordering a broken creature. The sort is stable, so synapses sharing a
+/// triple keep their relative order and remain reportable as duplicates.
 pub(crate) fn sort_synapses_canonically(creature: &mut CreatureExport) {
     let map = index_map(creature);
     let resolve = |uuid: &str| -> usize { map.get(uuid).copied().unwrap_or(usize::MAX) };
-    creature
-        .synapses
-        .sort_by_key(|s| (resolve(&s.from_uuid), resolve(&s.to_uuid)));
+    creature.synapses.sort_by_key(|s| {
+        (
+            resolve(&s.from_uuid),
+            resolve(&s.to_uuid),
+            parse_synapse_type(s.synapse_type.as_deref()) as u8,
+        )
+    });
 }
 
 /// Graft a sequence of `IF` nodes, each able to reference the ones before it.

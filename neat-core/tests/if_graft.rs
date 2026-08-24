@@ -350,11 +350,38 @@ fn rejects_a_node_with_no_outward_connection() {
     assert!(matches!(reject(spec), GraftError::NoTargets));
 }
 
+/// Issue #577 changed this case: one source feeding two **branches** of the
+/// grafted `IF` node is now a legal creature, because the node keeps a sum per
+/// role. What is still refused is a repeat of one role, below.
 #[test]
-fn rejects_two_synapses_between_the_same_pair() {
+fn accepts_one_source_under_two_branches_of_the_if_node() {
     let spec = IfNodeSpec::new("if-1", 0.0)
         .with_condition("input-0", 1.0)
-        .with_positive("input-0", 1.0)
+        .with_positive("input-0", 2.0)
+        .with_negative("input-1", 3.0)
+        .with_target("output-0", 1.0);
+    let grafted = graft_if_node(&base_creature(), &spec).expect("an IF node may repeat a source");
+
+    // `input-0 = 0.5` makes the condition sum 0.5 > 0, so the positive branch
+    // fires with the *same* source: 0.5 * 2.0 = 1.0 added to the base output.
+    let base = base_creature();
+    let above = [0.5f32, 0.0];
+    assert!((activate(&grafted, &above) - (activate(&base, &above) + 1.0)).abs() <= TOL);
+
+    // Below the split the negative branch reads `input-1` instead.
+    let below = [-0.5f32, 2.0];
+    assert!((activate(&grafted, &below) - (activate(&base, &below) + 6.0)).abs() <= TOL);
+
+    creature_validate(&grafted, &validate_options(&grafted))
+        .expect("and the shared validator accepts it");
+}
+
+#[test]
+fn rejects_two_synapses_between_the_same_pair_in_one_role() {
+    let spec = IfNodeSpec::new("if-1", 0.0)
+        .with_condition("input-0", 1.0)
+        .with_condition("input-0", 2.0)
+        .with_positive("input-1", 1.0)
         .with_negative("input-1", 1.0)
         .with_target("output-0", 1.0);
     assert!(matches!(
@@ -968,6 +995,84 @@ fn a_relay_carries_a_second_typed_edge_into_the_same_target() {
             correction_value(&record)
         );
     }
+}
+
+/// The Issue #577 payoff: the same correction reaches **both** branches of the
+/// `IF` output from the node itself, so the relay neuron the case above needs
+/// is not created at all. Same behaviour, one fewer neuron and one fewer
+/// synapse.
+#[test]
+fn a_node_reaches_both_branches_of_an_if_target_without_a_relay() {
+    let base = if_output_creature();
+    let spec = correction_spec(SynapseType::Positive).with_target_role(
+        "output-0",
+        1.0,
+        SynapseType::Negative,
+    );
+    let grafted = graft_if_node(&base, &spec).expect("both roles into one IF target");
+    assert_valid(&grafted, "a node wired into both branches of an IF output");
+
+    let roles: Vec<Option<&str>> = grafted
+        .synapses
+        .iter()
+        .filter(|s| s.from_uuid == "corr" && s.to_uuid == "output-0")
+        .map(|s| s.synapse_type.as_deref())
+        .collect();
+    assert_eq!(
+        roles,
+        vec![Some("negative"), Some("positive")],
+        "both roles are emitted, in canonical (from, to, type) order"
+    );
+
+    // Behaviour identical to the relay version, whichever branch the output
+    // takes.
+    for record in [[1.0f32, 1.0, 1.0], [-1.0, 1.0, 1.0], [-1.0, 0.0, 0.0]] {
+        let delta = activate(&grafted, &record) - activate(&base, &record);
+        assert!(
+            (delta - correction_value(&record)).abs() <= TOL,
+            "record {record:?}: delta {delta} vs expected {}",
+            correction_value(&record)
+        );
+    }
+
+    // The relay-free creature really is the smaller one.
+    let relay = RelaySpec::new("corr-relay", 0.0)
+        .with_source("corr", 1.0)
+        .with_target_role("output-0", 1.0, SynapseType::Negative);
+    let with_relay = graft_relay_node(
+        &graft_if_node(&base, &correction_spec(SynapseType::Positive)).expect("typed graft"),
+        &relay,
+    )
+    .expect("relay graft succeeds");
+    assert_eq!(grafted.neurons.len() + 1, with_relay.neurons.len());
+    assert_eq!(grafted.synapses.len() + 1, with_relay.synapses.len());
+}
+
+/// The other half of the rule: a destination that sums every inward synapse
+/// regardless of role reads two edges from one source as one, so the second is
+/// redundancy — refused under its own variant.
+#[test]
+fn rejects_two_roles_into_a_target_that_is_not_an_if_neuron() {
+    let spec = valid_spec().with_target_role("output-0", 1.0, SynapseType::Negative);
+    assert!(matches!(
+        graft_if_node(&base_creature(), &spec).expect_err("must be rejected"),
+        GraftError::TypedDuplicateEdge { ref from, ref to } if from == "if-1" && to == "output-0"
+    ));
+}
+
+/// And the same source twice in the same role stays a plain duplicate, however
+/// many roles the destination reads.
+#[test]
+fn rejects_one_role_repeated_into_an_if_target() {
+    let spec = correction_spec(SynapseType::Positive).with_target_role(
+        "output-0",
+        2.0,
+        SynapseType::Positive,
+    );
+    assert!(matches!(
+        graft_if_node(&if_output_creature(), &spec).expect_err("must be rejected"),
+        GraftError::DuplicateEdge { ref from, ref to } if from == "corr" && to == "output-0"
+    ));
 }
 
 #[test]

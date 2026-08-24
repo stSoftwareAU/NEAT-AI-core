@@ -41,7 +41,7 @@ pub const BACKWARD_CONNECTION: i32 = 2;
 pub const SORT_ERROR_FROM: i32 = 3;
 /// `to` indices not strictly increasing within the same `from`.
 pub const SORT_ERROR_TO: i32 = 4;
-/// Duplicate `(from, to)` connection.
+/// Duplicate `(from, to, type)` connection.
 pub const DUPLICATE_CONNECTION: i32 = 5;
 /// Input buffers are malformed — length mismatch, index out of range
 /// relative to `num_neurons`, or `num_neurons` itself implausibly large.
@@ -49,6 +49,11 @@ pub const DUPLICATE_CONNECTION: i32 = 5;
 /// a defined error code rather than a WASM `memory access out of bounds`
 /// trap when an evolved creature emits a pathological edge list.
 pub const MALFORMED_BUFFER: i32 = 6;
+/// Synapse roles not ascending within the same `(from, to)` pair — Issue #577.
+///
+/// Only [`validate_topology_typed`] can report it: the untyped
+/// [`validate_topology`] never sees a role.
+pub const SORT_ERROR_TYPE: i32 = 7;
 
 // ===========================================================================
 // Structural integrity error codes.
@@ -95,6 +100,7 @@ pub fn topology_error_message(error_code: i32) -> String {
         SORT_ERROR_TO => "To indices not sorted".to_string(),
         DUPLICATE_CONNECTION => "Duplicate connection".to_string(),
         MALFORMED_BUFFER => "Malformed input buffers".to_string(),
+        SORT_ERROR_TYPE => "Synapse types not sorted".to_string(),
         other => format!("unrecognised topology error code {other}"),
     }
 }
@@ -141,6 +147,11 @@ const SYN_POSITIVE: u8 = SynapseType::Positive as u8;
 /// within the same `from`), contain no self-connections, and contain no
 /// backward connections (`from > to`).
 ///
+/// Every synapse is read as carrying the **same** role, so a repeated
+/// `(from, to)` pair is a [`DUPLICATE_CONNECTION`] whatever the roles say.
+/// A caller holding the roles wants [`validate_topology_typed`], which keys
+/// the pair by role as a creature does (Issue #577).
+///
 /// # Arguments
 /// * `from_indices` - source neuron index per synapse
 /// * `to_indices` - destination neuron index per synapse
@@ -149,6 +160,51 @@ const SYN_POSITIVE: u8 = SynapseType::Positive as u8;
 /// A two-element vector `[error_code, synapse_index]`.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn validate_topology(from_indices: &[u32], to_indices: &[u32]) -> Vec<i32> {
+    topology_scan(from_indices, to_indices, None)
+}
+
+/// [`validate_topology`] with the synapse roles, which complete the sort key.
+///
+/// A creature keys its synapses by `(from, to, type)` (Issue #577), so an
+/// ordered pair may appear once **per role** — how one source feeds both
+/// branches of an `IF` neuron without an IDENTITY relay in between. Within a
+/// repeated pair the roles must still ascend ([`SORT_ERROR_TYPE`]), and an
+/// exact repeat of the triple is still a [`DUPLICATE_CONNECTION`].
+///
+/// Whether the *target* may read more than one role is a question about its
+/// squash, which this gate is not given: `creature_validate` rule 26 and
+/// [`crate::creature::validate_no_duplicate_synapses`] are where a repeated
+/// pair into a non-`IF` neuron is rejected.
+///
+/// # Arguments
+/// * `from_indices` - source neuron index per synapse
+/// * `to_indices` - destination neuron index per synapse
+/// * `synapse_types` - [`SynapseType`] code per synapse, same length as both
+///
+/// # Returns
+/// A two-element vector `[error_code, synapse_index]`; a `synapse_types`
+/// length that does not match reports [`MALFORMED_BUFFER`].
+#[cfg_attr(target_family = "wasm", wasm_bindgen)]
+pub fn validate_topology_typed(
+    from_indices: &[u32],
+    to_indices: &[u32],
+    synapse_types: &[u8],
+) -> Vec<i32> {
+    if synapse_types.len() != from_indices.len() {
+        return vec![MALFORMED_BUFFER, 0];
+    }
+    topology_scan(from_indices, to_indices, Some(synapse_types))
+}
+
+/// The one ordering walk both gates run — with roles when the caller has them.
+///
+/// `None` reads every synapse as the same role, which is exactly the untyped
+/// `(from, to)` rule [`validate_topology`] has always applied.
+fn topology_scan(
+    from_indices: &[u32],
+    to_indices: &[u32],
+    synapse_types: Option<&[u8]>,
+) -> Vec<i32> {
     let len = from_indices.len();
     if len != to_indices.len() {
         // Issue NEAT-AI #2659 — length mismatch now reports a dedicated
@@ -158,12 +214,16 @@ pub fn validate_topology(from_indices: &[u32], to_indices: &[u32]) -> Vec<i32> {
         return vec![MALFORMED_BUFFER, 0];
     }
 
+    let role_at = |i: usize| synapse_types.map_or(0u8, |types| types[i]);
+
     let mut last_from: i64 = -1;
     let mut last_to: i64 = -1;
+    let mut last_type: u8 = 0;
 
     for i in 0..len {
         let from = from_indices[i] as i64;
         let to = to_indices[i] as i64;
+        let role = role_at(i);
 
         if from == to {
             return vec![SELF_CONNECTION, i as i32];
@@ -183,12 +243,20 @@ pub fn validate_topology(from_indices: &[u32], to_indices: &[u32]) -> Vec<i32> {
             if to < last_to {
                 return vec![SORT_ERROR_TO, i as i32];
             } else if to == last_to {
-                return vec![DUPLICATE_CONNECTION, i as i32];
+                if role < last_type {
+                    return vec![SORT_ERROR_TYPE, i as i32];
+                }
+                if role == last_type {
+                    return vec![DUPLICATE_CONNECTION, i as i32];
+                }
             }
         }
 
         last_from = from;
         last_to = to;
+        // Read only when the next synapse repeats this pair, so it is simply
+        // the previous role.
+        last_type = role;
     }
 
     vec![VALID, 0]
@@ -925,6 +993,66 @@ mod tests {
         let to: [u32; 0] = [];
         let result = validate_topology(&from, &to);
         assert_eq!(result[0], VALID);
+    }
+
+    // -----------------------------------------------------------------------
+    // Issue #577 — the role completes the sort key.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn typed_gate_accepts_one_pair_once_per_role() {
+        let from = [0u32, 0, 0];
+        let to = [2u32, 2, 2];
+        let types = [SYN_CONDITION, SYN_NEGATIVE, SYN_POSITIVE];
+        let result = validate_topology_typed(&from, &to, &types);
+        assert_eq!(result[0], VALID, "one synapse per role is not a duplicate");
+
+        // The untyped gate reads the same list as a repeated pair, which is
+        // exactly why the forward-only leg has to pass the roles.
+        assert_eq!(validate_topology(&from, &to)[0], DUPLICATE_CONNECTION);
+    }
+
+    #[test]
+    fn typed_gate_still_rejects_a_repeated_role() {
+        let from = [0u32, 0];
+        let to = [2u32, 2];
+        let types = [SYN_POSITIVE, SYN_POSITIVE];
+        let result = validate_topology_typed(&from, &to, &types);
+        assert_eq!(result[0], DUPLICATE_CONNECTION);
+        assert_eq!(result[1], 1);
+    }
+
+    #[test]
+    fn typed_gate_rejects_roles_out_of_order_within_a_pair() {
+        let from = [0u32, 0];
+        let to = [2u32, 2];
+        let types = [SYN_POSITIVE, SYN_CONDITION];
+        let result = validate_topology_typed(&from, &to, &types);
+        assert_eq!(result[0], SORT_ERROR_TYPE);
+        assert_eq!(result[1], 1);
+        assert_eq!(
+            topology_error_message(SORT_ERROR_TYPE),
+            "Synapse types not sorted"
+        );
+    }
+
+    #[test]
+    fn typed_gate_resets_the_role_when_the_pair_advances() {
+        // `0->2 positive` then `0->3 condition`: a new pair starts its role
+        // ordering afresh, so the descending code is not a sort failure.
+        let from = [0u32, 0];
+        let to = [2u32, 3];
+        let types = [SYN_POSITIVE, SYN_CONDITION];
+        assert_eq!(validate_topology_typed(&from, &to, &types)[0], VALID);
+    }
+
+    #[test]
+    fn typed_gate_reports_a_short_role_buffer_as_malformed() {
+        let from = [0u32, 0];
+        let to = [2u32, 3];
+        let types = [SYN_STANDARD];
+        let result = validate_topology_typed(&from, &to, &types);
+        assert_eq!(result[0], MALFORMED_BUFFER);
     }
 
     #[test]
