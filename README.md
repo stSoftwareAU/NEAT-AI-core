@@ -647,6 +647,12 @@ flowchart TD
     V -- passes --> O["Ok(CleanupOutcome)"]
 ```
 
+The stable creature is put through **both** shared gates before it is
+returned — `creature_validate` (the TypeScript rule table) and
+`validate_creature_topology` (the index-space and order-independent legs,
+including `validate_no_duplicate_synapses`) — so a creature that fails either is
+reported as a `CleanupError`, never handed back.
+
 `CleanupOutcome` carries the creature plus what the cleanup cost: the neurons
 and synapses removed, the hidden neurons folded into constant support, the
 constants rescaled or merged, the `IF` neurons downgraded, and how many passes

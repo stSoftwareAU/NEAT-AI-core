@@ -26,8 +26,9 @@ use neat_core::prune_fixtures::{
 };
 use neat_core::{
     CleanupError, CleanupOutcome, CreatureExport, MAX_SUPPORT_CONSTANTS, PRUNE_PARITY_CASES,
-    SUPPORT_CONSTANT_BIAS, SynapseType, ValidateOptions, cleanup_creature, compile_creature,
-    creature_validate, parse_creature_json, parse_synapse_type, validate_creature_topology,
+    SUPPORT_CONSTANT_BIAS, SquashType, SynapseType, ValidateOptions, cleanup_creature,
+    compile_creature, creature_validate, parse_creature_json, parse_synapse_type,
+    validate_creature_topology,
 };
 
 const OPTIONS: ValidateOptions = ValidateOptions {
@@ -163,6 +164,48 @@ fn logistic(x: f64) -> f64 {
 
 fn cleaned(creature: &CreatureExport) -> CleanupOutcome {
     cleanup_creature(creature).expect("cleanup succeeds")
+}
+
+/// A creature whose only hidden neuron has **no** inward edge — the shape a
+/// synapse prune leaves behind — carrying the named squash and bias.
+fn stranded_hidden_creature(squash: &str, bias: f64) -> CreatureExport {
+    CreatureExport {
+        input: 1,
+        output: 1,
+        neurons: vec![
+            neat_core::NeuronExport {
+                id: None,
+                neuron_type: "hidden".to_string(),
+                uuid: "h-1".to_string(),
+                bias,
+                squash: Some(squash.to_string()),
+            },
+            neat_core::NeuronExport {
+                id: None,
+                neuron_type: "output".to_string(),
+                uuid: "output-0".to_string(),
+                bias: 0.0,
+                squash: Some("IDENTITY".to_string()),
+            },
+        ],
+        synapses: vec![
+            neat_core::SynapseExport {
+                from_uuid: "input-0".to_string(),
+                to_uuid: "output-0".to_string(),
+                weight: 1.0,
+                synapse_type: None,
+            },
+            neat_core::SynapseExport {
+                from_uuid: "h-1".to_string(),
+                to_uuid: "output-0".to_string(),
+                weight: 2.0,
+                synapse_type: None,
+            },
+        ],
+        semantic_version: Some("4.0.0".to_string()),
+        forward_only: true,
+        memetic: None,
+    }
 }
 
 // --- the scenario table -----------------------------------------------------
@@ -456,7 +499,55 @@ fn no_creature_comes_back_with_more_than_three_constants() {
             scenario.name,
             constants(&outcome.creature).len()
         );
+        assert!(
+            outcome.surplus_constants.is_empty(),
+            "{}: reported a surplus it did not have",
+            scenario.name
+        );
     }
+}
+
+#[test]
+fn a_budget_the_maths_will_not_allow_is_reported_rather_than_forced() {
+    // Five constants all reading one MEAN: merging any two would change the
+    // divisor, so cleanup keeps them and *names* the surplus. Silently leaving
+    // the budget broken is the failure this test exists to prevent.
+    let five_on_a_mean = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"constant","uuid":"c-1","bias":1.0},
+        {"type":"constant","uuid":"c-2","bias":1.0},
+        {"type":"constant","uuid":"c-3","bias":1.0},
+        {"type":"constant","uuid":"c-4","bias":1.0},
+        {"type":"constant","uuid":"c-5","bias":1.0},
+        {"type":"hidden","uuid":"mean-1","bias":0.0,"squash":"MEAN"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"mean-1"},
+        {"weight":0.1,"fromUUID":"c-1","toUUID":"mean-1"},
+        {"weight":0.2,"fromUUID":"c-2","toUUID":"mean-1"},
+        {"weight":0.3,"fromUUID":"c-3","toUUID":"mean-1"},
+        {"weight":0.4,"fromUUID":"c-4","toUUID":"mean-1"},
+        {"weight":0.5,"fromUUID":"c-5","toUUID":"mean-1"},
+        {"weight":1.0,"fromUUID":"mean-1","toUUID":"output-0"}
+      ]
+    }"#,
+    );
+    let outcome = cleaned(&five_on_a_mean);
+
+    assert_eq!(
+        constants(&outcome.creature).len(),
+        5,
+        "cleanup forced the budget and changed what the MEAN computes"
+    );
+    assert_eq!(
+        outcome.surplus_constants,
+        vec!["c-4".to_string(), "c-5".to_string()],
+        "the constants over budget were not named"
+    );
+    assert_same_function("five_on_a_mean", &five_on_a_mean, &outcome.creature);
 }
 
 #[test]
@@ -931,6 +1022,34 @@ fn a_folded_constant_moves_ahead_of_the_hidden_neurons() {
     );
 }
 
+#[test]
+fn a_fold_reproduces_the_forward_pass_for_every_squash() {
+    // `apply_squash` is a *fallback* for the aggregate squashes, not the
+    // forward pass, so a fold that trusted it computed the wrong constant for
+    // HYPOT and HYPOTv2. The oracle is the network itself: fold a stranded
+    // neuron of every squash at several biases and demand the same outputs.
+    let mut checked = 0;
+    for code in 0u8..=37 {
+        let squash = SquashType::from(code);
+        let name = neat_core::squash_name_from(squash);
+        // The extremes matter: they are where a raw activation leaves the
+        // squash's own output range and the forward pass clamps it.
+        for bias in [-1.0e6f64, -1.5, -0.5, 0.0, 0.7, 3.0, 1.0e6] {
+            let before = stranded_hidden_creature(name, bias);
+            let outcome = cleanup_creature(&before)
+                .unwrap_or_else(|e| panic!("{name} at bias {bias}: cleanup failed: {e}"));
+            assert_same_function(&format!("{name}@{bias}"), &before, &outcome.creature);
+            assert_eq!(
+                neuron(&outcome.creature, "h-1").neuron_type,
+                "constant",
+                "{name} at bias {bias}: the stranded neuron did not fold"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 38 * 7, "every squash and bias must be exercised");
+}
+
 // --- constant support invariants -------------------------------------------
 
 #[test]
@@ -1227,6 +1346,219 @@ fn a_canonical_creature_comes_back_untouched() {
     assert_eq!(outcome.passes, 1, "a no-op needs exactly one pass");
 }
 
+#[test]
+fn the_constant_budget_is_three() {
+    // The budget is a documented number, not whatever the constant happens to
+    // say: a creature carrying four constants comes back with three.
+    assert_eq!(MAX_SUPPORT_CONSTANTS, 3, "the documented constant budget");
+    let four = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"constant","uuid":"c-1","bias":1.0},
+        {"type":"constant","uuid":"c-2","bias":1.0},
+        {"type":"constant","uuid":"c-3","bias":1.0},
+        {"type":"constant","uuid":"c-4","bias":1.0},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"},
+        {"weight":0.1,"fromUUID":"c-1","toUUID":"output-0"},
+        {"weight":0.2,"fromUUID":"c-2","toUUID":"output-0"},
+        {"weight":0.3,"fromUUID":"c-3","toUUID":"output-0"},
+        {"weight":0.4,"fromUUID":"c-4","toUUID":"output-0"}
+      ]
+    }"#,
+    );
+    let outcome = cleaned(&four);
+    assert_eq!(
+        constants(&outcome.creature).len(),
+        3,
+        "four constants must canonicalise to three"
+    );
+    // The merged pair is summed at the IDENTITY output: 0.1 + 0.4.
+    assert_eq!(weight(&outcome.creature, "c-1", "output-0"), 0.5);
+    assert_same_function("four_constants", &four, &outcome.creature);
+}
+
+#[test]
+fn a_maximum_target_merges_two_constant_terms_to_the_larger_weight() {
+    // The mirror of the MINIMUM rule: MAXIMUM takes the largest term, and two
+    // terms from one bias-1 constant are just their weights.
+    let before = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-a","bias":1.0,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"h-b","bias":0.5,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"max-1","bias":0.0,"squash":"MAXIMUM"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"max-1"},
+        {"weight":0.25,"fromUUID":"h-a","toUUID":"max-1"},
+        {"weight":3.0,"fromUUID":"h-b","toUUID":"max-1"},
+        {"weight":1.0,"fromUUID":"max-1","toUUID":"output-0"}
+      ]
+    }"#,
+    );
+    let outcome = cleaned(&before);
+
+    // Terms: `0.25 * IDENTITY(1.0) = 0.25` and `3.0 * IDENTITY(0.5) = 1.5`.
+    assert_eq!(
+        weight(&outcome.creature, "h-a", "max-1"),
+        1.5,
+        "the merge did not keep the larger of the two constant terms"
+    );
+    assert_same_function("maximum_merge", &before, &outcome.creature);
+}
+
+#[test]
+fn a_hypotenuse_target_keeps_one_edge_per_folded_source() {
+    // HYPOT squares each term, so `hypot(a, b) != a + b` and the two folded
+    // sources must stay two edges.
+    let before = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-a","bias":0.6,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"h-b","bias":0.8,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"hyp-1","bias":0.0,"squash":"HYPOT"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"hyp-1"},
+        {"weight":1.0,"fromUUID":"h-a","toUUID":"hyp-1"},
+        {"weight":1.0,"fromUUID":"h-b","toUUID":"hyp-1"},
+        {"weight":1.0,"fromUUID":"hyp-1","toUUID":"output-0"}
+      ]
+    }"#,
+    );
+    let outcome = cleaned(&before);
+
+    assert_eq!(
+        inward(&outcome.creature, "hyp-1"),
+        3,
+        "a HYPOT target lost an inward edge to a merge"
+    );
+    assert_eq!(
+        constants(&outcome.creature).len(),
+        2,
+        "the two folds must keep their own support constants"
+    );
+    assert_same_function("hypotenuse_targets", &before, &outcome.creature);
+}
+
+#[test]
+fn two_roles_into_an_aggregate_target_are_never_folded_together() {
+    // The role is only readable at an `IF`; at a MEAN both edges are the same
+    // key, and merging them would change the divisor. So the second fold must
+    // not land on the first fold's support constant.
+    let before = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-a","bias":0.3,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"h-b","bias":0.7,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"mean-1","bias":0.0,"squash":"MEAN"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"mean-1"},
+        {"weight":2.0,"fromUUID":"h-a","toUUID":"mean-1","type":"positive"},
+        {"weight":4.0,"fromUUID":"h-b","toUUID":"mean-1","type":"negative"}
+      ]
+    }"#,
+    );
+    let mut wired = before.clone();
+    wired.synapses.push(neat_core::SynapseExport {
+        from_uuid: "mean-1".to_string(),
+        to_uuid: "output-0".to_string(),
+        weight: 1.0,
+        synapse_type: None,
+    });
+    let outcome = cleaned(&wired);
+
+    assert_eq!(
+        inward(&outcome.creature, "mean-1"),
+        3,
+        "the two roles were folded onto one constant and the divisor moved"
+    );
+    assert_eq!(constants(&outcome.creature).len(), 2);
+    assert_same_function("two_roles_into_mean", &wired, &outcome.creature);
+}
+
+#[test]
+fn a_fold_will_not_reuse_a_constant_the_target_cannot_tell_it_apart_from() {
+    // `c-1` already feeds the MEAN under `positive` and the stranded `h-b`
+    // under `negative`. The MEAN cannot read either role, so both edges are the
+    // same key there — reusing `c-1` would collapse two terms into one and move
+    // the divisor. The fold must mint its own support node instead.
+    let before = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"constant","uuid":"c-1","bias":1.0},
+        {"type":"hidden","uuid":"h-b","bias":0.7,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"mean-1","bias":0.0,"squash":"MEAN"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"mean-1"},
+        {"weight":2.0,"fromUUID":"c-1","toUUID":"mean-1","type":"positive"},
+        {"weight":4.0,"fromUUID":"h-b","toUUID":"mean-1","type":"negative"},
+        {"weight":1.0,"fromUUID":"mean-1","toUUID":"output-0"}
+      ]
+    }"#,
+    );
+    let outcome = cleaned(&before);
+
+    assert_eq!(
+        constants(&outcome.creature).len(),
+        2,
+        "the fold reused a constant the MEAN cannot tell apart from it"
+    );
+    assert_eq!(
+        inward(&outcome.creature, "mean-1"),
+        3,
+        "the MEAN divisor moved"
+    );
+    assert_same_function("reuse_blocked_at_mean", &before, &outcome.creature);
+}
+
+#[test]
+fn a_surviving_if_comes_back_with_its_roles_in_canonical_order() {
+    // The role is the third leg of the `(from, to, role)` key (Issue #577), so
+    // `h-b`'s two edges must come back negative (2) before positive (3) even
+    // though the creature lists them the other way around.
+    let mut shuffled = EDGE_ROLE_IDENTITY.after();
+    let positive = shuffled
+        .synapses
+        .iter()
+        .position(|s| s.from_uuid == "h-b" && s.synapse_type.as_deref() == Some("positive"))
+        .expect("the positive row");
+    let negative = shuffled
+        .synapses
+        .iter()
+        .position(|s| s.from_uuid == "h-b" && s.synapse_type.as_deref() == Some("negative"))
+        .expect("the negative row");
+    shuffled.synapses.swap(positive, negative);
+
+    let outcome = cleaned(&shuffled);
+    let roles: Vec<Option<&str>> = outcome
+        .creature
+        .synapses
+        .iter()
+        .filter(|s| s.from_uuid == "h-b")
+        .map(|s| s.synapse_type.as_deref())
+        .collect();
+    assert_eq!(
+        roles,
+        vec![Some("negative"), Some("positive")],
+        "the role leg of the canonical sort did not run"
+    );
+}
+
 // --- failing closed ---------------------------------------------------------
 
 #[test]
@@ -1290,11 +1622,101 @@ fn a_creature_cleanup_cannot_make_valid_is_reported_not_returned() {
     );
     match cleanup_creature(&backward) {
         Err(CleanupError::Invalid(failure)) => {
-            assert!(
-                !failure.message.is_empty(),
-                "an invalid result must say what was wrong"
+            // `h-1 -> h-2` reads an activation `h-2` has not computed yet, so
+            // rule 27 is the rule that must name it — not merely "something".
+            assert_eq!(
+                failure.reason, "RECURSIVE_SYNAPSE",
+                "the failure must name the rule the creature broke"
             );
         }
         other => panic!("expected an invalid result, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_synapse_pointing_at_an_observation_neuron_is_refused() {
+    let mut broken = creature(CASCADE_JSON);
+    broken.synapses[0].to_uuid = "input-1".to_string();
+    match cleanup_creature(&broken) {
+        Err(CleanupError::SynapseTargetsInput { uuid }) => assert_eq!(uuid, "input-1"),
+        other => panic!("expected a synapse targeting an input, got {other:?}"),
+    }
+}
+
+#[test]
+fn two_neurons_sharing_a_uuid_are_refused() {
+    let mut broken = creature(CASCADE_JSON);
+    broken.neurons[1].uuid = "h-c".to_string();
+    match cleanup_creature(&broken) {
+        Err(CleanupError::DuplicateUuid { uuid }) => assert_eq!(uuid, "h-c"),
+        other => panic!("expected a duplicate UUID, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_neuron_of_an_unknown_type_is_refused() {
+    let mut broken = creature(CASCADE_JSON);
+    broken.neurons[0].neuron_type = "gate".to_string();
+    match cleanup_creature(&broken) {
+        Err(CleanupError::UnknownNeuronType { uuid, declared }) => {
+            assert_eq!(uuid, "h-c");
+            assert_eq!(declared, "gate");
+        }
+        other => panic!("expected an unknown neuron type, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_non_finite_weight_is_refused() {
+    let mut broken = creature(CASCADE_JSON);
+    broken.synapses[0].weight = f64::INFINITY;
+    match cleanup_creature(&broken) {
+        Err(CleanupError::NonFiniteWeight {
+            from_uuid,
+            to_uuid,
+            weight,
+        }) => {
+            assert_eq!(from_uuid, "input-0");
+            assert_eq!(to_uuid, "h-c");
+            assert!(weight.is_infinite());
+        }
+        other => panic!("expected a non-finite weight, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_merge_that_could_not_be_exact_is_refused_rather_than_guessed() {
+    // Two roles from one *hidden* source into a MINIMUM target: the target
+    // cannot read the roles, so they are the same edge written twice — but a
+    // hidden source's term is not its weight, so no single edge carries the
+    // same value. Cleanup refuses instead of picking one.
+    let broken = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-a","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"min-1","bias":0.0,"squash":"MINIMUM"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"min-1"},
+        {"weight":2.0,"fromUUID":"h-a","toUUID":"min-1","type":"positive"},
+        {"weight":0.5,"fromUUID":"h-a","toUUID":"min-1","type":"negative"},
+        {"weight":1.0,"fromUUID":"min-1","toUUID":"output-0"}
+      ]
+    }"#,
+    );
+    match cleanup_creature(&broken) {
+        Err(CleanupError::InexactMerge {
+            from_uuid,
+            to_uuid,
+            squash,
+        }) => {
+            assert_eq!(from_uuid, "h-a");
+            assert_eq!(to_uuid, "min-1");
+            assert_eq!(squash, "MINIMUM");
+        }
+        other => panic!("expected an inexact merge, got {other:?}"),
     }
 }

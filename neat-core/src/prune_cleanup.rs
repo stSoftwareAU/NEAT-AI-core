@@ -67,6 +67,21 @@
 //! function of the inputs — `neat-core/tests/prune_cleanup.rs` proves it by
 //! activating both — and only this one holds the support-node invariants.
 //!
+//! # Two boundaries worth naming
+//!
+//! **Dead structure is "nothing reads it", not "no output reads it".** A node
+//! with no outward edge cannot reach an output, and in a `forwardOnly` creature
+//! — every creature this fleet trains — those two statements are the same, so
+//! the sweep is complete. A *recurrent* creature can hold an island that feeds
+//! only itself; each member has an outward edge, so cleanup leaves it alone
+//! rather than widening the rule the caller asked for.
+//!
+//! **The `IF` repair follows the structural gate, not rule 12's exemption.**
+//! [`creature_validate`] skips rule 12 for a neuron at index `<= 2`, but
+//! [`validate_creature_topology`]'s structural leg has no such exemption and
+//! cleanup is gated on both, so an `IF` short a role is downgraded wherever it
+//! sits.
+//!
 //! # What is preserved
 //!
 //! Observation (input) neurons and output neurons are never removed, never
@@ -81,8 +96,11 @@ use crate::creature::{
     parse_synapse_type, squash_name_from, validate_creature_width,
 };
 use crate::creature_validate::{ValidateOptions, ValidationFailure, creature_validate};
+use crate::if_graft::{GraftError, sort_synapses_canonically, validate_creature_topology};
+use crate::range::apply_limit_range;
 use crate::squash::{SquashType, apply_squash};
 use crate::synapse_type::SynapseType;
+use crate::topology_invariants::{IfRoles, if_neuron_fault};
 
 /// Bias every surviving constant carries.
 ///
@@ -135,6 +153,15 @@ pub struct CleanupOutcome {
     pub rescaled_constants: Vec<String>,
     /// Surplus constants merged into a surviving support constant.
     pub merged_constants: Vec<String>,
+    /// Constants still over [`MAX_SUPPORT_CONSTANTS`] because no merge of them
+    /// would have been exact, named rather than left for a caller to discover.
+    ///
+    /// Empty in the canonical case. It fills only where a surplus constant
+    /// lands on a target whose squash reads its inward **count** (`MEAN`) or
+    /// squares each term (`HYPOT`), where one edge cannot carry what two did —
+    /// cleanup keeps the constants apart rather than change what the creature
+    /// computes, and says so here.
+    pub surplus_constants: Vec<String>,
     /// `IF` neurons downgraded to `IDENTITY` because a required role was gone.
     pub downgraded_if_neurons: Vec<String>,
 }
@@ -208,6 +235,10 @@ pub enum CleanupError {
     },
     /// The stable creature failed the shared validator, so it was not returned.
     Invalid(ValidationFailure),
+    /// The stable creature failed the shared topology gate — the index-space
+    /// and order-independent legs `creature_validate` does not cover — so it
+    /// was not returned.
+    MalformedResult(GraftError),
 }
 
 impl std::fmt::Display for CleanupError {
@@ -252,6 +283,9 @@ impl std::fmt::Display for CleanupError {
                 "Cleaned creature is invalid ({}): {}",
                 failure.reason, failure.message
             ),
+            CleanupError::MalformedResult(e) => {
+                write!(f, "Cleaned creature failed the topology gate: {e}")
+            }
         }
     }
 }
@@ -261,6 +295,7 @@ impl std::error::Error for CleanupError {
         match self {
             CleanupError::Creature(e) => Some(e),
             CleanupError::Invalid(e) => Some(e),
+            CleanupError::MalformedResult(e) => Some(e),
             _ => None,
         }
     }
@@ -356,6 +391,19 @@ pub fn cleanup_creature(creature: &CreatureExport) -> Result<CleanupOutcome, Cle
         forward_only: result.forward_only,
     };
     creature_validate(&result, &options).map_err(CleanupError::Invalid)?;
+    // Both gates, as `if_graft::validated` does: `creature_validate` speaks the
+    // TypeScript rule table, `validate_creature_topology` adds the index-space
+    // and order-independent legs (including `validate_no_duplicate_synapses`).
+    // A creature this module produced must satisfy both or not be returned.
+    validate_creature_topology(&result).map_err(CleanupError::MalformedResult)?;
+
+    let surplus_constants: Vec<String> = result
+        .neurons
+        .iter()
+        .filter(|n| n.neuron_type == "constant")
+        .skip(MAX_SUPPORT_CONSTANTS)
+        .map(|n| n.uuid.clone())
+        .collect();
 
     Ok(CleanupOutcome {
         creature: result,
@@ -366,6 +414,7 @@ pub fn cleanup_creature(creature: &CreatureExport) -> Result<CleanupOutcome, Cle
         folded_neurons: engine.folded_neurons,
         rescaled_constants: engine.rescaled_constants,
         merged_constants: engine.merged_constants,
+        surplus_constants,
         downgraded_if_neurons: engine.downgraded_if_neurons,
     })
 }
@@ -487,11 +536,18 @@ impl Engine {
             .and_then(squash_of)
     }
 
-    fn is_constant(&self, uuid: &str) -> bool {
-        self.creature
-            .neurons
-            .iter()
-            .any(|n| n.uuid == uuid && n.neuron_type == "constant")
+    /// Is `uuid` a **support** constant — a constant worth exactly 1?
+    ///
+    /// The `MINIMUM` / `MAXIMUM` merge is exact only because a constant term is
+    /// its own weight, which holds at bias 1 and nowhere else, so the bias is
+    /// part of the question rather than an invariant assumed elsewhere.
+    /// `normalise_constants` makes it true before any merge runs, so this is
+    /// the invariant restated where it is relied on — it does not reject
+    /// anything today, and a pass reorder must not make it start to.
+    fn is_support_constant(&self, uuid: &str) -> bool {
+        self.creature.neurons.iter().any(|n| {
+            n.uuid == uuid && n.neuron_type == "constant" && n.bias == SUPPORT_CONSTANT_BIAS
+        })
     }
 
     /// Reject what cleanup cannot repair exactly, before any pass runs.
@@ -569,16 +625,18 @@ impl Engine {
 
         let mut changed = false;
         for uuid in if_uuids {
-            let (mut condition, mut positive, mut negative, mut total) = (false, false, false, 0);
-            for synapse in self.creature.synapses.iter().filter(|s| s.to_uuid == uuid) {
-                total += 1;
-                match role_of(synapse) {
-                    SynapseType::Condition => condition = true,
-                    SynapseType::Negative => negative = true,
-                    SynapseType::Positive | SynapseType::Standard => positive = true,
-                }
-            }
-            if condition && positive && negative && total >= 3 {
+            // `IfRoles` / `if_neuron_fault` are the single home of "does this
+            // IF carry all three roles" (Issue #560) — asked here rather than
+            // restated, so a repair and a validation can never disagree.
+            let inward: Vec<SynapseType> = self
+                .creature
+                .synapses
+                .iter()
+                .filter(|s| s.to_uuid == uuid)
+                .map(role_of)
+                .collect();
+            let roles = IfRoles::tally(inward.iter().copied());
+            if if_neuron_fault(inward.len(), roles).is_none() {
                 continue;
             }
 
@@ -678,10 +736,11 @@ impl Engine {
             return Ok(false);
         };
 
-        // The value the forward pass computes for this neuron. `apply_squash`
-        // is that forward pass, so the folded constant is what the network
-        // itself would have produced rather than a second opinion about it.
-        let value = f64::from(apply_squash(squash, bias as f32));
+        // The value the forward pass computes for this neuron — see
+        // [`zero_inward_activation`], which mirrors `CompiledNetwork::activate`
+        // for a neuron with no synapses rather than assuming `apply_squash`
+        // covers the aggregates.
+        let value = f64::from(zero_inward_activation(squash, bias));
         if !value.is_finite() {
             return Err(CleanupError::NonFiniteBias { uuid });
         }
@@ -714,6 +773,10 @@ impl Engine {
     /// support node: correctness outranks the constant budget.
     fn reusable_support_constant(&self, uuid: &str) -> Result<Option<String>, CleanupError> {
         let squashes = self.squash_map()?;
+        // `normalise_constants` runs before the fold in every pass, so the bias
+        // test is a re-check of that invariant rather than a filter that fires
+        // — kept so a future pass reorder cannot quietly fold a value onto a
+        // constant that is not worth 1.
         let candidates: Vec<String> = self
             .creature
             .neurons
@@ -832,7 +895,7 @@ impl Engine {
             return Ok(());
         };
 
-        let source_is_constant = self.is_constant(&synapse.from_uuid);
+        let source_is_constant = self.is_support_constant(&synapse.from_uuid);
         let merged = merge_weights(
             merge_rule(target_squash),
             self.creature.synapses[index].weight,
@@ -986,7 +1049,7 @@ impl Engine {
                     kept.push(synapse);
                 }
                 Some(&index) => {
-                    let source_is_constant = self.is_constant(&synapse.from_uuid);
+                    let source_is_constant = self.is_support_constant(&synapse.from_uuid);
                     kept[index].weight = merge_weights(
                         merge_rule(target_squash),
                         kept[index].weight,
@@ -1029,40 +1092,52 @@ impl Engine {
 
     /// Sort the synapses into `(from, to, role)` index order — validation
     /// rule 25, and what makes two equivalent creatures compare equal.
+    ///
+    /// Reuses [`sort_synapses_canonically`], the single home of that order
+    /// (Issue #577), rather than restating its key; the comparison is only here
+    /// to tell the fixed-point loop whether the order actually moved.
     fn sort_synapses(&mut self) -> Result<bool, CleanupError> {
-        let mut index: HashMap<&str, usize> = HashMap::new();
-        let names: Vec<String> = (0..self.creature.input)
-            .map(|i| format!("input-{i}"))
-            .collect();
-        for (i, name) in names.iter().enumerate() {
-            index.insert(name.as_str(), i);
-        }
-        for (j, neuron) in self.creature.neurons.iter().enumerate() {
-            index.insert(neuron.uuid.as_str(), self.creature.input + j);
-        }
-
-        let mut keyed: Vec<((usize, usize, u8), SynapseExport)> =
-            Vec::with_capacity(self.creature.synapses.len());
-        for synapse in &self.creature.synapses {
-            let from = *index.get(synapse.from_uuid.as_str()).ok_or_else(|| {
-                CleanupError::UnknownEndpoint {
-                    uuid: synapse.from_uuid.clone(),
-                }
-            })?;
-            let to = *index.get(synapse.to_uuid.as_str()).ok_or_else(|| {
-                CleanupError::UnknownEndpoint {
-                    uuid: synapse.to_uuid.clone(),
-                }
-            })?;
-            keyed.push(((from, to, role_of(synapse) as u8), synapse.clone()));
-        }
-        keyed.sort_by_key(|entry| entry.0);
-
-        let sorted: Vec<SynapseExport> = keyed.into_iter().map(|(_, s)| s).collect();
-        let changed = sorted != self.creature.synapses;
-        self.creature.synapses = sorted;
-        Ok(changed)
+        let before = self.creature.synapses.clone();
+        sort_synapses_canonically(&mut self.creature);
+        Ok(self.creature.synapses != before)
     }
+}
+
+/// What the forward pass computes for a neuron with **no** inward synapses.
+///
+/// This has to mirror [`crate::network::CompiledNetwork::activate`] exactly,
+/// and [`apply_squash`] alone does not: the aggregate squashes are handled
+/// outside the sum-then-squash path there, and `apply_squash` documents itself
+/// as a single-value *fallback* for them (`HYPOT(x) = |x|`), which is not what
+/// an empty aggregate produces. Getting this wrong is silent — the creature
+/// keeps scoring, just differently — so each aggregate is spelled out:
+///
+/// | Squash | Empty-input activation | Why |
+/// |---|---|---|
+/// | `MINIMUM` / `MAXIMUM` | `bias` | no terms, so the extreme falls back to the bias |
+/// | `MEAN` | `bias` | `n == 0`, so the division is skipped |
+/// | `IF` | `bias` | the condition sum is `0`, so the empty negative branch is taken |
+/// | `HYPOT` | `bias` | `sqrt(0) + bias` |
+/// | `HYPOTv2` | `0` | the bias lives *inside* the per-synapse square, so an empty sum never sees it |
+/// | anything else | `squash(bias)` | the ordinary weighted-sum path with a sum of zero |
+///
+/// The result goes through [`apply_limit_range`] because the forward pass does.
+/// That clamp is a no-op for every bias [`Engine::check_references`] admits —
+/// `apply_squash` already bounds its own outputs, and a finite bias is in range
+/// for each aggregate arm above — so it is here to keep the mirror complete
+/// rather than because a test can tell it apart.
+fn zero_inward_activation(squash: SquashType, bias: f64) -> f32 {
+    let bias = bias as f32;
+    let raw = match squash {
+        SquashType::Minimum
+        | SquashType::Maximum
+        | SquashType::Mean
+        | SquashType::Hypotenuse
+        | SquashType::If => bias,
+        SquashType::HypotenuseV2 => 0.0,
+        _ => apply_squash(squash, bias),
+    };
+    apply_limit_range(squash, raw)
 }
 
 /// Combine two edges that share one readable key, or refuse to.
