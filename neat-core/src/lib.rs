@@ -34,6 +34,7 @@ pub mod loss;
 pub mod network;
 pub mod parallel_scoring;
 pub mod propagate_codec;
+pub mod prune_fixtures;
 pub mod range;
 pub mod safe_zone;
 pub mod score_scan;
@@ -95,11 +96,13 @@ pub use decision_tree::{
     DecisionCase, depth2_tree_creature, linear_base_creature, residual_correction_creature,
     stump_creature,
 };
+// Issue #588 — the TypeScript pruning behaviour, captured as parity fixtures.
 pub use if_graft::{
     GraftEdge, GraftError, IfCorrectionSpec, IfNodeSpec, RelaySpec, graft_if_correction,
     graft_if_node, graft_if_nodes, graft_if_tree, graft_relay_node, validate_creature_topology,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
+pub use prune_fixtures::{PRUNE_PARITY_CASES, PruneCase, PruneRequest};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{
