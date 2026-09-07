@@ -14,9 +14,9 @@
 //! flowchart TD
 //!     I["creature, straight after<br/>the caller's deletion"] --> R["repair: an IF short a role<br/>→ IDENTITY, roles stripped"]
 //!     R --> D["remove dead structure:<br/>non-output nodes with<br/>no outward edge"]
-//!     D --> F["fold: hidden with no inward edge<br/>→ bias-1 support constant,<br/>squash(bias) into its weights"]
-//!     F --> C["constant support invariants:<br/>bias 1, reuse, at most three,<br/>none unreferenced"]
-//!     C --> N["canonicalise: constants, hiddens,<br/>outputs; edges sorted by (from, to, role)"]
+//!     D --> C["constant support invariants:<br/>bias 1, at most three,<br/>none unreferenced"]
+//!     C --> F["fold: hidden with no inward edge<br/>→ bias-1 support constant,<br/>squash(bias) into its weights"]
+//!     F --> N["canonicalise: constants, hiddens,<br/>outputs; edges sorted by (from, to, role)"]
 //!     N --> Q{"anything change?"}
 //!     Q -- yes --> R
 //!     Q -- no --> M["prune the memetic record<br/>of references the edits stranded"]
