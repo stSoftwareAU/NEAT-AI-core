@@ -25,11 +25,15 @@
 //! real operator — `SubNeuron` or `SubConnection` — was run several hundred
 //! times from a fresh copy, and the distinct outcomes were grouped by which
 //! neuron or synapse the operator happened to pick. The outcome for **this**
-//! case's [`PruneCase::request`] is the `after` recorded here, `exportJSON()`
-//! verbatim. Both halves of every pair were `creatureValidate`d TypeScript-side
-//! before they were written down. The capture used NEAT-AI `7.0.25`; the
-//! operator picks its target at random, which is why the harness enumerates
-//! outcomes rather than forcing one.
+//! case's [`PruneCase::request`] is the `after` recorded here. The JSON was
+//! transcribed from `exportJSON()` — re-indented and given the `forwardOnly`
+//! flag this crate always writes; every neuron, synapse, weight, bias, role and
+//! their order are the TypeScript output unchanged. Both halves of every pair
+//! were `creatureValidate`d TypeScript-side before they were written down. The
+//! capture used NEAT-AI `7.0.25`; the operator picks its target at random,
+//! which is why the harness enumerates outcomes rather than forcing one. The
+//! harness itself is in `docs/research/pruning-parity-matrix.md`, so the
+//! captures can be re-derived when the TypeScript changes.
 //!
 //! ## The rules the fixtures encode
 //!
@@ -41,7 +45,7 @@
 //! | [`EDGE_ROLE_IDENTITY`] | only the requested `(from, to, role)` triple goes; the other roles of that ordered pair stay | `SubConnection.ts` (NEAT-AI #3873) |
 //! | [`IF_REPAIR_COALESCES_ROLES`] | an `IF` that loses a required role is downgraded to `IDENTITY`, its inward roles are stripped, and rows that were only distinct by role are summed into one | `RepairInvalidIfNeurons.ts` |
 //! | [`CONSTANT_MOVES_INTO_PREFIX`] | after a hidden→constant flip the computational slice is re-ordered constants-then-hiddens, and the synapses re-sorted | `NormaliseComputationalNeuronOrder.ts` |
-//! | [`MEMETIC_DROPPED_ON_REMOVAL`] | a successful removal invalidates the content-derived identity: `uuid` and `memetic` are dropped | `OrphanedNeuronCleanup.ts::removeHiddenNeuron` (NEAT-AI #3843) |
+//! | [`MEMETIC_DROPPED_ON_REMOVAL`] | a successful removal invalidates the content-derived identity — of which `CreatureExport` represents only `memetic` | `OrphanedNeuronCleanup.ts::removeHiddenNeuron` (NEAT-AI #3843) |
 //! | [`CONSTANT_BIAS_FOLD`] | discovery's compensation folds `w · meanActivation` of the removed neuron into each target's bias | `DiscoveryNeuronRemoval.ts::applyMeanBiasFold` |
 //!
 //! ```mermaid
@@ -50,7 +54,7 @@
 //!     C --> K["target with no inward<br/>but an outward edge<br/>→ constant, bias = squash(bias)"]
 //!     K --> I["IF missing a role<br/>→ IDENTITY, strip roles,<br/>sum the coalesced rows"]
 //!     I --> N["canonicalise: constants,<br/>then hiddens, then outputs;<br/>re-sort synapses"]
-//!     N --> M["drop uuid + memetic"]
+//!     N --> M["drop the content-derived identity<br/>(memetic here; uuid TypeScript-side)"]
 //!     M --> V["validate — a successful<br/>rewrite never returns<br/>an invalid creature"]
 //! ```
 //!
@@ -400,7 +404,7 @@ pub const CONSTANT_MOVES_INTO_PREFIX: PruneCase = PruneCase {
     name: "constant_moves_into_prefix",
     rule: "after a hidden→constant flip the slice is re-ordered constants-then-hiddens and synapses re-sorted",
     ts_source: "src/architecture/NormaliseComputationalNeuronOrder.ts",
-    ts_test: "test/compact/CompactKeepOrder.ts",
+    ts_test: "test/architecture/ForwardOnlyTopologyAfterBulkRemap.ts, test/validate/CreatureValidate.ts",
     request: PruneRequest::RemoveSynapse {
         from_uuid: "input-0",
         to_uuid: "h-2",
@@ -443,14 +447,20 @@ pub const CONSTANT_MOVES_INTO_PREFIX: PruneCase = PruneCase {
 
 /// A successful removal sheds the content-derived identity.
 ///
-/// The same cascade as [`CASCADE_ORPHAN_FEEDERS`], with a memetic record whose
-/// bias and weight both name structure the removal deletes. TypeScript drops
-/// `memetic` (and `uuid`) wholesale on every removal rather than pruning it:
-/// both are derived from the neurons and synapses, so neither describes the
-/// creature any more.
+/// Deliberately the **same** topology and request as
+/// [`CASCADE_ORPHAN_FEEDERS`], so the memetic record is the only thing that
+/// differs between the two captures and the rule is isolated — a test pins that
+/// equality, so the pair cannot drift apart. The record's bias and weight both
+/// name structure the removal deletes.
+///
+/// TypeScript drops `memetic` **and** `uuid` wholesale on every removal rather
+/// than pruning them: both are derived from the neurons and synapses, so
+/// neither describes the creature any more. Only `memetic` is representable
+/// here — a `CreatureExport` carries no creature-level `uuid` — so that is the
+/// half this fixture captures.
 pub const MEMETIC_DROPPED_ON_REMOVAL: PruneCase = PruneCase {
     name: "memetic_dropped_on_removal",
-    rule: "a successful removal drops the content-derived identity: uuid and memetic",
+    rule: "a successful removal drops the content-derived identity — memetic, the half a CreatureExport carries",
     ts_source: "src/compact/OrphanedNeuronCleanup.ts, src/mutate/SubNeuron.ts",
     ts_test: "test/architecture/StaleUuidAfterStructuralChange.ts",
     request: PruneRequest::RemoveNeuron { uuid: "h-x" },

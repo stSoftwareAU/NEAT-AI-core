@@ -346,6 +346,7 @@ fn synapses_come_back_in_canonical_from_to_role_order() {
 
 #[test]
 fn every_surviving_if_neuron_still_carries_its_three_roles() {
+    let mut if_neurons_checked = 0;
     for case in PRUNE_PARITY_CASES {
         let after = case.after();
         for n in after
@@ -353,6 +354,7 @@ fn every_surviving_if_neuron_still_carries_its_three_roles() {
             .iter()
             .filter(|n| n.squash.as_deref() == Some("IF"))
         {
+            if_neurons_checked += 1;
             let roles: Vec<SynapseType> = after
                 .synapses
                 .iter()
@@ -373,6 +375,10 @@ fn every_surviving_if_neuron_still_carries_its_three_roles() {
             }
         }
     }
+    assert!(
+        if_neurons_checked > 0,
+        "no captured case keeps an IF neuron — the rule is untested"
+    );
 }
 
 #[test]
@@ -390,6 +396,60 @@ fn a_rewrite_sheds_the_content_derived_memetic_record() {
             .any(|c| c.before().memetic.is_some()),
         "no captured case starts with a memetic record — the rule is untested"
     );
+}
+
+#[test]
+fn every_case_names_the_typescript_behaviour_it_captures() {
+    let mut names: Vec<&str> = Vec::new();
+    for case in PRUNE_PARITY_CASES {
+        for (field, value) in [
+            ("name", case.name),
+            ("rule", case.rule),
+            ("ts_source", case.ts_source),
+            ("ts_test", case.ts_test),
+        ] {
+            assert!(
+                !value.trim().is_empty(),
+                "{}: {field} is empty — a capture with no provenance cannot be graded",
+                case.name
+            );
+        }
+        assert!(
+            case.ts_source.contains(".ts"),
+            "{}: ts_source does not name a TypeScript file",
+            case.name
+        );
+        assert!(
+            case.ts_test.contains(".ts"),
+            "{}: ts_test does not name a TypeScript test",
+            case.name
+        );
+        assert!(
+            !names.contains(&case.name),
+            "duplicate case name {}",
+            case.name
+        );
+        names.push(case.name);
+    }
+}
+
+#[test]
+fn the_memetic_capture_differs_from_the_cascade_capture_only_by_the_record() {
+    let cascade = case("cascade_orphan_feeders");
+    let memetic = case("memetic_dropped_on_removal");
+    assert_eq!(
+        cascade.request, memetic.request,
+        "the two captures must isolate the memetic record, not a second variable"
+    );
+
+    let mut stripped = memetic.before();
+    stripped.memetic = None;
+    assert_eq!(
+        stripped,
+        cascade.before(),
+        "the memetic capture's topology has drifted from the cascade capture it reuses"
+    );
+    assert_eq!(memetic.after(), cascade.after());
 }
 
 // --- The rules each case was captured for -----------------------------------

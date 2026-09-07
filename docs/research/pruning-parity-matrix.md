@@ -20,8 +20,10 @@ exist the captured pairs are checked against the rules they obey.
 | TypeScript source | NEAT-AI `src/mutate/`, `src/compact/`, `src/architecture/` |
 
 Each `PruneCase` carries its own provenance as data — `ts_source`, `ts_test`,
-`rule` — so the mapping below is generated from the fixtures rather than
-maintained beside them.
+`rule` — and that data is authoritative: the table below restates it for
+readers, and `every_case_names_the_typescript_behaviour_it_captures` fails the
+build if a capture arrives without it. Where the two disagree, the fixture
+wins.
 
 ## The matrix
 
@@ -32,8 +34,8 @@ maintained beside them.
 | `EDGE_SOURCE_BECOMES_DEAD` | a hidden or constant source left with no outward edge is removed | `src/mutate/SubConnection.ts` | `test/mutate/SubConnectionStaleFromIndex.ts` | `a_source_left_with_nothing_to_feed_is_removed` |
 | `EDGE_ROLE_IDENTITY` | only the requested `(from, to, role)` triple is removed, not every edge of the pair | `src/mutate/SubConnection.ts`, `src/architecture/SynapseKey.ts` | `test/creature/TypedSynapseKey.ts` | `removing_one_role_keeps_the_other_role_of_the_same_pair` |
 | `IF_REPAIR_COALESCES_ROLES` | an `IF` missing a required role is downgraded to `IDENTITY`, roles stripped, coalesced rows summed | `src/architecture/RepairInvalidIfNeurons.ts`, `src/architecture/CoalesceInwardSynapses.ts` | `test/NEAT/MutatorForwardOnlyIFConditionsRepair.ts`, `test/fix/IfRoleAssignmentCoalesce.ts` | `an_if_that_loses_a_role_is_downgraded_and_its_rows_are_summed` |
-| `CONSTANT_MOVES_INTO_PREFIX` | after a hidden→constant flip the slice is re-ordered constants-then-hiddens and the synapses re-sorted | `src/architecture/NormaliseComputationalNeuronOrder.ts` | `test/compact/CompactKeepOrder.ts` | `a_converted_constant_moves_ahead_of_the_hidden_neurons` |
-| `MEMETIC_DROPPED_ON_REMOVAL` | a successful removal drops the content-derived identity: `uuid` and `memetic` | `src/compact/OrphanedNeuronCleanup.ts`, `src/mutate/SubNeuron.ts` | `test/architecture/StaleUuidAfterStructuralChange.ts` | `a_memetic_record_naming_removed_structure_is_dropped_whole` |
+| `CONSTANT_MOVES_INTO_PREFIX` | after a hidden→constant flip the slice is re-ordered constants-then-hiddens and the synapses re-sorted | `src/architecture/NormaliseComputationalNeuronOrder.ts` | `test/architecture/ForwardOnlyTopologyAfterBulkRemap.ts`, `test/validate/CreatureValidate.ts` | `a_converted_constant_moves_ahead_of_the_hidden_neurons` |
+| `MEMETIC_DROPPED_ON_REMOVAL` | a successful removal drops the content-derived identity — of which a `CreatureExport` represents only `memetic` | `src/compact/OrphanedNeuronCleanup.ts`, `src/mutate/SubNeuron.ts` | `test/architecture/StaleUuidAfterStructuralChange.ts` | `a_memetic_record_naming_removed_structure_is_dropped_whole` |
 | `CONSTANT_BIAS_FOLD` | compensation folds `w · meanActivation` of the removed neuron into each target's bias | `src/architecture/ErrorGuidedStructuralEvolution/DiscoveryNeuronRemoval.ts` | `test/ErrorGuidedStructuralEvolution/DiscoveryOperationIntegrity.ts` | `the_constant_bias_fold_leaves_the_creature_scoring_identically` |
 
 Four rules hold across **every** case rather than belonging to one, and are
@@ -54,9 +56,60 @@ mutation operator (`SubNeuron` or `SubConnection`) was run several hundred
 times from a fresh copy, and the distinct outcomes were grouped by which
 neuron or synapse the operator happened to pick — the operators choose at
 random, so enumerating outcomes is what makes one reproducible. The outcome
-matching the case's `request` is recorded as `after`, `exportJSON()` verbatim.
-Both halves were `creatureValidate`d TypeScript-side before being written down.
-Captured against NEAT-AI `7.0.25`.
+matching the case's `request` is recorded as `after`. The JSON was transcribed
+from `exportJSON()` — re-indented, and given the `forwardOnly` flag this crate
+always writes — with every neuron, synapse, weight, bias, role and their order
+unchanged. Both halves were `creatureValidate`d TypeScript-side before being
+written down. Captured against NEAT-AI `7.0.25`.
+
+The harness is reproduced here so the captures can be re-derived when the
+TypeScript changes. Save it inside a NEAT-AI checkout (the import aliases are
+that repo's) and run `deno run -A capture.ts`:
+
+```ts
+import { Creature } from "@creature";
+import { SubNeuron } from "@mutate/SubNeuron.ts";
+import { SubConnection } from "@mutate/SubConnection.ts";
+import { creatureValidate } from "@architecture/CreatureValidate.ts";
+
+/** Identity of one outcome: which neurons and synapses came back. */
+function key(exp: any): string {
+  const ns = exp.neurons
+    .map((n: any) => `${n.type}:${n.uuid}:${n.bias}:${n.squash ?? "-"}`)
+    .join("|");
+  const ss = exp.synapses
+    .map((s: any) => `${s.fromUUID}->${s.toUUID}:${s.type ?? "-"}:${s.weight}`)
+    .join("|");
+  return `${ns}###${ss}`;
+}
+
+/** Run one operator repeatedly and print each distinct outcome once. */
+export function capture(
+  name: string,
+  json: unknown,
+  op: "SubNeuron" | "SubConnection",
+  attempts = 400,
+): void {
+  const seen = new Map<string, unknown>();
+  for (let i = 0; i < attempts; i++) {
+    const creature = Creature.fromJSON(structuredClone(json));
+    const mutator = op === "SubNeuron"
+      ? new SubNeuron(creature)
+      : new SubConnection(creature);
+    if (!mutator.mutate()) continue;
+    creatureValidate(creature);          // fail loud on an invalid rewrite
+    const exp = creature.exportJSON();
+    seen.set(key(exp), exp);
+  }
+  console.log(`##### ${name} (${op}) — ${seen.size} distinct outcomes`);
+  for (const exp of seen.values()) console.log(JSON.stringify(exp));
+}
+```
+
+The `before` half of each fixture is the input JSON round-tripped through
+`Creature.fromJSON(...).exportJSON()`, which is what puts it in canonical
+order; the `after` half is the printed outcome whose removed neuron or synapse
+matches the case's `request`.
 
 ```mermaid
 flowchart LR
@@ -98,6 +151,15 @@ is pinned by a test that cannot fail.
   correlated survivor's weight (`removeNeuronCompensation`). That remedy needs
   Discovery-side statistics no `CreatureExport` carries, so it belongs with the
   compensation work in Issue #590 rather than in a structural fixture.
+- **The `uuid` half of the identity rule.** TypeScript sheds `creature.uuid`
+  alongside `memetic` on every removal, but a `CreatureExport` carries no
+  creature-level `uuid` field, so there is nothing for a fixture to assert —
+  the issue's "where represented in core" hedge is doing real work here.
+- **The refusal path.** `SubConnection.ts::#wouldBreakIfNeuron` declines to
+  remove an edge that would leave an `IF` short a role, and
+  `RepairInvalidIfNeurons.ts` skips `indx <= 2`. `PruneRequest` has no way to
+  express a request the helper must reject, so those belong with the synapse
+  rewrites in Issue #591.
 - **Memetic pruning.** TypeScript drops the record wholesale; this crate
   already owns the finer-grained inverse of validation rule 31
   (see README, "Pruning — rule 31's inverse"). The fixture captures the
