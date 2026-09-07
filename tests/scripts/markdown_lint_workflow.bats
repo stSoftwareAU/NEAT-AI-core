@@ -227,3 +227,50 @@ PY
   rm -rf "$TMP"
   [ "$status" -ne 0 ]
 }
+
+# Issue #581 (BP-CI-INSTALL-PIN-npm-markdownlint-cli2) — a `run:` step that
+# installs a package without an exact version resolves whatever the registry
+# serves at that moment, so a hijacked release executes on the runner the
+# instant it is published. Dependabot's cooldown only covers manifests and a
+# `run:` block is not a manifest, so the pin is the only embargo here.
+@test "markdown-lint workflow pins every npm install to an exact version" {
+  require_python3
+  run python3 - "$WORKFLOW" <<'PY'
+import re
+import sys
+
+import yaml
+
+EXACT = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
+
+data = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+unpinned = []
+for job in data["jobs"].values():
+    for step in job["steps"]:
+        script = step.get("run")
+        if not script:
+            continue
+        # Resolve any ${VAR}/$VAR the step pins in its own `env:` block, so a
+        # version held in an env var counts as pinned.
+        for name, value in (step.get("env") or {}).items():
+            script = script.replace("${%s}" % name, str(value))
+            script = script.replace("$%s" % name, str(value))
+        for line in script.splitlines():
+            tokens = line.split()
+            if not tokens or tokens[0] != "npm":
+                continue
+            if len(tokens) < 2 or tokens[1] not in ("install", "i", "add"):
+                continue
+            for spec in tokens[2:]:
+                if spec.startswith("-"):
+                    continue
+                spec = spec.strip("\"'")
+                name, sep, version = spec.rpartition("@")
+                if not sep or not name or not EXACT.match(version):
+                    unpinned.append(line.strip())
+
+assert not unpinned, f"npm install without an exact version pin: {unpinned}"
+PY
+  echo "$output"
+  [ "$status" -eq 0 ]
+}
