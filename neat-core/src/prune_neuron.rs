@@ -483,10 +483,12 @@ pub fn prune_neuron(
             continue;
         };
 
-        if compensation.share != 0.0 {
-            let proxy = stats
-                .and_then(|s| s.proxy.as_ref())
-                .expect("a share is only produced from a proxy");
+        // A share of exactly zero moves nothing — an uncorrelated survivor
+        // predicts none of what went — so the edge it would have landed on is
+        // not required to exist.
+        if let Some(proxy) = stats.and_then(|s| s.proxy.as_ref())
+            && compensation.share != 0.0
+        {
             add_to_edge(&mut cut, &proxy.uuid, &target_uuid, compensation.share)?;
             weight_shares.push(WeightShare {
                 from_uuid: proxy.uuid.clone(),

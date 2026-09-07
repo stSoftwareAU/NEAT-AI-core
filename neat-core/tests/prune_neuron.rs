@@ -693,6 +693,39 @@ fn the_mean_only_residual_is_the_whole_variance_the_neuron_carried() {
 }
 
 #[test]
+fn an_uncorrelated_proxy_moves_no_weight_and_needs_no_edge() {
+    let before = creature(TWO_TARGETS_JSON);
+    let stats = PruneStats {
+        mean_activation: 0.6,
+        variance: Some(0.1),
+        proxy: Some(ProxyStats {
+            // `h-2` does not feed itself, so an edge would be missing — but a
+            // survivor that predicts nothing (`cov = 0`, so `β = 0`) carries
+            // nothing, and needs no edge to carry it on.
+            uuid: "h-2".to_string(),
+            mean_activation: 0.4,
+            variance: 0.5,
+            covariance: 0.0,
+        }),
+    };
+    let result = pruned(&before, "h-1", Some(&stats));
+
+    assert!(result.weight_shares.is_empty());
+    // With β = 0 the fold is the plain mean fold.
+    assert_close(
+        "output-0 bias",
+        neuron(&result.creature, "output-0").bias,
+        0.3 + 2.0 * 0.6,
+    );
+    assert_close(
+        "h-2 bias",
+        neuron(&result.creature, "h-2").bias,
+        0.2 + 0.5 * 0.6,
+    );
+    assert_valid("uncorrelated proxy", &result.creature);
+}
+
+#[test]
 fn a_proxy_that_does_not_already_feed_a_target_is_refused() {
     let before = creature(TWO_TARGETS_JSON);
     let stats = PruneStats {
