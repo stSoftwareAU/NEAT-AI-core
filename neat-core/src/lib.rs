@@ -34,6 +34,7 @@ pub mod loss;
 pub mod network;
 pub mod parallel_scoring;
 pub mod propagate_codec;
+pub mod prune_cleanup;
 pub mod prune_fixtures;
 pub mod range;
 pub mod safe_zone;
@@ -101,6 +102,11 @@ pub use if_graft::{
     graft_if_node, graft_if_nodes, graft_if_tree, graft_relay_node, validate_creature_topology,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
+// Issue #589 — the canonical fixed-point cleanup every prune operation reuses.
+pub use prune_cleanup::{
+    CleanupError, CleanupOutcome, MAX_SUPPORT_CONSTANTS, SUPPORT_CONSTANT_BIAS, SynapseKey,
+    cleanup_creature,
+};
 // Issue #588 — the TypeScript pruning behaviour, captured as parity fixtures.
 pub use prune_fixtures::{PRUNE_PARITY_CASES, PruneCase, PruneRequest};
 pub use squash::SquashType;
