@@ -745,8 +745,11 @@ into one target.
 | correlated survivor `s`, `β = cov / σₛ²` (`removeNeuronCompensation`) | `weight(s → target) += β · W`, `target.bias += W · (μ − β μₛ)` | variance `W² (σ² − cov²/σₛ²)` |
 
 Every fold, share and residual is reported per target on `PruneResult`, so a
-caller sees exactly what it accepted. A proxy must already feed the target and
-have `σₛ² > 0`, or the request is refused rather than half-applied.
+caller sees exactly what it accepted. A proxy must have `σₛ² > 0`, must survive
+the removal, and must already feed each target it has a non-zero share to carry
+into, or the request is refused rather than half-applied. Statistics that break
+the Cauchy–Schwarz bound `cov² <= σ² σₛ²` cannot have come from one sample, so
+they are refused too rather than turned into a negative residual variance.
 
 **Where a bias fold means nothing, it is not attempted.** A point-wise squash
 computes `squash(bias + Σ w·a)`, so `W · μ` in the bias stands where the removed
@@ -754,15 +757,21 @@ term was. An aggregate does not — `MINIMUM` takes the smallest inward term,
 `MEAN` divides by its inward count, `HYPOT` squares each term, and an `IF` reads
 its condition sum to pick a branch — so those targets are named on
 `PruneResult::uncompensated` instead, with the same entry recording a target
-left bare because no statistics were supplied at all.
+left bare because no statistics were supplied at all. The entry is per
+**readable key**, not per target: an `IF` fed on two roles is reported once per
+role, because it never sums its arms into the single term a total would imply.
 
 #### `Exact` is earned, never assumed
 
 `PruneResult::transform` is the honest label on what came back. It is `Exact`
 only where the creature itself proves the removal changed nothing: either
 nothing read the neuron, or the neuron had **no inward edge**, so it activated to
-one value on every record and that value folds into each target's bias exactly.
-A supplied mean never buys the label and never overrides the structural value.
+one value on every record and that value folds into each target's bias. A
+supplied mean never buys the label and never overrides the structural value —
+though a bad one is still *refused*, so the same request cannot succeed here and
+fail on every other neuron. "Same number" means to the `f32` precision the
+forward pass itself works in: the folded value is the very value that pass would
+have produced, but the fold re-associates the sum.
 Everything else is `Approximate` — including an `IF` that lost a role, which can
 no longer branch at all.
 

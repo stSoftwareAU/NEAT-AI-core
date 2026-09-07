@@ -144,6 +144,70 @@ const DUPLICATE_ROWS_JSON: &str = r#"{
   ]
 }"#;
 
+/// A memetic record with one entry the removal strands and one it does not.
+const MIXED_MEMETIC_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-2","bias":0.2,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":0.75,"fromUUID":"input-1","toUUID":"h-2"},
+    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
+    {"weight":1.0,"fromUUID":"h-2","toUUID":"output-0"}
+  ],
+  "memetic":{
+    "generation":7,"score":0.5,
+    "biases":{"h-1":0.05,"h-2":0.02},
+    "weights":[
+      {"fromUUID":"h-1","toUUID":"output-0","weight":2.0},
+      {"fromUUID":"h-2","toUUID":"output-0","weight":1.0}
+    ]
+  }
+}"#;
+
+/// A neuron declaring a type outside `hidden | output | constant`.
+const UNKNOWN_TYPE_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"spooky","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":1.0,"fromUUID":"h-1","toUUID":"output-0"}
+  ]
+}"#;
+
+/// A target declaring a squash this crate does not know.
+const UNKNOWN_SQUASH_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"WOBBLE"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":1.0,"fromUUID":"h-1","toUUID":"output-0"}
+  ]
+}"#;
+
+/// A synapse naming a target the creature does not carry.
+const DANGLING_TARGET_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"},
+    {"weight":1.0,"fromUUID":"h-1","toUUID":"h-ghost"}
+  ]
+}"#;
+
 /// `h-dead` has no outward edge, so nothing reads what it computes.
 const DEAD_NEURON_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
@@ -414,6 +478,44 @@ fn the_memetic_record_is_pruned_of_the_structure_the_prune_removed() {
         Some(0),
         "the record still names a removed synapse: {:?}",
         memetic.weights
+    );
+}
+
+#[test]
+fn a_memetic_entry_the_removal_does_not_strand_survives_the_prune() {
+    // The other half of the pruned-not-dropped decision: an implementation
+    // that emptied the record wholesale would pass the test above, so the
+    // record here names both a neuron the removal deletes and one it does not.
+    let before = creature(MIXED_MEMETIC_JSON);
+    let result = pruned(&before, "h-1", Some(&mean_only(0.6)));
+
+    let memetic = result
+        .creature
+        .memetic
+        .as_ref()
+        .expect("the record survives the prune");
+    assert!(
+        !memetic.biases.contains_key("h-1"),
+        "the record still names the removed neuron"
+    );
+    assert_eq!(
+        memetic.biases.get("h-2"),
+        Some(&0.02),
+        "the surviving neuron's fine-tuning history was thrown away"
+    );
+
+    let rows = memetic
+        .weights
+        .rows()
+        .expect("the fixture carries the row form");
+    assert_eq!(rows.len(), 1, "exactly the dangling row goes: {rows:?}");
+    assert_eq!(rows[0].from_uuid.as_deref(), Some("h-2"));
+    assert_eq!(rows[0].to_uuid.as_deref(), Some("output-0"));
+
+    // And the history the record exists to carry is untouched.
+    assert_eq!(
+        memetic.extra.get("generation").and_then(|v| v.as_i64()),
+        Some(7)
     );
 }
 
@@ -1009,6 +1111,38 @@ fn a_creature_carrying_a_value_that_is_not_a_number_is_refused() {
     match prune_neuron(&before, "h-1", None) {
         Err(PruneError::Cleanup(_)) => {}
         other => panic!("a non-finite weight produced a result: {other:?}"),
+    }
+}
+
+#[test]
+fn a_neuron_declaring_an_unknown_type_is_refused() {
+    let before = creature(UNKNOWN_TYPE_JSON);
+    match prune_neuron(&before, "h-1", None) {
+        Err(PruneError::UnknownNeuronType { uuid, declared }) => {
+            assert_eq!(uuid, "h-1");
+            assert_eq!(declared, "spooky");
+        }
+        other => panic!("an unknown neuron type was accepted: {other:?}"),
+    }
+}
+
+#[test]
+fn a_target_declaring_an_unknown_squash_is_refused() {
+    let before = creature(UNKNOWN_SQUASH_JSON);
+    // The compensation would have to know what the target computes; it does
+    // not, so nothing is rewritten.
+    match prune_neuron(&before, "h-1", Some(&mean_only(0.5))) {
+        Err(PruneError::Cleanup(_)) => {}
+        other => panic!("an unknown squash was accepted: {other:?}"),
+    }
+}
+
+#[test]
+fn a_synapse_naming_a_target_that_does_not_exist_is_refused() {
+    let before = creature(DANGLING_TARGET_JSON);
+    match prune_neuron(&before, "h-1", Some(&mean_only(0.5))) {
+        Err(PruneError::Cleanup(_)) => {}
+        other => panic!("a dangling target was accepted: {other:?}"),
     }
 }
 

@@ -41,8 +41,8 @@
 //!   activated to one value on every record and that value folds into each
 //!   target's bias. No statistic can buy this label, and a supplied mean never
 //!   overrides the structural value. "Same number" means to the precision the
-//!   forward pass works in: the folded value *is* the `f32`
-//!   [`zero_inward_activation`] the pass would have produced, but the fold
+//!   forward pass works in: the folded value *is* the `f32` activation the
+//!   pass would have produced for a neuron with nothing to sum, but the fold
 //!   re-associates the sum, so the two agree to `f32` rounding rather than bit
 //!   for bit.
 //! - [`TransformClass::Approximate`] — everything else. A neuron whose
