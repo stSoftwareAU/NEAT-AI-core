@@ -1126,7 +1126,11 @@ impl Engine {
 /// `apply_squash` already bounds its own outputs, and a finite bias is in range
 /// for each aggregate arm above — so it is here to keep the mirror complete
 /// rather than because a test can tell it apart.
-fn zero_inward_activation(squash: SquashType, bias: f64) -> f32 {
+///
+/// Crate-visible because [`crate::prune_neuron`] needs the same value to fold a
+/// structurally constant neuron into its targets (Issue #590): one mirror of
+/// the forward pass, not two.
+pub(crate) fn zero_inward_activation(squash: SquashType, bias: f64) -> f32 {
     let bias = bias as f32;
     let raw = match squash {
         SquashType::Minimum
