@@ -691,6 +691,132 @@ fn a_shared_subgraph_keeps_the_branch_that_is_still_read() {
     );
 }
 
+#[test]
+fn a_long_chain_of_orphaned_feeders_is_cleaned_in_one_call() {
+    // The fixed point has to hold at scale, not just on a two-level fixture:
+    // 100 hidden neurons in a chain behind the neuron the caller removed.
+    const CHAIN: usize = 100;
+    let mut creature = CreatureExport {
+        input: 1,
+        output: 1,
+        neurons: Vec::new(),
+        synapses: Vec::new(),
+        semantic_version: Some("4.0.0".to_string()),
+        forward_only: true,
+        memetic: None,
+    };
+    for i in 0..CHAIN {
+        creature.neurons.push(neat_core::NeuronExport {
+            id: None,
+            neuron_type: "hidden".to_string(),
+            uuid: format!("h-{i}"),
+            bias: 0.1,
+            squash: Some("LOGISTIC".to_string()),
+        });
+        creature.synapses.push(neat_core::SynapseExport {
+            from_uuid: if i == 0 {
+                "input-0".to_string()
+            } else {
+                format!("h-{}", i - 1)
+            },
+            to_uuid: format!("h-{i}"),
+            weight: 1.0,
+            synapse_type: None,
+        });
+    }
+    creature.neurons.push(neat_core::NeuronExport {
+        id: None,
+        neuron_type: "output".to_string(),
+        uuid: "output-0".to_string(),
+        bias: 0.0,
+        squash: Some("IDENTITY".to_string()),
+    });
+    creature.synapses.push(neat_core::SynapseExport {
+        from_uuid: format!("h-{}", CHAIN - 1),
+        to_uuid: "output-0".to_string(),
+        weight: 1.0,
+        synapse_type: None,
+    });
+    creature.synapses.push(neat_core::SynapseExport {
+        from_uuid: "input-0".to_string(),
+        to_uuid: "output-0".to_string(),
+        weight: 0.5,
+        synapse_type: None,
+    });
+
+    let cut = without_neuron(&creature, &format!("h-{}", CHAIN - 1));
+    let outcome = cleaned(&cut);
+
+    assert_eq!(
+        outcome.removed_neurons.len(),
+        CHAIN - 1,
+        "the whole chain behind the removed neuron should have gone"
+    );
+    assert_eq!(
+        outcome.creature.neurons.len(),
+        1,
+        "only the output should remain"
+    );
+    creature_validate(&outcome.creature, &OPTIONS).expect("the cleaned chain validates");
+}
+
+#[test]
+fn many_stranded_hidden_neurons_share_a_single_support_constant() {
+    // Every fold reuses the constant the first fold made, so a creature that
+    // strands fifty hidden neurons comes back with one support node, not fifty.
+    const STRANDED: usize = 50;
+    let mut creature = CreatureExport {
+        input: 1,
+        output: 1,
+        neurons: Vec::new(),
+        synapses: Vec::new(),
+        semantic_version: Some("4.0.0".to_string()),
+        forward_only: true,
+        memetic: None,
+    };
+    for i in 0..STRANDED {
+        creature.neurons.push(neat_core::NeuronExport {
+            id: None,
+            neuron_type: "hidden".to_string(),
+            uuid: format!("h-{i}"),
+            bias: 0.01 * i as f64,
+            squash: Some("TANH".to_string()),
+        });
+        creature.synapses.push(neat_core::SynapseExport {
+            from_uuid: format!("h-{i}"),
+            to_uuid: "output-0".to_string(),
+            weight: 0.1,
+            synapse_type: None,
+        });
+    }
+    creature.neurons.push(neat_core::NeuronExport {
+        id: None,
+        neuron_type: "output".to_string(),
+        uuid: "output-0".to_string(),
+        bias: 0.0,
+        squash: Some("IDENTITY".to_string()),
+    });
+    creature.synapses.push(neat_core::SynapseExport {
+        from_uuid: "input-0".to_string(),
+        to_uuid: "output-0".to_string(),
+        weight: 1.0,
+        synapse_type: None,
+    });
+
+    let outcome = cleaned(&creature);
+    assert_eq!(
+        constants(&outcome.creature).len(),
+        1,
+        "fifty folds should share one support constant"
+    );
+    assert_eq!(
+        outcome.creature.neurons.len(),
+        2,
+        "one support constant and the output"
+    );
+    assert_same_function("many_stranded", &creature, &outcome.creature);
+}
+
 // --- the constant fold ------------------------------------------------------
 
 #[test]
