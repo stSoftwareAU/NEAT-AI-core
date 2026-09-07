@@ -39,8 +39,12 @@
 //!   on every record**. Two cases reach it, both provable from the creature
 //!   alone: nothing read the neuron, or the neuron had no inward edge, so it
 //!   activated to one value on every record and that value folds into each
-//!   target's bias exactly. No statistic can buy this label, and a supplied
-//!   mean never overrides the structural value.
+//!   target's bias. No statistic can buy this label, and a supplied mean never
+//!   overrides the structural value. "Same number" means to the precision the
+//!   forward pass works in: the folded value *is* the `f32`
+//!   [`zero_inward_activation`] the pass would have produced, but the fold
+//!   re-associates the sum, so the two agree to `f32` rounding rather than bit
+//!   for bit.
 //! - [`TransformClass::Approximate`] — everything else. A neuron whose
 //!   activation varies is gone, and the mean fold only replaces it *on
 //!   average*; an `IF` that lost a role can no longer branch at all.
@@ -95,11 +99,13 @@ use std::collections::HashMap;
 use crate::creature::{CreatureExport, parse_squash_name, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{CleanupError, SynapseKey, cleanup_creature, zero_inward_activation};
 use crate::squash::SquashType;
+use crate::synapse_type::SynapseType;
 
 /// How faithful the rewrite was to the creature it started from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransformClass {
-    /// The pruned creature computes the same number on every record.
+    /// The pruned creature computes the same number on every record, to the
+    /// `f32` precision the forward pass itself works in.
     Exact,
     /// The pruned creature is a compensated approximation of the original.
     Approximate,
@@ -208,11 +214,19 @@ pub enum UncompensatedReason {
 }
 
 /// A target left carrying the removal without compensation.
+///
+/// One entry per **readable key**, not per target: an `IF` never sums its arms,
+/// so a neuron feeding one on two roles is reported once per role rather than
+/// as a total the target never computed. Every other squash sums whatever
+/// reaches it, so there the role is always [`SynapseType::Standard`] and the
+/// entry is the target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UncompensatedTarget {
     /// Wire UUID of the target.
     pub target_uuid: String,
-    /// Total weight the removed neuron carried into it.
+    /// Role the removed edges played at that target.
+    pub role: SynapseType,
+    /// Total weight the removed neuron carried into that role of that target.
     pub weight_sum: f64,
     /// The target's squash, which is what makes an aggregate uncompensable.
     pub squash: &'static str,
@@ -303,6 +317,18 @@ pub enum PruneError {
         /// Its supplied variance.
         variance: f64,
     },
+    /// The covariance is larger than the two variances allow, so the
+    /// statistics cannot have come from one sample.
+    InconsistentCovariance {
+        /// UUID of the proxy the covariance was measured against.
+        uuid: String,
+        /// The supplied covariance.
+        covariance: f64,
+        /// Variance of the neuron being removed.
+        variance: f64,
+        /// Variance of the proxy.
+        proxy_variance: f64,
+    },
     /// The proxy does not already feed a target the removed neuron fed, so it
     /// cannot carry what that target loses.
     MissingProxyEdge {
@@ -347,6 +373,15 @@ impl std::fmt::Display for PruneError {
                     "Proxy {uuid} has variance {variance}, so its regression slope is undefined"
                 )
             }
+            PruneError::InconsistentCovariance {
+                uuid,
+                covariance,
+                variance,
+                proxy_variance,
+            } => write!(
+                f,
+                "Covariance {covariance} with {uuid} exceeds what variances {variance} and {proxy_variance} allow"
+            ),
             PruneError::MissingProxyEdge { from_uuid, to_uuid } => {
                 write!(
                     f,
@@ -428,15 +463,18 @@ pub fn prune_neuron(
 
     // A neuron with nothing to sum activates to one value on every record, and
     // that value is the creature's to prove — no statistic is needed for it,
-    // and none may override it.
+    // and none may override it. The supplied statistics are still *checked*:
+    // a request this crate cannot make sense of is refused whether or not the
+    // compensation would have used it.
     let invariant_value = structural_activation(creature, neuron_uuid)?;
+    let supplied = stats;
     let stats = if invariant_value.is_some() {
         None
     } else {
         stats
     };
 
-    let targets = outward_totals(creature, neuron_uuid);
+    let targets = outward_keys(creature, neuron_uuid)?;
 
     let mut cut = creature.clone();
     cut.neurons.retain(|n| n.uuid != neuron_uuid);
@@ -453,7 +491,7 @@ pub fn prune_neuron(
         !names_it
     });
 
-    if let Some(proxy) = stats.and_then(|s| s.proxy.as_ref()) {
+    if let Some(proxy) = supplied.and_then(|s| s.proxy.as_ref()) {
         check_proxy(&cut, neuron_uuid, proxy)?;
     }
 
@@ -461,11 +499,11 @@ pub fn prune_neuron(
     let mut weight_shares = Vec::new();
     let mut uncompensated = Vec::new();
 
-    for (target_uuid, weight_sum) in targets {
-        let squash = target_squash(&cut, &target_uuid)?;
+    for (target_uuid, role, squash, weight_sum) in targets {
         if squash.is_aggregate() {
             uncompensated.push(UncompensatedTarget {
                 target_uuid,
+                role,
                 weight_sum,
                 squash: squash_name_from(squash),
                 reason: UncompensatedReason::AggregateTarget,
@@ -476,6 +514,7 @@ pub fn prune_neuron(
         let Some(compensation) = compensate(invariant_value, stats, weight_sum) else {
             uncompensated.push(UncompensatedTarget {
                 target_uuid,
+                role,
                 weight_sum,
                 squash: squash_name_from(squash),
                 reason: UncompensatedReason::NoStatistics,
@@ -694,24 +733,44 @@ fn squash_of(neuron: &crate::creature::NeuronExport) -> Result<SquashType, Prune
         .map_err(|e| PruneError::Cleanup(CleanupError::from(e)))
 }
 
-/// Total weight the neuron carried into each target, in first-edge order.
-fn outward_totals(creature: &CreatureExport, uuid: &str) -> Vec<(String, f64)> {
-    let mut order: Vec<String> = Vec::new();
-    let mut totals: HashMap<String, f64> = HashMap::new();
+/// What the neuron carried out of itself, one entry per **readable key**, in
+/// first-edge order.
+///
+/// The key is `(target, role)`, and the role is only kept where the target can
+/// tell roles apart: an `IF` holds a sum per role, every other squash sums
+/// whatever reaches it, so two roles into one of those are the same term
+/// written twice and are summed here. That is the same reading
+/// [`cleanup_creature`] takes of an edge's identity, so a compensation and a
+/// canonicalisation can never disagree about what one term is.
+fn outward_keys(
+    creature: &CreatureExport,
+    uuid: &str,
+) -> Result<Vec<(String, SynapseType, SquashType, f64)>, PruneError> {
+    let mut order: Vec<(String, SynapseType)> = Vec::new();
+    let mut totals: HashMap<(String, SynapseType), (SquashType, f64)> = HashMap::new();
+
     for synapse in creature.synapses.iter().filter(|s| s.from_uuid == uuid) {
-        let entry = totals.entry(synapse.to_uuid.clone()).or_insert_with(|| {
-            order.push(synapse.to_uuid.clone());
-            0.0
+        let squash = target_squash(creature, &synapse.to_uuid)?;
+        let role = if squash == SquashType::If {
+            parse_synapse_type(synapse.synapse_type.as_deref())
+        } else {
+            SynapseType::Standard
+        };
+        let key = (synapse.to_uuid.clone(), role);
+        let entry = totals.entry(key.clone()).or_insert_with(|| {
+            order.push(key);
+            (squash, 0.0)
         });
-        *entry += synapse.weight;
+        entry.1 += synapse.weight;
     }
-    order
+
+    Ok(order
         .into_iter()
-        .map(|uuid| {
-            let total = totals[&uuid];
-            (uuid, total)
+        .map(|key| {
+            let (squash, weight) = totals[&key];
+            (key.0, key.1, squash, weight)
         })
-        .collect()
+        .collect())
 }
 
 /// Every supplied statistic must be a number a compensation can be derived
@@ -745,8 +804,28 @@ fn check_stats(uuid: &str, stats: &PruneStats) -> Result<(), PruneError> {
             variance: proxy.variance,
         });
     }
+    // Cauchy-Schwarz: `cov² <= σ² σₛ²` for any two series measured over the
+    // same records. Beyond it the remedy would subtract more variance than the
+    // neuron carried and report a negative residual, so the statistics are
+    // refused rather than turned into a number no caller could act on. The
+    // slack absorbs the rounding of a genuine `|ρ| = 1` sample.
+    if let Some(variance) = stats.variance
+        && proxy.covariance * proxy.covariance
+            > variance * proxy.variance * (1.0 + COVARIANCE_SLACK)
+    {
+        return Err(PruneError::InconsistentCovariance {
+            uuid: proxy.uuid.clone(),
+            covariance: proxy.covariance,
+            variance,
+            proxy_variance: proxy.variance,
+        });
+    }
     Ok(())
 }
+
+/// Relative slack on the Cauchy-Schwarz bound, so a perfectly correlated sample
+/// that rounds a hair over `σ² σₛ²` is not refused for it.
+const COVARIANCE_SLACK: f64 = 1e-9;
 
 fn finite(uuid: &str, field: &'static str, value: f64) -> Result<(), PruneError> {
     if value.is_finite() {
@@ -759,11 +838,14 @@ fn finite(uuid: &str, field: &'static str, value: f64) -> Result<(), PruneError>
     })
 }
 
-/// The proxy must survive the removal and already feed every target the
-/// compensation will land on.
+/// The proxy must be a neuron that survives the removal.
 ///
-/// A proxy that reaches only some of the targets is a request this crate cannot
-/// carry out as described, so it is refused rather than half-applied. Call
+/// Whether it also *reaches* each target is settled per target by
+/// [`add_to_edge`], because only there is the share it would carry known — a
+/// survivor that predicts nothing carries nothing and needs no edge. A proxy
+/// that must carry a share into a target it does not feed is a request this
+/// crate cannot carry out as described, so the whole prune is refused rather
+/// than half-applied: no partially compensated creature is ever returned. Call
 /// without the proxy — or add the missing edge first — to prune anyway.
 fn check_proxy(
     cut: &CreatureExport,

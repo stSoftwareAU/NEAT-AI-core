@@ -23,9 +23,9 @@ use neat_core::prune_fixtures::{
     MEMETIC_DROPPED_ON_REMOVAL,
 };
 use neat_core::{
-    CreatureExport, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, TransformClass,
-    UncompensatedReason, ValidateOptions, compile_creature, creature_validate, parse_creature_json,
-    prune_neuron, validate_creature_topology,
+    CreatureExport, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, SynapseType,
+    TransformClass, UncompensatedReason, ValidateOptions, compile_creature, creature_validate,
+    parse_creature_json, prune_neuron, validate_creature_topology,
 };
 
 const OPTIONS: ValidateOptions = ValidateOptions {
@@ -126,6 +126,21 @@ const PROXY_JSON: &str = r#"{
     {"weight":1.0,"fromUUID":"input-0","toUUID":"h-s"},
     {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
     {"weight":1.0,"fromUUID":"h-s","toUUID":"output-0"}
+  ]
+}"#;
+
+/// `h-1` feeds one `IDENTITY` target twice, on roles the target cannot read.
+const DUPLICATE_ROWS_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"},
+    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0","type":"positive"},
+    {"weight":-0.5,"fromUUID":"h-1","toUUID":"output-0","type":"negative"}
   ]
 }"#;
 
@@ -487,19 +502,48 @@ fn an_aggregate_target_is_reported_uncompensated_rather_than_folded() {
 }
 
 #[test]
-fn two_roles_into_one_target_report_the_weight_they_summed_to() {
-    // `h-a` feeds `if-1` twice — `positive` at 2.0 and `negative` at -3.0 —
-    // so the target loses `2.0 + (-3.0) = -1.0` of weight when `h-a` goes.
+fn two_roles_into_one_if_target_are_reported_role_by_role() {
+    // `h-a` feeds `if-1` twice — `positive` at 2.0 and `negative` at -3.0. An
+    // `IF` never sums its arms, so the two are reported as the two terms the
+    // target lost, not as a total it never computed.
     let before = IF_REPAIR_COALESCES_ROLES.before();
     let result = pruned(&before, "h-a", Some(&mean_only(0.5)));
 
-    assert_eq!(result.uncompensated.len(), 1);
-    let shortfall = &result.uncompensated[0];
-    assert_eq!(shortfall.target_uuid, "if-1");
-    assert_eq!(shortfall.reason, UncompensatedReason::AggregateTarget);
-    assert_close("if-1 weight sum", shortfall.weight_sum, 2.0 - 3.0);
+    let mut lost: Vec<(SynapseType, f64)> = result
+        .uncompensated
+        .iter()
+        .map(|u| {
+            assert_eq!(u.target_uuid, "if-1");
+            assert_eq!(u.reason, UncompensatedReason::AggregateTarget);
+            assert_eq!(u.squash, "IF");
+            (u.role, u.weight_sum)
+        })
+        .collect();
+    lost.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert_eq!(lost.len(), 2, "one entry per role: {lost:?}");
+    assert_eq!(lost[0].0, SynapseType::Negative);
+    assert_close("the negative arm", lost[0].1, -3.0);
+    assert_eq!(lost[1].0, SynapseType::Positive);
+    assert_close("the positive arm", lost[1].1, 2.0);
+
     assert_eq!(result.transform, TransformClass::Approximate);
     assert_valid("two roles", &result.creature);
+}
+
+#[test]
+fn two_edges_into_one_summing_target_are_reported_as_one_term() {
+    // Every squash but `IF` sums whatever reaches it, so two rows into one of
+    // those *are* one term — reported once, at their summed weight. The roles
+    // here are unreadable at an `IDENTITY` target, which is what makes the two
+    // rows the same key.
+    let before = creature(DUPLICATE_ROWS_JSON);
+    let result = pruned(&before, "h-1", None);
+
+    assert_eq!(result.uncompensated.len(), 1);
+    let shortfall = &result.uncompensated[0];
+    assert_eq!(shortfall.target_uuid, "output-0");
+    assert_eq!(shortfall.role, SynapseType::Standard);
+    assert_close("the summed term", shortfall.weight_sum, 2.0 - 0.5);
 }
 
 #[test]
@@ -730,7 +774,9 @@ fn a_proxy_that_does_not_already_feed_a_target_is_refused() {
     let before = creature(TWO_TARGETS_JSON);
     let stats = PruneStats {
         mean_activation: 0.6,
-        variance: Some(0.1),
+        // cov² = 0.09 <= σ² σₛ² = 0.25, so these statistics are consistent and
+        // the refusal below is about the missing edge, nothing else.
+        variance: Some(0.5),
         proxy: Some(ProxyStats {
             // `h-2` feeds `output-0` but not itself, so it cannot carry what
             // `h-1` contributed to `h-2`.
@@ -793,6 +839,29 @@ fn a_proxy_the_creature_does_not_carry_is_refused() {
 }
 
 #[test]
+fn a_bad_proxy_is_refused_even_where_the_compensation_would_not_use_it() {
+    // `h-1` sums nothing, so the fold is structural and the statistics are not
+    // consulted — but a request naming a survivor the creature does not carry
+    // is still a request this crate cannot make sense of, and must not quietly
+    // succeed where the same input fails on every other neuron.
+    let before = creature(ZERO_INWARD_JSON);
+    let stats = PruneStats {
+        mean_activation: 0.5,
+        variance: Some(0.25),
+        proxy: Some(ProxyStats {
+            uuid: "h-nope".to_string(),
+            mean_activation: 0.4,
+            variance: 0.5,
+            covariance: 0.3,
+        }),
+    };
+    match prune_neuron(&before, "h-1", Some(&stats)) {
+        Err(PruneError::UnknownProxy { uuid }) => assert_eq!(uuid, "h-nope"),
+        other => panic!("an unknown proxy slipped past the structural fold: {other:?}"),
+    }
+}
+
+#[test]
 fn a_proxy_that_is_the_neuron_being_removed_is_refused() {
     let before = creature(PROXY_JSON);
     let stats = PruneStats {
@@ -841,6 +910,57 @@ fn a_negative_variance_is_refused() {
         }
         other => panic!("a negative variance was accepted: {other:?}"),
     }
+}
+
+#[test]
+fn a_covariance_larger_than_the_variances_allow_is_refused() {
+    let before = creature(PROXY_JSON);
+    // |cov| <= sqrt(σ² σₛ²) = sqrt(0.25 · 0.5) ≈ 0.3536 for any two series
+    // measured over the same records, so 0.9 cannot have been.
+    let stats = PruneStats {
+        mean_activation: 0.5,
+        variance: Some(0.25),
+        proxy: Some(ProxyStats {
+            uuid: "h-s".to_string(),
+            mean_activation: 0.4,
+            variance: 0.5,
+            covariance: 0.9,
+        }),
+    };
+    match prune_neuron(&before, "h-1", Some(&stats)) {
+        Err(PruneError::InconsistentCovariance {
+            uuid, covariance, ..
+        }) => {
+            assert_eq!(uuid, "h-s");
+            assert_eq!(covariance, 0.9);
+        }
+        other => panic!("an impossible covariance was accepted: {other:?}"),
+    }
+}
+
+#[test]
+fn a_perfectly_correlated_survivor_is_accepted_and_carries_it_all() {
+    let before = creature(PROXY_JSON);
+    // cov = sqrt(σ² σₛ²) exactly — |ρ| = 1, the boundary of what a sample can
+    // produce — so the remedy is accepted and the residual is zero.
+    let stats = PruneStats {
+        mean_activation: 0.5,
+        variance: Some(0.25),
+        proxy: Some(ProxyStats {
+            uuid: "h-s".to_string(),
+            mean_activation: 0.4,
+            variance: 0.5,
+            covariance: (0.25f64 * 0.5).sqrt(),
+        }),
+    };
+    let result = pruned(&before, "h-1", Some(&stats));
+    assert_close(
+        "residual variance",
+        result.bias_folds[0]
+            .residual_variance
+            .expect("the caller supplied the variance"),
+        0.0,
+    );
 }
 
 #[test]
