@@ -147,10 +147,7 @@ impl PruneCase {
     /// [`Self::before`].
     pub fn after(&self) -> CreatureExport {
         parse_creature_json(self.after_json).unwrap_or_else(|e| {
-            panic!(
-                "prune fixture {} has an unparsable `after`: {e}",
-                self.name
-            )
+            panic!("prune fixture {} has an unparsable `after`: {e}", self.name)
         })
     }
 }
