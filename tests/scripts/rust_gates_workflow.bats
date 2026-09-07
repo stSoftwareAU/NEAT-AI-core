@@ -10,17 +10,26 @@
 #
 # Asserts on observable outcomes:
 #   - ci.yml parses as YAML,
-#   - the workflow triggers on pushes to Develop AND on pull requests,
+#   - the workflow triggers on pull requests,
 #   - a job invokes the clippy lint gate with `-D warnings`,
 #   - a job invokes an explicit compile/syntax gate (cargo check / cargo build),
-#   - the gate job runs on push (not restricted to pull_request only), so direct
-#     pushes to Develop are gated too,
+#   - the gate job is not restricted to pull_request events, so it still runs on
+#     the non-PR lane the workflow keeps (`workflow_dispatch`),
 #   - exactly one job lints on a pull_request event (Issue #337 — no duplicate
 #     clippy gate),
 #   - third-party actions in the gate job are SHA-pinned (Issue #77).
 #
 # The checkout credential check (Issue #318) now lives in the repo-wide sweep in
 # workflow_checkout_credentials.bats (Issue #477).
+#
+# Issue #580 changed the wiring these assertions describe: `Develop` is PR-only
+# (`.github/rulesets/develop.json`), so a push to it is only ever the merge of a
+# PR this workflow already gated, and the duplicate post-merge run was dropped.
+# Two assertions moved with it - the trigger test now requires the *absence* of
+# a push-to-Develop trigger, and the gate-job test asks whether the job runs on
+# the surviving non-PR event (`workflow_dispatch`) instead of on `push`. The
+# Issue #143 contract itself is unchanged: a single job still carries both the
+# lint and the compile gate, and it is still not PR-only.
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
@@ -74,7 +83,7 @@ HELPERS_PY
   [ "$status" -eq 0 ]
 }
 
-@test "ci workflow triggers on PRs and on pushes to Develop" {
+@test "ci workflow triggers on PRs and not on pushes to Develop" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
@@ -85,9 +94,12 @@ data = yaml.safe_load(open("$WORKFLOW"))
 triggers = data.get("on") or data.get(True)
 assert triggers is not None, data
 assert "pull_request" in triggers, triggers
+# Issue #580 - the PR is the gate; a push to the PR-only default branch is the
+# merge of an already-gated PR, so re-running there is pure duplication.
+assert "workflow_dispatch" in triggers, triggers
 push = triggers.get("push") or {}
 branches = push.get("branches") or []
-assert "Develop" in branches, branches
+assert "Develop" not in branches, branches
 PY
   [ "$status" -eq 0 ]
 }
@@ -128,7 +140,7 @@ PY
   [ "$status" -eq 0 ]
 }
 
-@test "ci workflow gates lint + compile on push (not pull_request only)" {
+@test "ci workflow gates lint + compile off the PR lane too (not pull_request only)" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
   fi
@@ -137,15 +149,16 @@ import yaml
 $HELPERS
 data = yaml.safe_load(open("$WORKFLOW"))
 
-# At least one job must carry BOTH gates and must actually run on a push
-# event, so direct pushes to Develop are gated too.
+# At least one job must carry BOTH gates and must run on the non-PR lane the
+# workflow keeps, so the default branch can still be lint- and compile-gated on
+# demand. Issue #580 dropped the push trigger, leaving workflow_dispatch.
 gate_jobs = [
     job for job in data["jobs"].values()
     if has_lint(job) and has_compile(job)
 ]
 assert gate_jobs, "no single job carries both the lint and compile gates"
-runs_on_push = [job for job in gate_jobs if runs_on(job, "push")]
-assert runs_on_push, "lint+compile gate job does not run on push events"
+runs_off_pr = [job for job in gate_jobs if runs_on(job, "workflow_dispatch")]
+assert runs_off_pr, "lint+compile gate job does not run on workflow_dispatch"
 PY
   [ "$status" -eq 0 ]
 }
