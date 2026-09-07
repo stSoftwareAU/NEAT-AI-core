@@ -515,6 +515,13 @@ pub fn prune_neuron(
     // that computes the same number on every record: nothing may be left
     // uncompensated, every fold must be structural, and no `IF` may have been
     // downgraded — that repair is cleanup's one inexact rewrite.
+    //
+    // The `IF` clause is defence in depth rather than a branch a caller can
+    // reach today: every route to a downgrade runs through an `IF` that the
+    // removed neuron fed, and an `IF` is an aggregate, so `uncompensated` is
+    // already non-empty. It stays because the two rules are independent —
+    // widening what counts as compensable must not quietly start calling a
+    // downgraded creature exact.
     let exact = uncompensated.is_empty()
         && bias_folds.iter().all(|f| f.exact)
         && outcome.downgraded_if_neurons.is_empty();

@@ -487,6 +487,22 @@ fn an_aggregate_target_is_reported_uncompensated_rather_than_folded() {
 }
 
 #[test]
+fn two_roles_into_one_target_report_the_weight_they_summed_to() {
+    // `h-a` feeds `if-1` twice — `positive` at 2.0 and `negative` at -3.0 —
+    // so the target loses `2.0 + (-3.0) = -1.0` of weight when `h-a` goes.
+    let before = IF_REPAIR_COALESCES_ROLES.before();
+    let result = pruned(&before, "h-a", Some(&mean_only(0.5)));
+
+    assert_eq!(result.uncompensated.len(), 1);
+    let shortfall = &result.uncompensated[0];
+    assert_eq!(shortfall.target_uuid, "if-1");
+    assert_eq!(shortfall.reason, UncompensatedReason::AggregateTarget);
+    assert_close("if-1 weight sum", shortfall.weight_sum, 2.0 - 3.0);
+    assert_eq!(result.transform, TransformClass::Approximate);
+    assert_valid("two roles", &result.creature);
+}
+
+#[test]
 fn without_statistics_no_bias_moves_and_the_shortfall_is_named() {
     let before = creature(TWO_TARGETS_JSON);
     let result = pruned(&before, "h-1", None);

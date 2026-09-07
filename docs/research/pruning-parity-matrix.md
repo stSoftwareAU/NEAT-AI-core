@@ -162,6 +162,18 @@ bytes.
 | `CASCADE_ORPHAN_FEEDERS`, `IF_REPAIR_COALESCES_ROLES` | structural equality with the capture |
 | `EDGE_TARGET_BECOMES_CONSTANT`, `CONSTANT_MOVES_INTO_PREFIX` | activation equality with the capture |
 
+## How Issue #590 is graded against the captures
+
+`prune_neuron` (Issue #590) is the first helper the `RemoveNeuron` captures can
+be run against end to end. `neat-core/tests/prune_neuron.rs` grades it:
+
+| Case | Graded by |
+|---|---|
+| `CASCADE_ORPHAN_FEEDERS` | structural equality with the capture — `prune_neuron(before, "h-x")` **is** `after` |
+| `IF_REPAIR_COALESCES_ROLES` | structural equality with the capture |
+| `MEMETIC_DROPPED_ON_REMOVAL` | structural equality on the neurons and synapses; the record is **pruned**, not dropped (the divergence above) |
+| `CONSTANT_BIAS_FOLD` | its request removes a *constant*, which `prune_neuron` protects, so the fold is graded on the hidden-neuron twin: an `IDENTITY` neuron that sums nothing is worth `0.5` on every record just as that constant is, on the same weight into the same target, and produces the capture's `after` |
+
 ## Not captured here
 
 - **Selection policy.** Which neuron or synapse to try is the caller's, per the
@@ -169,8 +181,11 @@ bytes.
   was chosen.
 - **Variance-aware compensation.** `DiscoveryNeuronRemoval.ts` also bumps a
   correlated survivor's weight (`removeNeuronCompensation`). That remedy needs
-  Discovery-side statistics no `CreatureExport` carries, so it belongs with the
-  compensation work in Issue #590 rather than in a structural fixture.
+  Discovery-side statistics no `CreatureExport` carries, so it is not a
+  structural fixture — it is **supplied data**, and Issue #590 landed it as
+  `PruneStats::proxy`: `β = cov / σₛ²` onto the survivor's existing edge, the
+  rest of the mean into the target's bias. `neat-core/tests/prune_neuron.rs`
+  derives both from the formula rather than from a capture.
 - **The `uuid` half of the identity rule.** TypeScript sheds `creature.uuid`
   alongside `memetic` on every removal, but a `CreatureExport` carries no
   creature-level `uuid` field, so there is nothing for a fixture to assert —
@@ -183,5 +198,7 @@ bytes.
 - **Memetic pruning.** TypeScript drops the record wholesale; this crate
   already owns the finer-grained inverse of validation rule 31
   (see README, "Pruning — rule 31's inverse"). The fixture captures the
-  TypeScript behaviour; which of the two the shared helper adopts is Issue
-  #590's decision.
+  TypeScript behaviour; Issue #590 **decided for the prune**: `prune_neuron`
+  keeps every entry that still names live structure and drops exactly the
+  dangling ones, because the fine-tuning history a caller measured is worth more
+  than a blunt reset and rule 31 is satisfied either way.
