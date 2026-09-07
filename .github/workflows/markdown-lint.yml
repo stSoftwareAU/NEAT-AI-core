@@ -40,8 +40,15 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: "lts/*"
+      # Issue #581 — pin the install to an exact version. A floating
+      # `npm install -g markdownlint-cli2` resolves whatever the registry
+      # serves at that instant, so a hijacked release would execute on the
+      # runner the moment it is published, with no embargo. Dependabot's
+      # cooldown only covers manifests and a `run:` block is not a manifest,
+      # so this pin is the only quarantine on this install. Bump it
+      # deliberately, as with GITLEAKS_VERSION in gitleaks.yml.
       - name: Install markdownlint-cli2
-        run: npm install -g markdownlint-cli2
+        run: npm install -g markdownlint-cli2@0.23.2
       - name: Run markdownlint-cli2
         run: markdownlint-cli2
       # Issue #379 — Mermaid validation is unconditional. It previously
