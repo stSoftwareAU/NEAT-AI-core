@@ -618,6 +618,78 @@ The full mapping from each TypeScript behaviour and test to its fixture, how
 the captures were taken, and what is deliberately **not** captured are in
 [`docs/research/pruning-parity-matrix.md`](docs/research/pruning-parity-matrix.md).
 
+### Canonical pruning cleanup (Issue #589)
+
+`neat-core/src/prune_cleanup.rs` is the cleanup engine every prune operation
+calls after its requested deletion. `cleanup_creature(&creature)` takes the
+creature **as the caller left it** — one neuron or one typed edge short, and
+very possibly invalid because of it — repairs it to a fixed point, and validates
+the stable result before returning it. A successful call never returns an
+invalid creature.
+
+```rust
+pub fn cleanup_creature(creature: &CreatureExport)
+    -> Result<CleanupOutcome, CleanupError>;
+```
+
+```mermaid
+flowchart TD
+    I["creature, straight after<br/>the caller's deletion"] --> R["repair: an IF short a role<br/>→ IDENTITY, roles stripped"]
+    R --> D["remove dead structure:<br/>non-output nodes with<br/>no outward edge"]
+    D --> C["constant support invariants:<br/>bias 1, at most three,<br/>none unreferenced"]
+    C --> F["fold: hidden with no inward edge<br/>→ bias-1 support constant,<br/>squash(bias) into its weights"]
+    F --> N["canonicalise: constants, hiddens,<br/>outputs; edges sorted by (from, to, role)"]
+    N --> Q{"anything change?"}
+    Q -- yes --> R
+    Q -- no --> M["prune the memetic record<br/>of references the edits stranded"]
+    M --> V["creature_validate"]
+    V -- fails --> E["Err(CleanupError)"]
+    V -- passes --> O["Ok(CleanupOutcome)"]
+```
+
+`CleanupOutcome` carries the creature plus what the cleanup cost: the neurons
+and synapses removed, the hidden neurons folded into constant support, the
+constants rescaled or merged, the `IF` neurons downgraded, and how many passes
+the fixed point took. Callers own *which* neuron or synapse to try and any
+statistical compensation (Issues #590 / #591); cleanup owns the exact structural
+repair.
+
+#### Every rewrite is exact
+
+Cleanup removes only structure nothing reads, or rewrites structure into a form
+that computes the **same number on every record**. It never approximates — the
+one deliberate exception is the `IF` repair, where a neuron that has lost a
+required role can no longer branch at all.
+
+| Rewrite | Why it is exact |
+|---------|-----------------|
+| dead structure removed | nothing reads it, so no output depends on it |
+| hidden with no inward edge → constant | it sums nothing, so its activation is `squash(bias)` on every record; that value moves into its outward **weights** |
+| constant of value `b` → bias-1 constant | `1 · (w · b)` is the term `b · w` was |
+| two edges from one constant merged | summed at a summing target; the smaller/larger weight at `MINIMUM`/`MAXIMUM`, where a constant term is the weight itself |
+| roles stripped at a non-`IF` target | only an `IF` keeps a sum per role; anywhere else the role is unread |
+
+A `MEAN` target divides by its inward **count** and a `HYPOT` squares each term,
+so merging two edges there would change the value — cleanup refuses, keeps the
+constants apart, and never trades correctness for the constant budget.
+
+#### Constants are support nodes
+
+Constants exist to carry a fixed value into the legal synapse roles, not to be
+optimised (Ockham #180). Cleanup holds four invariants: every constant has bias
+exactly `SUPPORT_CONSTANT_BIAS` (`1.0`), a fold **reuses** an existing
+compatible constant rather than minting one, a constant nothing references is
+removed, and a creature carries at most `MAX_SUPPORT_CONSTANTS` (`3`) of them.
+
+That is a **deliberate divergence** from the TypeScript captures in
+`prune_fixtures.rs`, which carry the folded value in the constant's *bias*
+(`LOGISTIC(0.4)` and friends). The two forms are the same function of the
+inputs, and `neat-core/tests/prune_cleanup.rs` proves it by activating both
+halves — but only this one holds the support-node invariants, so parity with the
+captures is asserted on the numbers the creatures produce rather than on their
+bytes. The cascade and `IF`-repair captures carry no constants, and cleanup
+reproduces those byte for byte.
+
 ### Creature validation contract (Issue #559)
 
 `neat-core/src/creature_validate.rs` is the Rust home of NEAT-AI's

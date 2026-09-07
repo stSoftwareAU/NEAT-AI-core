@@ -142,6 +142,26 @@ constant left after a hidden, a short fold, a surviving memetic record,
 out-of-order synapses); each mutation turned the suite red, so no captured rule
 is pinned by a test that cannot fail.
 
+## Where the Rust canonical form diverges (Issue #589)
+
+`cleanup_creature` (Issue #589) reproduces the cascade and `IF`-repair captures
+byte for byte, but **not** the two that carry a folded constant. TypeScript
+writes the folded value into the constant's `bias`; the Rust canonical form
+holds the constant support invariants instead (Ockham #180) — every constant is
+a bias-`1` support node, folds reuse an existing one, and a creature carries at
+most three. The value moves into the **weights** of the edges that read the
+constant, which is the same function of the inputs.
+
+So for those cases the fixture stays the oracle, on the property that matters:
+`neat-core/tests/prune_cleanup.rs` compiles and activates both the capture and
+the cleaned creature and asserts the outputs agree, rather than comparing their
+bytes.
+
+| Case | Graded by |
+|---|---|
+| `CASCADE_ORPHAN_FEEDERS`, `IF_REPAIR_COALESCES_ROLES` | structural equality with the capture |
+| `EDGE_TARGET_BECOMES_CONSTANT`, `CONSTANT_MOVES_INTO_PREFIX` | activation equality with the capture |
+
 ## Not captured here
 
 - **Selection policy.** Which neuron or synapse to try is the caller's, per the
