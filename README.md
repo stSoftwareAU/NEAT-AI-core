@@ -592,6 +592,32 @@ flowchart LR
     V2 -- passes --> O["Ok(CreatureExport)"]
 ```
 
+### Pruning parity fixtures (Issue #588)
+
+`neat-core/src/prune_fixtures.rs` captures NEAT-AI's battle-tested **removal**
+semantics — remove a hidden neuron or one synapse, then repair whatever the
+removal broke — as `(before, request, after)` triples where `after` is the
+creature the TypeScript operators actually produced. It is step 1 of the
+canonical pruning rewrite engine (Issue #587): the fixtures are the acceptance
+oracle the shared Rust helpers (Issues #590 / #591) are graded against, so a
+rewrite has a recorded "before" to be graded on.
+
+Nothing in this module prunes. `PRUNE_PARITY_CASES` is walked by
+`neat-core/tests/prune_parity.rs`, which asserts the rules each capture
+encodes: the orphan cascade to a fixed point, a target that loses its last
+inward edge becoming a constant whose bias is its own squash of its old bias, a
+source left with nothing to feed being removed, typed edge identity (only the
+requested `(from, to, role)` triple goes), `IF` repair with its coalesced rows
+summed, constants-then-hiddens ordering with the synapses re-sorted, the
+content-derived `memetic` record dropped, and the discovery bias fold that
+leaves a creature scoring identically. Every pair is re-checked through
+`creature_validate`, `validate_creature_topology` and `compile_creature` —
+a successful rewrite never returns an invalid creature.
+
+The full mapping from each TypeScript behaviour and test to its fixture, how
+the captures were taken, and what is deliberately **not** captured are in
+[`docs/research/pruning-parity-matrix.md`](docs/research/pruning-parity-matrix.md).
+
 ### Creature validation contract (Issue #559)
 
 `neat-core/src/creature_validate.rs` is the Rust home of NEAT-AI's
