@@ -41,3 +41,27 @@ setup() {
   echo "$output"
   [ "$status" -eq 0 ]
 }
+
+# Issue #580 — CI is a test/lint/scan workflow, so it gates the pull request.
+# The default branch is PR-only (`.github/rulesets/develop.json` requires a
+# reviewed PR with no bypass actors), so the only `push` events Develop ever
+# sees are the merges of PRs this workflow already gated. Re-running on that
+# push duplicates the gating run for no new signal. The PR and
+# `workflow_dispatch` triggers stay.
+@test "ci workflow gates PRs only and does not re-run on push to Develop" {
+  require_python3
+  run python3 - <<PY
+import yaml
+data = yaml.safe_load(open("$WORKFLOW"))
+# YAML parses bare 'on:' as boolean True in some loaders; tolerate both.
+triggers = data.get("on") or data.get(True)
+assert triggers is not None, data
+assert "pull_request" in triggers, triggers
+assert "workflow_dispatch" in triggers, triggers
+push = triggers.get("push")
+branches = (push or {}).get("branches") or []
+assert "Develop" not in branches, branches
+PY
+  echo "$output"
+  [ "$status" -eq 0 ]
+}

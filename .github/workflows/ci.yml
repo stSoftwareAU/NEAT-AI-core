@@ -6,13 +6,13 @@
 # into .git/config while PR-authored code (bump-deps.sh, cargo fmt) runs.
 name: CI
 
+# Issue #580 — CI is a test/lint gate, so it gates the pull request and nothing
+# else. The default branch is PR-only (`.github/rulesets/develop.json` requires
+# a reviewed PR and lists no bypass actors), so every `push` to `Develop` is the
+# merge of a PR this workflow already gated: re-running there duplicated the
+# gating run, burnt CI minutes and could redden the default branch for a check
+# that had already passed.
 on:
-  push:
-    branches:
-      - Develop
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
   pull_request:
     types: [opened, synchronize, reopened]
     branches:
@@ -393,10 +393,12 @@ jobs:
     name: Lint & Compile Gates
     runs-on: ubuntu-latest
     timeout-minutes: 45 # cargo fmt/clippy/check across the workspace
-    # Issue #143 — explicit Rust lint + compile/syntax gates. Deliberately
-    # independent of the PR-only auto-bump / auto-format jobs above, so direct
-    # pushes to Develop (which skip those jobs) are still gated against lint
-    # regressions and syntax errors.
+    # Issue #143 — explicit Rust lint + compile/syntax gates, deliberately
+    # independent of the PR-only auto-bump / auto-format jobs above.
+    # Issue #580 — the workflow no longer runs on push to Develop (the branch is
+    # PR-only, so those pushes were merges of already-gated PRs), which leaves
+    # `workflow_dispatch` as this job's lane: an on-demand lint + compile gate
+    # over the default branch, without the PR-only bump/format jobs.
     # Issue #337 — on pull requests the `quality` job already runs the identical
     # clippy invocation (which compiles the workspace, subsuming `cargo check`),
     # so running this job there compiled and linted the workspace twice per PR
@@ -444,10 +446,11 @@ jobs:
       - name: Lint gate (cargo clippy)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  # Issue #307 — TypeScript basic-validity gate. Runs on every push to Develop
-  # AND every pull request (no PR-only guard), so a syntax or type error in the
-  # committed .ts helpers cannot land unnoticed. Basic validity only — this is
-  # not a style or lint gate. The same script backs the local quality.sh run.
+  # Issue #307 — TypeScript basic-validity gate. Carries no event guard, so it
+  # runs on every pull request (and on a manual dispatch), and a syntax or type
+  # error in the committed .ts helpers cannot land unnoticed. Basic validity
+  # only — this is not a style or lint gate. The same script backs the local
+  # quality.sh run.
   typescript-gate:
     name: TypeScript validity gate
     runs-on: ubuntu-latest
