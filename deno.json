@@ -1,0 +1,13 @@
+{
+  "lock": {
+    "path": "deno.lock",
+    "frozen": true
+  },
+  "minimumDependencyAge": {
+    "age": "P1D",
+    "exclude": [
+      "jsr:@stsoftware/*",
+      "npm:@stsoftware/*"
+    ]
+  }
+}
