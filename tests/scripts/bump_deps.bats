@@ -402,6 +402,9 @@ TXT
   [ "$status" -eq 0 ]
   [[ "$output" == *"fail: js-sys -> 0.3.105"* ]]
   [[ "$output" == *"fail: wasm-bindgen -> 0.2.128"* ]]
+  # Each member reports the revert, not the misleading "cargo update rejected".
+  [[ "$output" != *"(cargo update rejected)"* ]]
+  [[ "$output" == *"(reverted — grouped retry moved js-sys off its approved target 0.3.105)"* ]]
   # The group must actually have been attempted, in one invocation.
   grep -F -- "-p js-sys@0.3.104" "$STUB_LOG" | grep -qF -- "-p wasm-bindgen@0.2.127"
   # The unapproved version must not survive in the lock.
@@ -552,6 +555,9 @@ TXT
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: per-crate update of cc moved find-msvc-tools off its approved target 0.1.12"* ]]
   [[ "$output" == *"fail: cc -> 1.4.5"* ]]
+  # The restored lock must still let the next crate land: cc sitting at its
+  # pre-bump version is not itself a breach.
+  [[ "$output" == *"bump: find-msvc-tools -> 0.1.12"* ]]
   ! grep -q '0.1.99' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
 }
@@ -570,4 +576,58 @@ TXT
   [[ "$output" == *"bump: cc -> 1.4.5"* ]]
   [[ "$output" != *"revert:"* ]]
   grep -qx 'version = "3.1.0"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: per-crate update dragging another major of the same crate is reverted" {
+  setup_stub_cargo
+  # syn is locked at two majors. The 3.x pin lands, but the update drags the
+  # 2.x copy to a version the quarantine never saw — the crate sitting on its
+  # target must not hide movement on its other major.
+  write_fake_lock "syn 2.0.119" "syn 3.0.3"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating syn v3.0.3 -> v3.0.5
+TXT
+  printf 'syn 2.0.119 2.0.999\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of syn moved syn off its approved target 3.0.5"* ]]
+  [[ "$output" == *"fail: syn -> 3.0.5"* ]]
+  ! grep -q '2.0.999' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "2.0.119"' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "3.0.3"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: grouped retry dragging a planned crate it skipped is reverted" {
+  setup_stub_cargo
+  # syn is planned but has no unambiguous spec, so the group never names it.
+  # The group still must not leave it on a version the quarantine never
+  # approved — the check covers the whole plan, not just the group members.
+  write_fake_lock "js-sys 0.3.104" "syn 2.0.119" "syn 3.0.3"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating js-sys v0.3.104 -> v0.3.105
+    Updating syn v3.0.9 -> v3.1.0
+TXT
+  printf 'js-sys\n' >"$STUB_REJECT"
+  printf 'js-sys 0.3.105\n' >"$STUB_TARGETS"
+  printf 'syn 3.0.3 3.0.7\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: grouped retry moved syn off its approved target 3.1.0"* ]]
+  [[ "$output" == *"fail: js-sys -> 0.3.105"* ]]
+  ! grep -q '3.0.7' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "0.3.104"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: a bump with no lockfile to verify against is refused, not run" {
+  setup_stub_cargo
+  # No Cargo.lock — nothing to snapshot, so nothing to verify. The bump must
+  # be refused and named rather than run unverified.
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skip: cc 1.4.5 (no ${TMP_REPO}/Cargo.lock to verify against)"* ]]
+  [[ "$output" == *"fail: cc -> 1.4.5 (no ${TMP_REPO}/Cargo.lock to verify against)"* ]]
+  ! grep -qF -- "-p cc" "$STUB_LOG"
 }
