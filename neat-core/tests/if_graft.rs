@@ -576,9 +576,9 @@ fn gate_rejects_a_widthless_creature() {
     assert!(matches!(err, GraftError::Creature(_)));
 }
 
-/// One past the largest count the `u32` index gates can read. `2^32 + 1` keeps
-/// `1` in its low 32 bits — exactly `base_creature`'s real output width — so a
-/// gate that truncates cannot tell the two apart.
+/// `2^32 + 1` — past the `u32` index space the gates read, and chosen for what
+/// its low 32 bits hold: `1`, which is exactly `base_creature`'s real output
+/// width, so a gate that truncates cannot tell the two apart.
 fn width_past_u32_index_space() -> usize {
     usize::try_from(u64::from(u32::MAX) + 2).expect("64-bit test host")
 }

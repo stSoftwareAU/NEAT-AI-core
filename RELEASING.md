@@ -154,6 +154,36 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.12.0` — `GraftError::CountNotRepresentable` (Issue #606)
+
+`GraftError` gains a variant. The enum is not `#[non_exhaustive]`, so a
+downstream exhaustive `match` on it stops compiling until it handles
+`CountNotRepresentable { field: &'static str, found: u64 }`.
+
+`validate_creature_topology` passed `creature.input` / `creature.output` to the
+index gates through `as u32`, so a declared `output` of `4_294_967_297` arrived
+as `1` and a creature no compiler could accept passed the gate. The counts are
+now checked with `u32::try_from` before anything reads them, and the new variant
+is what a count past `u32::MAX` returns. A creature whose declared widths fit
+`u32` — every creature this crate can compile, which caps at `MAX_NODE_COUNT` —
+is unaffected.
+
+The same change made `training_state`'s packed-record indexing checked. A record
+index whose start offset overflows `usize` is now out of range rather than
+wrapping onto a live record, and `init_training_state` panics rather than
+silently allocating a wrapped, far-too-small buffer.
+
+**Migration** — add an arm (or a `_ =>` catch-all) for the new variant:
+
+```rust
+match err {
+    // … existing arms …
+    GraftError::CountNotRepresentable { field, found } => {
+        eprintln!("declared {field} count {found} is past the u32 index space");
+    }
+}
+```
+
 ### `0.10.0` — `MemeticExport::weights` is a two-form enum
 
 `MemeticExport::weights` changes type from

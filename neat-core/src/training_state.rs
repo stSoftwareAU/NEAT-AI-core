@@ -33,6 +33,35 @@ const SYNAPSE_FIELDS: usize = 7;
 /// Number of f64 fields per neuron in the training state.
 const NEURON_FIELDS: usize = 3;
 
+/// Start offset of record `index` in a packed state buffer of `len` values, or
+/// `None` when that record does not lie inside the buffer.
+///
+/// The multiply and the add are **checked** on purpose (Issue #606). `index`
+/// arrives straight from the caller — a JavaScript host, across
+/// `wasm_bindgen` — and `[profile.release]` does not enable `overflow-checks`,
+/// so `index * fields` wraps silently in a release build. A wrapped start
+/// lands *inside* the buffer, where a plain `base + fields <= len` guard waves
+/// it through: `read_synapse_state(usize::MAX / 7 + 1)` used to return the
+/// seven values at offset 5, and the accumulators used to add into them.
+fn record_start(index: usize, fields: usize, len: usize) -> Option<usize> {
+    let base = index.checked_mul(fields)?;
+    (base.checked_add(fields)? <= len).then_some(base)
+}
+
+/// Size of a packed state buffer holding `count` records of `fields` values.
+///
+/// # Panics
+///
+/// Panics when the buffer would not fit `usize`. Wrapping instead would resize
+/// the buffer to a handful of values while the recorded count stayed huge, and
+/// every later accumulation would then be dropped by the length guard — an
+/// epoch that trains nothing and reports success.
+fn packed_len(count: usize, fields: usize) -> usize {
+    count
+        .checked_mul(fields)
+        .expect("record count does not fit a packed state buffer")
+}
+
 // Thread-local persistent training state.
 // Using `RefCell` because WASM is single-threaded and we need interior
 // mutability for the global state that persists across function calls.
@@ -55,13 +84,13 @@ thread_local! {
 pub fn init_training_state(num_synapses: usize, num_neurons: usize) {
     SYNAPSE_STATE.with(|s| {
         let mut state = s.borrow_mut();
-        let required = num_synapses * SYNAPSE_FIELDS;
+        let required = packed_len(num_synapses, SYNAPSE_FIELDS);
         state.resize(required, 0.0);
         state.fill(0.0);
     });
     NEURON_STATE.with(|s| {
         let mut state = s.borrow_mut();
-        let required = num_neurons * NEURON_FIELDS;
+        let required = packed_len(num_neurons, NEURON_FIELDS);
         state.resize(required, 0.0);
         state.fill(0.0);
     });
@@ -106,11 +135,9 @@ pub fn free_training_state() {
 pub fn read_synapse_state(index: usize) -> Vec<f64> {
     SYNAPSE_STATE.with(|s| {
         let state = s.borrow();
-        let base = index * SYNAPSE_FIELDS;
-        if base + SYNAPSE_FIELDS <= state.len() {
-            state[base..base + SYNAPSE_FIELDS].to_vec()
-        } else {
-            vec![0.0; SYNAPSE_FIELDS]
+        match record_start(index, SYNAPSE_FIELDS, state.len()) {
+            Some(base) => state[base..base + SYNAPSE_FIELDS].to_vec(),
+            None => vec![0.0; SYNAPSE_FIELDS],
         }
     })
 }
@@ -123,11 +150,9 @@ pub fn read_synapse_state(index: usize) -> Vec<f64> {
 pub fn read_neuron_state(index: usize) -> Vec<f64> {
     NEURON_STATE.with(|s| {
         let state = s.borrow();
-        let base = index * NEURON_FIELDS;
-        if base + NEURON_FIELDS <= state.len() {
-            state[base..base + NEURON_FIELDS].to_vec()
-        } else {
-            vec![0.0; NEURON_FIELDS]
+        match record_start(index, NEURON_FIELDS, state.len()) {
+            Some(base) => state[base..base + NEURON_FIELDS].to_vec(),
+            None => vec![0.0; NEURON_FIELDS],
         }
     })
 }
@@ -192,16 +217,19 @@ pub fn accumulate_weight_persistent_4way(
                 );
 
             if d_count > 0.0 {
-                let base = (start_index + i) * SYNAPSE_FIELDS;
-                if base + SYNAPSE_FIELDS <= state.len() {
-                    state[base] += d_count;
-                    state[base + 1] += d_pos_act;
-                    state[base + 2] += d_neg_act;
-                    state[base + 3] += d_cnt_pos;
-                    state[base + 4] += d_cnt_neg;
-                    state[base + 5] += d_pos_adj;
-                    state[base + 6] += d_neg_adj;
-                }
+                let Some(base) = start_index
+                    .checked_add(i)
+                    .and_then(|index| record_start(index, SYNAPSE_FIELDS, state.len()))
+                else {
+                    continue;
+                };
+                state[base] += d_count;
+                state[base + 1] += d_pos_act;
+                state[base + 2] += d_neg_act;
+                state[base + 3] += d_cnt_pos;
+                state[base + 4] += d_cnt_neg;
+                state[base + 5] += d_pos_adj;
+                state[base + 6] += d_neg_adj;
             }
         }
     });
@@ -235,16 +263,19 @@ pub fn accumulate_weight_persistent_8way(
                 );
 
             if d_count > 0.0 {
-                let base = (start_index + i) * SYNAPSE_FIELDS;
-                if base + SYNAPSE_FIELDS <= state.len() {
-                    state[base] += d_count;
-                    state[base + 1] += d_pos_act;
-                    state[base + 2] += d_neg_act;
-                    state[base + 3] += d_cnt_pos;
-                    state[base + 4] += d_cnt_neg;
-                    state[base + 5] += d_pos_adj;
-                    state[base + 6] += d_neg_adj;
-                }
+                let Some(base) = start_index
+                    .checked_add(i)
+                    .and_then(|index| record_start(index, SYNAPSE_FIELDS, state.len()))
+                else {
+                    continue;
+                };
+                state[base] += d_count;
+                state[base + 1] += d_pos_act;
+                state[base + 2] += d_neg_act;
+                state[base + 3] += d_cnt_pos;
+                state[base + 4] += d_cnt_neg;
+                state[base + 5] += d_pos_adj;
+                state[base + 6] += d_neg_adj;
             }
         }
     });
@@ -290,12 +321,15 @@ pub fn accumulate_bias_persistent_4way(
             );
 
             if d_count > 0.0 {
-                let base = (start_index + i) * NEURON_FIELDS;
-                if base + NEURON_FIELDS <= state.len() {
-                    state[base] += d_count;
-                    state[base + 1] += d_total_bias;
-                    state[base + 2] += d_adj_bias;
-                }
+                let Some(base) = start_index
+                    .checked_add(i)
+                    .and_then(|index| record_start(index, NEURON_FIELDS, state.len()))
+                else {
+                    continue;
+                };
+                state[base] += d_count;
+                state[base + 1] += d_total_bias;
+                state[base + 2] += d_adj_bias;
             }
         }
     });
@@ -328,12 +362,15 @@ pub fn accumulate_bias_persistent_8way(
             );
 
             if d_count > 0.0 {
-                let base = (start_index + i) * NEURON_FIELDS;
-                if base + NEURON_FIELDS <= state.len() {
-                    state[base] += d_count;
-                    state[base + 1] += d_total_bias;
-                    state[base + 2] += d_adj_bias;
-                }
+                let Some(base) = start_index
+                    .checked_add(i)
+                    .and_then(|index| record_start(index, NEURON_FIELDS, state.len()))
+                else {
+                    continue;
+                };
+                state[base] += d_count;
+                state[base + 1] += d_total_bias;
+                state[base + 2] += d_adj_bias;
             }
         }
     });
