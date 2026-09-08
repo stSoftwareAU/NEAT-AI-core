@@ -73,6 +73,24 @@ some kernels would fall back to the checked scalar loop and panic instead — th
 tests assert refusal either way, so they stay valid; only the *signature* of the
 pre-fix failure is host-specific.
 
+The red run was **repeated independently** before this PR was raised, in a
+throwaway worktree checked out at `origin/Develop` (`f2ceeca`). The committed
+suite names `simd::bounds` and the `*_unchecked` twins, so it cannot compile
+against the unfixed tree; the repeat therefore ran the same three assertion
+bodies over the **safe public entry points alone**, which exist unchanged on
+both trees. Each aborts the test process on the unfixed sources:
+
+| unfixed reproducer | outcome on `f2ceeca` |
+| --- | --- |
+| `weighted_sum_simd`, `from_index: 9_999` against a 1-long buffer | `slice::get_unchecked` precondition violated at `neat-core/src/simd_native.rs:614` — SIGABRT |
+| `weighted_sum_simd_8records`, same span | violated at `neat-core/src/simd_native.rs:460` — SIGABRT |
+| `weighted_sum_simd`, `end = 64` against a 2-long synapse slice | violated at `neat-core/src/simd_native.rs:607` — SIGABRT |
+
+The same three cases are `weighted_sum_simd_rejects_out_of_range_from_index`,
+`weighted_sum_simd_8records_rejects_out_of_range_from_index` and
+`weighted_sum_simd_rejects_a_span_past_the_synapse_slice` in the committed
+suite, where they pass.
+
 ### Original trigger closed, with no trivial bypass
 
 The issue's trigger is a `from_index` past the end of `activations` reaching an
@@ -205,8 +223,9 @@ prototype and measured on the same host before being discarded:
 - **met** — a regression test in `neat-core/tests/` covers the out-of-range case
   for at least one single-record and one multi-record kernel — evidence:
   `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_rejects_out_of_range_from_index`
-  and `…::weighted_sum_simd_8records_rejects_out_of_range_from_index` — reviewer:
-  met.
+  and `…::weighted_sum_simd_8records_rejects_out_of_range_from_index`
+  — reviewer: met — reason: both named tests are declared in the added lines of
+  `neat-core/tests/simd_public_bounds.rs`.
 - **met** — benchmarks show no meaningful regression on the forward-pass hot
   path — evidence: the paired alternating A/B table above (+0.7% / +1.1% /
   −1.2%, inside a 5–10% noise floor), and `weighted_sum_simd/single_checked` in
@@ -386,3 +405,14 @@ Two environmental caveats, both **pre-existing and unrelated to this change**:
   `cargo check -p neat-core --target wasm32-unknown-unknown` that `AGENTS.md`
   asks for before merging a `wasm` change must run in CI. The `wasm` edits
   mirror the native ones exactly and add no new intrinsic usage.
+
+`./quality.sh` was re-run in full before the PR was raised. It still exits 1 at
+the `bats` stage on the same 109 environmental failures (`ModuleNotFoundError:
+No module named 'yaml'`), which is where `set -e` stops it, so every stage after
+that point was run individually and each passed on the final tree: the
+TypeScript, Mermaid, wasm-prune-parity and JSR supply-chain gates,
+`cargo deny check`, `cargo fmt --all --check`, `cargo clippy --workspace
+--all-targets --all-features -- -D warnings`, `cargo test --workspace --lib
+--tests --all-features -- --test-threads=2`, `cargo test --workspace --doc
+--all-features`, `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
+and `cargo build --workspace --release`.
