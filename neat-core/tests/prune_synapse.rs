@@ -217,6 +217,27 @@ const IF_STATIC_UNTYPED_ARM_JSON: &str = r#"{
   ]
 }"#;
 
+/// An `IF` with a varying condition, in a creature that already carries a
+/// support constant. Restoring an emptied branch role has to hang off that
+/// constant rather than mint a second one (Ockham #180).
+const IF_WITH_SUPPORT_CONSTANT_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"constant","uuid":"c-1","bias":1.0},
+    {"type":"hidden","uuid":"h-a","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
+    {"weight":1.0,"fromUUID":"input-1","toUUID":"if-1","type":"condition"},
+    {"weight":0.5,"fromUUID":"c-1","toUUID":"output-0"},
+    {"weight":-3.0,"fromUUID":"h-a","toUUID":"if-1","type":"negative"},
+    {"weight":2.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
+    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+  ]
+}"#;
+
 /// A synapse naming a target the creature does not carry, on an edge the
 /// request does not touch.
 const DANGLING_TARGET_JSON: &str = r#"{
@@ -933,6 +954,32 @@ fn losing_the_last_negative_keeps_the_branch_and_stays_valid() {
         "the condition still varies, so the IF still branches"
     );
     assert_valid("losing_the_last_negative", &result.creature);
+}
+
+#[test]
+fn a_restored_branch_role_reuses_the_support_constant_already_there() {
+    let before = creature(IF_WITH_SUPPORT_CONSTANT_JSON);
+    let result = pruned(&before, &key("h-a", "if-1", SynapseType::Positive), None);
+
+    // Constants are support nodes, not something a repair may proliferate.
+    let constants: Vec<&str> = result
+        .creature
+        .neurons
+        .iter()
+        .filter(|n| n.neuron_type == "constant")
+        .map(|n| n.uuid.as_str())
+        .collect();
+    assert_eq!(
+        constants,
+        vec!["c-1"],
+        "the restored role minted a constant instead of reusing c-1"
+    );
+    assert_eq!(result.restored_if_roles.len(), 1);
+    assert_eq!(result.restored_if_roles[0].from_uuid, "c-1");
+
+    let twin = with_edge_zeroed(&before, "h-a", "if-1", Some("positive"));
+    assert_same_function("restored_role_reuses_support", &twin, &result.creature);
+    assert_valid("a_restored_branch_role_reuses", &result.creature);
 }
 
 #[test]
