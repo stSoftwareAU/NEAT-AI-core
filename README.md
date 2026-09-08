@@ -582,6 +582,13 @@ itself.
 restating their rules. The ordering gate only runs for `forwardOnly` creatures,
 because a recurrent creature legitimately carries backward edges.
 
+Those gates read `u32` widths and `u32` neuron indices, so the gate bounds the
+declared counts against that index space **first** — before the UUID map names
+one entry per declared input. An `input`, `output` or node count past
+`u32::MAX` earns `GraftError::CountNotRepresentable`; it is never narrowed
+(Issue #606, which is what a declared `output` of `4_294_967_297` read as `1`
+before).
+
 ```mermaid
 flowchart LR
     B["base CreatureExport"] --> V["validate_creature_topology"]
