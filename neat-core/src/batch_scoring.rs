@@ -5,7 +5,8 @@
 //! ([`CompiledNetwork::activate_into`]) re-reads each synapse's weight and
 //! metadata once **per record**. This module drives the forward pass through
 //! the existing across-records SIMD primitives
-//! ([`weighted_sum_simd_8records`] / [`weighted_sum_simd_4records`]), loading
+//! ([`weighted_sum_simd_8records_unchecked`] /
+//! [`weighted_sum_simd_4records_unchecked`]), loading
 //! each synapse weight once and applying it across 8 (then 4) records. That
 //! amortises the weight load and synapse-index read across the batch, cutting
 //! gather traffic on the dominant standard-squash neurons.
@@ -14,7 +15,8 @@
 //!
 //! Standard-squash neurons accumulate their weighted sum across records rather
 //! than across synapses, so the summation is re-associated relative to the
-//! single-record [`weighted_sum_simd`] kernel. In `f32` that yields results
+//! single-record [`weighted_sum_simd_unchecked`] kernel. In `f32` that yields
+//! results
 //! that match the per-record reference **within a small tolerance**, not
 //! bit-for-bit (Issue #230 acceptance criteria explicitly allow SIMD
 //! reordering / `f32` accumulation differences). Every other numeric step is
