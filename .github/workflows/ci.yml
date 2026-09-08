@@ -484,6 +484,19 @@ jobs:
           chmod +x scripts/typescript-check.sh
           ./scripts/typescript-check.sh
 
+      # Issue #603 — the JSR half of the dependency tree gets the same
+      # treatment as the Cargo half: a 24h release-age quarantine
+      # (`minimumDependencyAge` in deno.json) and a frozen `deno.lock`, so a
+      # freshly published `@std/*` release cannot be pulled into a CI run with
+      # no embargo and no integrity pin. Every `deno check`/`deno test` above
+      # already resolves against that lockfile; this step is what fails if the
+      # quarantine or the lockfile is removed.
+      - name: JSR supply-chain gate (quarantine + frozen lockfile)
+        run: |
+          set -euo pipefail
+          deno test --allow-read --allow-write --allow-run=deno \
+            tests/deno_supply_chain_test.ts < /dev/null
+
   scripts-and-spelling:
     name: Scripts & spelling
     runs-on: ubuntu-latest
