@@ -9,9 +9,12 @@
 #   1. External: crates.io — `cargo update`, honouring the quarantine window
 #      (`--quarantine-hours`, default `$VIBE_BUMP_QUARANTINE_HOURS` / 24h)
 #      so versions published less than N hours ago are deferred to dodge
-#      fast-flagged supply-chain attacks.
-#   2. `cargo audit` — fails non-zero on any reported advisory, naming the
-#      offending crate + advisory ID.
+#      fast-flagged supply-chain attacks. Crates the per-crate pass cannot
+#      land on their own are retried together in one grouped `cargo update`.
+#   2. Advisory scan — `cargo deny check advisories` when `cargo-deny` is on
+#      PATH, otherwise `cargo audit`. Fails non-zero on any reported advisory,
+#      naming the offending crate + advisory ID; also fails when neither tool
+#      is installed (Issue #598).
 #   3. `cargo build` (native) and `cargo build --target wasm32-unknown-unknown`
 #      — both must succeed against the bumped tree.
 #
@@ -31,14 +34,15 @@ usage() {
   cat <<'EOF'
 Usage: bump-deps.sh [options]
 
-Refreshes Cargo dependencies, then runs cargo audit and dual native/WASM
-builds. Prints a one-line summary.
+Refreshes Cargo dependencies, then runs the advisory scan (cargo deny check
+advisories, falling back to cargo audit) and dual native/WASM builds. Prints a
+one-line summary.
 
 Options:
   --quarantine-hours N   Skip crates.io versions newer than N hours.
                          Default: $VIBE_BUMP_QUARANTINE_HOURS, else 24.
   --skip-external        Skip cargo update (crates.io).
-  --skip-audit           Skip cargo audit.
+  --skip-audit           Skip the advisory scan.
   --skip-build           Skip native + wasm32 cargo build.
   --repo DIR             Repository root (default: cwd).
   --check-published TS H Internal helper: exit 0 if TS (ISO 8601) is older
@@ -47,7 +51,8 @@ Options:
 
 Exit codes:
   0  clean / no-op
-  1  bump produced a non-passing tree (audit / build failure)
+  1  bump produced a non-passing tree (advisory / build failure, or no
+     advisory scanner installed)
   2  usage error
 EOF
 }
@@ -169,12 +174,120 @@ for v in data.get("versions", []):
 ' "$version"
 }
 
+# --- lockfile helpers ------------------------------------------------------
+
+# Print "<name> <version>" for every package in the repo's Cargo.lock, sorted.
+# A missing lockfile prints nothing, so every "is it landed?" query below
+# answers no rather than silently claiming success.
+lock_snapshot() {
+  local lock="${REPO_DIR}/Cargo.lock"
+  [[ -f "$lock" ]] || return 0
+  awk '
+    /^name[[:space:]]*=/    { gsub(/"/, ""); name = $3 }
+    /^version[[:space:]]*=/ { gsub(/"/, ""); if (name != "") { print name " " $3; name = "" } }
+  ' "$lock" | LC_ALL=C sort
+}
+
+# Exit 0 when <crate> is locked at <version>.
+crate_locked_at() {
+  lock_snapshot | grep -qxF "$1 $2"
+}
+
+# Echo the `cargo update -p` spec for <crate>, pinned to the version it is
+# locked at, so a crate locked at two majors (syn 2.x and 3.x) is unambiguous.
+# Prefers <from> — the version the dry run planned to replace — and falls back
+# to the sole locked version when an earlier bump already moved it. Returns 1
+# when the crate is locked at several versions and none is <from>, because no
+# unambiguous spec exists.
+crate_pkg_spec() {
+  local crate="$1" from="$2" versions count
+  if crate_locked_at "$crate" "$from"; then
+    printf '%s@%s\n' "$crate" "$from"
+    return 0
+  fi
+  versions="$(lock_snapshot | awk -v c="$crate" '$1 == c { print $2 }')"
+  count="$(printf '%s' "$versions" | grep -c . || true)"
+  if [[ "$count" -eq 1 ]]; then
+    printf '%s@%s\n' "$crate" "$versions"
+    return 0
+  fi
+  return 1
+}
+
+# Exit 0 when the only lockfile movement between the "<name> <version>"
+# snapshots $1 (before) and $2 (after) is an approved one: every line that
+# appeared is in the approved-additions list $3, and every line that
+# disappeared is in the approved-removals list $4.
+lock_change_approved() {
+  local before="$1" after="$2" approved_added="$3" approved_removed="$4"
+  local line
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '%s' "$approved_added" | grep -qxF "$line" || return 1
+  done < <(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '%s' "$approved_removed" | grep -qxF "$line" || return 1
+  done < <(comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
+  return 0
+}
+
 # --- stages ----------------------------------------------------------------
 
 external_changed=0
 external_msg="skipped"
 audit_msg="skipped"
 build_msg="skipped"
+
+# The quarantine-approved bump plan, parallel arrays filled by bump_external
+# and read by grouped_retry.
+BUMP_NAMES=()
+BUMP_FROMS=()
+BUMP_TARGETS=()
+
+# Retry every crate the per-crate pass could not land, in one `cargo update`.
+# Some families (js-sys / wasm-bindgen / web-sys) only resolve when moved
+# together, and each is rejected on its own. Takes the indices to retry.
+#
+# The grouped update carries no `--precise` (cargo accepts only one), so the
+# quarantine is enforced afterwards: only crates whose target already passed
+# the quarantine check are included, and unless every version that moved is
+# one of those approved targets the whole group is reverted.
+grouped_retry() {
+  local -a idx=("$@")
+  local -a specs=()
+  local approved_added="" approved_removed=""
+  local i spec pending=0
+  for i in "${idx[@]}"; do
+    if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then continue; fi
+    if ! spec="$(crate_pkg_spec "${BUMP_NAMES[i]}" "${BUMP_FROMS[i]}")"; then continue; fi
+    pending=$((pending + 1))
+    specs+=(-p "$spec")
+    approved_added+="${BUMP_NAMES[i]} ${BUMP_TARGETS[i]}"$'\n'
+    approved_removed+="${BUMP_NAMES[i]} ${spec##*@}"$'\n'
+  done
+  [[ "$pending" -gt 0 ]] || return 0
+
+  local lock="${REPO_DIR}/Cargo.lock"
+  [[ -f "$lock" ]] || return 0
+  local backup before after
+  backup="$(mktemp)"
+  cp "$lock" "$backup"
+  before="$(lock_snapshot)"
+  if ! (cd "$REPO_DIR" && cargo update "${specs[@]}") >/dev/null 2>&1; then
+    cp "$backup" "$lock"
+    rm -f "$backup"
+    return 0
+  fi
+  after="$(lock_snapshot)"
+  if lock_change_approved "$before" "$after" "$approved_added" "$approved_removed"; then
+    rm -f "$backup"
+    return 0
+  fi
+  echo "  revert: grouped retry moved a version the quarantine did not approve"
+  cp "$backup" "$lock"
+  rm -f "$backup"
+}
 
 bump_external() {
   if ! command -v cargo >/dev/null 2>&1; then
@@ -184,34 +297,71 @@ bump_external() {
   fi
   local dry_log
   dry_log="$({ cd "$REPO_DIR" && cargo update --dry-run 2>&1; } || true)"
+
+  BUMP_NAMES=()
+  BUMP_FROMS=()
+  BUMP_TARGETS=()
   local applied=0 deferred=0 failed=0
+  local line crate from_v new_v published_at
+  # Pass 0 — read the plan and split it into quarantine-approved and deferred.
   while IFS= read -r line; do
     # Match lines like:
     #   Updating clap v4.5.20 -> v4.5.21
     #   Bumping  serde v1.0.210 -> v1.0.211
     if [[ "$line" =~ (Updating|Bumping)[[:space:]]+([a-zA-Z0-9_-]+)[[:space:]]+v([0-9A-Za-z.+-]+)[[:space:]]+-\>[[:space:]]+v([0-9A-Za-z.+-]+) ]]; then
-      local crate="${BASH_REMATCH[2]}"
-      local new_v="${BASH_REMATCH[4]}"
-      local published_at
+      crate="${BASH_REMATCH[2]}"
+      from_v="${BASH_REMATCH[3]}"
+      new_v="${BASH_REMATCH[4]}"
       if ! published_at="$(crate_published_at "$crate" "$new_v")"; then
         echo "  skip: $crate $new_v (publish time lookup failed)"
         failed=$((failed + 1))
         continue
       fi
       if is_older_than_hours "$published_at" "$QUARANTINE_HOURS"; then
-        if (cd "$REPO_DIR" && cargo update -p "$crate" --precise "$new_v") >/dev/null 2>&1; then
-          applied=$((applied + 1))
-          echo "  bump: $crate -> $new_v"
-        else
-          failed=$((failed + 1))
-          echo "  fail: $crate -> $new_v (cargo update rejected)"
-        fi
+        BUMP_NAMES+=("$crate")
+        BUMP_FROMS+=("$from_v")
+        BUMP_TARGETS+=("$new_v")
       else
         deferred=$((deferred + 1))
         echo "  defer: $crate $new_v (within ${QUARANTINE_HOURS}h quarantine, published $published_at)"
       fi
     fi
   done <<<"$dry_log"
+
+  local i spec
+  local -a retry=()
+  if [[ "${#BUMP_NAMES[@]}" -gt 0 ]]; then
+    # Pass 1 — one crate at a time, spec pinned to the locked version.
+    for i in "${!BUMP_NAMES[@]}"; do
+      # An earlier bump may already have dragged this crate to its target.
+      if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then continue; fi
+      if ! spec="$(crate_pkg_spec "${BUMP_NAMES[i]}" "${BUMP_FROMS[i]}")"; then
+        retry+=("$i")
+        continue
+      fi
+      if ! (cd "$REPO_DIR" && cargo update -p "$spec" --precise "${BUMP_TARGETS[i]}") >/dev/null 2>&1; then
+        retry+=("$i")
+      fi
+    done
+
+    # Pass 2 — retry the rejects together.
+    if [[ "${#retry[@]}" -gt 0 ]]; then
+      grouped_retry "${retry[@]}"
+    fi
+
+    # Pass 3 — reconcile against the lockfile: a crate is bumped only when the
+    # lock actually holds its approved target, whichever pass landed it.
+    for i in "${!BUMP_NAMES[@]}"; do
+      if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then
+        applied=$((applied + 1))
+        echo "  bump: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]}"
+      else
+        failed=$((failed + 1))
+        echo "  fail: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]} (cargo update rejected)"
+      fi
+    done
+  fi
+
   if [[ "$applied" -gt 0 ]]; then
     external_changed=1
   fi
@@ -223,29 +373,83 @@ bump_external() {
   echo "external: $external_msg"
 }
 
+# Parse `cargo deny --format json check advisories` output on stdin and print
+# the first error diagnostic as "audit: FAILED — <crate> (<advisory id>)".
+deny_first_advisory() {
+  python3 -c 'import json, sys
+for raw in sys.stdin:
+    raw = raw.strip()
+    if not raw.startswith("{"):
+        continue
+    try:
+        obj = json.loads(raw)
+    except ValueError:
+        continue
+    if obj.get("type") != "diagnostic":
+        continue
+    fields = obj.get("fields") or {}
+    if fields.get("severity") != "error":
+        continue
+    advisory = fields.get("advisory") or {}
+    ident = advisory.get("id")
+    crate = advisory.get("package")
+    if not crate:
+        graphs = fields.get("graphs") or []
+        if graphs:
+            crate = (graphs[0].get("Krate") or {}).get("name")
+    if ident and crate:
+        print("audit: FAILED — %s (%s)" % (crate, ident))
+        break'
+}
+
+# Parse `cargo audit` text output on stdin, same one-line shape.
+audit_first_advisory() {
+  awk '
+    /^[[:space:]]*ID:[[:space:]]/    { id = $2 }
+    /^[[:space:]]*Crate:[[:space:]]/ { crate = $2 }
+    {
+      if (id != "" && crate != "") { print "audit: FAILED \342\200\224 " crate " (" id ")"; exit }
+    }
+  '
+}
+
 run_audit() {
-  if ! cargo audit --version >/dev/null 2>&1; then
-    echo "Error: cargo audit not available — install with 'cargo install cargo-audit --locked'" >&2
+  # cargo-deny is the repo's own advisory tool (quality.sh and the ci.yml
+  # `deny` job both run it, and deny.toml lives here); cargo-audit is the
+  # fallback CI still installs. Requiring cargo-audit alone is what silently
+  # disabled every bump on the worker (Issue #598).
+  local tool
+  if command -v cargo-deny >/dev/null 2>&1; then
+    tool="cargo-deny"
+  elif command -v cargo-audit >/dev/null 2>&1; then
+    tool="cargo-audit"
+  else
+    echo "Error: no advisory scanner on PATH — install with 'cargo install cargo-deny --locked' (preferred) or 'cargo install cargo-audit --locked'" >&2
     audit_msg="error"
     return 1
   fi
-  local audit_log
-  if audit_log="$(cd "$REPO_DIR" && cargo audit 2>&1)"; then
-    audit_msg="ok"
-    echo "audit: ok"
-    return 0
+  local audit_log first
+  if [[ "$tool" == "cargo-deny" ]]; then
+    echo "  audit tool: cargo deny check advisories"
+    if audit_log="$(cd "$REPO_DIR" && cargo deny --format json check advisories 2>&1)"; then
+      audit_msg="ok"
+      echo "audit: ok"
+      return 0
+    fi
+    first="$(printf '%s\n' "$audit_log" | deny_first_advisory)"
+  else
+    echo "  audit tool: cargo audit"
+    if audit_log="$(cd "$REPO_DIR" && cargo audit 2>&1)"; then
+      audit_msg="ok"
+      echo "audit: ok"
+      return 0
+    fi
+    first="$(printf '%s\n' "$audit_log" | audit_first_advisory)"
   fi
   # Surface the first advisory ID + offending crate so the worker log shows
   # exactly why the bump was rejected.
-  local first
-  first=$(printf '%s\n' "$audit_log" | awk '
-    /^[[:space:]]*ID:[[:space:]]/    { id = $2 }
-    /^[[:space:]]*Crate:[[:space:]]/ {
-      if (id != "") { print "audit: FAILED — " $2 " (" id ")"; exit }
-    }
-  ')
   if [[ -z "$first" ]]; then
-    first="audit: FAILED (see cargo audit output above)"
+    first="audit: FAILED (see ${tool} output above)"
   fi
   audit_msg="failed"
   printf '%s\n' "$audit_log" >&2

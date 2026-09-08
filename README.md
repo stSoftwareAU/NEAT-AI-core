@@ -116,7 +116,7 @@ safe-fall-back invariants; see
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
-| `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
+| `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
 | `.github/dependabot.yml` | Weekly Cargo **version-updates** channel (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
 | `deno.json` | Deno/JSR supply-chain config (Issue #603): a 24h `minimumDependencyAge` release-age quarantine for external JSR/npm specifiers (internal `@stsoftware/*` scopes excluded, they bump at 0h) and a **frozen** `deno.lock` — see [JSR (Deno) dependencies](#jsr-deno-dependencies). |
 | `deno.lock` | Committed integrity pin for every JSR dependency the `.ts` gates import. Frozen: `deno check`/`deno test` fail rather than re-resolve a floating range. |
@@ -1019,7 +1019,8 @@ bump:
 
 - **Routine bump (authoritative)** — [`.github/workflows/upgrade-dependencies.yml`](.github/workflows/upgrade-dependencies.yml)
   runs `bump-deps.sh` every Monday (`cron "0 6 * * 1"`), applying the
-  `VIBE_BUMP_QUARANTINE_HOURS` release-age quarantine, `cargo audit`, and
+  `VIBE_BUMP_QUARANTINE_HOURS` release-age quarantine, the advisory scan
+  (`cargo deny check advisories`, falling back to `cargo audit`), and
   dual native/WASM builds before raising a general upgrade PR. The same script
   runs on every PR from the `ci.yml` `version-increment` job.
 - **Dependabot version updates** — [`.github/dependabot.yml`](.github/dependabot.yml)
