@@ -49,11 +49,30 @@ Deno.test("the golden record reaches both entry points and both answer shapes", 
     golden.some((c) => c.response.transform === "approximate"),
     "no approximate transform recorded",
   );
+  // `[]` is truthy in JS, so these ask for a *non-empty* payload: a record whose
+  // IF and compensation arrays were all empty would grade neither.
   assert(
-    golden.some((c) => (c.response.staticIfNeurons ?? c.response.downgradedIfNeurons)),
+    golden.some((c) =>
+      (c.response.staticIfNeurons?.length ?? 0) + (c.response.downgradedIfNeurons?.length ?? 0) > 0
+    ),
     "no IF rewrite recorded — the typed edge cases would go ungraded",
   );
-  assert(golden.some((c) => c.response.weightShares), "no compensation payload recorded");
+  assert(
+    golden.some((c) => (c.response.weightShares?.length ?? 0) > 0),
+    "no compensation payload recorded",
+  );
+  assert(
+    golden.some((c) => (c.response.biasFolds?.length ?? 0) > 0),
+    "no bias fold recorded",
+  );
+  assert(
+    golden.some((c) => (c.response.cascadeNeurons?.length ?? 0) > 0),
+    "no cascade recorded",
+  );
+  assert(
+    golden.some((c) => (c.response.restoredIfRoles?.length ?? 0) > 0),
+    "no restored IF role recorded",
+  );
 });
 
 Deno.test("every successful answer carries the creature and the transform label", () => {

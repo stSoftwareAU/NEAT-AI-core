@@ -121,10 +121,13 @@ pub use prune_neuron::{
 pub use prune_synapse::prune_synapse;
 // Issue #592 — the JSON ABI both the native and the WASM surface answer on.
 pub use prune_json::{
-    BiasFoldJson, GOLDEN_PATH, PruneFailureJson, PruneGoldenCase, PruneOp, PruneResponse,
-    StaticIfJson, SynapseKeyJson, UncompensatedJson, WeightShareJson, prune_golden_cases,
-    prune_neuron_json, prune_synapse_json, run_golden_case,
+    BiasFoldJson, PruneFailureJson, PruneResponse, StaticIfJson, SynapseKeyJson, UncompensatedJson,
+    WeightShareJson, prune_neuron_json, prune_synapse_json,
 };
+// The parity record is native-only test scaffolding, so it is not part of the
+// surface the published wasm bundle carries.
+#[cfg(not(target_family = "wasm"))]
+pub use prune_json::{GOLDEN_PATH, PruneGoldenCase, PruneOp, prune_golden_cases, run_golden_case};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{

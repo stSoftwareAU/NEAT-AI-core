@@ -957,8 +957,9 @@ it. Regenerate it with
 
 Parity is byte-exact where the representation allows: the keys present, the
 array lengths, every uuid, role, squash name, reason code, message, boolean and
-integer must match character for character. Floats are compared to a relative
-`1e-9`, because folding a fixed neuron's activation runs its squash and a
+integer must match character for character. Floats are compared to
+`1e-9 · max(1, |native|)` — relative above `1`, an absolute `1e-9` floor below
+it — because folding a fixed neuron's activation runs its squash and a
 transcendental is resolved by the host libm natively and by the bundle's own
 implementation on wasm — each correct to within an ulp, neither obliged to agree
 on the last bit. Every structural claim stays exact, so anything wider than

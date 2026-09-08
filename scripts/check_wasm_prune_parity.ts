@@ -43,9 +43,10 @@ export interface GoldenCase {
 }
 
 /**
- * Relative slack allowed on a float. Tight enough that a changed weight or a
- * differently-ordered sum fails; loose enough that a last-ulp difference
- * between two libm implementations does not.
+ * Slack allowed on a float: `FLOAT_TOLERANCE · max(1, |native|)`, so it is
+ * relative above `1` and an absolute floor below it. Tight enough that a
+ * changed weight or a differently-ordered sum fails; loose enough that a
+ * last-ulp difference between two libm implementations does not.
  */
 export const FLOAT_TOLERANCE = 1e-9;
 

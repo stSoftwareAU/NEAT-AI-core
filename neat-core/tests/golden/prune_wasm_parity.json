@@ -1360,6 +1360,206 @@
     }
   },
   {
+    "name": "restored_if_role",
+    "note": "an IF branch the removal empties is given back a zero-weight support edge",
+    "op": "synapse",
+    "request": {
+      "creature": {
+        "forwardOnly": true,
+        "input": 2,
+        "neurons": [
+          {
+            "bias": 0.1,
+            "squash": "LOGISTIC",
+            "type": "hidden",
+            "uuid": "h-c"
+          },
+          {
+            "bias": 0.2,
+            "squash": "LOGISTIC",
+            "type": "hidden",
+            "uuid": "h-p"
+          },
+          {
+            "bias": 0.3,
+            "squash": "LOGISTIC",
+            "type": "hidden",
+            "uuid": "h-n"
+          },
+          {
+            "bias": 0.0,
+            "squash": "IF",
+            "type": "hidden",
+            "uuid": "if-1"
+          },
+          {
+            "bias": 0.0,
+            "squash": "IDENTITY",
+            "type": "output",
+            "uuid": "output-0"
+          }
+        ],
+        "output": 1,
+        "semanticVersion": "4.0.0",
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "h-c",
+            "weight": 1.0
+          },
+          {
+            "fromUUID": "input-1",
+            "toUUID": "h-p",
+            "weight": 1.0
+          },
+          {
+            "fromUUID": "input-1",
+            "toUUID": "h-n",
+            "weight": 1.0
+          },
+          {
+            "fromUUID": "h-c",
+            "toUUID": "if-1",
+            "type": "condition",
+            "weight": 1.0
+          },
+          {
+            "fromUUID": "h-p",
+            "toUUID": "if-1",
+            "type": "positive",
+            "weight": 2.0
+          },
+          {
+            "fromUUID": "h-n",
+            "toUUID": "if-1",
+            "type": "negative",
+            "weight": -2.0
+          },
+          {
+            "fromUUID": "if-1",
+            "toUUID": "output-0",
+            "weight": 1.0
+          }
+        ]
+      },
+      "synapse": {
+        "fromUUID": "h-p",
+        "toUUID": "if-1",
+        "type": "positive"
+      }
+    },
+    "response": {
+      "cascadeNeurons": [
+        "h-p"
+      ],
+      "cascadeSynapses": [
+        {
+          "fromUUID": "input-1",
+          "toUUID": "h-p",
+          "type": "standard"
+        }
+      ],
+      "creature": {
+        "forwardOnly": true,
+        "input": 2,
+        "neurons": [
+          {
+            "bias": 1.0,
+            "type": "constant",
+            "uuid": "prune-support-0"
+          },
+          {
+            "bias": 0.1,
+            "squash": "LOGISTIC",
+            "type": "hidden",
+            "uuid": "h-c"
+          },
+          {
+            "bias": 0.3,
+            "squash": "LOGISTIC",
+            "type": "hidden",
+            "uuid": "h-n"
+          },
+          {
+            "bias": 0.0,
+            "squash": "IF",
+            "type": "hidden",
+            "uuid": "if-1"
+          },
+          {
+            "bias": 0.0,
+            "squash": "IDENTITY",
+            "type": "output",
+            "uuid": "output-0"
+          }
+        ],
+        "output": 1,
+        "semanticVersion": "4.0.0",
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "h-c",
+            "weight": 1.0
+          },
+          {
+            "fromUUID": "input-1",
+            "toUUID": "h-n",
+            "weight": 1.0
+          },
+          {
+            "fromUUID": "prune-support-0",
+            "toUUID": "if-1",
+            "type": "positive",
+            "weight": 0.0
+          },
+          {
+            "fromUUID": "h-c",
+            "toUUID": "if-1",
+            "type": "condition",
+            "weight": 1.0
+          },
+          {
+            "fromUUID": "h-n",
+            "toUUID": "if-1",
+            "type": "negative",
+            "weight": -2.0
+          },
+          {
+            "fromUUID": "if-1",
+            "toUUID": "output-0",
+            "weight": 1.0
+          }
+        ]
+      },
+      "ok": true,
+      "passes": 2,
+      "removedSynapses": [
+        {
+          "fromUUID": "h-p",
+          "toUUID": "if-1",
+          "type": "positive"
+        }
+      ],
+      "restoredIfRoles": [
+        {
+          "fromUUID": "prune-support-0",
+          "toUUID": "if-1",
+          "type": "positive"
+        }
+      ],
+      "transform": "approximate",
+      "uncompensated": [
+        {
+          "reason": "AGGREGATE_TARGET",
+          "squash": "IF",
+          "targetUUID": "if-1",
+          "type": "positive",
+          "weightSum": 2.0
+        }
+      ]
+    }
+  },
+  {
     "name": "constant_edge_folds_exactly",
     "note": "an edge from a constant folds into the target's bias and preserves the output",
     "op": "synapse",

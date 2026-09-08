@@ -197,6 +197,29 @@ same function of the inputs as the original without that edge, and it is reached
 without touching the code under test. Both creatures are compiled and activated,
 and the rewrite has to agree on every probe.
 
+## How Issue #592 carries the captures across the WASM boundary
+
+Issue #592 adds no rewrite and no fixture. It gives the two proven helpers a
+wire form (`neat-core/src/prune_json.rs`, renamed for JS in `wasm_exports.rs`)
+and reuses **these** captures to keep the two entry surfaces from drifting:
+`neat-core/tests/golden/prune_wasm_parity.json` records one request per case in
+the table above, plus the shapes only a boundary has, together with the answer
+the *native* ABI gives it.
+
+| Recorded case | Where it comes from |
+|---|---|
+| all eight `PRUNE_PARITY_CASES` | the matrix above, one request each |
+| `static_if_rewrite`, `restored_if_role` | the two `IF` rewrites TypeScript refuses, so they have no capture — the response payloads they produce would otherwise cross the boundary ungraded |
+| `constant_edge_folds_exactly` | the `Exact` transform label, on `CONSTANT_BIAS_FOLD`'s creature |
+| `proxy_compensation` | the correlated-survivor statistics payload, the widest the wire carries |
+| `protected_neuron_refused`, `unknown_role_refused` | a refusal — understood, and answered `malformed: false` |
+| `malformed_missing_creature`, `malformed_unknown_role` | a payload that never reached the rewrite |
+
+`neat-core/tests/prune_json.rs` grades the native side against the record and
+`scripts/check_wasm_prune_parity.ts` drives the published bundle of both arches
+through the same requests in `wasm-bundle.yml`. Regenerate the record with
+`UPDATE_PRUNE_GOLDEN=1 cargo test -p neat-core --test prune_json`.
+
 ## Not captured here
 
 - **Selection policy.** Which neuron or synapse to try is the caller's, per the

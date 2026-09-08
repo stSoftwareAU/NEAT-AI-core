@@ -80,6 +80,12 @@
 //! convention [`mod@crate::creature_validate_json`] uses — and an oversized
 //! creature is refused before the walk allocates per neuron.
 //!
+//! One malformed *message* is target-dependent and deliberately left so: a
+//! declared width past `u32` fits `usize` natively but not on wasm32, where
+//! serde refuses it while reading rather than the ceiling refusing it after.
+//! Both answer `malformed: true` and neither reaches a rewrite, so the contract
+//! holds; only the wording differs, which is why no parity case pins it.
+//!
 //! # Native and WASM answer the same thing
 //!
 //! There is one implementation and two entry surfaces:
@@ -94,7 +100,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::creature::{CreatureExport, synapse_type_name_from};
-use crate::creature_validate_json::{MALFORMED_REQUEST, MAX_REQUEST_NEURONS};
+use crate::creature_validate_json::{MALFORMED_REQUEST, oversized_detail};
 use crate::prune_cleanup::{StaticIfRewrite, SynapseKey};
 use crate::prune_neuron::{
     BiasFold, ProxyStats, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
@@ -427,29 +433,50 @@ pub struct PruneResponse {
 
 impl PruneResponse {
     /// The answer for a successful rewrite.
+    ///
+    /// The result is **destructured**, not read field by field: a field added
+    /// to [`PruneResult`] then fails to compile here rather than silently
+    /// never reaching the wire.
     fn from_result(result: &PruneResult) -> Self {
+        let PruneResult {
+            creature,
+            removed_neuron,
+            removed_synapses,
+            cascade_neurons,
+            cascade_synapses,
+            folded_neurons,
+            downgraded_if_neurons,
+            static_if_neurons,
+            restored_if_roles,
+            bias_folds,
+            weight_shares,
+            uncompensated,
+            transform,
+            passes,
+        } = result;
+
         Self {
             ok: true,
-            creature: Some(result.creature.clone()),
+            creature: Some(creature.clone()),
             transform: Some(
-                match result.transform {
+                match transform {
                     TransformClass::Exact => "exact",
                     TransformClass::Approximate => "approximate",
                 }
                 .to_string(),
             ),
-            passes: Some(result.passes),
-            removed_neuron: result.removed_neuron.clone(),
-            removed_synapses: result.removed_synapses.iter().map(Into::into).collect(),
-            cascade_neurons: result.cascade_neurons.clone(),
-            cascade_synapses: result.cascade_synapses.iter().map(Into::into).collect(),
-            folded_neurons: result.folded_neurons.clone(),
-            downgraded_if_neurons: result.downgraded_if_neurons.clone(),
-            static_if_neurons: result.static_if_neurons.iter().map(Into::into).collect(),
-            restored_if_roles: result.restored_if_roles.iter().map(Into::into).collect(),
-            bias_folds: result.bias_folds.iter().map(Into::into).collect(),
-            weight_shares: result.weight_shares.iter().map(Into::into).collect(),
-            uncompensated: result.uncompensated.iter().map(Into::into).collect(),
+            passes: Some(*passes),
+            removed_neuron: removed_neuron.clone(),
+            removed_synapses: removed_synapses.iter().map(Into::into).collect(),
+            cascade_neurons: cascade_neurons.clone(),
+            cascade_synapses: cascade_synapses.iter().map(Into::into).collect(),
+            folded_neurons: folded_neurons.clone(),
+            downgraded_if_neurons: downgraded_if_neurons.clone(),
+            static_if_neurons: static_if_neurons.iter().map(Into::into).collect(),
+            restored_if_roles: restored_if_roles.iter().map(Into::into).collect(),
+            bias_folds: bias_folds.iter().map(Into::into).collect(),
+            weight_shares: weight_shares.iter().map(Into::into).collect(),
+            uncompensated: uncompensated.iter().map(Into::into).collect(),
             failure: None,
         }
     }
@@ -507,13 +534,13 @@ fn write(response: &PruneResponse) -> String {
 }
 
 /// Refuse a creature bigger than the boundary walks, before it allocates.
+///
+/// The ceiling and its wording live once, on
+/// [`crate::creature_validate_json::oversized_detail`]; this boundary asks
+/// there rather than re-inlining the comparison.
 fn refuse_oversized(creature: &CreatureExport) -> Option<PruneResponse> {
-    let declared = creature.input.saturating_add(creature.neurons.len());
-    (declared > MAX_REQUEST_NEURONS).then(|| {
-        PruneResponse::malformed(format!(
-            "creature declares {declared} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}"
-        ))
-    })
+    oversized_detail(creature.input.saturating_add(creature.neurons.len()))
+        .map(PruneResponse::malformed)
 }
 
 /// Remove one hidden neuron, described by a JSON request, answering with JSON.
@@ -599,288 +626,353 @@ fn synapse_response(request: &str) -> PruneResponse {
 
 // ---------------------------------------------------------------------------
 // The golden record native and WASM are both graded against.
+//
+// Native only. The record is test scaffolding — the requests, and the answers
+// native gives them — that a host never asks for, and this crate ships its
+// wasm side as a published bundle, so none of it belongs in those bytes. The
+// wasm surface is the two shims over the ABI above and nothing else.
 // ---------------------------------------------------------------------------
 
-/// Which entry point a golden case drives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PruneOp {
-    /// [`prune_neuron_json`], `prune_neuron` on the wasm surface.
-    Neuron,
-    /// [`prune_synapse_json`], `prune_synapse` on the wasm surface.
-    Synapse,
-}
+#[cfg(not(target_family = "wasm"))]
+mod golden {
+    use super::{prune_neuron_json, prune_synapse_json, role_name};
+    use serde::{Deserialize, Serialize};
 
-/// One request in the golden record, with the answer native gives it.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct PruneGoldenCase {
-    /// Stable name, used in the parity report and in test failures.
-    pub name: String,
-    /// What the case pins, in one line.
-    pub note: String,
-    /// Which entry point to call.
-    pub op: PruneOp,
-    /// The request, as a JSON value so a diff shows a changed weight.
-    pub request: serde_json::Value,
-    /// The answer the **native** implementation gives — filled in when the
-    /// record is written, and empty on the cases [`prune_golden_cases`] builds.
-    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-    pub response: serde_json::Value,
-}
+    /// Which entry point a golden case drives.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum PruneOp {
+        /// [`prune_neuron_json`], `prune_neuron` on the wasm surface.
+        Neuron,
+        /// [`prune_synapse_json`], `prune_synapse` on the wasm surface.
+        Synapse,
+    }
 
-/// Where the committed golden record lives, relative to the repository root.
-pub const GOLDEN_PATH: &str = "neat-core/tests/golden/prune_wasm_parity.json";
+    /// One request in the golden record, with the answer native gives it.
+    #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+    pub struct PruneGoldenCase {
+        /// Stable name, used in the parity report and in test failures.
+        pub name: String,
+        /// What the case pins, in one line.
+        pub note: String,
+        /// Which entry point to call.
+        pub op: PruneOp,
+        /// The request, as a JSON value so a diff shows a changed weight.
+        pub request: serde_json::Value,
+        /// The answer the **native** implementation gives — filled in when the
+        /// record is written, and empty on the cases [`prune_golden_cases`] builds.
+        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+        pub response: serde_json::Value,
+    }
 
-/// Build the request half of the golden record.
-///
-/// The cases are the Issue #588 captures — the same fixtures Issues #589-#591
-/// were graded on, so the wire surface is exercised on the creatures the
-/// semantics were proven on — plus the request and payload shapes only a
-/// boundary has: a refusal, a malformed payload, an `IF` whose condition the
-/// removal makes static, and a correlated-survivor statistics payload.
-#[must_use]
-pub fn prune_golden_cases() -> Vec<PruneGoldenCase> {
-    let mut cases = Vec::new();
+    /// Where the committed golden record lives, relative to the repository root.
+    pub const GOLDEN_PATH: &str = "neat-core/tests/golden/prune_wasm_parity.json";
 
-    for case in crate::prune_fixtures::PRUNE_PARITY_CASES {
-        let creature = case.before();
-        let (op, target) = match case.request {
-            crate::prune_fixtures::PruneRequest::RemoveNeuron { uuid } => {
-                (PruneOp::Neuron, serde_json::json!({ "uuid": uuid }))
+    /// Build the request half of the golden record.
+    ///
+    /// The cases are the Issue #588 captures — the same fixtures Issues #589-#591
+    /// were graded on, so the wire surface is exercised on the creatures the
+    /// semantics were proven on — plus the request and payload shapes only a
+    /// boundary has: a refusal, a malformed payload, an `IF` whose condition the
+    /// removal makes static, and a correlated-survivor statistics payload.
+    #[must_use]
+    pub fn prune_golden_cases() -> Vec<PruneGoldenCase> {
+        let mut cases = Vec::new();
+
+        for case in crate::prune_fixtures::PRUNE_PARITY_CASES {
+            let creature = case.before();
+            let (op, target) = match case.request {
+                crate::prune_fixtures::PruneRequest::RemoveNeuron { uuid } => {
+                    (PruneOp::Neuron, serde_json::json!({ "uuid": uuid }))
+                }
+                crate::prune_fixtures::PruneRequest::RemoveSynapse {
+                    from_uuid,
+                    to_uuid,
+                    role,
+                } => (
+                    PruneOp::Synapse,
+                    serde_json::json!({ "synapse": {
+                        "fromUUID": from_uuid,
+                        "toUUID": to_uuid,
+                        "type": role_name(role),
+                    }}),
+                ),
+            };
+            let mut request = serde_json::json!({ "creature": creature });
+            merge(&mut request, target);
+            if let Some(mean) = case.mean_activation {
+                merge(
+                    &mut request,
+                    serde_json::json!({ "stats": { "meanActivation": mean } }),
+                );
             }
-            crate::prune_fixtures::PruneRequest::RemoveSynapse {
-                from_uuid,
-                to_uuid,
-                role,
-            } => (
-                PruneOp::Synapse,
-                serde_json::json!({ "synapse": {
-                    "fromUUID": from_uuid,
-                    "toUUID": to_uuid,
-                    "type": role_name(role),
-                }}),
-            ),
-        };
-        let mut request = serde_json::json!({ "creature": creature });
-        merge(&mut request, target);
-        if let Some(mean) = case.mean_activation {
-            merge(
-                &mut request,
-                serde_json::json!({ "stats": { "meanActivation": mean } }),
-            );
+            cases.push(PruneGoldenCase {
+                name: case.name.to_string(),
+                note: case.rule.to_string(),
+                op,
+                request,
+                response: serde_json::Value::Null,
+            });
         }
+
+        // An `IF` whose condition the removal leaves structurally fixed: the
+        // condition is `input-0` plus a constant, so cutting the varying half
+        // flattens the `IF` onto the branch it always took (Issue #591).
+        let typed = crate::prune_fixtures::EDGE_ROLE_IDENTITY.before();
         cases.push(PruneGoldenCase {
-            name: case.name.to_string(),
-            note: case.rule.to_string(),
-            op,
-            request,
+            name: "static_if_rewrite".to_string(),
+            note: "an IF whose condition the removal fixes is flattened to the surviving branch"
+                .to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": typed,
+                "synapse": { "fromUUID": "input-0", "toUUID": "if-1", "type": "condition" },
+            }),
             response: serde_json::Value::Null,
         });
-    }
 
-    // An `IF` whose condition the removal leaves structurally fixed: the
-    // condition is `input-0` plus a constant, so cutting the varying half
-    // flattens the `IF` onto the branch it always took (Issue #591).
-    let typed = crate::prune_fixtures::EDGE_ROLE_IDENTITY.before();
-    cases.push(PruneGoldenCase {
-        name: "static_if_rewrite".to_string(),
-        note: "an IF whose condition the removal fixes is flattened to the surviving branch"
-            .to_string(),
-        op: PruneOp::Synapse,
-        request: serde_json::json!({
-            "creature": typed,
-            "synapse": { "fromUUID": "input-0", "toUUID": "if-1", "type": "condition" },
-        }),
-        response: serde_json::Value::Null,
-    });
+        // An `IF` branch the removal empties while its condition still varies:
+        // cleanup gives the role back a zero-weight support edge, which is the
+        // one response payload no captured fixture reaches (Issue #591).
+        let branch = crate::creature::parse_creature_json(EMPTIED_IF_BRANCH)
+            .expect("the golden fixture parses");
+        cases.push(PruneGoldenCase {
+            name: "restored_if_role".to_string(),
+            note: "an IF branch the removal empties is given back a zero-weight support edge"
+                .to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": branch,
+                "synapse": { "fromUUID": "h-p", "toUUID": "if-1", "type": "positive" },
+            }),
+            response: serde_json::Value::Null,
+        });
 
-    // A source the creature itself fixes: the removal folds `w · a` into the
-    // target's bias with no statistic, so the rewrite is *exact* — the label a
-    // host must be able to read off the wire.
-    cases.push(PruneGoldenCase {
-        name: "constant_edge_folds_exactly".to_string(),
-        note: "an edge from a constant folds into the target's bias and preserves the output"
-            .to_string(),
-        op: PruneOp::Synapse,
-        request: serde_json::json!({
-            "creature": crate::prune_fixtures::CONSTANT_BIAS_FOLD.before(),
-            "synapse": { "fromUUID": "c-1", "toUUID": "output-0" },
-        }),
-        response: serde_json::Value::Null,
-    });
+        // A source the creature itself fixes: the removal folds `w · a` into the
+        // target's bias with no statistic, so the rewrite is *exact* — the label a
+        // host must be able to read off the wire.
+        cases.push(PruneGoldenCase {
+            name: "constant_edge_folds_exactly".to_string(),
+            note: "an edge from a constant folds into the target's bias and preserves the output"
+                .to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": crate::prune_fixtures::CONSTANT_BIAS_FOLD.before(),
+                "synapse": { "fromUUID": "c-1", "toUUID": "output-0" },
+            }),
+            response: serde_json::Value::Null,
+        });
 
-    // The correlated-survivor remedy, which is the widest statistics payload
-    // the wire carries.
-    let correlated = crate::creature::parse_creature_json(CORRELATED_SURVIVOR)
-        .expect("the golden fixture parses");
-    cases.push(PruneGoldenCase {
-        name: "proxy_compensation".to_string(),
-        note: "the correlated-survivor remedy: a weight share and the residual it leaves"
-            .to_string(),
-        op: PruneOp::Neuron,
-        request: serde_json::json!({
-            "creature": correlated,
-            "uuid": "h-x",
-            "stats": {
-                "meanActivation": 0.5,
-                "variance": 0.04,
-                "proxy": {
-                    "uuid": "h-p", "meanActivation": 0.4,
-                    "variance": 0.02, "covariance": 0.01,
+        // The correlated-survivor remedy, which is the widest statistics payload
+        // the wire carries.
+        let correlated = crate::creature::parse_creature_json(CORRELATED_SURVIVOR)
+            .expect("the golden fixture parses");
+        cases.push(PruneGoldenCase {
+            name: "proxy_compensation".to_string(),
+            note: "the correlated-survivor remedy: a weight share and the residual it leaves"
+                .to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({
+                "creature": correlated,
+                "uuid": "h-x",
+                "stats": {
+                    "meanActivation": 0.5,
+                    "variance": 0.04,
+                    "proxy": {
+                        "uuid": "h-p", "meanActivation": 0.4,
+                        "variance": 0.02, "covariance": 0.01,
+                    },
                 },
-            },
-        }),
-        response: serde_json::Value::Null,
-    });
+            }),
+            response: serde_json::Value::Null,
+        });
 
-    // A refusal — understood, and answered `malformed: false`.
-    let protected = crate::prune_fixtures::CASCADE_ORPHAN_FEEDERS.before();
-    cases.push(PruneGoldenCase {
-        name: "protected_neuron_refused".to_string(),
-        note: "an output neuron is not a caller's to delete".to_string(),
-        op: PruneOp::Neuron,
-        request: serde_json::json!({ "creature": protected, "uuid": "output-0" }),
-        response: serde_json::Value::Null,
-    });
+        // A refusal — understood, and answered `malformed: false`.
+        let protected = crate::prune_fixtures::CASCADE_ORPHAN_FEEDERS.before();
+        cases.push(PruneGoldenCase {
+            name: "protected_neuron_refused".to_string(),
+            note: "an output neuron is not a caller's to delete".to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({ "creature": protected, "uuid": "output-0" }),
+            response: serde_json::Value::Null,
+        });
 
-    // A triple the creature does not carry: the role is part of the identity.
-    let roles = crate::prune_fixtures::EDGE_ROLE_IDENTITY.before();
-    cases.push(PruneGoldenCase {
-        name: "unknown_role_refused".to_string(),
-        note: "asking for a role a pair does not carry names no edge".to_string(),
-        op: PruneOp::Synapse,
-        request: serde_json::json!({
-            "creature": roles,
-            "synapse": { "fromUUID": "input-0", "toUUID": "if-1", "type": "negative" },
-        }),
-        response: serde_json::Value::Null,
-    });
+        // A triple the creature does not carry: the role is part of the identity.
+        let roles = crate::prune_fixtures::EDGE_ROLE_IDENTITY.before();
+        cases.push(PruneGoldenCase {
+            name: "unknown_role_refused".to_string(),
+            note: "asking for a role a pair does not carry names no edge".to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": roles,
+                "synapse": { "fromUUID": "input-0", "toUUID": "if-1", "type": "negative" },
+            }),
+            response: serde_json::Value::Null,
+        });
 
-    // A payload that never reaches the rewrite.
-    cases.push(PruneGoldenCase {
-        name: "malformed_missing_creature".to_string(),
-        note: "a request naming no creature is a boundary fault, not a verdict".to_string(),
-        op: PruneOp::Neuron,
-        request: serde_json::json!({ "uuid": "h-1" }),
-        response: serde_json::Value::Null,
-    });
-    cases.push(PruneGoldenCase {
-        name: "malformed_unknown_role".to_string(),
-        note: "a role spelling the wire does not carry is refused, never defaulted".to_string(),
-        op: PruneOp::Synapse,
-        request: serde_json::json!({
-            "creature": crate::prune_fixtures::EDGE_ROLE_IDENTITY.before(),
-            "synapse": { "fromUUID": "h-a", "toUUID": "if-1", "type": "POSITIVE" },
-        }),
-        response: serde_json::Value::Null,
-    });
+        // A payload that never reaches the rewrite.
+        cases.push(PruneGoldenCase {
+            name: "malformed_missing_creature".to_string(),
+            note: "a request naming no creature is a boundary fault, not a verdict".to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({ "uuid": "h-1" }),
+            response: serde_json::Value::Null,
+        });
+        cases.push(PruneGoldenCase {
+            name: "malformed_unknown_role".to_string(),
+            note: "a role spelling the wire does not carry is refused, never defaulted".to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": crate::prune_fixtures::EDGE_ROLE_IDENTITY.before(),
+                "synapse": { "fromUUID": "h-a", "toUUID": "if-1", "type": "POSITIVE" },
+            }),
+            response: serde_json::Value::Null,
+        });
 
-    cases
-}
-
-/// `h-x` and `h-p` both feed the output, so `h-p` can carry the correlated
-/// part of what `h-x` did.
-const CORRELATED_SURVIVOR: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-x","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
-    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-x"},
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-p"},
-    {"weight":2.0,"fromUUID":"h-x","toUUID":"output-0"},
-    {"weight":1.0,"fromUUID":"h-p","toUUID":"output-0"}
-  ]
-}"#;
-
-/// Copy the keys of `extra` into `target`, which is always a JSON object here.
-fn merge(target: &mut serde_json::Value, extra: serde_json::Value) {
-    let (Some(target), Some(extra)) = (target.as_object_mut(), extra.as_object()) else {
-        return;
-    };
-    for (key, value) in extra {
-        target.insert(key.clone(), value.clone());
-    }
-}
-
-/// Answer one golden case through the native ABI.
-///
-/// # Panics
-///
-/// Panics when the case's request cannot be re-serialised. The requests are
-/// built here from `serde_json::json!`, so that is a defect in the record
-/// rather than a runtime condition, and it must fail loudly rather than be
-/// answered as a malformed payload.
-#[must_use]
-pub fn run_golden_case(case: &PruneGoldenCase) -> String {
-    let request = serde_json::to_string(&case.request).unwrap_or_else(|e| {
-        panic!(
-            "golden case {} has an unserialisable request: {e}",
-            case.name
-        )
-    });
-    match case.op {
-        PruneOp::Neuron => prune_neuron_json(&request),
-        PruneOp::Synapse => prune_synapse_json(&request),
-    }
-}
-
-/// Read and write the committed golden record.
-///
-/// Native only: the record is test scaffolding a host never asks for, and the
-/// wasm build has no filesystem to read it from.
-#[cfg(not(target_family = "wasm"))]
-mod golden_io {
-    use super::{GOLDEN_PATH, PruneGoldenCase, prune_golden_cases, run_golden_case};
-
-    /// Absolute path of the committed golden record.
-    fn golden_file() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/prune_wasm_parity.json")
+        cases
     }
 
-    /// Load the committed golden record.
-    ///
-    /// # Errors
-    ///
-    /// Returns the read or parse failure. A missing or unreadable record is a
-    /// defect, not a condition to skip over: regenerate it with
-    /// [`write_golden`].
-    pub fn read_golden() -> Result<Vec<PruneGoldenCase>, String> {
-        let path = golden_file();
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("{GOLDEN_PATH} could not be read: {e}"))?;
-        serde_json::from_str(&text).map_err(|e| format!("{GOLDEN_PATH} is not the record: {e}"))
-    }
+    /// `if-1` reads a varying condition and one source per branch, so removing
+    /// either branch's only edge leaves that role empty with the condition
+    /// still undecided.
+    const EMPTIED_IF_BRANCH: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-c","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"h-n","bias":0.3,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-c"},
+        {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
+        {"weight":1.0,"fromUUID":"input-1","toUUID":"h-n"},
+        {"weight":1.0,"fromUUID":"h-c","toUUID":"if-1","type":"condition"},
+        {"weight":2.0,"fromUUID":"h-p","toUUID":"if-1","type":"positive"},
+        {"weight":-2.0,"fromUUID":"h-n","toUUID":"if-1","type":"negative"},
+        {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+      ]
+    }"#;
 
-    /// Regenerate the committed golden record from the native answers.
-    ///
-    /// # Errors
-    ///
-    /// Returns the serialisation or write failure.
-    pub fn write_golden() -> Result<(), String> {
-        let mut cases = prune_golden_cases();
-        for case in &mut cases {
-            // An answer this crate cannot read back is a defect in the ABI, not
-            // a record to write down as `null`.
-            case.response = serde_json::from_str(&run_golden_case(case))
-                .map_err(|e| format!("{}: the native answer is not JSON: {e}", case.name))?;
+    /// `h-x` and `h-p` both feed the output, so `h-p` can carry the correlated
+    /// part of what `h-x` did.
+    const CORRELATED_SURVIVOR: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-x","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-x"},
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-p"},
+        {"weight":2.0,"fromUUID":"h-x","toUUID":"output-0"},
+        {"weight":1.0,"fromUUID":"h-p","toUUID":"output-0"}
+      ]
+    }"#;
+
+    /// Copy the keys of `extra` into `target`, which is always a JSON object here.
+    fn merge(target: &mut serde_json::Value, extra: serde_json::Value) {
+        let (Some(target), Some(extra)) = (target.as_object_mut(), extra.as_object()) else {
+            return;
+        };
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
         }
-        let mut text = serde_json::to_string_pretty(&cases)
-            .map_err(|e| format!("the golden record could not be serialised: {e}"))?;
-        text.push('\n');
-        let path = golden_file();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("{} could not be created: {e}", parent.display()))?;
-        }
-        std::fs::write(&path, text).map_err(|e| format!("{GOLDEN_PATH} could not be written: {e}"))
     }
+
+    /// Answer one golden case through the native ABI.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the case's request cannot be re-serialised. The requests are
+    /// built here from `serde_json::json!`, so that is a defect in the record
+    /// rather than a runtime condition, and it must fail loudly rather than be
+    /// answered as a malformed payload.
+    #[must_use]
+    pub fn run_golden_case(case: &PruneGoldenCase) -> String {
+        let request = serde_json::to_string(&case.request).unwrap_or_else(|e| {
+            panic!(
+                "golden case {} has an unserialisable request: {e}",
+                case.name
+            )
+        });
+        match case.op {
+            PruneOp::Neuron => prune_neuron_json(&request),
+            PruneOp::Synapse => prune_synapse_json(&request),
+        }
+    }
+
+    /// Read and write the committed golden record.
+    ///
+    /// Native only: the record is test scaffolding a host never asks for, and the
+    /// wasm build has no filesystem to read it from.
+    #[cfg(not(target_family = "wasm"))]
+    mod golden_io {
+        use super::{GOLDEN_PATH, PruneGoldenCase, prune_golden_cases, run_golden_case};
+
+        /// Absolute path of the committed golden record.
+        ///
+        /// Derived from [`GOLDEN_PATH`] — which is repository-root relative, and is
+        /// the same string `scripts/check_wasm_prune_parity.ts` reads — so moving
+        /// the record cannot leave the constant naming one file and this reader
+        /// opening another.
+        fn golden_file() -> std::path::PathBuf {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(GOLDEN_PATH)
+        }
+
+        /// Load the committed golden record.
+        ///
+        /// # Errors
+        ///
+        /// Returns the read or parse failure. A missing or unreadable record is a
+        /// defect, not a condition to skip over: regenerate it with
+        /// [`write_golden`].
+        pub fn read_golden() -> Result<Vec<PruneGoldenCase>, String> {
+            let path = golden_file();
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| format!("{GOLDEN_PATH} could not be read: {e}"))?;
+            serde_json::from_str(&text).map_err(|e| format!("{GOLDEN_PATH} is not the record: {e}"))
+        }
+
+        /// Regenerate the committed golden record from the native answers.
+        ///
+        /// # Errors
+        ///
+        /// Returns the serialisation or write failure.
+        pub fn write_golden() -> Result<(), String> {
+            let mut cases = prune_golden_cases();
+            for case in &mut cases {
+                // An answer this crate cannot read back is a defect in the ABI, not
+                // a record to write down as `null`.
+                case.response = serde_json::from_str(&run_golden_case(case))
+                    .map_err(|e| format!("{}: the native answer is not JSON: {e}", case.name))?;
+            }
+            let mut text = serde_json::to_string_pretty(&cases)
+                .map_err(|e| format!("the golden record could not be serialised: {e}"))?;
+            text.push('\n');
+            let path = golden_file();
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{} could not be created: {e}", parent.display()))?;
+            }
+            std::fs::write(&path, text)
+                .map_err(|e| format!("{GOLDEN_PATH} could not be written: {e}"))
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub use golden_io::{read_golden, write_golden};
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub use golden_io::{read_golden, write_golden};
+pub use golden::{
+    GOLDEN_PATH, PruneGoldenCase, PruneOp, prune_golden_cases, read_golden, run_golden_case,
+    write_golden,
+};
 
 #[cfg(test)]
 mod tests {

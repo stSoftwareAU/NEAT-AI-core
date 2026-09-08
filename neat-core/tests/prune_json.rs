@@ -32,10 +32,12 @@ fn answer(json: &str) -> PruneResponse {
 
 #[test]
 fn every_neuron_fixture_answers_exactly_what_the_native_call_answers() {
+    let mut graded = 0;
     for case in PRUNE_PARITY_CASES {
         let PruneRequest::RemoveNeuron { uuid } = case.request else {
             continue;
         };
+        graded += 1;
         let creature = case.before();
         let stats = case.mean_activation.map(PruneStats::mean);
         let native = prune_neuron(&creature, uuid, stats.as_ref());
@@ -72,10 +74,15 @@ fn every_neuron_fixture_answers_exactly_what_the_native_call_answers() {
             case.name
         );
     }
+
+    // A fixture list that stopped carrying a neuron removal would leave this
+    // test asserting nothing at all.
+    assert!(graded > 0, "no RemoveNeuron fixture was graded");
 }
 
 #[test]
 fn every_synapse_fixture_answers_exactly_what_the_native_call_answers() {
+    let mut graded = 0;
     for case in PRUNE_PARITY_CASES {
         let PruneRequest::RemoveSynapse {
             from_uuid,
@@ -85,6 +92,7 @@ fn every_synapse_fixture_answers_exactly_what_the_native_call_answers() {
         else {
             continue;
         };
+        graded += 1;
         let creature = case.before();
         let key = SynapseKey {
             from_uuid: from_uuid.to_string(),
@@ -117,15 +125,19 @@ fn every_synapse_fixture_answers_exactly_what_the_native_call_answers() {
             case.name
         );
     }
+
+    assert!(graded > 0, "no RemoveSynapse fixture was graded");
 }
 
 #[test]
 fn a_successful_answer_always_carries_a_creature_the_core_validator_accepts() {
+    let mut graded = 0;
     for case in prune_golden_cases() {
         let response = answer(&run_golden_case(&case));
         if !response.ok {
             continue;
         }
+        graded += 1;
         let creature = response.creature.expect("an ok answer carries a creature");
         creature_validate(&creature, &OPTIONS).unwrap_or_else(|failure| {
             panic!(
@@ -134,6 +146,9 @@ fn a_successful_answer_always_carries_a_creature_the_core_validator_accepts() {
             )
         });
     }
+
+    // A record that answered only refusals would pass this vacuously.
+    assert!(graded > 0, "no golden case produced a creature to validate");
 }
 
 #[test]
@@ -461,12 +476,35 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
             .any(|c| c.response["transform"] == serde_json::json!("approximate")),
         "no approximate transform in the golden record"
     );
+    // Every list the response can carry is reached by some case, so no payload
+    // shape crosses the boundary ungraded.
+    for payload in [
+        "removedSynapses",
+        "cascadeNeurons",
+        "cascadeSynapses",
+        "foldedNeurons",
+        "downgradedIfNeurons",
+        "staticIfNeurons",
+        "restoredIfRoles",
+        "biasFolds",
+        "weightShares",
+        "uncompensated",
+    ] {
+        assert!(
+            golden.iter().any(|c| c.response[payload]
+                .as_array()
+                .is_some_and(|a| !a.is_empty())),
+            "no golden case carries a non-empty {payload}"
+        );
+    }
+
     // The IF/typed edge cases and the cascade this milestone is about.
     for required in [
         "if_repair_coalesces_roles",
         "edge_role_identity",
         "cascade_orphan_feeders",
         "static_if_rewrite",
+        "restored_if_role",
     ] {
         assert!(
             golden.iter().any(|c| c.name == required),
