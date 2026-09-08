@@ -176,16 +176,18 @@ for v in data.get("versions", []):
 
 # --- lockfile helpers ------------------------------------------------------
 
+# The one definition of the lockfile path; every stage below reads this.
+LOCK_FILE="${REPO_DIR}/Cargo.lock"
+
 # Print "<name> <version>" for every package in the repo's Cargo.lock, sorted.
 # A missing lockfile prints nothing, so every "is it landed?" query below
 # answers no rather than silently claiming success.
 lock_snapshot() {
-  local lock="${REPO_DIR}/Cargo.lock"
-  [[ -f "$lock" ]] || return 0
+  [[ -f "$LOCK_FILE" ]] || return 0
   awk '
     /^name[[:space:]]*=/    { gsub(/"/, ""); name = $3 }
     /^version[[:space:]]*=/ { gsub(/"/, ""); if (name != "") { print name " " $3; name = "" } }
-  ' "$lock" | LC_ALL=C sort
+  ' "$LOCK_FILE" | LC_ALL=C sort
 }
 
 # Exit 0 when <crate> is locked at <version>. The snapshot is materialised
@@ -234,24 +236,70 @@ BUMP_NAMES=()
 BUMP_FROMS=()
 BUMP_TARGETS=()
 # "<name> <version>" lines for crates the quarantine deferred, at the version
-# they must stay on. The grouped retry checks these did not move.
+# they must stay on. Both update passes check these did not move.
 BUMP_DEFERRED_LOCK=""
+# Why a planned bump did not land, by plan index. Unset means the plain
+# "cargo update rejected" case; a quarantine revert fills in its own reason.
+BUMP_FAIL_REASON=()
+
+# Name the first quarantine breach a `cargo update` left in the lockfile, or
+# print nothing when the lock is clean. $1 is the lock_snapshot taken before
+# that update — this is the single definition of the contract both the
+# per-crate pass and the grouped retry are held to (Issue #614).
+#
+# A breach is either a crate the quarantine deferred moving off the version it
+# was held at, or a crate in the bump plan landing anywhere other than its
+# approved target or the version(s) it held before the update. Movement of
+# out-of-plan transitive crates is expected — cargo must be free to move a
+# dependency to satisfy the versions it was asked for — so it is not a breach.
+quarantine_breach() {
+  local before="$1" after i name version clean line
+  after="$(lock_snapshot)"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    if ! grep -qxF "$line" <<<"$after"; then
+      printf 'moved quarantined %s off %s\n' "${line%% *}" "${line##* }"
+      return 0
+    fi
+  done <<<"$BUMP_DEFERRED_LOCK"
+  # Guarded: bash 3.2 treats "${!arr[@]}" on an empty array as unbound.
+  [[ "${#BUMP_NAMES[@]}" -gt 0 ]] || return 0
+  for i in "${!BUMP_NAMES[@]}"; do
+    name="${BUMP_NAMES[i]}"
+    # Every version the crate is now locked at must be its approved target or
+    # one it already held. Checked version by version rather than "is the
+    # target present?": a crate locked at two majors (syn 2.x and 3.x) can
+    # land its target and be dragged on the *other* major in one update.
+    clean=1
+    while IFS= read -r version; do
+      [[ -n "$version" ]] || continue
+      [[ "$version" == "${BUMP_TARGETS[i]}" ]] && continue
+      if ! grep -qxF "$name $version" <<<"$before"; then
+        clean=0
+        break
+      fi
+    done <<<"$(awk -v c="$name" '$1 == c { print $2 }' <<<"$after")"
+    if [[ "$clean" -eq 1 ]]; then continue; fi
+    printf 'moved %s off its approved target %s\n' "$name" "${BUMP_TARGETS[i]}"
+    return 0
+  done
+  # A clean lock: no breach named, and never a non-zero status the callers'
+  # `breach="$(quarantine_breach …)"` assignment would trip `set -e` on.
+  return 0
+}
 
 # Retry every crate the per-crate pass could not land, in one `cargo update`.
 # Some families (js-sys / wasm-bindgen / web-sys) only resolve when moved
 # together, and each is rejected on its own. Takes the indices to retry.
 #
 # The grouped update carries no `--precise` (cargo accepts only one), so the
-# quarantine is re-checked afterwards against the lockfile: every crate in the
-# group must end on its approved target or on the version it started from, and
-# no crate the quarantine deferred may have moved. Anything else reverts the
-# whole group. Movement of out-of-group transitive crates is expected — cargo
-# must be free to move a dependency to satisfy the versions the group asked
-# for — and is not a quarantine breach, so it does not trip the check.
+# lockfile is checked against `quarantine_breach` afterwards: any planned crate
+# off both its approved target and the version it started from, or any deferred
+# crate that moved, reverts the whole group.
 grouped_retry() {
   [[ $# -gt 0 ]] || return 0
   local -a idx=("$@")
-  local -a specs=() members=() froms=()
+  local -a specs=() members=()
   local i spec
   for i in "${idx[@]}"; do
     if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then continue; fi
@@ -260,48 +308,32 @@ grouped_retry() {
       continue
     fi
     members+=("$i")
-    froms+=("${spec##*@}")
     specs+=(-p "$spec")
   done
   [[ "${#members[@]}" -gt 0 ]] || return 0
 
-  local lock="${REPO_DIR}/Cargo.lock"
-  if [[ ! -f "$lock" ]]; then
-    echo "  skip: grouped retry of ${#members[@]} crate(s) (no ${lock} to verify against)"
+  if [[ ! -f "$LOCK_FILE" ]]; then
+    echo "  skip: grouped retry of ${#members[@]} crate(s) (no ${LOCK_FILE} to verify against)"
     return 0
   fi
-  local backup
+  local backup before breach
   backup="$(mktemp "${TMPDIR:-/tmp}/bump-deps-lock.XXXXXX")"
-  cp "$lock" "$backup"
+  cp "$LOCK_FILE" "$backup"
+  before="$(lock_snapshot)"
   if ! (cd "$REPO_DIR" && cargo update "${specs[@]}") >&2; then
     echo "  retry: grouped cargo update rejected ${#members[@]} crate(s)"
-    cp "$backup" "$lock"
+    cp "$backup" "$LOCK_FILE"
     rm -f "$backup"
     return 0
   fi
 
-  local approved=1 j line
-  for j in "${!members[@]}"; do
-    i="${members[j]}"
-    if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then continue; fi
-    if crate_locked_at "${BUMP_NAMES[i]}" "${froms[j]}"; then continue; fi
-    echo "  revert: grouped retry moved ${BUMP_NAMES[i]} off its approved target ${BUMP_TARGETS[i]}"
-    approved=0
-    break
-  done
-  if [[ "$approved" -eq 1 && -n "$BUMP_DEFERRED_LOCK" ]]; then
-    while IFS= read -r line; do
-      [[ -n "$line" ]] || continue
-      if ! crate_locked_at "${line%% *}" "${line##* }"; then
-        echo "  revert: grouped retry moved quarantined ${line%% *} off ${line##* }"
-        approved=0
-        break
-      fi
-    done <<<"$BUMP_DEFERRED_LOCK"
-  fi
-
-  if [[ "$approved" -eq 0 ]]; then
-    cp "$backup" "$lock"
+  breach="$(quarantine_breach "$before")"
+  if [[ -n "$breach" ]]; then
+    echo "  revert: grouped retry $breach"
+    cp "$backup" "$LOCK_FILE"
+    for i in "${members[@]}"; do
+      BUMP_FAIL_REASON[i]="reverted — grouped retry $breach"
+    done
   fi
   rm -f "$backup"
 }
@@ -319,6 +351,7 @@ bump_external() {
   BUMP_FROMS=()
   BUMP_TARGETS=()
   BUMP_DEFERRED_LOCK=""
+  BUMP_FAIL_REASON=()
   local applied=0 deferred=0 failed=0
   local line crate from_v new_v published_at
   # Pass 0 — read the plan and split it into quarantine-approved and deferred.
@@ -347,20 +380,47 @@ bump_external() {
     fi
   done <<<"$dry_log"
 
-  local i spec
+  local i spec backup before breach
   local -a retry=()
   if [[ "${#BUMP_NAMES[@]}" -gt 0 ]]; then
-    # Pass 1 — one crate at a time, spec pinned to the locked version.
+    # Pass 1 — one crate at a time, spec pinned to the locked version. Even
+    # with `--precise`, cargo may move *other* crates to satisfy the pin, so
+    # each update is snapshotted and verified: a drag past the quarantine is
+    # reverted and named rather than left in the lock (Issue #614). One
+    # snapshot per crate rather than one for the whole pass — it costs a copy
+    # of a file cargo has just rewritten anyway, and it is what lets the
+    # report name the update that caused the drag and keep the bumps that
+    # landed cleanly before it.
     for i in "${!BUMP_NAMES[@]}"; do
+      # No lockfile, no verification — so no update either. An unverifiable
+      # bump is refused and named, never run quietly (as grouped_retry does).
+      if [[ ! -f "$LOCK_FILE" ]]; then
+        echo "  skip: ${BUMP_NAMES[i]} ${BUMP_TARGETS[i]} (no ${LOCK_FILE} to verify against)"
+        BUMP_FAIL_REASON[i]="no ${LOCK_FILE} to verify against"
+        continue
+      fi
       # An earlier bump may already have dragged this crate to its target.
       if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then continue; fi
       if ! spec="$(crate_pkg_spec "${BUMP_NAMES[i]}" "${BUMP_FROMS[i]}")"; then
         retry+=("$i")
         continue
       fi
+      backup="$(mktemp "${TMPDIR:-/tmp}/bump-deps-lock.XXXXXX")"
+      cp "$LOCK_FILE" "$backup"
+      before="$(lock_snapshot)"
       if ! (cd "$REPO_DIR" && cargo update -p "$spec" --precise "${BUMP_TARGETS[i]}") >/dev/null 2>&1; then
+        # A rejected update leaves nothing verified behind it either.
+        cp "$backup" "$LOCK_FILE"
         retry+=("$i")
+      else
+        breach="$(quarantine_breach "$before")"
+        if [[ -n "$breach" ]]; then
+          echo "  revert: per-crate update of ${BUMP_NAMES[i]} $breach"
+          cp "$backup" "$LOCK_FILE"
+          BUMP_FAIL_REASON[i]="reverted — $breach"
+        fi
       fi
+      rm -f "$backup"
     done
 
     # Pass 2 — retry the rejects together.
@@ -376,7 +436,7 @@ bump_external() {
         echo "  bump: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]}"
       else
         failed=$((failed + 1))
-        echo "  fail: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]} (cargo update rejected)"
+        echo "  fail: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]} (${BUMP_FAIL_REASON[i]:-cargo update rejected})"
       fi
     done
   fi
