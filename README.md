@@ -19,7 +19,9 @@ vocabulary carries a plain-English gloss.
 
 ## Test-driven development
 
-Development in this repository follows **TDD**: do not merge behaviour changes unless **`cargo test --workspace`** already covers them (extend tests first when fixing bugs or adding APIs). Run **`./quality.sh`** before every commit/PR.
+Development in this repository follows **TDD**, the first of the family-wide [engineering principles](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md) that govern every NEAT-AI repository: do not merge behaviour changes unless **`cargo test --workspace`** already covers them (extend tests first when fixing bugs or adding APIs). Run **`./quality.sh`** before every commit/PR.
+
+Those principles — one implementation owner per capability, the TypeScript → Rust migration rules, and rollback by re-pinning a published revision rather than keeping a duplicate implementation — are canonical for humans and coding agents alike, and are linked rather than restated here. [`AGENTS.md`](AGENTS.md#family-wide-engineering-principles) carries what they mean for this crate, alongside the Rust/core invariants that are specific to it.
 
 ## WebAssembly
 
