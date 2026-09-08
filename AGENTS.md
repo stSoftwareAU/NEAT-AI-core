@@ -30,17 +30,19 @@ only what those rules mean **here**, in the shared native core:
   than cutting that scenario over.
 - **A defect found after a migration starts with the smallest reproducing test**
   ([principle 2](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#2-a-post-release-defect-starts-with-the-smallest-reproducing-test)).
-  Add that test to `neat-core`, watch it go red, then fix the canonical
-  implementation here. Never patch around the defect in a consumer, and never
+  Write the smallest test that reproduces it against `neat-core`, watch it go
+  red, then fix the canonical implementation here. Never patch around the defect in a consumer, and never
   revive the deleted TypeScript path to work around it.
 - **Rollback is a repin, not a duplicate implementation**
   ([principle 8](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#8-rollback-is-versioning-and-pinning-not-duplicate-code)).
-  Consumers pin a published revision of this crate — NEAT-AI pins `neatCore.rev`
-  with its `assetSha256`, NEAT-AI-scorer pins the crate version — so a bad
-  release is rolled back by re-pinning the last known-good revision and
-  rebuilding the bundle, exactly as the per-commit wasm release lane already
-  treats wasm32 as the rollback for wasm64. Never keep a second, parallel
-  implementation alive as the rollback lever. Version and release mechanics:
+  NEAT-AI pins a published revision of this crate — `neatCore.rev` with its
+  `assetSha256` — so a bad release is rolled back by re-pinning the last
+  known-good revision and rebuilding the bundle. NEAT-AI-scorer takes no pin at
+  all: it compiles against the tip of `Develop` through a path dependency
+  ([README](README.md#neat-ai-scorer-rust--path-dependency)), so its lever is
+  the semver break signal plus a revert here. Either way the recovery is a
+  version move in this repository — never a second, parallel implementation
+  kept alive as the rollback lever. Version and release mechanics:
   [`RELEASING.md`](RELEASING.md).
 - **The ownership fence below is
   [principle 10](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#10-shared-logic-belongs-in-the-lowest-sensible-reusable-component)
@@ -49,9 +51,8 @@ only what those rules mean **here**, in the shared native core:
 
 ## TDD (required)
 
-[Principle 1](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#1-test-driven-development-tdd-comes-first) in local
-mechanics — new behaviour and bugfixes start from a failing test, and that rule
-is not restated here:
+[Principle 1](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#1-test-driven-development-tdd-comes-first) owns the
+rule; what follows is only how it is discharged in this crate:
 
 - Do not land Rust changes without **tests** in `neat-core` (or the relevant crate) and a green **`cargo test --workspace`**.
 - **Characterisation-test exception — pure extractions only.** Collapsing N identical copies into one helper adds no behaviour for a failing-first test to describe, so write the tests against the **pre-change copies**, run them green there, and keep them green through the extraction (that is what proves the refactor behaviour-preserving — `pr-summary-442.md`). The red run you skip is repaid by the mutation evidence below: a characterisation test that never fails is worth nothing.

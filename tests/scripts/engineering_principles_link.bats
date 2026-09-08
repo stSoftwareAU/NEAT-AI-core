@@ -56,14 +56,74 @@ sys.stdout.write("\n".join(out))
 PY
 }
 
-# assert_section_matches <file> <heading> <label=regex>... — every regex must
-# match the section body (case-insensitively), or the helper names the ones that
-# did not and fails.
-assert_section_matches() {
-  local file="$1" heading="$2"
-  shift 2
-  local body
-  body="$(section_text "$file" "$heading")" || return 1
+# bullet_body <file> <heading> <marker> — print one top-level `- ` bullet from
+# <heading>'s section, chosen by <marker> (a case-insensitive substring of its
+# text), with its leading bold label removed. Section scope alone proved too
+# coarse: "never revive the **deleted TypeScript** path" in the defect bullet
+# satisfied the migration bullet's deletion rule, and a bullet's own **title**
+# satisfied assertions its body contradicted. Matching one bullet's prose, title
+# stripped, closes both leaks.
+bullet_body() {
+  BULLET_FILE="$1" BULLET_HEADING="$2" BULLET_MARKER="$3" python3 - <<'PY'
+import os, re, sys
+
+path = os.environ["BULLET_FILE"]
+heading = os.environ["BULLET_HEADING"]
+marker = os.environ["BULLET_MARKER"].lower()
+
+level = len(heading) - len(heading.lstrip("#"))
+lines, inside = [], False
+for line in open(path, encoding="utf-8"):
+    stripped = line.rstrip("\n")
+    if stripped.startswith("#"):
+        this_level = len(stripped) - len(stripped.lstrip("#"))
+        if inside and this_level <= level:
+            break
+        if stripped == heading:
+            inside = True
+            continue
+    if inside:
+        lines.append(stripped)
+if not inside:
+    sys.stderr.write(f"heading not found in {path}: {heading}\n")
+    sys.exit(1)
+
+bullets, current = [], None
+for line in lines:
+    if line.startswith("- "):
+        if current is not None:
+            bullets.append(current)
+        current = [line[2:]]
+    elif current is not None:
+        current.append(line.strip())
+if current is not None:
+    bullets.append(current)
+
+for bullet in bullets:
+    text = " ".join(bullet)
+    if marker in text.lower():
+        sys.stdout.write(re.sub(r"^\s*\*\*.*?\*\*", "", text, count=1))
+        sys.exit(0)
+sys.stderr.write(f"no bullet under {heading} matching: {marker}\n")
+sys.exit(1)
+PY
+}
+
+# assert_ok — the previous `run` succeeded; on failure print what the helper
+# wrote, so a red test names the rule that went missing instead of reporting a
+# bare exit status.
+assert_ok() {
+  if [ "$status" -ne 0 ]; then
+    printf '%s\n' "$output" >&2
+    return 1
+  fi
+}
+
+# assert_matches <body> <label=regex>... — every regex must match <body>
+# (case-insensitively), or the helper names the ones that did not and fails.
+assert_matches() {
+  local body="$1"
+  shift
   SECTION_BODY="$body" SECTION_RULES="$(printf '%s\n' "$@")" python3 - <<'PY'
 import os, re, sys
 
@@ -85,9 +145,30 @@ for rule in os.environ["SECTION_RULES"].splitlines():
     if not re.search(pattern, body):
         missing.append(label)
 if missing:
-    sys.stderr.write("section is missing: " + "; ".join(missing) + "\n")
+    sys.stderr.write("text is missing: " + "; ".join(missing) + "\n")
     sys.exit(1)
 PY
+}
+
+# assert_section_matches <file> <heading> <label=regex>... — match a whole
+# section's prose. Use where the rule may legitimately be stated anywhere in the
+# section; prefer assert_bullet_matches where a single bullet owns the rule.
+assert_section_matches() {
+  local file="$1" heading="$2"
+  shift 2
+  local body
+  body="$(section_text "$file" "$heading")" || return 1
+  assert_matches "$body" "$@"
+}
+
+# assert_bullet_matches <file> <heading> <marker> <label=regex>... — match the
+# prose of the one bullet that owns the rule, its bold title stripped.
+assert_bullet_matches() {
+  local file="$1" heading="$2" marker="$3"
+  shift 3
+  local body
+  body="$(bullet_body "$file" "$heading" "$marker")" || return 1
+  assert_matches "$body" "$@"
 }
 
 # --- The canonical document is reachable from both audiences ----------------
@@ -137,8 +218,8 @@ PY
   run assert_section_matches "$RELEASING" "## Versioning policy" \
     "the canonical principle is named=rollback is versioning and pinning" \
     "rollback is a repin of a known-good revision=re-?pin\\w*[^.]*(revision|version)" \
-    "not a revived duplicate implementation=(never|not)[^.]*(revi\\w+|duplicate|second)[^.]*(implementation|fallback)"
-  [ "$status" -eq 0 ]
+    "not a revived duplicate implementation=(never|not|neither)[^.]*(revi\\w+|superseded|duplicate|second)[^.]*(implementation|fallback)"
+  assert_ok
   run grep -qF "$CANONICAL_URL" "$RELEASING"
   [ "$status" -eq 0 ]
 }
@@ -151,37 +232,86 @@ PY
 }
 
 @test "the migration rule names parity, ownership, deletion and no fallback" {
-  run assert_section_matches "$AGENTS" "$DEFERRAL_HEADING" \
+  run assert_bullet_matches "$AGENTS" "$DEFERRAL_HEADING" "receiving end of a typescript" \
     "parity or a justified improvement proven first=parit\w*[^.]*(superior|improvement)|(superior|improvement)\w*[^.]*parit" \
     "ownership transfers to neat-core=(ownership|owner)[^.]*neat-core" \
-    "the superseded implementation is deleted=delet\w+[^.]*(superseded|typescript)" \
+    "the superseded implementation is deleted=delet\w+[^.]*superseded" \
     "no runtime fallback or dual path=no [^.]*(fallback|dual path)"
-  [ "$status" -eq 0 ]
+  assert_ok
 }
 
 @test "a post-migration defect starts with the smallest reproducing test" {
-  run assert_section_matches "$AGENTS" "$DEFERRAL_HEADING" \
-    "the smallest reproducing test comes first=(smallest|reproduc\w+)[^.]*test" \
+  run assert_bullet_matches "$AGENTS" "$DEFERRAL_HEADING" "defect found after a migration" \
+    "the smallest reproducing test comes first=smallest test[^.]*reproduc" \
+    "it is watched failing before the fix=(red|fail\w*)" \
     "the fix lands in the canonical implementation=canonical implementation"
-  [ "$status" -eq 0 ]
+  assert_ok
 }
 
 @test "rollback is documented as re-pinning a revision, not duplicate code" {
-  run assert_section_matches "$AGENTS" "$DEFERRAL_HEADING" \
-    "rollback is a repin of a released revision=roll ?back[^.]*(pin|version|revision)" \
-    "rollback is not a duplicate implementation=(not|never)[^.]*(duplicate|second|parallel)[^.]*(implementation|path)"
-  [ "$status" -eq 0 ]
+  run assert_bullet_matches "$AGENTS" "$DEFERRAL_HEADING" "rollback is a repin" \
+    "rollback is a repin of a released revision=rolled back[^.]*(re-?pin|revision)" \
+    "rollback is not a duplicate implementation=(not|never)[^.]*(duplicate|second|parallel)[^.]*implementation"
+  assert_ok
 }
 
 # --- DRY: link the shared policy, do not copy it -----------------------------
 
-@test "the deferral section stays a pointer, not a copy of the policy" {
-  local body line_count
-  body="$(section_text "$AGENTS" "$DEFERRAL_HEADING")"
-  line_count=$(printf '%s\n' "$body" | wc -l)
-  # A pointer plus the core-specific extensions; anything longer is the shared
-  # policy being copied back in.
-  [ "$line_count" -le 45 ]
+@test "every rule in the deferral section defers by link" {
+  # The first cut of this test counted lines, which measured wrapping rather
+  # than copying: four canonical principles pasted in verbatim stayed under the
+  # budget and passed. What actually distinguishes a pointer from a copy is
+  # that every rule here cites the canonical principle it localises — a block
+  # of policy pasted in carries no such citation.
+  run env AGENTS_MD="$AGENTS" HEADING="$DEFERRAL_HEADING" python3 - <<'PY'
+import os, re, sys
+
+path, heading = os.environ["AGENTS_MD"], os.environ["HEADING"]
+level = len(heading) - len(heading.lstrip("#"))
+lines, inside = [], False
+for line in open(path, encoding="utf-8"):
+    stripped = line.rstrip("\n")
+    if stripped.startswith("#"):
+        this_level = len(stripped) - len(stripped.lstrip("#"))
+        if inside and this_level <= level:
+            break
+        if stripped == heading:
+            inside = True
+            continue
+    if inside:
+        lines.append(stripped)
+if not inside:
+    sys.stderr.write(f"heading not found: {heading}\n")
+    sys.exit(1)
+
+bullets, current = [], None
+for line in lines:
+    if line.startswith("- "):
+        if current is not None:
+            bullets.append(current)
+        current = [line[2:]]
+    elif current is not None:
+        current.append(line.strip())
+if current is not None:
+    bullets.append(current)
+
+if len(bullets) < 3:
+    sys.stderr.write(f"expected the core-specific rules as bullets, found {len(bullets)}\n")
+    sys.exit(1)
+
+undeferred = [
+    " ".join(b)[:60]
+    for b in bullets
+    if not re.search(r"ENGINEERING_PRINCIPLES\.md#", " ".join(b))
+]
+if undeferred:
+    sys.stderr.write(
+        "rule states policy without citing the canonical principle:\n"
+        + "\n".join(undeferred) + "\n"
+    )
+    sys.exit(1)
+PY
+  assert_ok
 }
 
 @test "the family checklist and principle titles are not restated here" {
@@ -189,8 +319,10 @@ PY
   # pre-pull-request checklist; neither is duplicated into this repository.
   # (The numbered headings this file does carry — the oracle rules — are
   # core-specific and have no counterpart in the shared document.)
+  # Exit 1 is "no match"; exit 2 is an unreadable file and must not read as a
+  # pass.
   run grep -qiE '^#+ .*before you open a pull request' "$AGENTS" "$README" "$RELEASING"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   run env AGENTS_MD="$AGENTS" README_MD="$README" RELEASING_MD="$RELEASING" python3 - <<'PY'
 import os, re, sys
 
@@ -242,5 +374,5 @@ PY
   run assert_section_matches "$AGENTS" "## TDD (required)" \
     "the workspace test command=cargo test --workspace" \
     "the local quality gate=\./quality\.sh"
-  [ "$status" -eq 0 ]
+  assert_ok
 }

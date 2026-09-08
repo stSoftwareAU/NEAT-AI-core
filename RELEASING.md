@@ -14,9 +14,11 @@ anything:
 [principle 8 — rollback is versioning and pinning, not duplicate code](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#8-rollback-is-versioning-and-pinning-not-duplicate-code)
 of the family-wide
 [engineering principles](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md).
-A consumer recovers from a bad release by re-pinning the last known-good
-revision — NEAT-AI its `neatCore.rev` and `assetSha256`, NEAT-AI-scorer the
-crate version — never by reviving a superseded implementation as a fallback.
+NEAT-AI recovers from a bad release by re-pinning the last known-good revision
+— its `neatCore.rev` and `assetSha256` — and NEAT-AI-scorer, which takes no pin
+and tracks the path dependency at head, recovers through the semver break
+signal below plus a revert here. Neither reaches for a superseded
+implementation kept alive as a fallback.
 [`AGENTS.md`](AGENTS.md#family-wide-engineering-principles) reads those
 principles for this crate.
 
