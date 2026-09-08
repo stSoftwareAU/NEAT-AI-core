@@ -846,6 +846,11 @@ pub unsafe fn weighted_sum_simd_8records_unchecked(
 ///
 /// Every lane accumulates `bias + Σ w·a` in synapse order, independently of the
 /// other lanes, so widening `R` leaves each record's sum **bit-identical**.
+///
+/// Bounds-validating entry point (Issue #613): a tile that does not address
+/// `inter` throughout takes the fully-checked scalar reference instead of the
+/// unchecked kernel, so safe caller code can never reach an out-of-bounds read.
+/// Validated callers should use [`weighted_sum_interleaved_unchecked`].
 #[inline]
 pub fn weighted_sum_interleaved<const R: usize>(
     hot_weights: &[f32],

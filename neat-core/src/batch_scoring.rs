@@ -324,17 +324,15 @@ pub(crate) fn neuron_activation_scalar(
             }
         }
         SquashType::Hypotenuse => {
-            // SAFETY: the caller's precondition (documented on this function) is the
-            // load-time `CompiledNetwork::new` invariant — every `from_index` is
-            // `< num_neurons` and every buffer here is sized from `num_neurons`.
+            // SAFETY: this function's documented precondition is the load-time
+            // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
             let sum_sq =
                 unsafe { weighted_sum_of_squares_simd_unchecked(synapses, act, start, end) };
             sum_sq.sqrt() + neuron.bias
         }
         SquashType::HypotenuseV2 => {
-            // SAFETY: the caller's precondition (documented on this function) is the
-            // load-time `CompiledNetwork::new` invariant — every `from_index` is
-            // `< num_neurons` and every buffer here is sized from `num_neurons`.
+            // SAFETY: this function's documented precondition is the load-time
+            // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
             let sum_sq = unsafe {
                 weighted_sum_of_squares_v2_simd_unchecked(synapses, act, start, end, neuron.bias)
             };
@@ -345,17 +343,15 @@ pub(crate) fn neuron_activation_scalar(
             if n <= 0.0 {
                 neuron.bias
             } else {
-                // SAFETY: the caller's precondition (documented on this function) is the
-                // load-time `CompiledNetwork::new` invariant — every `from_index` is
-                // `< num_neurons` and every buffer here is sized from `num_neurons`.
+                // SAFETY: this function's documented precondition is the load-time
+                // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
                 let sum = unsafe { weighted_sum_no_bias_simd_unchecked(synapses, act, start, end) };
                 sum / n + neuron.bias
             }
         }
         _ => {
-            // SAFETY: the caller's precondition (documented on this function) is the
-            // load-time `CompiledNetwork::new` invariant — every `from_index` is
-            // `< num_neurons` and every buffer here is sized from `num_neurons`.
+            // SAFETY: this function's documented precondition is the load-time
+            // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
             let sum =
                 unsafe { weighted_sum_simd_unchecked(synapses, act, start, end, neuron.bias) };
             inline_squash(neuron.squash_type, squash, sum)
@@ -604,9 +600,8 @@ impl CompiledNetwork {
                     _ => {
                         let start = neuron.start_synapse as usize;
                         let end = start + neuron.num_synapses as usize;
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and every scratch
-                        // activation buffer is sized to `num_neurons`.
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and every scratch buffer is sized to `num_neurons`.
                         let (s0, s1, s2, s3, s4, s5, s6, s7) = unsafe {
                             weighted_sum_simd_8records_unchecked(
                                 &self.synapses,
@@ -696,9 +691,8 @@ impl CompiledNetwork {
                     _ => {
                         let start = neuron.start_synapse as usize;
                         let end = start + neuron.num_synapses as usize;
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and every scratch
-                        // activation buffer is sized to `num_neurons`.
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and every scratch buffer is sized to `num_neurons`.
                         let (s0, s1, s2, s3) = unsafe {
                             weighted_sum_simd_4records_unchecked(
                                 &self.synapses,

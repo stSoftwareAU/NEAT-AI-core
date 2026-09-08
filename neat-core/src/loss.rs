@@ -104,9 +104,8 @@ macro_rules! batch_8way_activation {
                         }
                         _ => {
                             let (sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7) =
-                                // SAFETY: the network is loaded, so `CompiledNetwork::new` has already
-                                // rejected any `from_index >= num_neurons`, and every activation buffer
-                                // here is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                                // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                                // `from_index`, and every activation buffer is sized to `num_neurons`.
                                 unsafe { weighted_sum_simd_8records_unchecked(
                                     &$network.synapses,
                                     &act0,
@@ -214,9 +213,8 @@ macro_rules! batch_8way_activation {
                                 }
                             }
                             _ => {
-                                // SAFETY: the network is loaded, so `CompiledNetwork::new` has already
-                                // rejected any `from_index >= num_neurons`, and every activation buffer
-                                // here is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                                // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                                // `from_index`, and every activation buffer is sized to `num_neurons`.
                                 let (sum0, sum1, sum2, sum3) = unsafe { weighted_sum_simd_4records_unchecked(
                                     &$network.synapses,
                                     &act0,
@@ -717,9 +715,8 @@ fn mse_sum_batch_interleaved<const R: usize>(
             let squash = SquashType::from(neuron.squash_type);
             let start_synapse = neuron.start_synapse as usize;
             let end_synapse = start_synapse + neuron.num_synapses as usize;
-            // SAFETY: the network is loaded, so `CompiledNetwork::new` has already
-            // rejected any `from_index >= num_neurons`, and every activation buffer
-            // here is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+            // `from_index`, and every activation buffer is sized to `num_neurons`.
             let (sum0, sum1, sum2, sum3) = unsafe {
                 weighted_sum_simd_4records_unchecked(
                     &network.synapses,

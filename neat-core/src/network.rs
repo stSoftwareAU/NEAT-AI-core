@@ -541,9 +541,8 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum_sq = unsafe {
                             weighted_sum_of_squares_simd_unchecked(
                                 &self.synapses,
@@ -556,9 +555,8 @@ impl CompiledNetwork {
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum_sq = unsafe {
                             weighted_sum_of_squares_v2_simd_unchecked(
                                 &self.synapses,
@@ -576,9 +574,8 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                            // already rejected any `from_index >= num_neurons` and the activation buffer
-                            // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                             let sum = unsafe {
                                 weighted_sum_no_bias_simd_unchecked(
                                     &self.synapses,
@@ -593,9 +590,8 @@ impl CompiledNetwork {
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum = unsafe {
                             weighted_sum_simd_unchecked(
                                 &self.synapses,
@@ -720,9 +716,8 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum_sq = unsafe {
                             weighted_sum_of_squares_simd_unchecked(
                                 &self.synapses,
@@ -735,9 +730,8 @@ impl CompiledNetwork {
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum_sq = unsafe {
                             weighted_sum_of_squares_v2_simd_unchecked(
                                 &self.synapses,
@@ -755,9 +749,8 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                            // already rejected any `from_index >= num_neurons` and the activation buffer
-                            // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                             let sum = unsafe {
                                 weighted_sum_no_bias_simd_unchecked(
                                     &self.synapses,
@@ -772,9 +765,8 @@ impl CompiledNetwork {
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum = unsafe {
                             weighted_sum_simd_unchecked(
                                 &self.synapses,
@@ -973,9 +965,8 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum_sq = unsafe {
                             weighted_sum_of_squares_simd_unchecked(
                                 &self.synapses,
@@ -991,9 +982,8 @@ impl CompiledNetwork {
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum_sq = unsafe {
                             weighted_sum_of_squares_v2_simd_unchecked(
                                 &self.synapses,
@@ -1014,9 +1004,8 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                            // already rejected any `from_index >= num_neurons` and the activation buffer
-                            // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                             let sum = unsafe {
                                 weighted_sum_no_bias_simd_unchecked(
                                     &self.synapses,
@@ -1034,9 +1023,8 @@ impl CompiledNetwork {
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let sum = unsafe {
                             weighted_sum_simd_unchecked(
                                 &self.synapses,
@@ -1290,9 +1278,8 @@ impl CompiledNetwork {
                     }
                     _ => {
                         // Standard squash: use SIMD 4-record weighted sum
-                        // SAFETY: `self` is a loaded `CompiledNetwork`, so `CompiledNetwork::new` has
-                        // already rejected any `from_index >= num_neurons` and the activation buffer
-                        // is sized to `num_neurons` (`AGENTS.md`, "Unsafe & SIMD invariants").
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
                         let (s0, s1, s2, s3) = unsafe {
                             weighted_sum_simd_4records_unchecked(
                                 &self.synapses,
