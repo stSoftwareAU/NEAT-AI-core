@@ -28,16 +28,27 @@ the pre-fix `usize` sum does not wrap, so the fault is unreachable natively as
 written. To observe the original symptom, `expected_size_wide`'s body was
 temporarily replaced with the pre-fix sum evaluated at the shipped wasm32
 width (`u32` wrapping arithmetic — the same expression, the same operand
-order). Against that, all five new tests failed, three of them with the exact
-reported symptom:
+order). Against that, all three boundary tests failed — each with the exact
+reported symptom, an out-of-bounds index off the end of the short buffer
+rather than a `BufferTruncated` error:
 
 ```
+---- a_neuron_count_whose_size_wraps_a_32_bit_usize_is_refused stdout ----
+thread '...' panicked at neat-core/src/propagate_codec.rs:215:26:
+index out of bounds: the len is 36 but the index is 36
 ---- a_synapse_count_no_buffer_could_hold_is_refused stdout ----
 thread '...' panicked at neat-core/src/propagate_codec.rs:108:9:
 index out of bounds: the len is 36 but the index is 36
-...
+---- flat_section_counts_no_buffer_could_hold_are_refused stdout ----
+thread '...' panicked at neat-core/src/propagate_codec.rs:118:9:
+index out of bounds: the len is 36 but the index is 36
+
 test result: FAILED. 0 passed; 3 failed
 ```
+
+The two in-module unit tests fail against the same simulation on their
+`expected_size_wide` width assertions, which is what pins the arithmetic
+itself rather than only the boundary behaviour.
 
 The simulation was reverted before committing; the committed tree contains
 only the `u64` gate.
