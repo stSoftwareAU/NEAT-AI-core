@@ -193,6 +193,30 @@ const IF_STATIC_MULTILEVEL_JSON: &str = r#"{
   ]
 }"#;
 
+/// The static-condition shape again, with the positive arm written as an
+/// **untyped** edge. `IfRoles::tally` and the forward pass both read an untyped
+/// inward edge as the positive role, so a flatten onto the positive branch has
+/// to keep it.
+const IF_STATIC_UNTYPED_ARM_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-c","bias":0.5,"squash":"IDENTITY"},
+    {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-n","bias":0.3,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-c"},
+    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
+    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-n"},
+    {"weight":1.0,"fromUUID":"h-c","toUUID":"if-1","type":"condition"},
+    {"weight":2.0,"fromUUID":"h-p","toUUID":"if-1"},
+    {"weight":-1.0,"fromUUID":"h-n","toUUID":"if-1","type":"negative"},
+    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+  ]
+}"#;
+
 /// A synapse naming a target the creature does not carry, on an edge the
 /// request does not touch.
 const DANGLING_TARGET_JSON: &str = r#"{
@@ -964,6 +988,28 @@ fn a_statically_true_condition_drops_the_unreachable_branch_and_cascades() {
         2.0,
     );
     assert_valid("a_statically_true_condition", &result.creature);
+}
+
+#[test]
+fn a_flattened_positive_branch_keeps_the_untyped_edges_that_feed_it() {
+    let before = creature(IF_STATIC_UNTYPED_ARM_JSON);
+    let result = pruned(&before, &key("input-0", "h-c", SynapseType::Standard), None);
+
+    // The condition settles at `0.5 > 0`, so the positive branch is the one the
+    // forward pass takes — and an untyped edge is a positive-branch edge.
+    let twin = with_edge_zeroed(&before, "input-0", "h-c", None);
+    assert_same_function("static_if_untyped_arm", &twin, &result.creature);
+
+    assert!(
+        has_edge(&result.creature, "h-p", "if-1"),
+        "the untyped positive arm was dropped with the unreachable branch"
+    );
+    assert_close(
+        "the untyped arm survives at its own weight",
+        weight(&result.creature, "h-p", "if-1"),
+        2.0,
+    );
+    assert_valid("a_flattened_positive_branch_untyped", &result.creature);
 }
 
 #[test]
