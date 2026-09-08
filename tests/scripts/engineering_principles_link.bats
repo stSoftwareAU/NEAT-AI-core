@@ -235,7 +235,7 @@ PY
   run assert_bullet_matches "$AGENTS" "$DEFERRAL_HEADING" "receiving end of a typescript" \
     "parity or a justified improvement proven first=parit\w*[^.]*(superior|improvement)|(superior|improvement)\w*[^.]*parit" \
     "ownership transfers to neat-core=(ownership|owner)[^.]*neat-core" \
-    "the superseded implementation is deleted=delet\w+[^.]*superseded" \
+    "the superseded implementation is deleted=delete\w+[^.]*superseded" \
     "no runtime fallback or dual path=no [^.]*(fallback|dual path)"
   assert_ok
 }
