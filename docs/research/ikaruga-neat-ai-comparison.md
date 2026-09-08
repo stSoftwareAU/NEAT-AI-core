@@ -50,7 +50,7 @@ The `mame-neat` sibling crate mirrors this layout against MAME.
 
 The table lists the modules present in `neat-core/src/` today. `pc_inference` / `pc_learning` (the predictive-coding inference engine and learning rule) were in this inventory when the research was written and were **removed in Issue #414**; `wasm_dataset` was likewise **removed in Issue #415**.
 
-Source footprint: **~26,200** LOC across `neat-core/src/`, measured on `Develop` at NEAT-AI#3832. `tests/scripts/research_docs_removed_modules.bats` fails loud once the tree drifts more than 10% from that figure — refresh the number here when it does. No evolutionary operator code is present — by design.
+Source footprint: **~29,700** LOC across `neat-core/src/`, measured on the Issue #590 pruning branch (PR #597). `tests/scripts/research_docs_removed_modules.bats` fails loud once the tree drifts more than 10% from that figure — refresh the number here when it does. No evolutionary operator code is present — by design.
 
 ## Feature-by-feature comparison
 
