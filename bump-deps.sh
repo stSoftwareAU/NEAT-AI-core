@@ -188,9 +188,14 @@ lock_snapshot() {
   ' "$lock" | LC_ALL=C sort
 }
 
-# Exit 0 when <crate> is locked at <version>.
+# Exit 0 when <crate> is locked at <version>. The snapshot is materialised
+# before the match rather than piped: `grep -q` exits at the first hit, and a
+# SIGPIPE'd `sort` upstream would make `pipefail` report a locked crate as
+# unlocked.
 crate_locked_at() {
-  lock_snapshot | grep -qxF "$1 $2"
+  local snapshot
+  snapshot="$(lock_snapshot)"
+  grep -qxF "$1 $2" <<<"$snapshot"
 }
 
 # Echo the `cargo update -p` spec for <crate>, pinned to the version it is
@@ -205,31 +210,15 @@ crate_pkg_spec() {
     printf '%s@%s\n' "$crate" "$from"
     return 0
   fi
-  versions="$(lock_snapshot | awk -v c="$crate" '$1 == c { print $2 }')"
+  local snapshot
+  snapshot="$(lock_snapshot)"
+  versions="$(awk -v c="$crate" '$1 == c { print $2 }' <<<"$snapshot")"
   count="$(printf '%s' "$versions" | grep -c . || true)"
   if [[ "$count" -eq 1 ]]; then
     printf '%s@%s\n' "$crate" "$versions"
     return 0
   fi
   return 1
-}
-
-# Exit 0 when the only lockfile movement between the "<name> <version>"
-# snapshots $1 (before) and $2 (after) is an approved one: every line that
-# appeared is in the approved-additions list $3, and every line that
-# disappeared is in the approved-removals list $4.
-lock_change_approved() {
-  local before="$1" after="$2" approved_added="$3" approved_removed="$4"
-  local line
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    printf '%s' "$approved_added" | grep -qxF "$line" || return 1
-  done < <(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
-  while IFS= read -r line; do
-    [[ -n "$line" ]] || continue
-    printf '%s' "$approved_removed" | grep -qxF "$line" || return 1
-  done < <(comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))
-  return 0
 }
 
 # --- stages ----------------------------------------------------------------
@@ -244,48 +233,76 @@ build_msg="skipped"
 BUMP_NAMES=()
 BUMP_FROMS=()
 BUMP_TARGETS=()
+# "<name> <version>" lines for crates the quarantine deferred, at the version
+# they must stay on. The grouped retry checks these did not move.
+BUMP_DEFERRED_LOCK=""
 
 # Retry every crate the per-crate pass could not land, in one `cargo update`.
 # Some families (js-sys / wasm-bindgen / web-sys) only resolve when moved
 # together, and each is rejected on its own. Takes the indices to retry.
 #
 # The grouped update carries no `--precise` (cargo accepts only one), so the
-# quarantine is enforced afterwards: only crates whose target already passed
-# the quarantine check are included, and unless every version that moved is
-# one of those approved targets the whole group is reverted.
+# quarantine is re-checked afterwards against the lockfile: every crate in the
+# group must end on its approved target or on the version it started from, and
+# no crate the quarantine deferred may have moved. Anything else reverts the
+# whole group. Movement of out-of-group transitive crates is expected — cargo
+# must be free to move a dependency to satisfy the versions the group asked
+# for — and is not a quarantine breach, so it does not trip the check.
 grouped_retry() {
+  [[ $# -gt 0 ]] || return 0
   local -a idx=("$@")
-  local -a specs=()
-  local approved_added="" approved_removed=""
-  local i spec pending=0
+  local -a specs=() members=() froms=()
+  local i spec
   for i in "${idx[@]}"; do
     if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then continue; fi
-    if ! spec="$(crate_pkg_spec "${BUMP_NAMES[i]}" "${BUMP_FROMS[i]}")"; then continue; fi
-    pending=$((pending + 1))
+    if ! spec="$(crate_pkg_spec "${BUMP_NAMES[i]}" "${BUMP_FROMS[i]}")"; then
+      echo "  skip: ${BUMP_NAMES[i]} ${BUMP_TARGETS[i]} (locked at several versions, no unambiguous package spec)"
+      continue
+    fi
+    members+=("$i")
+    froms+=("${spec##*@}")
     specs+=(-p "$spec")
-    approved_added+="${BUMP_NAMES[i]} ${BUMP_TARGETS[i]}"$'\n'
-    approved_removed+="${BUMP_NAMES[i]} ${spec##*@}"$'\n'
   done
-  [[ "$pending" -gt 0 ]] || return 0
+  [[ "${#members[@]}" -gt 0 ]] || return 0
 
   local lock="${REPO_DIR}/Cargo.lock"
-  [[ -f "$lock" ]] || return 0
-  local backup before after
-  backup="$(mktemp)"
+  if [[ ! -f "$lock" ]]; then
+    echo "  skip: grouped retry of ${#members[@]} crate(s) (no ${lock} to verify against)"
+    return 0
+  fi
+  local backup
+  backup="$(mktemp "${TMPDIR:-/tmp}/bump-deps-lock.XXXXXX")"
   cp "$lock" "$backup"
-  before="$(lock_snapshot)"
-  if ! (cd "$REPO_DIR" && cargo update "${specs[@]}") >/dev/null 2>&1; then
+  if ! (cd "$REPO_DIR" && cargo update "${specs[@]}") >&2; then
+    echo "  retry: grouped cargo update rejected ${#members[@]} crate(s)"
     cp "$backup" "$lock"
     rm -f "$backup"
     return 0
   fi
-  after="$(lock_snapshot)"
-  if lock_change_approved "$before" "$after" "$approved_added" "$approved_removed"; then
-    rm -f "$backup"
-    return 0
+
+  local approved=1 j line
+  for j in "${!members[@]}"; do
+    i="${members[j]}"
+    if crate_locked_at "${BUMP_NAMES[i]}" "${BUMP_TARGETS[i]}"; then continue; fi
+    if crate_locked_at "${BUMP_NAMES[i]}" "${froms[j]}"; then continue; fi
+    echo "  revert: grouped retry moved ${BUMP_NAMES[i]} off its approved target ${BUMP_TARGETS[i]}"
+    approved=0
+    break
+  done
+  if [[ "$approved" -eq 1 && -n "$BUMP_DEFERRED_LOCK" ]]; then
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      if ! crate_locked_at "${line%% *}" "${line##* }"; then
+        echo "  revert: grouped retry moved quarantined ${line%% *} off ${line##* }"
+        approved=0
+        break
+      fi
+    done <<<"$BUMP_DEFERRED_LOCK"
   fi
-  echo "  revert: grouped retry moved a version the quarantine did not approve"
-  cp "$backup" "$lock"
+
+  if [[ "$approved" -eq 0 ]]; then
+    cp "$backup" "$lock"
+  fi
   rm -f "$backup"
 }
 
@@ -301,6 +318,7 @@ bump_external() {
   BUMP_NAMES=()
   BUMP_FROMS=()
   BUMP_TARGETS=()
+  BUMP_DEFERRED_LOCK=""
   local applied=0 deferred=0 failed=0
   local line crate from_v new_v published_at
   # Pass 0 — read the plan and split it into quarantine-approved and deferred.
@@ -323,6 +341,7 @@ bump_external() {
         BUMP_TARGETS+=("$new_v")
       else
         deferred=$((deferred + 1))
+        BUMP_DEFERRED_LOCK+="$crate $from_v"$'\n'
         echo "  defer: $crate $new_v (within ${QUARANTINE_HOURS}h quarantine, published $published_at)"
       fi
     fi
@@ -373,10 +392,18 @@ bump_external() {
   echo "external: $external_msg"
 }
 
-# Parse `cargo deny --format json check advisories` output on stdin and print
-# the first error diagnostic as "audit: FAILED — <crate> (<advisory id>)".
-deny_first_advisory() {
-  python3 -c 'import json, sys
+# Both scanners feed the same report, so each parser emits one
+# "<crate>|<version>|<id>|<title>" record per advisory and run_audit owns the
+# single copy of the output format.
+
+# Parse `cargo deny --format json check advisories` diagnostics on stdin. The
+# program is read from a quoted heredoc rather than a heredoc on stdin, which
+# would swallow the diagnostics this function is here to read.
+deny_advisories() {
+  python3 -c "$(cat <<'PY'
+import json
+import sys
+
 for raw in sys.stdin:
     raw = raw.strip()
     if not raw.startswith("{"):
@@ -393,22 +420,32 @@ for raw in sys.stdin:
     advisory = fields.get("advisory") or {}
     ident = advisory.get("id")
     crate = advisory.get("package")
-    if not crate:
-        graphs = fields.get("graphs") or []
-        if graphs:
-            crate = (graphs[0].get("Krate") or {}).get("name")
+    version = ""
+    graphs = fields.get("graphs") or []
+    if graphs:
+        krate = graphs[0].get("Krate") or {}
+        # cargo-deny omits `advisory.package` for some diagnostic kinds; the
+        # crate the graph is rooted at is the offending one either way.
+        crate = crate or krate.get("name")
+        version = krate.get("version") or ""
+    title = advisory.get("title") or fields.get("message") or ""
     if ident and crate:
-        print("audit: FAILED — %s (%s)" % (crate, ident))
-        break'
+        print("%s|%s|%s|%s" % (crate, version, ident, title))
+PY
+  )"
 }
 
-# Parse `cargo audit` text output on stdin, same one-line shape.
-audit_first_advisory() {
-  awk '
-    /^[[:space:]]*ID:[[:space:]]/    { id = $2 }
-    /^[[:space:]]*Crate:[[:space:]]/ { crate = $2 }
-    {
-      if (id != "" && crate != "") { print "audit: FAILED \342\200\224 " crate " (" id ")"; exit }
+# Parse `cargo audit` text output on stdin into the same record shape. cargo
+# audit prints Crate/Version/Title before ID, so the record is emitted when the
+# ID arrives rather than assuming a field order.
+audit_advisories() {
+  awk -F': *' '
+    /^[[:space:]]*Crate:[[:space:]]/   { crate = $2 }
+    /^[[:space:]]*Version:[[:space:]]/ { version = $2 }
+    /^[[:space:]]*Title:[[:space:]]/   { title = $2 }
+    /^[[:space:]]*ID:[[:space:]]/      {
+      if (crate != "") { print crate "|" version "|" $2 "|" title }
+      crate = ""; version = ""; title = ""
     }
   '
 }
@@ -428,7 +465,7 @@ run_audit() {
     audit_msg="error"
     return 1
   fi
-  local audit_log first
+  local audit_log records
   if [[ "$tool" == "cargo-deny" ]]; then
     echo "  audit tool: cargo deny check advisories"
     if audit_log="$(cd "$REPO_DIR" && cargo deny --format json check advisories 2>&1)"; then
@@ -436,7 +473,7 @@ run_audit() {
       echo "audit: ok"
       return 0
     fi
-    first="$(printf '%s\n' "$audit_log" | deny_first_advisory)"
+    records="$(deny_advisories <<<"$audit_log")"
   else
     echo "  audit tool: cargo audit"
     if audit_log="$(cd "$REPO_DIR" && cargo audit 2>&1)"; then
@@ -444,16 +481,24 @@ run_audit() {
       echo "audit: ok"
       return 0
     fi
-    first="$(printf '%s\n' "$audit_log" | audit_first_advisory)"
-  fi
-  # Surface the first advisory ID + offending crate so the worker log shows
-  # exactly why the bump was rejected.
-  if [[ -z "$first" ]]; then
-    first="audit: FAILED (see ${tool} output above)"
+    records="$(audit_advisories <<<"$audit_log")"
   fi
   audit_msg="failed"
-  printf '%s\n' "$audit_log" >&2
-  printf '%s\n' "$first" >&2
+  # Surface the offending crates so the worker log shows exactly why the bump
+  # was rejected, then the one-line verdict naming the first of them. An
+  # unparsable log still fails loud, with the raw output to read.
+  if [[ -z "$records" ]]; then
+    printf '%s\n' "$audit_log" >&2
+    printf 'audit: FAILED (see %s output above)\n' "$tool" >&2
+    return 1
+  fi
+  local crate version ident title
+  while IFS='|' read -r crate version ident title; do
+    [[ -n "$crate" ]] || continue
+    printf '  advisory: %s %s — %s (%s)\n' "$crate" "$version" "$title" "$ident" >&2
+  done <<<"$records"
+  IFS='|' read -r crate version ident title <<<"$(head -n 1 <<<"$records")"
+  printf 'audit: FAILED — %s (%s)\n' "$crate" "$ident" >&2
   return 1
 }
 

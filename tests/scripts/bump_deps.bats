@@ -148,16 +148,18 @@ setup_stub_cargo() {
   STUB_DRY_RUN="$TMP_REPO/dry-run.txt"
   STUB_TARGETS="$TMP_REPO/targets.txt"
   STUB_REJECT="$TMP_REPO/reject.txt"
+  STUB_DRAG="$TMP_REPO/drag.txt"
   STUB_AUDIT_OUT="$TMP_REPO/audit-output.txt"
   STUB_AUDIT_STATUS="$TMP_REPO/audit-status.txt"
   : >"$STUB_LOG"
   : >"$STUB_DRY_RUN"
   : >"$STUB_TARGETS"
   : >"$STUB_REJECT"
+  : >"$STUB_DRAG"
   : >"$STUB_AUDIT_OUT"
   echo 0 >"$STUB_AUDIT_STATUS"
-  export STUB_LOG STUB_DRY_RUN STUB_TARGETS STUB_REJECT STUB_AUDIT_OUT \
-    STUB_AUDIT_STATUS
+  export STUB_LOG STUB_DRY_RUN STUB_TARGETS STUB_REJECT STUB_DRAG \
+    STUB_AUDIT_OUT STUB_AUDIT_STATUS
 
   cat >"$STUB_BIN/cargo" <<'STUB'
 #!/usr/bin/env bash
@@ -203,15 +205,8 @@ if [ -n "$precise" ]; then
   done
 fi
 
-for spec in "${specs[@]}"; do
-  name="${spec%@*}"
-  from="${spec##*@}"
-  to="$precise"
-  if [ -z "$to" ]; then
-    to="$(awk -v n="$name" '$1 == n { print $2 }' "$STUB_TARGETS")"
-  fi
-  [ -n "$to" ] || continue
-  python3 - Cargo.lock "$name" "$from" "$to" <<'PY'
+apply_version() {
+  python3 - Cargo.lock "$1" "$2" "$3" <<'PY'
 import sys
 
 lock, name, frm, to = sys.argv[1:5]
@@ -226,7 +221,25 @@ for i, line in enumerate(lines):
             break
 open(lock, "w").write("\n".join(lines) + "\n")
 PY
+}
+
+for spec in "${specs[@]}"; do
+  name="${spec%@*}"
+  from="${spec##*@}"
+  to="$precise"
+  if [ -z "$to" ]; then
+    to="$(awk -v n="$name" '$1 == n { print $2 }' "$STUB_TARGETS")"
+  fi
+  [ -n "$to" ] || continue
+  apply_version "$name" "$from" "$to"
 done
+
+# Crates cargo drags along to satisfy the versions it was asked for, named in
+# $STUB_DRAG as "<name> <from> <to>" — the spec never mentions them.
+while read -r dname dfrom dto; do
+  [ -n "${dname:-}" ] || continue
+  apply_version "$dname" "$dfrom" "$dto"
+done <"$STUB_DRAG"
 exit 0
 STUB
   chmod +x "$STUB_BIN/cargo"
@@ -257,6 +270,7 @@ run_stubbed() {
     BUMP_DEPS_PUBLISH_FIXTURE="$TMP_REPO/publish" \
     STUB_LOG="$STUB_LOG" STUB_DRY_RUN="$STUB_DRY_RUN" \
     STUB_TARGETS="$STUB_TARGETS" STUB_REJECT="$STUB_REJECT" \
+    STUB_DRAG="$STUB_DRAG" \
     STUB_AUDIT_OUT="$STUB_AUDIT_OUT" STUB_AUDIT_STATUS="$STUB_AUDIT_STATUS" \
     bash "$SCRIPT_UNDER_TEST" --repo "$TMP_REPO" "$@"
 }
@@ -403,19 +417,99 @@ TXT
     Updating cc v1.4.2 -> v1.4.5
     Updating find-msvc-tools v0.1.10 -> v0.1.12
 TXT
-  # Updating cc drags find-msvc-tools along, so the later per-crate attempt
-  # for find-msvc-tools@0.1.10 no longer matches anything in the lock.
+  # Updating cc drags find-msvc-tools along, so by the time its own per-crate
+  # attempt comes round there is no 0.1.10 left in the lock to move.
+  printf 'find-msvc-tools 0.1.10 0.1.12\n' >"$STUB_DRAG"
   printf 'find-msvc-tools\n' >"$STUB_REJECT"
   printf 'find-msvc-tools 0.1.12\n' >"$STUB_TARGETS"
-  python3 - "$TMP_REPO/Cargo.lock" <<'PY'
-import sys
-# Pre-land find-msvc-tools at its target to model the side-effect bump.
-lock = sys.argv[1]
-text = open(lock).read().replace('version = "0.1.10"', 'version = "0.1.12"')
-open(lock, "w").write(text)
-PY
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"bump: find-msvc-tools -> 0.1.12"* ]]
   [[ "$output" == *"0 failed"* ]]
+}
+
+@test "audit: cargo-deny is preferred when both scanners are installed" {
+  setup_stub_cargo
+  install_stub_tool cargo-deny
+  install_stub_tool cargo-audit
+  run_stubbed --skip-external --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"audit: ok"* ]]
+  # cargo-deny is the repo's own advisory tool, so it wins the tie.
+  grep -q "deny .*check advisories" "$STUB_LOG"
+  ! grep -qx "audit" "$STUB_LOG"
+}
+
+@test "audit: a cargo-deny advisory with no package field names the graph crate" {
+  setup_stub_cargo
+  install_stub_tool cargo-deny
+  # cargo-deny omits advisory.package for some diagnostic kinds; the crate the
+  # inclusion graph is rooted at is the offending one either way.
+  cat >"$STUB_AUDIT_OUT" <<'JSON'
+{"fields":{"advisory":{"id":"RUSTSEC-2021-0003","title":"Buffer overflow in SmallVec::insert_many"},"code":"vulnerability","graphs":[{"Krate":{"name":"smallvec","version":"1.6.0"}}],"message":"Buffer overflow in SmallVec::insert_many","severity":"error"},"type":"diagnostic"}
+JSON
+  echo 1 >"$STUB_AUDIT_STATUS"
+  run_stubbed --skip-external --skip-build
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"audit: FAILED — smallvec (RUSTSEC-2021-0003)"* ]]
+}
+
+@test "external: a crate with no unambiguous package spec fails loud" {
+  setup_stub_cargo
+  # syn is locked at two majors and the dry run names a third version, so no
+  # `-p syn@<locked>` spec exists. That must be reported, not passed to cargo
+  # as a bare ambiguous `-p syn`.
+  write_fake_lock "syn 2.0.119" "syn 3.0.3"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating syn v3.0.9 -> v3.1.0
+TXT
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"skip: syn 3.1.0 (locked at several versions"* ]]
+  [[ "$output" == *"fail: syn -> 3.1.0"* ]]
+  ! grep -qF -- "-p syn" "$STUB_LOG"
+}
+
+@test "external: grouped retry dragging a quarantined crate is reverted" {
+  setup_stub_cargo
+  write_fake_lock "js-sys 0.3.104" "quarantined 1.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating js-sys v0.3.104 -> v0.3.105
+    Updating quarantined v1.0.0 -> v1.0.1
+TXT
+  python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())' \
+    >"$TMP_REPO/publish/quarantined-1.0.1.iso"
+  printf 'js-sys\n' >"$STUB_REJECT"
+  printf 'js-sys 0.3.105\n' >"$STUB_TARGETS"
+  # The grouped update lands js-sys but also drags the quarantined crate past
+  # the release-age window — the whole group must be reverted.
+  printf 'quarantined 1.0.0 1.0.1\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: grouped retry moved quarantined quarantined off 1.0.0"* ]]
+  [[ "$output" == *"fail: js-sys -> 0.3.105"* ]]
+  grep -qx 'version = "1.0.0"' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "0.3.104"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: grouped retry keeps a group that also moves a transitive crate" {
+  setup_stub_cargo
+  write_fake_lock "js-sys 0.3.104" "wasm-bindgen 0.2.127" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating js-sys v0.3.104 -> v0.3.105
+    Updating wasm-bindgen v0.2.127 -> v0.2.128
+TXT
+  printf 'js-sys\nwasm-bindgen\n' >"$STUB_REJECT"
+  printf 'js-sys 0.3.105\nwasm-bindgen 0.2.128\n' >"$STUB_TARGETS"
+  # cargo must be free to move an out-of-group dependency to satisfy the
+  # versions the group asked for; that is not a quarantine breach and must not
+  # revert a group whose own crates all landed on target.
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bump: js-sys -> 0.3.105"* ]]
+  [[ "$output" == *"bump: wasm-bindgen -> 0.2.128"* ]]
+  [[ "$output" == *"2 bumped, 0 deferred, 0 failed"* ]]
+  [[ "$output" != *"revert:"* ]]
+  grep -qx 'version = "3.1.0"' "$TMP_REPO/Cargo.lock"
 }
