@@ -19,7 +19,9 @@ vocabulary carries a plain-English gloss.
 
 ## Test-driven development
 
-Development in this repository follows **TDD**: do not merge behaviour changes unless **`cargo test --workspace`** already covers them (extend tests first when fixing bugs or adding APIs). Run **`./quality.sh`** before every commit/PR.
+Development in this repository follows **TDD**, the first of the family-wide [engineering principles](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md) that govern every NEAT-AI repository: do not merge behaviour changes unless **`cargo test --workspace`** already covers them (extend tests first when fixing bugs or adding APIs). Run **`./quality.sh`** before every commit/PR.
+
+Those principles — one implementation owner per capability, the TypeScript → Rust migration rules, and rollback by re-pinning a published revision rather than keeping a duplicate implementation — are canonical for humans and coding agents alike, and are linked rather than restated here. [`AGENTS.md`](AGENTS.md#family-wide-engineering-principles) carries what they mean for this crate, alongside the Rust/core invariants that are specific to it.
 
 ## WebAssembly
 
@@ -116,6 +118,8 @@ safe-fall-back invariants; see
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
 | `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
 | `.github/dependabot.yml` | Weekly Cargo **version-updates** channel (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
+| `deno.json` | Deno/JSR supply-chain config (Issue #603): a 24h `minimumDependencyAge` release-age quarantine for external JSR/npm specifiers (internal `@stsoftware/*` scopes excluded, they bump at 0h) and a **frozen** `deno.lock` — see [JSR (Deno) dependencies](#jsr-deno-dependencies). |
+| `deno.lock` | Committed integrity pin for every JSR dependency the `.ts` gates import. Frozen: `deno check`/`deno test` fail rather than re-resolve a floating range. |
 | `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`) and for the CI workflow contracts. Shared assertions live in `tests/scripts/helpers.bash` (loaded with `load helpers`, unit-tested by `helpers_shared.bats`) — put a new assertion there rather than copying it between suites (Issue #477). |
 | `LICENSE`, `.gitleaks.toml` | Inherited from NEAT-AI `Develop`. |
 
@@ -1040,6 +1044,46 @@ When an actively-exploited advisory's fix is newer than the
 **emergency quarantine override**. The full procedure (both bypass levers, the
 runbook, and the mandatory `cargo audit` re-check) lives in
 [`SECURITY.md`](SECURITY.md#emergency-quarantine-override).
+
+### JSR (Deno) dependencies
+
+The two channels above cover **Cargo**. The `.ts` gates in this repository
+(`typescript-gate`, the Mermaid gate, the wasm64 smoke tests) pull a second
+ecosystem — **JSR** — and it gets the same two defences, expressed in Deno's own
+tooling rather than in `bump-deps.sh` (Issue #603):
+
+- **Release-age quarantine** — [`deno.json`](deno.json) sets
+  `minimumDependencyAge` to `P1D` (24 hours, the `VIBE_BUMP_QUARANTINE_HOURS`
+  default), so a freshly published external JSR/npm release is not resolvable
+  until it has aged. Internal `jsr:@stsoftware/*` / `npm:@stsoftware/*` scopes
+  are excluded and bump immediately.
+- **Integrity pin** — [`deno.lock`](deno.lock) is committed and the config marks
+  it **frozen**, so every `deno check` / `deno test` resolves the exact,
+  integrity-verified versions recorded there. A specifier the lockfile does not
+  pin fails the run (`The lockfile is out of date`) instead of silently
+  re-resolving a floating `@1` range on the runner.
+
+Bumping is deliberate, as with the pinned `markdownlint-cli2` install:
+
+```bash
+deno outdated --update --latest   # honours minimumDependencyAge from deno.json
+git add deno.lock                 # commit the refreshed pin
+```
+
+`tests/deno_supply_chain_test.ts` is the gate — run by `quality.sh` and by the
+CI `typescript-gate` job, it fails if the quarantine or the frozen lockfile is
+removed or weakened.
+
+```mermaid
+flowchart LR
+    Src["tests/*.ts<br/>jsr:@std/assert@1"] --> Res{deno resolves}
+    Lock["deno.lock (frozen)<br/>exact version + integrity"] --> Res
+    Res -->|pinned version| Pass[Gate runs]
+    Res -->|specifier not pinned| Fail["Fails: lockfile is out of date"]
+    Bump["deliberate bump<br/>deno outdated --update --latest"] --> Age{"minimumDependencyAge<br/>P1D"}
+    Age -->|"external release &lt; 24h old"| Defer[Deferred]
+    Age -->|"aged, or internal @stsoftware/*"| Lock
+```
 
 ```mermaid
 flowchart TD
