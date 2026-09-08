@@ -326,14 +326,27 @@ fn validate_request(request: &str) -> ValidateResponse {
     }
 }
 
+/// The boundary fault a creature bigger than [`MAX_REQUEST_NEURONS`] earns,
+/// or `None` when the declared count is one this crate will walk.
+///
+/// The single home of the ceiling and its wording (Issue #550's doctrine, one
+/// entry point at a time): every JSON boundary that accepts a creature — this
+/// one and [`crate::prune_json`] — asks here rather than re-inlining the
+/// comparison, because a per-neuron allocation happens before the first rule
+/// and a boundary that forgot the check would abort the module.
+#[must_use]
+pub fn oversized_detail(declared: usize) -> Option<String> {
+    (declared > MAX_REQUEST_NEURONS).then(|| {
+        format!(
+            "creature declares {declared} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}"
+        )
+    })
+}
+
 /// Refuse a creature bigger than the boundary will walk, before the per-neuron
 /// allocation a declared count of `17179869180` would abort on.
 fn refuse_oversized(declared: usize) -> Option<ValidateResponse> {
-    (declared > MAX_REQUEST_NEURONS).then(|| {
-        ValidateResponse::malformed(format!(
-            "creature declares {declared} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}"
-        ))
-    })
+    oversized_detail(declared).map(ValidateResponse::malformed)
 }
 
 #[cfg(test)]

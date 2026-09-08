@@ -36,6 +36,7 @@ pub mod parallel_scoring;
 pub mod propagate_codec;
 pub mod prune_cleanup;
 pub mod prune_fixtures;
+pub mod prune_json;
 pub mod prune_neuron;
 pub mod prune_synapse;
 pub mod range;
@@ -118,6 +119,15 @@ pub use prune_neuron::{
 };
 // Issue #591 — synapse pruning with typed-role and `IF`-aware rewrites.
 pub use prune_synapse::prune_synapse;
+// Issue #592 — the JSON ABI both the native and the WASM surface answer on.
+pub use prune_json::{
+    BiasFoldJson, PruneFailureJson, PruneResponse, StaticIfJson, SynapseKeyJson, UncompensatedJson,
+    WeightShareJson, prune_neuron_json, prune_synapse_json,
+};
+// The parity record is native-only test scaffolding, so it is not part of the
+// surface the published wasm bundle carries.
+#[cfg(not(target_family = "wasm"))]
+pub use prune_json::{GOLDEN_PATH, PruneGoldenCase, PruneOp, prune_golden_cases, run_golden_case};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{
