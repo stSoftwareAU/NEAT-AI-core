@@ -10,7 +10,7 @@
 //! Benchmarks:
 //!
 //! - `bench_kernel` — the isolated `gather4`-driven kernel: one
-//!   `weighted_sum_simd` call per non-input neuron over the creature's real
+//!   `weighted_sum_simd_unchecked` call per non-input neuron over the creature's real
 //!   synapse spans, repeated [`KERNEL_REPS`] times.
 //! - `bench_activate` — end-to-end single-record inference (`activate_into`),
 //!   the production forward pass that calls that kernel.
@@ -25,7 +25,7 @@
 use std::cell::RefCell;
 
 use neat_core::network::CompiledNetwork;
-use neat_core::simd::weighted_sum_simd;
+use neat_core::simd::weighted_sum_simd_unchecked;
 
 // Reused verbatim; the backprop fixtures it also carries are unused here.
 #[allow(dead_code)]
@@ -127,7 +127,12 @@ pub extern "C" fn seed_activations() {
 }
 
 /// Isolated kernel: every non-input neuron's synapse span through
-/// `weighted_sum_simd`, [`KERNEL_REPS`] times. Returns the checksum.
+/// `weighted_sum_simd_unchecked`, [`KERNEL_REPS`] times. Returns the checksum.
+///
+/// Issue #613 - the `_unchecked` form is what the forward pass runs; the safe
+/// `weighted_sum_simd` of the same name adds an `O(end - start)` bounds
+/// pre-pass for callers holding no loaded network, which would measure
+/// something this harness is not about.
 #[unsafe(no_mangle)]
 pub extern "C" fn bench_kernel() -> f64 {
     with_fixture(|f| {
@@ -137,9 +142,18 @@ pub extern "C" fn bench_kernel() -> f64 {
             for neuron in &net.neurons {
                 let start = neuron.start_synapse as usize;
                 let end = start + neuron.num_synapses as usize;
-                checksum +=
-                    weighted_sum_simd(&net.synapses, &net.activations, start, end, neuron.bias)
-                        as f64;
+                // SAFETY: `net` came from `CompiledNetwork::new`, which rejects
+                // any `from_index >= num_neurons`, and `activations` is sized to
+                // `num_neurons`.
+                checksum += unsafe {
+                    weighted_sum_simd_unchecked(
+                        &net.synapses,
+                        &net.activations,
+                        start,
+                        end,
+                        neuron.bias,
+                    )
+                } as f64;
             }
         }
         checksum

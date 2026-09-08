@@ -81,8 +81,10 @@ so its memory-traffic behaviour is production-representative.
 
 ### Benchmarks
 
-- `kernel` — isolated: one `weighted_sum_simd` call per non-input neuron over
-  the creature's real synapse spans, ×200 (the `gather4` consumer).
+- `kernel` — isolated: one `weighted_sum_simd_unchecked` call per non-input
+  neuron over the creature's real synapse spans, ×200 (the `gather4` consumer).
+  Issue #613 split the kernel in two; this harness measures the `*_unchecked`
+  form, which is the one the forward pass reaches.
 - `activate` — end-to-end **single-record inference**: `activate_into` over
   every record. This is the production forward pass that calls `gather4`.
 - `score` — end-to-end **batched scoring**: `score_records_flat` over the whole

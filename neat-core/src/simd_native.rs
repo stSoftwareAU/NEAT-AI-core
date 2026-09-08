@@ -16,6 +16,7 @@
 //! [`crate::simd::scalar`] (Issue #447) and is shared with the wasm kernels.
 
 use crate::network::SynapseData;
+use crate::simd::bounds;
 use crate::simd::scalar;
 
 /// Widest record-interleaved tile the generic gather kernels support
@@ -723,9 +724,68 @@ mod aarch64 {
 }
 
 /// 8-record weighted sum: AVX2+FMA on x86_64, NEON on aarch64, else scalar.
+///
+/// Bounds-validating entry point (Issue #613): a span whose `from_index` values
+/// do not all index every activation buffer is **refused with a panic** rather
+/// than read unchecked, so safe caller code can never reach an out-of-bounds
+/// read. Validated callers — anything holding a `CompiledNetwork` — should call
+/// [`weighted_sum_simd_8records_unchecked`] and skip the `O(end - start)`
+/// predicate.
+///
+/// # Panics
+/// If `end > synapses.len()`, or any `from_index` in `start..end` does not index
+/// every one of the eight activation buffers.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn weighted_sum_simd_8records(
+    synapses: &[SynapseData],
+    act0: &[f32],
+    act1: &[f32],
+    act2: &[f32],
+    act3: &[f32],
+    act4: &[f32],
+    act5: &[f32],
+    act6: &[f32],
+    act7: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+    let lens = [
+        act0.len(),
+        act1.len(),
+        act2.len(),
+        act3.len(),
+        act4.len(),
+        act5.len(),
+        act6.len(),
+        act7.len(),
+    ];
+    if !bounds::span_in_bounds_multi(synapses, start, end, &lens) {
+        bounds::reject_span("weighted_sum_simd_8records");
+    }
+    // SAFETY: `span_in_bounds_multi` has just established the kernel's index
+    // precondition for this span against the shortest activation buffer.
+    unsafe {
+        weighted_sum_simd_8records_unchecked(
+            synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
+        )
+    }
+}
+
+/// 8-record weighted sum without the [`bounds`] pre-pass — the forward-pass
+/// hot-path form.
+///
+/// # Safety
+/// Every `synapse.from_index` in `start..end` must be a valid index into each
+/// of the eight activation buffers, and `end <= synapses.len()`; the kernel
+/// reads both with `get_unchecked`. `CompiledNetwork::new` enforces exactly
+/// that at load time (`NetworkError::InvalidSynapseIndex`), so a caller
+/// holding a loaded network already satisfies it. Safe callers must go through
+/// [`weighted_sum_simd_8records`].
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn weighted_sum_simd_8records_unchecked(
     synapses: &[SynapseData],
     act0: &[f32],
     act1: &[f32],
@@ -787,8 +847,47 @@ pub fn weighted_sum_simd_8records(
 ///
 /// Every lane accumulates `bias + Σ w·a` in synapse order, independently of the
 /// other lanes, so widening `R` leaves each record's sum **bit-identical**.
+///
+/// Bounds-validating entry point (Issue #613): a tile that does not address
+/// `inter` throughout is **refused with a panic** rather than read unchecked, so
+/// safe caller code can never reach an out-of-bounds read. Validated callers
+/// should use [`weighted_sum_interleaved_unchecked`].
+///
+/// # Panics
+/// If `end` exceeds either hot array, or any `hot_from` entry in `start..end`
+/// does not satisfy `from * R + R <= inter.len()`.
 #[inline]
 pub fn weighted_sum_interleaved<const R: usize>(
+    hot_weights: &[f32],
+    hot_from: &[u16],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; R] {
+    const { assert_interleaved_tile::<R>() };
+    if !bounds::interleaved_span_in_bounds(hot_weights, hot_from, inter.len(), R, start, end) {
+        bounds::reject_interleaved_span("weighted_sum_interleaved");
+    }
+    // SAFETY: `interleaved_span_in_bounds` has just established that every
+    // `hot_from` entry in `start..end` addresses a whole `R`-wide tile inside
+    // `inter`, and that the span indexes both hot arrays.
+    unsafe {
+        weighted_sum_interleaved_unchecked::<R>(hot_weights, hot_from, inter, start, end, bias)
+    }
+}
+
+/// [`weighted_sum_interleaved`] without the [`bounds`] pre-pass — the batched
+/// scoring hot-path form.
+///
+/// # Safety
+/// `end` must be `<= hot_weights.len()` and `<= hot_from.len()`, and every
+/// `hot_from` entry in `start..end` must satisfy `from * R + R <= inter.len()`
+/// — i.e. `inter` is the `num_neurons * R` transposed buffer and every source
+/// neuron is in range. `CompiledNetwork::new` enforces the index range at load
+/// time. Safe callers must go through [`weighted_sum_interleaved`].
+#[inline]
+pub unsafe fn weighted_sum_interleaved_unchecked<const R: usize>(
     hot_weights: &[f32],
     hot_from: &[u16],
     inter: &[f32],
@@ -850,6 +949,9 @@ pub fn weighted_sum_interleaved<const R: usize>(
 
 /// The 8-lane tile of [`weighted_sum_interleaved`], kept as the name the
 /// batched **scoring** path (`BatchScratch::inter`) and its tests use.
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_interleaved`].
 #[inline]
 pub fn weighted_sum_interleaved_8(
     hot_weights: &[f32],
@@ -862,10 +964,67 @@ pub fn weighted_sum_interleaved_8(
     weighted_sum_interleaved::<8>(hot_weights, hot_from, inter, start, end, bias)
 }
 
+/// The 8-lane tile of [`weighted_sum_interleaved_unchecked`].
+///
+/// # Safety
+/// Same contract as [`weighted_sum_interleaved_unchecked`] with `R == 8`.
+#[inline]
+pub unsafe fn weighted_sum_interleaved_8_unchecked(
+    hot_weights: &[f32],
+    hot_from: &[u16],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; 8] {
+    // SAFETY: forwarded verbatim to the generic kernel; the caller's obligation
+    // is the same contract at `R == 8`.
+    unsafe {
+        weighted_sum_interleaved_unchecked::<8>(hot_weights, hot_from, inter, start, end, bias)
+    }
+}
+
 /// 4-record weighted sum: FMA+SSE on x86_64, NEON on aarch64, else scalar.
+///
+/// Bounds-validating entry point (Issue #613) — see
+/// [`weighted_sum_simd_8records`]: an out-of-bounds span is refused with a
+/// panic, never read unchecked. Validated callers should use
+/// [`weighted_sum_simd_4records_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd_8records`], over the four
+/// activation buffers.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn weighted_sum_simd_4records(
+    synapses: &[SynapseData],
+    act0: &[f32],
+    act1: &[f32],
+    act2: &[f32],
+    act3: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> (f32, f32, f32, f32) {
+    let lens = [act0.len(), act1.len(), act2.len(), act3.len()];
+    if !bounds::span_in_bounds_multi(synapses, start, end, &lens) {
+        bounds::reject_span("weighted_sum_simd_4records");
+    }
+    // SAFETY: `span_in_bounds_multi` has just established the kernel's index
+    // precondition for this span against the shortest activation buffer.
+    unsafe {
+        weighted_sum_simd_4records_unchecked(synapses, act0, act1, act2, act3, start, end, bias)
+    }
+}
+
+/// 4-record weighted sum without the [`bounds`] pre-pass — the hot-path form.
+///
+/// # Safety
+/// Same contract as [`weighted_sum_simd_8records_unchecked`], over the four
+/// activation buffers.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn weighted_sum_simd_4records_unchecked(
     synapses: &[SynapseData],
     act0: &[f32],
     act1: &[f32],
@@ -927,13 +1086,47 @@ pub fn weighted_sum_simd_4records(
 /// Production forward-pass hot path. AVX2/FMA on x86_64, NEON on aarch64, scalar
 /// elsewhere and for counts below one SIMD lane.
 ///
-/// Issue #207 - on the SIMD paths this delegates to `get_unchecked` kernels, so
-/// every `synapse.from_index` in `start..end` must be a valid index into
-/// `activations`. `CompiledNetwork::new` enforces this at load time
-/// (`NetworkError::InvalidSynapseIndex`), so callers holding a loaded network
-/// already satisfy the precondition.
+/// Bounds-validating entry point (Issue #613): a span that does not index
+/// `activations` throughout is **refused with a panic** rather than read
+/// unchecked, so safe caller code can never reach an out-of-bounds read.
+/// Validated callers — anything holding a `CompiledNetwork` — should call
+/// [`weighted_sum_simd_unchecked`] and skip the `O(end - start)` predicate.
+///
+/// # Panics
+/// If `end > synapses.len()`, or any `from_index` in `start..end` is not a valid
+/// index into `activations`. Both are caller bugs the load-time
+/// `NetworkError::InvalidSynapseIndex` validation rules out for a loaded
+/// network, so failing loud beats answering from a truncated span.
 #[inline]
 pub fn weighted_sum_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> f32 {
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_simd");
+    }
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_simd_unchecked(synapses, activations, start, end, bias) }
+}
+
+/// [`weighted_sum_simd`] without the [`bounds`] pre-pass — the forward-pass
+/// hot-path form.
+///
+/// Issue #207 - on the SIMD paths this delegates to `get_unchecked` kernels.
+///
+/// # Safety
+/// `end` must be `<= synapses.len()` and every `synapse.from_index` in
+/// `start..end` must be a valid index into `activations`.
+/// `CompiledNetwork::new` enforces this at load time
+/// (`NetworkError::InvalidSynapseIndex`), so callers holding a loaded network
+/// already satisfy the precondition. Safe callers must go through
+/// [`weighted_sum_simd`].
+#[inline]
+pub unsafe fn weighted_sum_simd_unchecked(
     synapses: &[SynapseData],
     activations: &[f32],
     start: usize,
@@ -967,10 +1160,35 @@ pub fn weighted_sum_simd(
 
 /// Single-record sum of squared weighted activations (Hypotenuse): `sum((a*w)^2)`.
 ///
-/// Production forward-pass hot path. AVX2/FMA on x86_64, NEON on aarch64, scalar
-/// elsewhere and for counts below one SIMD lane.
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_of_squares_simd_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd`].
 #[inline]
 pub fn weighted_sum_of_squares_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+) -> f32 {
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_of_squares_simd");
+    }
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_of_squares_simd_unchecked(synapses, activations, start, end) }
+}
+
+/// [`weighted_sum_of_squares_simd`] without the [`bounds`] pre-pass — the
+/// forward-pass hot-path form. AVX2/FMA on x86_64, NEON on aarch64, scalar
+/// elsewhere and for counts below one SIMD lane.
+///
+/// # Safety
+/// Same contract as [`weighted_sum_simd_unchecked`].
+#[inline]
+pub unsafe fn weighted_sum_of_squares_simd_unchecked(
     synapses: &[SynapseData],
     activations: &[f32],
     start: usize,
@@ -1003,10 +1221,35 @@ pub fn weighted_sum_of_squares_simd(
 
 /// Single-record weighted sum without bias (Mean): `sum(activation[from] * weight)`.
 ///
-/// Production forward-pass hot path. Reuses the bias-carrying kernel with `bias = 0`
-/// so the SIMD path is shared. AVX2/FMA on x86_64, NEON on aarch64, scalar elsewhere.
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_no_bias_simd_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd`].
 #[inline]
 pub fn weighted_sum_no_bias_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+) -> f32 {
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_no_bias_simd");
+    }
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_no_bias_simd_unchecked(synapses, activations, start, end) }
+}
+
+/// [`weighted_sum_no_bias_simd`] without the [`bounds`] pre-pass — the
+/// forward-pass hot-path form. Reuses the bias-carrying kernel with `bias = 0`
+/// so the SIMD path is shared. AVX2/FMA on x86_64, NEON on aarch64, scalar elsewhere.
+///
+/// # Safety
+/// Same contract as [`weighted_sum_simd_unchecked`].
+#[inline]
+pub unsafe fn weighted_sum_no_bias_simd_unchecked(
     synapses: &[SynapseData],
     activations: &[f32],
     start: usize,
@@ -1038,10 +1281,36 @@ pub fn weighted_sum_no_bias_simd(
 /// Single-record sum of squared (bias + weighted activation) (HypotenuseV2):
 /// `sum((bias + a*w)^2)`.
 ///
-/// Production forward-pass hot path. AVX2/FMA on x86_64, NEON on aarch64, scalar
-/// elsewhere and for counts below one SIMD lane.
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_of_squares_v2_simd_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd`].
 #[inline]
 pub fn weighted_sum_of_squares_v2_simd(
+    synapses: &[SynapseData],
+    activations: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> f32 {
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_of_squares_v2_simd");
+    }
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_of_squares_v2_simd_unchecked(synapses, activations, start, end, bias) }
+}
+
+/// [`weighted_sum_of_squares_v2_simd`] without the [`bounds`] pre-pass — the
+/// forward-pass hot-path form. AVX2/FMA on x86_64, NEON on aarch64, scalar
+/// elsewhere and for counts below one SIMD lane.
+///
+/// # Safety
+/// Same contract as [`weighted_sum_simd_unchecked`].
+#[inline]
+pub unsafe fn weighted_sum_of_squares_v2_simd_unchecked(
     synapses: &[SynapseData],
     activations: &[f32],
     start: usize,

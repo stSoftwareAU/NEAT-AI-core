@@ -11,7 +11,7 @@ use crate::batch_scoring::{
 };
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
-use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
+use crate::simd::{weighted_sum_simd_4records_unchecked, weighted_sum_simd_8records_unchecked};
 use crate::squash::SquashType;
 use crate::squash_simd::{squash_x4, squash_x8};
 use crate::training_bin_stream::{for_each_read_chunk_with_mode, training_read_tuning_from_env};
@@ -104,7 +104,9 @@ macro_rules! batch_8way_activation {
                         }
                         _ => {
                             let (sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7) =
-                                weighted_sum_simd_8records(
+                                // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                                // `from_index`, and every activation buffer is sized to `num_neurons`.
+                                unsafe { weighted_sum_simd_8records_unchecked(
                                     &$network.synapses,
                                     &act0,
                                     &act1,
@@ -117,7 +119,7 @@ macro_rules! batch_8way_activation {
                                     start_synapse,
                                     end_synapse,
                                     neuron.bias,
-                                );
+                                ) };
 
                             // Hot transcendental squashes evaluate all 8 batch
                             // lanes at once via the vectorised approximation
@@ -211,7 +213,9 @@ macro_rules! batch_8way_activation {
                                 }
                             }
                             _ => {
-                                let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
+                                // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                                // `from_index`, and every activation buffer is sized to `num_neurons`.
+                                let (sum0, sum1, sum2, sum3) = unsafe { weighted_sum_simd_4records_unchecked(
                                     &$network.synapses,
                                     &act0,
                                     &act1,
@@ -220,7 +224,7 @@ macro_rules! batch_8way_activation {
                                     start_synapse,
                                     end_synapse,
                                     neuron.bias,
-                                );
+                                ) };
 
                                 // Vectorised squash for the hot transcendental
                                 // types (Issue #180); scalar fallback otherwise.
@@ -711,16 +715,20 @@ fn mse_sum_batch_interleaved<const R: usize>(
             let squash = SquashType::from(neuron.squash_type);
             let start_synapse = neuron.start_synapse as usize;
             let end_synapse = start_synapse + neuron.num_synapses as usize;
-            let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
-                &network.synapses,
-                &network.batch_activations[0],
-                &network.batch_activations[1],
-                &network.batch_activations[2],
-                &network.batch_activations[3],
-                start_synapse,
-                end_synapse,
-                neuron.bias,
-            );
+            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+            // `from_index`, and every activation buffer is sized to `num_neurons`.
+            let (sum0, sum1, sum2, sum3) = unsafe {
+                weighted_sum_simd_4records_unchecked(
+                    &network.synapses,
+                    &network.batch_activations[0],
+                    &network.batch_activations[1],
+                    &network.batch_activations[2],
+                    &network.batch_activations[3],
+                    start_synapse,
+                    end_synapse,
+                    neuron.bias,
+                )
+            };
             let sums = [sum0, sum1, sum2, sum3];
             let squashed = match squash_x4(squash, sums) {
                 Some(vec) => vec,

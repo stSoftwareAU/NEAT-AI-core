@@ -12,8 +12,9 @@ use crate::batch_scoring::{inline_squash, load_record};
 use crate::loss::MSE_TILE_LANES;
 use crate::range::apply_limit_range;
 use crate::simd::{
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
-    weighted_sum_simd, weighted_sum_simd_4records,
+    weighted_sum_no_bias_simd_unchecked, weighted_sum_of_squares_simd_unchecked,
+    weighted_sum_of_squares_v2_simd_unchecked, weighted_sum_simd_4records_unchecked,
+    weighted_sum_simd_unchecked,
 };
 use crate::squash::SquashType;
 use crate::squash_simd::squash_x4;
@@ -185,6 +186,21 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
 ///
 /// This compact format minimises memory access and enables efficient iteration.
 /// Issue #1175 - Uses typed structs for better cache locality and compiler optimisation.
+///
+/// # Field invariant the forward pass relies on
+///
+/// [`Self::new`] rejects any `from_index` outside `0..num_neurons`
+/// ([`NetworkError::InvalidSynapseIndex`]), and every activation buffer is sized
+/// to `num_neurons`. The forward and batched-scoring paths discharge the
+/// `simd::*_unchecked` index contract (Issue #613) from exactly that check, so
+/// **the invariant is a property of the values, not of the type**: these fields
+/// are `pub`, so writing `synapses`, `hot_weights`, `hot_from`, `activations` or
+/// `num_neurons` after construction — or assembling the struct as a literal —
+/// can break it, and a subsequent `activate*` / scoring call is then an
+/// out-of-bounds read. Treat the fields as read-only once `new` has returned;
+/// rebuild through `new` rather than editing in place. Closing this by
+/// construction (private fields plus accessors, or `#[non_exhaustive]`) is an
+/// API break for downstream consumers and is tracked by Issue #625.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 #[derive(Clone)]
 pub struct CompiledNetwork {
@@ -540,23 +556,31 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        let sum_sq = weighted_sum_of_squares_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                            )
+                        };
                         sum_sq.sqrt() + neuron.bias
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        let sum_sq = weighted_sum_of_squares_v2_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_v2_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         sum_sq.sqrt()
                     }
                     SquashType::Mean => {
@@ -565,25 +589,33 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            let sum = weighted_sum_no_bias_simd(
-                                &self.synapses,
-                                &self.activations,
-                                start_synapse,
-                                end_synapse,
-                            );
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                            let sum = unsafe {
+                                weighted_sum_no_bias_simd_unchecked(
+                                    &self.synapses,
+                                    &self.activations,
+                                    start_synapse,
+                                    end_synapse,
+                                )
+                            };
                             sum / n + neuron.bias
                         }
                     }
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        let sum = weighted_sum_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum = unsafe {
+                            weighted_sum_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         // Issue #1177 - Inline common squash functions for performance
                         // These 4 functions cover ~80% of typical networks
                         inline_squash(neuron.squash_type, squash, sum)
@@ -699,23 +731,31 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        let sum_sq = weighted_sum_of_squares_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                            )
+                        };
                         sum_sq.sqrt() + neuron.bias
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        let sum_sq = weighted_sum_of_squares_v2_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_v2_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         sum_sq.sqrt()
                     }
                     SquashType::Mean => {
@@ -724,25 +764,33 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            let sum = weighted_sum_no_bias_simd(
-                                &self.synapses,
-                                &self.activations,
-                                start_synapse,
-                                end_synapse,
-                            );
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                            let sum = unsafe {
+                                weighted_sum_no_bias_simd_unchecked(
+                                    &self.synapses,
+                                    &self.activations,
+                                    start_synapse,
+                                    end_synapse,
+                                )
+                            };
                             sum / n + neuron.bias
                         }
                     }
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        let sum = weighted_sum_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum = unsafe {
+                            weighted_sum_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         // Issue #1177 - Inline common squash functions for performance
                         // These 4 functions cover ~80% of typical networks
                         inline_squash(neuron.squash_type, squash, sum)
@@ -932,12 +980,16 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        let sum_sq = weighted_sum_of_squares_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                            )
+                        };
                         let result = sum_sq.sqrt() + neuron.bias;
                         self.trace_data_buffer.push(neuron_idx as f32);
                         self.trace_data_buffer.push(0.0f32);
@@ -945,13 +997,17 @@ impl CompiledNetwork {
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        let sum_sq = weighted_sum_of_squares_v2_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_v2_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         let result = sum_sq.sqrt();
                         self.trace_data_buffer.push(neuron_idx as f32);
                         self.trace_data_buffer.push(0.0f32);
@@ -963,12 +1019,16 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            let sum = weighted_sum_no_bias_simd(
-                                &self.synapses,
-                                &self.activations,
-                                start_synapse,
-                                end_synapse,
-                            );
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                            let sum = unsafe {
+                                weighted_sum_no_bias_simd_unchecked(
+                                    &self.synapses,
+                                    &self.activations,
+                                    start_synapse,
+                                    end_synapse,
+                                )
+                            };
                             sum / n + neuron.bias
                         };
                         self.trace_data_buffer.push(neuron_idx as f32);
@@ -978,13 +1038,17 @@ impl CompiledNetwork {
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        let sum = weighted_sum_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum = unsafe {
+                            weighted_sum_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         // Issue #1177 - Inline common squash functions for performance
                         let squashed = inline_squash(neuron.squash_type, squash, sum);
                         // For standard squash, hintValue is the pre-squash value (sum)
@@ -1029,8 +1093,8 @@ impl CompiledNetwork {
     /// Issue #1212 - Batch activate and trace for 4 records simultaneously.
     ///
     /// Processes 4 input records through the network in parallel, capturing trace
-    /// data for backpropagation. Uses SIMD via `weighted_sum_simd_4records()` for
-    /// standard squash functions.
+    /// data for backpropagation. Uses SIMD via
+    /// [`weighted_sum_simd_4records_unchecked`] for standard squash functions.
     ///
     /// # Arguments
     /// * `inputs` - Packed input array: [input0..., input1..., input2..., input3...]
@@ -1229,16 +1293,20 @@ impl CompiledNetwork {
                     }
                     _ => {
                         // Standard squash: use SIMD 4-record weighted sum
-                        let (s0, s1, s2, s3) = weighted_sum_simd_4records(
-                            &self.synapses,
-                            act0,
-                            act1,
-                            act2,
-                            act3,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let (s0, s1, s2, s3) = unsafe {
+                            weighted_sum_simd_4records_unchecked(
+                                &self.synapses,
+                                act0,
+                                act1,
+                                act2,
+                                act3,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
 
                         // Apply squash to all 4 records. The hot transcendental
                         // squashes (Tanh/Logistic/Gelu/Mish) evaluate every batch
