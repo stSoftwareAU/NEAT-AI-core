@@ -603,14 +603,24 @@ fn squash_of(neuron: &NeuronExport) -> Result<SquashType, CleanupError> {
 /// Only an `IF` keeps a sum per role; every other squash sums whatever reaches
 /// it, so two roles into one of those are the same edge written twice.
 ///
+/// At an `IF`, [`SynapseType::Standard`] **is** the positive role: an untyped
+/// inward edge lands in the positive accumulator in
+/// [`crate::network::CompiledNetwork::activate`] and tallies as positive in
+/// [`IfRoles::tally`], so the two spellings name one branch and are folded to
+/// one answer here. Reading them apart is what would let a request for the
+/// positive arm miss an untyped row, which is the refusal Issue #591 exists to
+/// remove.
+///
 /// Crate-visible because [`crate::prune_synapse`] resolves the *requested*
 /// role through it (Issue #591): one definition of "what names an edge", so a
 /// request and a canonicalisation can never disagree.
 pub(crate) fn canonical_role(target_squash: SquashType, role: SynapseType) -> SynapseType {
-    if target_squash == SquashType::If {
-        role
-    } else {
-        SynapseType::Standard
+    if target_squash != SquashType::If {
+        return SynapseType::Standard;
+    }
+    match role {
+        SynapseType::Standard => SynapseType::Positive,
+        other => other,
     }
 }
 
@@ -831,6 +841,11 @@ impl Engine {
         let mut changed = false;
         for uuid in if_uuids {
             if let Some(condition_sum) = self.static_condition_sum(&uuid)? {
+                // `> 0` chooses the positive arm, and an untyped edge belongs
+                // to it: both readings are
+                // [`crate::network::CompiledNetwork::activate`]'s, restated
+                // here because that helper reasons over a compiled synapse
+                // range and this pass has only the exported creature.
                 let branch = if condition_sum > 0.0 {
                     SynapseType::Positive
                 } else {
@@ -845,6 +860,12 @@ impl Engine {
 
             // The condition varies, so the `IF` still has to branch: give back
             // whichever arm the removal emptied rather than refuse the removal.
+            //
+            // `if_neuron_fault` (Issue #560) is the single home of "is this IF
+            // wired", and `downgrade_if_neurons` asks it; it reports only the
+            // *first* fault, so it cannot say which arms to restore when both
+            // are empty. The tally it is built from answers that, and restoring
+            // every empty arm satisfies the fault helper by construction.
             let (_, roles) = self.inward_roles(&uuid);
             for role in [SynapseType::Positive, SynapseType::Negative] {
                 let present = match role {
@@ -867,14 +888,21 @@ impl Engine {
     /// the branch is genuinely dynamic.
     ///
     /// The sum is accumulated in `f32`, walking the creature's synapse list in
-    /// storage order, because that is exactly what
-    /// [`crate::network::CompiledNetwork::activate`] would compute for **this**
+    /// storage order, because that is the closest available mirror of what
+    /// [`crate::network::CompiledNetwork::activate`] computes for **this**
     /// creature: `compile_creature` groups the inward edges of a target in the
     /// order it meets them, and a condition edge only ever lands in the
     /// condition accumulator. The creature in hand is the one whose behaviour
-    /// the rewrite must preserve, so mirroring its own compiled order — not the
+    /// the rewrite must preserve, so mirroring its own storage order — not the
     /// canonical order a later pass will impose — is what keeps the strict
     /// `> 0` branch decision the same on both sides.
+    ///
+    /// The mirror is a mirror, not the pass itself: `compile_creature`
+    /// regroups the edges per target, so the two additions can associate
+    /// differently and a sum within `f32` rounding of `0` is a boundary
+    /// neither side can claim to settle for the other. Away from that
+    /// boundary — which is every condition any training run produces — the
+    /// branch the two pick is the same, and the flatten is exact.
     fn static_condition_sum(&self, uuid: &str) -> Result<Option<f32>, CleanupError> {
         let mut sum = 0.0f32;
         for synapse in self

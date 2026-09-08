@@ -29,15 +29,23 @@
 //! delete a branch the caller never mentioned — so the request names the
 //! triple and only that triple goes.
 //!
+//! At an `IF`, `positive` and an **untyped** row are one branch, not two: the
+//! forward pass adds an untyped inward edge to the positive accumulator and
+//! `IfRoles::tally` counts it as positive, so a request for either spelling
+//! names the same edge. Reading the two apart is what would refuse "remove the
+//! positive arm" on a creature that wrote that arm untyped.
+//!
 //! Everywhere else a role means nothing: every other squash sums whatever
 //! reaches it, so two rows written for one pair are the same term written
 //! twice, and the readable key is the pair. Asking for one role of such a pair
 //! therefore takes the whole term, both rows — which is not "every same-pair
 //! edge" being deleted but *one* edge being deleted in the two halves the
-//! caller happened to write it in, and it is what [`cleanup_creature_with`]
-//! would coalesce them into anyway. One reading of what names an edge
-//! (`prune_cleanup::canonical_role`), shared by the request and the
-//! canonicalisation, so the two can never disagree.
+//! caller happened to write it in. A canonical creature never carries those
+//! two rows in the first place: they are a `TypedDuplicateSynapse` the shared
+//! validator rejects, so the case only arises for an input a caller built by
+//! hand. One reading of what names an edge (`prune_cleanup::canonical_role`),
+//! shared by the request and the canonicalisation, so the two can never
+//! disagree.
 //!
 //! An edge sourced at an observation neuron, and an edge targeting an output
 //! neuron, are ordinary candidates: nothing about the declared widths is
@@ -71,8 +79,9 @@
 //! - where it does not, the caller's [`PruneStats`] fold `w · μ` (and hand the
 //!   correlated part to a supplied survivor), exactly as Issue #590's neuron
 //!   removal does. A survivor that stands in for the source cannot *be* the
-//!   source: the edge it would carry the share on is the one just removed, so
-//!   such a request is refused rather than half-applied;
+//!   source: the only edge it could carry the share on is the one just
+//!   removed, so the share lands nowhere and the whole prune is refused with
+//!   [`PruneError::MissingProxyEdge`] rather than half-applied;
 //! - where the target **aggregates** — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`,
 //!   or an `IF` reading one role's sum — no bias fold stands in for the term,
 //!   so none is attempted and the target is named on

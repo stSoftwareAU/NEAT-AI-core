@@ -983,6 +983,44 @@ fn a_restored_branch_role_reuses_the_support_constant_already_there() {
 }
 
 #[test]
+fn an_untyped_if_arm_answers_to_the_positive_role() {
+    // `IfRoles::tally` and the forward pass both read an untyped inward edge
+    // as the positive branch, so a request for `Positive` has to name it.
+    // Reading the two spellings apart would refuse the very removal Issue #591
+    // exists to stop refusing.
+    let before = creature(IF_STATIC_UNTYPED_ARM_JSON);
+    let result = pruned(&before, &key("h-p", "if-1", SynapseType::Positive), None);
+
+    assert!(
+        !has_edge(&result.creature, "h-p", "if-1"),
+        "the untyped positive arm survived a request naming its role"
+    );
+    let twin = with_edge_zeroed(&before, "h-p", "if-1", None);
+    assert_same_function("untyped_arm_by_positive_role", &twin, &result.creature);
+    assert_valid("an_untyped_if_arm_answers_to_positive", &result.creature);
+}
+
+#[test]
+fn a_standard_request_names_the_positive_row_of_an_if() {
+    // The same identity read from the other side: `Standard` and `positive`
+    // are one branch, so either spelling of the request names the same edge.
+    let before = creature(IF_JSON);
+    let result = pruned(&before, &key("h-a", "if-1", SynapseType::Standard), None);
+
+    assert_close(
+        "the negative row of the same pair is untouched",
+        role_weight(&result.creature, "h-a", "if-1", Some("negative")),
+        -3.0,
+    );
+    let twin = with_edge_zeroed(&before, "h-a", "if-1", Some("positive"));
+    assert_same_function("positive_row_by_standard_role", &twin, &result.creature);
+    assert_valid(
+        "a_standard_request_names_the_positive_row",
+        &result.creature,
+    );
+}
+
+#[test]
 fn a_shared_branch_keeps_the_if_untouched() {
     let before = creature(IF_SHARED_BRANCHES_JSON);
     let result = pruned(&before, &key("h-a", "if-1", SynapseType::Positive), None);

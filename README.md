@@ -826,11 +826,15 @@ flowchart TD
 **The role is part of what names an edge.** An `IF` keeps a sum per role, so one
 source may feed two of its branches (Issue #577, NEAT-AI #3873); removing "the
 `h-a → if-1` synapse" would delete a branch the caller never mentioned. The
-request therefore names the triple and only that triple goes. Everywhere else a
-role means nothing — every other squash sums whatever reaches it, so the
-readable key is the pair — which is the same reading cleanup takes. An edge
-sourced at an observation neuron, or targeting an output neuron, is an ordinary
-candidate.
+request therefore names the triple and only that triple goes. At an `IF`,
+`positive` and an **untyped** row are one branch rather than two — the forward
+pass adds an untyped inward edge to the positive accumulator and `IfRoles::tally`
+counts it as positive — so either spelling of the request names the same edge.
+Everywhere else a role means nothing: every other squash sums whatever reaches
+it, so the readable key is the pair. All of that is the same reading cleanup
+takes (`canonical_role`), so a request and a canonicalisation can never
+disagree. An edge sourced at an observation neuron, or targeting an output
+neuron, is an ordinary candidate.
 
 #### `IF` structure is rewritten, never refused
 
