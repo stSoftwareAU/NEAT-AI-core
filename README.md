@@ -877,6 +877,93 @@ activation, so the same compensation table as Issue #590 applies with `W = w`:
 `removed_synapses` carries the one requested triple; for `prune_neuron` it is
 `Some(uuid)` and every edge naming that neuron.
 
+### Pruning over the WASM boundary (Issue #592)
+
+The rewrites above are one Rust implementation with **two entry surfaces**.
+Rust consumers call `prune_neuron` / `prune_synapse` directly; NEAT-AI calls the
+same code over the existing WASM boundary as
+`prune_neuron(request: string) -> string` and
+`prune_synapse(request: string) -> string`. Nothing about pruning is decided on
+the wasm side: `neat-core/src/prune_json.rs` parses the request, calls the
+native function and writes the answer down, and `wasm_exports.rs` is a
+`#[wasm_bindgen]` rename over it.
+
+```mermaid
+flowchart LR
+    TS["NEAT-AI (TypeScript)"] -->|"JSON request"| W["wasm_exports<br/>prune_neuron / prune_synapse"]
+    W --> J["prune_json<br/>parse, call, write"]
+    R["Rust consumer"] --> P["prune_neuron / prune_synapse<br/>the one implementation"]
+    J --> P
+    P --> J
+    J -->|"JSON response"| TS
+```
+
+The ABI is **JSON in, JSON out**, on the `CreatureExport` wire shape NEAT-AI
+already exchanges — a creature file goes in and a creature file comes out:
+
+```jsonc
+// in — a neuron removal, with the caller's optional statistics
+{ "creature": { /* CreatureExport */ }, "uuid": "h-1",
+  "stats": { "meanActivation": 0.5, "variance": 0.04,
+             "proxy": { "uuid": "h-2", "meanActivation": 0.4,
+                        "variance": 0.02, "covariance": 0.01 } } }
+
+// in — a synapse removal; `type` is optional and defaults to the untyped role
+{ "creature": { /* CreatureExport */ },
+  "synapse": { "fromUUID": "h-a", "toUUID": "if-1", "type": "negative" } }
+
+// out — one of
+{ "ok": true, "creature": { /* CreatureExport */ }, "transform": "exact", "passes": 2,
+  "removedNeuron": "h-1", "removedSynapses": [ /* … */ ], "cascadeNeurons": [ /* … */ ],
+  "staticIfNeurons": [ /* … */ ], "biasFolds": [ /* … */ ], "weightShares": [ /* … */ ],
+  "uncompensated": [ /* … */ ] }
+{ "ok": false, "failure": { "reason": "PROTECTED_NEURON",
+                            "message": "Neuron output-0 is a output node and is protected from direct removal",
+                            "malformed": false } }
+```
+
+Empty report lists are omitted rather than written as `[]`. `transform` is the
+same honest `"exact"` / `"approximate"` label `PruneResult::transform` carries
+natively, and a successful call always answers with a creature the shared
+`creature_validate` accepts — there is **no scorer and no acceptance policy**
+here or in the native crate, because deciding whether to keep the result is the
+caller's half of the Issue #587 boundary.
+
+`ok: false` covers two different things and the wire keeps them apart:
+`malformed: false` is a request that was understood and **refused** (an unknown
+UUID, a protected neuron, an unusable statistic), carrying one of the stable
+`reason` codes; `malformed: true` is a payload that never reached the rewrite,
+led by `MALFORMED_REQUEST:` — the same convention `creature_validate` uses, and
+for the same reason: a panic on wasm aborts the module and `catch_unwind` is
+unavailable there. A role spelling the wire does not carry (`"POSITIVE"`) is a
+boundary fault rather than a silent `"standard"`, so a typo can never delete an
+edge the caller did not name.
+
+#### Native / WASM parity, and what it means exactly
+
+`neat-core/tests/golden/prune_wasm_parity.json` is the shared record: the
+Issue #588 fixtures — the same creatures Issues #589-#591 were graded on,
+including the `IF`/typed edge cases and the cascade — plus the request shapes
+only a boundary has (a refusal, a malformed payload, a static-`IF` rewrite, the
+correlated-survivor statistics payload), each with the answer **native** gives
+it. Regenerate it with
+`UPDATE_PRUNE_GOLDEN=1 cargo test -p neat-core --test prune_json`.
+
+| Gate | Where | What it proves |
+|---|---|---|
+| `neat-core/tests/prune_json.rs` | `cargo test` | the native ABI answers exactly what the native call answers, and still answers the record |
+| `tests/wasm_prune_parity_test.ts` | `quality.sh`, every PR | the record still covers the wire shapes, and the comparator still reports a difference when there is one |
+| `scripts/check_wasm_prune_parity.ts` | `wasm-bundle.yml`, both arches | the **published bytes** answer the same requests the same way |
+
+Parity is byte-exact where the representation allows: the keys present, the
+array lengths, every uuid, role, squash name, reason code, message, boolean and
+integer must match character for character. Floats are compared to a relative
+`1e-9`, because folding a fixed neuron's activation runs its squash and a
+transcendental is resolved by the host libm natively and by the bundle's own
+implementation on wasm — each correct to within an ulp, neither obliged to agree
+on the last bit. Every structural claim stays exact, so anything wider than
+rounding fails loudly.
+
 ### Creature validation contract (Issue #559)
 
 `neat-core/src/creature_validate.rs` is the Rust home of NEAT-AI's

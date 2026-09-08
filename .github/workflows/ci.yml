@@ -614,6 +614,15 @@ jobs:
             tests/wasm64_bundle_gate_test.ts \
             tests/wasm_arch_parity_test.ts < /dev/null
 
+      # Issue #592 — the native/WASM pruning parity record and its comparator.
+      # The end-to-end check against a built bundle runs in wasm-bundle.yml; what
+      # runs here is the half that can go vacuous on any PR — a golden record
+      # that stops covering the wire shapes, or a comparator that reports
+      # agreement it never checked. `--allow-read` only: it reads the committed
+      # record and nothing else.
+      - name: Run the native/WASM pruning parity record and comparator tests
+        run: deno test --allow-read tests/wasm_prune_parity_test.ts < /dev/null
+
   security:
     uses: ./.github/workflows/security.yml
     if: github.event_name == 'pull_request'
