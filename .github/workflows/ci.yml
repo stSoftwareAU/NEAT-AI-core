@@ -106,56 +106,47 @@ jobs:
             BASE_BRANCH="develop"
           fi
 
-          SKIP_VERSION_BUMP=false
+          BASE_VERSION=""
+          RANGE="HEAD"
           if git show-ref --verify --quiet refs/remotes/origin/$BASE_BRANCH; then
-            VERSION_COMMIT_COUNT=$(git log --oneline origin/$BASE_BRANCH..HEAD --grep="chore: auto-increment versions for changed projects" | wc -l | tr -d ' ')
-            if [ "${VERSION_COMMIT_COUNT:-0}" -gt 0 ]; then
-              echo "Version bump commit already on this PR — skipping semver bump only"
-              SKIP_VERSION_BUMP=true
-            fi
-          fi
-
-          if [ "$SKIP_VERSION_BUMP" = false ] && git show-ref --verify --quiet refs/remotes/origin/$BASE_BRANCH; then
             BASE_VERSION=$(git show origin/$BASE_BRANCH:Cargo.toml 2>/dev/null | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/' || echo "")
-            CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-            # Skip only when HEAD is *ahead* of the base version. A milestone
-            # feature branch can sit behind Develop; skipping there left the PR
-            # on a downgrade that the version gate below then rejected.
-            chmod +x scripts/check-version-bump.sh
-            if [ -n "$BASE_VERSION" ] && [ -n "$CURRENT_VERSION" ] && [ "$CURRENT_VERSION" != "$BASE_VERSION" ] &&
-              scripts/check-version-bump.sh "$BASE_VERSION" "$CURRENT_VERSION" false >/dev/null 2>&1; then
-              echo "Version already ahead of base — skipping semver bump"
-              SKIP_VERSION_BUMP=true
-            fi
+            RANGE="origin/$BASE_BRANCH..HEAD"
           fi
+          CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          chmod +x scripts/check-version-bump.sh scripts/detect-breaking.sh scripts/next-version.sh scripts/version-bump-needed.sh
 
-          if [ "$SKIP_VERSION_BUMP" = false ]; then
-            CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          # Issue #251: a breaking change is a major-equivalent bump (pre-1.0:
+          # minor), a non-breaking change a patch bump. Detect the breaking
+          # signal from the `breaking-change` PR label or Conventional Commit
+          # markers (`type!:` subject, or a `BREAKING CHANGE:` footer). The
+          # signal is computed *before* the skip decision below, because whether
+          # the current version is big enough depends on it.
+          BREAKING=false
+          if [ "${PR_BREAKING_LABEL:-false}" = "true" ]; then
+            BREAKING=true
+          fi
+          if [ "$(scripts/detect-breaking.sh "$RANGE")" = "true" ]; then
+            BREAKING=true
+          fi
+          echo "Breaking change signalled: $BREAKING"
+
+          # Skip the semver bump only when the head version already satisfies the
+          # policy for that signal — i.e. it is ahead of base *and* big enough for
+          # a breaking change. The presence of an earlier auto-bump commit is not
+          # proof on its own: a milestone branch collects patch bumps from its
+          # sub-PRs and may then acquire a breaking commit, and Develop can catch
+          # up to the same version, which left the PR on a no-op bump that the
+          # version gate below rejected (PR #619).
+          BUMP_NEEDED=$(scripts/version-bump-needed.sh "$BASE_VERSION" "$CURRENT_VERSION" "$BREAKING")
+          if [ "$BUMP_NEEDED" = false ]; then
+            echo "Version $CURRENT_VERSION already satisfies the bump policy against base $BASE_VERSION — skipping semver bump"
+          else
             echo "Current crate version: $CURRENT_VERSION"
-
-            # Issue #251: a breaking change is a major-equivalent bump (pre-1.0:
-            # minor), a non-breaking change a patch bump. Detect the breaking
-            # signal from the `breaking-change` PR label or Conventional Commit
-            # markers (`type!:` subject, or a `BREAKING CHANGE:` footer).
-            BREAKING=false
-            if [ "${PR_BREAKING_LABEL:-false}" = "true" ]; then
-              BREAKING=true
-            fi
-            if git show-ref --verify --quiet refs/remotes/origin/$BASE_BRANCH; then
-              RANGE="origin/$BASE_BRANCH..HEAD"
-            else
-              RANGE="HEAD"
-            fi
-            chmod +x scripts/detect-breaking.sh scripts/next-version.sh
-            if [ "$(scripts/detect-breaking.sh "$RANGE")" = "true" ]; then
-              BREAKING=true
-            fi
-            echo "Breaking change signalled: $BREAKING"
 
             # Bump from whichever is higher — this branch's version or the base
             # branch's — so a branch lagging Develop lands above it, not below.
             BUMP_FROM="$CURRENT_VERSION"
-            if [ -n "${BASE_VERSION:-}" ] &&
+            if [ -n "$BASE_VERSION" ] &&
               ! scripts/check-version-bump.sh "$BASE_VERSION" "$CURRENT_VERSION" false >/dev/null 2>&1; then
               echo "Version $CURRENT_VERSION is behind base $BASE_VERSION — bumping from base"
               BUMP_FROM="$BASE_VERSION"
@@ -566,7 +557,7 @@ jobs:
           check_filenames: true
           check_hidden: true
           skip: "./target,./.git"
-          ignore_words_list: renderD,mape,froms
+          ignore_words_list: renderD,mape,froms,indx
 
   # Issue #297 — wasm64 lane (b) Memory64 runtime guard. The committed smoke
   # test instantiates a minimal `(memory i64 ...)` module, grows linear memory
@@ -613,6 +604,15 @@ jobs:
             tests/wasm64_memory64_smoke_test.ts \
             tests/wasm64_bundle_gate_test.ts \
             tests/wasm_arch_parity_test.ts < /dev/null
+
+      # Issue #592 — the native/WASM pruning parity record and its comparator.
+      # The end-to-end check against a built bundle runs in wasm-bundle.yml; what
+      # runs here is the half that can go vacuous on any PR — a golden record
+      # that stops covering the wire shapes, or a comparator that reports
+      # agreement it never checked. `--allow-read` only: it reads the committed
+      # record and nothing else.
+      - name: Run the native/WASM pruning parity record and comparator tests
+        run: deno test --allow-read tests/wasm_prune_parity_test.ts < /dev/null
 
   security:
     uses: ./.github/workflows/security.yml

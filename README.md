@@ -596,6 +596,377 @@ flowchart LR
     V2 -- passes --> O["Ok(CreatureExport)"]
 ```
 
+### Pruning parity fixtures (Issue #588)
+
+`neat-core/src/prune_fixtures.rs` captures NEAT-AI's battle-tested **removal**
+semantics — remove a hidden neuron or one synapse, then repair whatever the
+removal broke — as `(before, request, after)` triples where `after` is the
+creature the TypeScript operators actually produced. It is step 1 of the
+canonical pruning rewrite engine (Issue #587): the fixtures are the acceptance
+oracle the shared Rust helpers (Issues #590 / #591) are graded against, so a
+rewrite has a recorded "before" to be graded on.
+
+Nothing in this module prunes. `PRUNE_PARITY_CASES` is walked by
+`neat-core/tests/prune_parity.rs`, which asserts the rules each capture
+encodes: the orphan cascade to a fixed point, a target that loses its last
+inward edge becoming a constant whose bias is its own squash of its old bias, a
+source left with nothing to feed being removed, typed edge identity (only the
+requested `(from, to, role)` triple goes), `IF` repair with its coalesced rows
+summed, constants-then-hiddens ordering with the synapses re-sorted, the
+content-derived `memetic` record dropped, and the discovery bias fold that
+leaves a creature scoring identically. Every pair is re-checked through
+`creature_validate`, `validate_creature_topology` and `compile_creature` —
+a successful rewrite never returns an invalid creature.
+
+The full mapping from each TypeScript behaviour and test to its fixture, how
+the captures were taken, and what is deliberately **not** captured are in
+[`docs/research/pruning-parity-matrix.md`](docs/research/pruning-parity-matrix.md).
+
+### Canonical pruning cleanup (Issue #589)
+
+`neat-core/src/prune_cleanup.rs` is the cleanup engine every prune operation
+calls after its requested deletion. `cleanup_creature(&creature)` takes the
+creature **as the caller left it** — one neuron or one typed edge short, and
+very possibly invalid because of it — repairs it to a fixed point, and validates
+the stable result before returning it. A successful call never returns an
+invalid creature.
+
+```rust
+pub fn cleanup_creature(creature: &CreatureExport)
+    -> Result<CleanupOutcome, CleanupError>;
+```
+
+```mermaid
+flowchart TD
+    I["creature, straight after<br/>the caller's deletion"] --> R["repair: an IF short a role<br/>→ IDENTITY, roles stripped"]
+    R --> D["remove dead structure:<br/>non-output nodes with<br/>no outward edge"]
+    D --> C["constant support invariants:<br/>bias 1, at most three,<br/>none unreferenced"]
+    C --> F["fold: hidden with no inward edge<br/>→ bias-1 support constant,<br/>squash(bias) into its weights"]
+    F --> N["canonicalise: constants, hiddens,<br/>outputs; edges sorted by (from, to, role)"]
+    N --> Q{"anything change?"}
+    Q -- yes --> R
+    Q -- no --> M["prune the memetic record<br/>of references the edits stranded"]
+    M --> V["creature_validate"]
+    V -- fails --> E["Err(CleanupError)"]
+    V -- passes --> O["Ok(CleanupOutcome)"]
+```
+
+The stable creature is put through **both** shared gates before it is
+returned — `creature_validate` (the TypeScript rule table) and
+`validate_creature_topology` (the index-space and order-independent legs,
+including `validate_no_duplicate_synapses`) — so a creature that fails either is
+reported as a `CleanupError`, never handed back.
+
+`CleanupOutcome` carries the creature plus what the cleanup cost: the neurons
+and synapses removed, the hidden neurons folded into constant support, the
+constants rescaled or merged, the `IF` neurons downgraded (or, under
+`IfRepair::Rewrite`, flattened and role-restored), and how many passes the fixed
+point took. Callers own *which* neuron or synapse to try and any
+statistical compensation (Issues #590 / #591); cleanup owns the exact structural
+repair.
+
+#### Every rewrite is exact
+
+Cleanup removes only structure nothing reads, or rewrites structure into a form
+that computes the **same number on every record**. It never approximates — the
+one deliberate exception is the `IF` repair, where a neuron that has lost a
+required role can no longer branch at all.
+
+| Rewrite | Why it is exact |
+|---------|-----------------|
+| dead structure removed | nothing reads it, so no output depends on it |
+| hidden with no inward edge → constant | it sums nothing, so its activation is `squash(bias)` on every record; that value moves into its outward **weights** |
+| constant of value `b` → bias-1 constant | `1 · (w · b)` is the term `b · w` was |
+| two edges from one constant merged | summed at a summing target; the smaller/larger weight at `MINIMUM`/`MAXIMUM`, where a constant term is the weight itself |
+| roles stripped at a non-`IF` target | only an `IF` keeps a sum per role; anywhere else the role is unread |
+
+A `MEAN` target divides by its inward **count** and a `HYPOT` squares each term,
+so merging two edges there would change the value — cleanup refuses, keeps the
+constants apart, and never trades correctness for the constant budget.
+
+#### Two `IF` repair policies (Issue #591)
+
+The inexact `IF` repair above is a **policy**, not a fixed rule.
+`cleanup_creature` keeps TypeScript parity (`IfRepair::Downgrade`), which is what
+the `prune_fixtures.rs` captures record and what Issue #590's neuron removal
+uses. `cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a
+caller ask for `IfRepair::Rewrite` instead — the exact rewrites synapse pruning
+uses, described under [Synapse pruning](#synapse-pruning-issue-591). Under that
+policy `CleanupOutcome::downgraded_if_neurons` is always empty and
+`static_if_neurons` / `restored_if_roles` carry the rewrites that replaced it.
+
+#### Constants are support nodes
+
+Constants exist to carry a fixed value into the legal synapse roles, not to be
+optimised (Ockham #180). Cleanup holds four invariants: every constant has bias
+exactly `SUPPORT_CONSTANT_BIAS` (`1.0`), a fold **reuses** an existing
+compatible constant rather than minting one, a constant nothing references is
+removed, and a creature carries at most `MAX_SUPPORT_CONSTANTS` (`3`) of them.
+
+That is a **deliberate divergence** from the TypeScript captures in
+`prune_fixtures.rs`, which carry the folded value in the constant's *bias*
+(`LOGISTIC(0.4)` and friends). The two forms are the same function of the
+inputs, and `neat-core/tests/prune_cleanup.rs` proves it by activating both
+halves — but only this one holds the support-node invariants, so parity with the
+captures is asserted on the numbers the creatures produce rather than on their
+bytes. The cascade and `IF`-repair captures carry no constants, and cleanup
+reproduces those byte for byte.
+
+### Hidden-neuron pruning (Issue #590)
+
+`neat-core/src/prune_neuron.rs` is the shared answer to "remove this hidden
+neuron and give me back something I can score". It cuts the requested neuron
+out, optionally compensates the targets that read it with the **caller's** own
+statistics, runs the Issue #589 cleanup fixed point over the wreckage, and
+validates the stable result before returning it.
+
+```rust
+pub fn prune_neuron(
+    creature: &CreatureExport,
+    neuron_uuid: &str,
+    stats: Option<&PruneStats>,
+) -> Result<PruneResult, PruneError>;
+```
+
+```mermaid
+flowchart TD
+    Q["prune_neuron(creature, uuid, stats?)"] --> C{"what is uuid?"}
+    C -- "observation / output / constant" --> P["Err(Protected)"]
+    C -- "not in the creature" --> U["Err(UnknownNeuron)"]
+    C -- hidden --> S{"statistics supplied?"}
+    S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
+    S -- ok --> X["cut the neuron and<br/>every edge naming it"]
+    X --> F["compensate each target:<br/>structural value, or the<br/>caller's mean and proxy"]
+    F --> L["cleanup_creature — cascade,<br/>fold, canonicalise, validate"]
+    L -- fails --> E["Err(Cleanup)"]
+    L -- passes --> R["Ok(PruneResult) —<br/>Exact or Approximate"]
+```
+
+**Only a hidden neuron is a direct target.** Observation (input) and output
+neurons carry the declared widths (Issue #550) and a constant is canonical
+support structure (Ockham #180), so all three are refused with
+`PruneError::Protected` before anything is rewritten. They still *disappear* as
+a consequence — a constant nothing references any more is dead structure the
+cascade removes — but never on request.
+
+#### The compensation, spelled out
+
+Write `a` for the removed neuron's activation, `μ` and `σ²` for the mean and
+variance the caller measured, and `W` for the total weight the neuron carried
+into one target.
+
+| Compensation | Rewrite | Residual |
+|---|---|---|
+| mean bias fold (`DiscoveryNeuronRemoval.ts::applyMeanBiasFold`) | `target.bias += W · μ` | variance `W² σ²` |
+| correlated survivor `s`, `β = cov / σₛ²` (`removeNeuronCompensation`) | `weight(s → target) += β · W`, `target.bias += W · (μ − β μₛ)` | variance `W² (σ² − cov²/σₛ²)` |
+
+Every fold, share and residual is reported per target on `PruneResult`, so a
+caller sees exactly what it accepted. A proxy must have `σₛ² > 0`, must survive
+the removal, and must already feed each target it has a non-zero share to carry
+into, or the request is refused rather than half-applied. Statistics that break
+the Cauchy–Schwarz bound `cov² <= σ² σₛ²` cannot have come from one sample, so
+they are refused too rather than turned into a negative residual variance.
+
+**Where a bias fold means nothing, it is not attempted.** A point-wise squash
+computes `squash(bias + Σ w·a)`, so `W · μ` in the bias stands where the removed
+term was. An aggregate does not — `MINIMUM` takes the smallest inward term,
+`MEAN` divides by its inward count, `HYPOT` squares each term, and an `IF` reads
+its condition sum to pick a branch — so those targets are named on
+`PruneResult::uncompensated` instead, with the same entry recording a target
+left bare because no statistics were supplied at all. The entry is per
+**readable key**, not per target: an `IF` fed on two roles is reported once per
+role, because it never sums its arms into the single term a total would imply.
+
+#### `Exact` is earned, never assumed
+
+`PruneResult::transform` is the honest label on what came back. It is `Exact`
+only where the creature itself proves the removal changed nothing: either
+nothing read the neuron, or the neuron had **no inward edge**, so it activated to
+one value on every record and that value folds into each target's bias. A
+supplied mean never buys the label and never overrides the structural value —
+though a bad one is still *refused*, so the same request cannot succeed here and
+fail on every other neuron. "Same number" means to the `f32` precision the
+forward pass itself works in: the folded value is the very value that pass would
+have produced, but the fold re-associates the sum.
+Everything else is `Approximate` — including an `IF` that lost a role, which can
+no longer branch at all.
+
+**The memetic record is pruned, not dropped** — Issue #590's call on the choice
+`docs/research/pruning-parity-matrix.md` left open. TypeScript drops `memetic`
+wholesale on every removal; this crate applies rule 31's inverse
+(`CreatureExport::prune_memetic`, NEAT-AI-Lamarck#197) through cleanup, so every
+entry that still names live structure survives and exactly the dangling ones go.
+
+### Synapse pruning (Issue #591)
+
+`neat-core/src/prune_synapse.rs` is the shared answer to "remove this one edge
+and give me back something I can score". It cuts exactly the requested
+`(from, to, role)` triple, compensates the target that read it with the
+**caller's** statistics, rewrites whatever `IF` structure the removal made
+statically decidable, runs the Issue #589 cleanup fixed point, and validates the
+stable result before returning it.
+
+```rust
+pub fn prune_synapse(
+    creature: &CreatureExport,
+    key: &SynapseKey,
+    stats: Option<&PruneStats>,
+) -> Result<PruneResult, PruneError>;
+```
+
+```mermaid
+flowchart TD
+    Q["prune_synapse(creature, key, stats?)"] --> F{"does the creature carry<br/>that (from, to, role)?"}
+    F -- no --> U["Err(UnknownSynapse)"]
+    F -- yes --> S{"statistics supplied?"}
+    S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
+    S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
+    X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
+    C --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
+    R -- fails --> E["Err(Cleanup)"]
+    R -- passes --> O["Ok(PruneResult) —<br/>Exact or Approximate"]
+```
+
+**The role is part of what names an edge.** An `IF` keeps a sum per role, so one
+source may feed two of its branches (Issue #577, NEAT-AI #3873); removing "the
+`h-a → if-1` synapse" would delete a branch the caller never mentioned. The
+request therefore names the triple and only that triple goes. At an `IF`,
+`positive` and an **untyped** row are one branch rather than two — the forward
+pass adds an untyped inward edge to the positive accumulator and `IfRoles::tally`
+counts it as positive — so either spelling of the request names the same edge.
+Everywhere else a role means nothing: every other squash sums whatever reaches
+it, so the readable key is the pair. All of that is the same reading cleanup
+takes (`canonical_role`), so a request and a canonicalisation can never
+disagree. An edge sourced at an observation neuron, or targeting an output
+neuron, is an ordinary candidate.
+
+#### `IF` structure is rewritten, never refused
+
+NEAT-AI's `SubConnection.ts::#wouldBreakIfNeuron` declines to remove an edge that
+would leave an `IF` short a role, so a whole class of typed structure is
+unreachable to the mutation operators. This crate rewrites instead
+(`CleanupOptions { if_repair: IfRepair::Rewrite }`), and both rewrites compute
+the **same number on every record**:
+
+| What the removal left | Rewrite | Why it is exact |
+|---|---|---|
+| no condition edge, or every condition source structurally fixed | the branch the condition always takes, as an `IDENTITY` sum; the condition edges and the unreachable branch go, and their feeders cascade | the forward pass could never take the other branch |
+| a `positive` / `negative` branch with nothing left in it, condition still varying | a **zero-weight** edge from a support constant into that role | an empty branch sum is `0`, and so is `0 · 1` |
+
+Both are reported, on `CleanupOutcome` and again on `PruneResult`:
+`static_if_neurons` names the `IF` and the branch that survived,
+`restored_if_roles` names the support edges added — including the constant a
+rewrite had to mint when the creature carried none, so new structure is never
+left to be discovered. `downgraded_if_neurons` is correspondingly always empty
+for a synapse prune. Neither rewrite is a compensation: they restore what the
+creature already computed once the requested edge was gone, so
+`PruneResult::transform` still grades only the loss of the term itself.
+`cleanup_creature` keeps the TypeScript-parity `IfRepair::Downgrade` default, so
+Issue #590's neuron removal is unchanged.
+
+#### What the removal cost
+
+The edge carried `w · a` into its target, where `a` is the **source's**
+activation, so the same compensation table as Issue #590 applies with `W = w`:
+
+| Case | What happens |
+|---|---|
+| the creature fixes `a` (a constant, or a source with nothing to sum) | `target.bias += w · a`, exactly; no statistic is needed and a supplied mean never overrides it — `TransformClass::Exact` |
+| `a` varies and `PruneStats` are supplied | `w · μ` folds into the bias, and a supplied correlated survivor takes `β · w` on its own edge |
+| the target aggregates (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost |
+
+`PruneResult::removed_neuron` is `None` for a synapse prune and
+`removed_synapses` carries the one requested triple; for `prune_neuron` it is
+`Some(uuid)` and every edge naming that neuron.
+
+### Pruning over the WASM boundary (Issue #592)
+
+The rewrites above are one Rust implementation with **two entry surfaces**.
+Rust consumers call `prune_neuron` / `prune_synapse` directly; NEAT-AI calls the
+same code over the existing WASM boundary as
+`prune_neuron(request: string) -> string` and
+`prune_synapse(request: string) -> string`. Nothing about pruning is decided on
+the wasm side: `neat-core/src/prune_json.rs` parses the request, calls the
+native function and writes the answer down, and `wasm_exports.rs` is a
+`#[wasm_bindgen]` rename over it.
+
+```mermaid
+flowchart LR
+    TS["NEAT-AI (TypeScript)"] -->|"JSON request"| W["wasm_exports<br/>prune_neuron / prune_synapse"]
+    W --> J["prune_json<br/>parse, call, write"]
+    R["Rust consumer"] --> P["prune_neuron / prune_synapse<br/>the one implementation"]
+    J --> P
+    P --> J
+    J -->|"JSON response"| TS
+```
+
+The ABI is **JSON in, JSON out**, on the `CreatureExport` wire shape NEAT-AI
+already exchanges — a creature file goes in and a creature file comes out:
+
+```jsonc
+// in — a neuron removal, with the caller's optional statistics
+{ "creature": { /* CreatureExport */ }, "uuid": "h-1",
+  "stats": { "meanActivation": 0.5, "variance": 0.04,
+             "proxy": { "uuid": "h-2", "meanActivation": 0.4,
+                        "variance": 0.02, "covariance": 0.01 } } }
+
+// in — a synapse removal; `type` is optional and defaults to the untyped role
+{ "creature": { /* CreatureExport */ },
+  "synapse": { "fromUUID": "h-a", "toUUID": "if-1", "type": "negative" } }
+
+// out — one of
+{ "ok": true, "creature": { /* CreatureExport */ }, "transform": "exact", "passes": 2,
+  "removedNeuron": "h-1", "removedSynapses": [ /* … */ ], "cascadeNeurons": [ /* … */ ],
+  "staticIfNeurons": [ /* … */ ], "biasFolds": [ /* … */ ], "weightShares": [ /* … */ ],
+  "uncompensated": [ /* … */ ] }
+{ "ok": false, "failure": { "reason": "PROTECTED_NEURON",
+                            "message": "Neuron output-0 is a output node and is protected from direct removal",
+                            "malformed": false } }
+```
+
+Empty report lists are omitted rather than written as `[]`. `transform` is the
+same honest `"exact"` / `"approximate"` label `PruneResult::transform` carries
+natively, and a successful call always answers with a creature the shared
+`creature_validate` accepts — there is **no scorer and no acceptance policy**
+here or in the native crate, because deciding whether to keep the result is the
+caller's half of the Issue #587 boundary.
+
+`ok: false` covers two different things and the wire keeps them apart:
+`malformed: false` is a request that was understood and **refused** (an unknown
+UUID, a protected neuron, an unusable statistic), carrying one of the stable
+`reason` codes; `malformed: true` is a payload that never reached the rewrite,
+led by `MALFORMED_REQUEST:` — the same convention `creature_validate` uses, and
+for the same reason: a panic on wasm aborts the module and `catch_unwind` is
+unavailable there. A role spelling the wire does not carry (`"POSITIVE"`) is a
+boundary fault rather than a silent `"standard"`, so a typo can never delete an
+edge the caller did not name.
+
+#### Native / WASM parity, and what it means exactly
+
+`neat-core/tests/golden/prune_wasm_parity.json` is the shared record: the
+Issue #588 fixtures — the same creatures Issues #589-#591 were graded on,
+including the `IF`/typed edge cases and the cascade — plus the request shapes
+only a boundary has (a refusal, a malformed payload, a static-`IF` rewrite, the
+correlated-survivor statistics payload), each with the answer **native** gives
+it. Regenerate it with
+`UPDATE_PRUNE_GOLDEN=1 cargo test -p neat-core --test prune_json`.
+
+| Gate | Where | What it proves |
+|---|---|---|
+| `neat-core/tests/prune_json.rs` | `cargo test` | the native ABI answers exactly what the native call answers, and still answers the record |
+| `tests/wasm_prune_parity_test.ts` | `quality.sh`, every PR | the record still covers the wire shapes, and the comparator still reports a difference when there is one |
+| `scripts/check_wasm_prune_parity.ts` | `wasm-bundle.yml`, both arches | the **published bytes** answer the same requests the same way |
+
+Parity is byte-exact where the representation allows: the keys present, the
+array lengths, every uuid, role, squash name, reason code, message, boolean and
+integer must match character for character. Floats are compared to
+`1e-9 · max(1, |native|)` — relative above `1`, an absolute `1e-9` floor below
+it — because folding a fixed neuron's activation runs its squash and a
+transcendental is resolved by the host libm natively and by the bundle's own
+implementation on wasm — each correct to within an ulp, neither obliged to agree
+on the last bit. Every structural claim stays exact, so anything wider than
+rounding fails loudly.
+
 ### Creature validation contract (Issue #559)
 
 `neat-core/src/creature_validate.rs` is the Rust home of NEAT-AI's

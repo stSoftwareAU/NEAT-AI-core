@@ -5,4 +5,5 @@ check-filenames =
 check-hidden =
 # renderD: serde/JSON field name; mape: MAPE (mean absolute percentage error) acronym
 # froms: variable name storing "from" versions in bump-deps.sh, intentional plural
-ignore-words-list = renderD,mape,froms
+# indx: variable name from TypeScript code being referenced
+ignore-words-list = renderD,mape,froms,indx
