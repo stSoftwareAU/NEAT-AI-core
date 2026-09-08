@@ -4,12 +4,9 @@
 # and an empty `[workspace]` table here): it is a research harness, not shipped
 # code, so it takes no part in the workspace build or the version bump.
 #
-# Its supply chain is **not** excluded (Issue #607). The lockfile this crate
-# resolves for itself is audited by `security.yml`
-# (`cargo audit --file wasm-bench/Cargo.lock`), checked by `quality.sh`
-# (`cargo deny --manifest-path wasm-bench/Cargo.toml check`, same root
-# `deny.toml`) and bumped by Dependabot (`directory: "/wasm-bench"`) — see
-# SECURITY.md "Supply-chain audit scope".
+# Its supply chain is **not** excluded (Issue #607): the lockfile this crate
+# resolves for itself is audited, denied and bumped like the root one. The
+# per-lockfile wiring lives once, in SECURITY.md "Supply-chain audit scope".
 [package]
 name = "wasm-gather4-bench"
 version = "0.0.0"

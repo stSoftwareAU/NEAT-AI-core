@@ -6,9 +6,10 @@
 # carried a single `directory: "/"` entry. An advisory or a banned source
 # reaching a crate only the harness depends on was therefore invisible.
 #
-# These are "what" tests: each reads the committed pipeline artefact and asserts
-# on the configuration it would actually execute, and the SECURITY.md scope
-# statement is checked against that same wiring rather than against prose.
+# These are "what" tests: each one reads the commands the committed pipeline
+# would actually **execute** — a workflow's `run:` bodies, not its step names —
+# and the SECURITY.md scope statement is checked against that same wiring
+# rather than against prose.
 #
 # Oracle rule 4 (AGENTS.md): each rule has exactly **one** pattern definition,
 # exported from setup() and compiled both by the sweep over the live files and
@@ -18,6 +19,11 @@
 load helpers
 
 setup() {
+  require_python3
+  if ! python3 -c 'import yaml' 2>/dev/null; then
+    skip "PyYAML required for workflow parsing"
+  fi
+
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   SECURITY_WORKFLOW="${REPO_ROOT}/.github/workflows/security.yml"
   QUALITY="${REPO_ROOT}/quality.sh"
@@ -26,22 +32,48 @@ setup() {
 
   # `cargo audit --file <lockfile>` — the capture is the lockfile it reads.
   export AUDIT_LOCKFILE_RE='\bcargo[ \t]+audit\b[^\n;&|]*--file[ \t=]+([^ \t\n;&|]+)'
+  # A bare `cargo audit` with no `--file`: the root lockfile, by default.
+  export ROOT_AUDIT_RE='\bcargo[ \t]+audit\b(?![^\n;&|]*--file)'
   # `cargo deny --manifest-path <manifest> … check` — the capture is the
   # manifest whose graph is checked.
   export DENY_MANIFEST_RE='\bcargo[ \t]+deny\b[^\n;&|]*--manifest-path[ \t=]+([^ \t\n;&|]+)[^\n;&|]*\bcheck\b'
-  # A bare `cargo audit` with no `--file`: the root lockfile, by default.
-  export ROOT_AUDIT_RE='\bcargo[ \t]+audit\b(?![^\n;&|]*--file)'
+  # A bare `cargo deny check`: the root manifest, by default.
+  export ROOT_DENY_RE='\bcargo[ \t]+deny[ \t]+check\b'
 
   WASM_BENCH_LOCK="wasm-bench/Cargo.lock"
   WASM_BENCH_MANIFEST="wasm-bench/Cargo.toml"
 }
 
-# Every lockfile `security.yml` audits: the `--file` captures, plus the root
-# `Cargo.lock` when a bare `cargo audit` runs.
+# The shell commands file $1 would actually execute, written to stdout: the
+# `run:` bodies of a workflow, or the comment-stripped body of a shell script.
+# A step *name* quoting a command is prose — `- name: Run cargo audit
+# (fallback)` must never satisfy an assertion about what runs.
+command_text() {
+  case "$1" in
+    *.yml | *.yaml)
+      python3 - "$1" <<'PY'
+import sys
+
+import yaml
+
+data = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+for job in (data.get("jobs") or {}).values():
+    for step in job.get("steps") or []:
+        if "run" in step:
+            # `run: true` parses as a YAML boolean; str() keeps the sweep total.
+            print(str(step["run"]))
+PY
+      ;;
+    *) strip_comments "$1" ;;
+  esac
+}
+
+# Every lockfile the commands in file $1 audit: the `--file` captures, plus the
+# root `Cargo.lock` when a bare `cargo audit` runs.
 audited_lockfiles() {
-  local stripped="${BATS_TEST_TMPDIR:-/tmp}/security.stripped"
-  strip_comments "$SECURITY_WORKFLOW" >"$stripped"
-  python3 - "$stripped" <<'PY'
+  local commands="${BATS_TEST_TMPDIR:-/tmp}/audit-commands.txt"
+  command_text "$1" >"$commands"
+  python3 - "$commands" <<'PY'
 import os
 import re
 import sys
@@ -54,20 +86,20 @@ print("\n".join(sorted(found)))
 PY
 }
 
-# Every manifest `quality.sh` runs `cargo deny check` against: the
+# Every manifest the commands in file $1 run `cargo deny check` against: the
 # `--manifest-path` captures, plus the root manifest for a bare `cargo deny
 # check`.
 denied_manifests() {
-  local stripped="${BATS_TEST_TMPDIR:-/tmp}/deny-source.stripped"
-  strip_comments "$1" >"$stripped"
-  python3 - "$stripped" <<'PY'
+  local commands="${BATS_TEST_TMPDIR:-/tmp}/deny-commands.txt"
+  command_text "$1" >"$commands"
+  python3 - "$commands" <<'PY'
 import os
 import re
 import sys
 
 text = open(sys.argv[1], encoding="utf-8").read()
 found = set(re.findall(os.environ["DENY_MANIFEST_RE"], text))
-if re.search(r'\bcargo[ \t]+deny[ \t]+check\b', text):
+if re.search(os.environ["ROOT_DENY_RE"], text):
     found.add("Cargo.toml")
 print("\n".join(sorted(found)))
 PY
@@ -96,8 +128,7 @@ end = next(
 )
 section = "\n".join(lines[start:end])
 # Path-shaped backticked tokens only: a backticked *command* that names a
-# lockfile (`cargo audit --file wasm-bench/Cargo.lock`) is not itself a
-# lockfile entry.
+# lockfile (`cargo audit --file wasm-bench/Cargo.lock`) is not itself an entry.
 found = sorted(set(re.findall(r"`([A-Za-z0-9_./-]*Cargo\.lock)`", section)))
 if not found:
     sys.exit("the 'Supply-chain audit scope' section names no lockfile")
@@ -106,23 +137,22 @@ PY
 }
 
 @test "security.yml audits the wasm-bench lockfile" {
-  run audited_lockfiles
+  run audited_lockfiles "$SECURITY_WORKFLOW"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -Fxq "$WASM_BENCH_LOCK"
 }
 
 @test "security.yml still audits the root lockfile" {
-  run audited_lockfiles
+  run audited_lockfiles "$SECURITY_WORKFLOW"
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" | grep -Fxq "Cargo.lock"
 }
 
-@test "the audit pattern accepts a --file audit and rejects a root-only one" {
-  # The same AUDIT_LOCKFILE_RE the sweep above compiles, against literals.
+@test "the audit patterns accept the live commands and reject their near misses" {
+  # The same AUDIT_LOCKFILE_RE / ROOT_AUDIT_RE the sweeps above compile.
   run python3 - <<'PY'
 import os
 import re
-import sys
 
 audit = re.compile(os.environ["AUDIT_LOCKFILE_RE"])
 root = re.compile(os.environ["ROOT_AUDIT_RE"])
@@ -153,7 +183,7 @@ PY
 }
 
 # quality.sh is the local gate; no workflow runs it (docs_pipeline_accuracy.bats
-# pins that), so the CI `quality` job has to make the same call itself or the
+# pins that), so the CI `quality` job has to make the same calls itself or the
 # wasm-bench graph is unchecked on every PR.
 @test "the CI quality job runs cargo deny over both manifests" {
   run denied_manifests "$CI_WORKFLOW"
@@ -162,12 +192,13 @@ PY
   printf '%s\n' "$output" | grep -Fxq "Cargo.toml"
 }
 
-@test "the deny pattern accepts a --manifest-path check and rejects a bare deny" {
+@test "the deny patterns accept the live commands and reject their near misses" {
   run python3 - <<'PY'
 import os
 import re
 
 deny = re.compile(os.environ["DENY_MANIFEST_RE"])
+root = re.compile(os.environ["ROOT_DENY_RE"])
 
 good = "cargo deny --manifest-path wasm-bench/Cargo.toml check"
 m = deny.search(good)
@@ -179,15 +210,43 @@ for bad in (
     "cargo build --manifest-path wasm-bench/Cargo.toml check",
 ):
     assert not deny.search(bad), bad
+
+assert root.search("cargo deny check"), "bare cargo deny check is the root graph"
+assert not root.search(good), "a --manifest-path check is not the root graph"
 PY
   [ "$status" -eq 0 ]
+}
+
+# A workflow's step names are prose: quoting a command there must not satisfy
+# any assertion above. This is what stops `run: cargo audit` being gutted while
+# `- name: Run cargo audit (fallback)` keeps the suite green.
+@test "command_text reads run: bodies and ignores step names" {
+  local workflow="${BATS_TEST_TMPDIR}/prose.yml"
+  cat >"$workflow" <<'YAML'
+jobs:
+  security:
+    steps:
+      - name: Run cargo audit (fallback) and cargo deny check
+        run: echo nothing
+YAML
+  run command_text "$workflow"
+  [ "$status" -eq 0 ]
+  [ "$output" = "echo nothing" ]
+
+  run audited_lockfiles "$workflow"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+
+  run denied_manifests "$workflow"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
 }
 
 @test "every lockfile SECURITY.md scopes exists and is audited by security.yml" {
   run scoped_lockfiles
   [ "$status" -eq 0 ]
   local scoped="$output"
-  run audited_lockfiles
+  run audited_lockfiles "$SECURITY_WORKFLOW"
   [ "$status" -eq 0 ]
   local audited="$output"
 

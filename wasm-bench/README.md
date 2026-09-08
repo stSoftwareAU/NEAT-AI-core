@@ -10,11 +10,9 @@ workspace build and the version-bump job see exactly the crate set they saw
 before.
 
 Its **supply chain is in scope** (Issue #607): the lockfile this crate resolves
-for itself is audited by `security.yml`
-(`cargo audit --file wasm-bench/Cargo.lock`), checked by `quality.sh`
-(`cargo deny --manifest-path wasm-bench/Cargo.toml check`, under the root
-`deny.toml`) and bumped by Dependabot (`directory: "/wasm-bench"`). The scope
-statement lives in [`SECURITY.md`](../SECURITY.md#supply-chain-audit-scope).
+for itself is audited, denied and bumped like the root one. The per-lockfile
+wiring lives once, in
+[`SECURITY.md`](../SECURITY.md#supply-chain-audit-scope).
 
 ## Why it is shaped like this
 
