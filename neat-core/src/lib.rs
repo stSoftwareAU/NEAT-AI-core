@@ -36,6 +36,7 @@ pub mod parallel_scoring;
 pub mod propagate_codec;
 pub mod prune_cleanup;
 pub mod prune_fixtures;
+pub mod prune_neuron;
 pub mod range;
 pub mod safe_zone;
 pub mod score_scan;
@@ -109,6 +110,11 @@ pub use prune_cleanup::{
 };
 // Issue #588 — the TypeScript pruning behaviour, captured as parity fixtures.
 pub use prune_fixtures::{PRUNE_PARITY_CASES, PruneCase, PruneRequest};
+// Issue #590 — hidden-neuron pruning with optional statistical compensation.
+pub use prune_neuron::{
+    BiasFold, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, TransformClass,
+    UncompensatedReason, UncompensatedTarget, WeightShare, prune_neuron,
+};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{
