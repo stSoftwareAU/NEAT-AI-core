@@ -4,4 +4,5 @@ skip = ./target,./.git
 check-filenames =
 check-hidden =
 # renderD: serde/JSON field name; mape: MAPE (mean absolute percentage error) acronym
-ignore-words-list = renderD,mape
+# froms: variable name storing "from" versions in bump-deps.sh, intentional plural
+ignore-words-list = renderD,mape,froms
