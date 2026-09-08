@@ -607,7 +607,8 @@ mod simd_native;
 // kernels and run on the primary `activate()` forward-pass hot path.
 #[cfg(not(target_family = "wasm"))]
 pub use simd_native::{
-    MAX_INTERLEAVED_LANES, weighted_sum_interleaved, weighted_sum_interleaved_8,
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
-    weighted_sum_simd, weighted_sum_simd_4records, weighted_sum_simd_8records,
+    MAX_INTERLEAVED_LANES, avx2_fma_kernels_enabled, weighted_sum_interleaved,
+    weighted_sum_interleaved_8, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
+    weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
+    weighted_sum_simd_8records,
 };

@@ -243,10 +243,28 @@ function this changes how intrinsics must be wrapped:
   `vst1q_f32`, `_mm_storeu_ps` / `_mm256_storeu_ps`); and intrinsics needing a
   feature the enclosing fn does **not** enable (e.g. `_mm256_fmadd_ps` needs
   `fma` inside an `avx2`-only fn).
-- Every SIMD `unsafe` block must carry a `// SAFETY:` note that **names the
-  `is_*_feature_detected!` guard** (`is_x86_feature_detected!` /
-  `is_aarch64_feature_detected!`) proving the callee's `#[target_feature]`
-  precondition.
+- Every SIMD `unsafe` block must be **discharged in writing**, one of two ways
+  (Issue #605):
+  - a `# Safety` doc on the enclosing `unsafe fn` covers every `unsafe {` block
+    in its body. A kernel's index and target-feature preconditions belong in
+    that one contract — the caller is who must satisfy them — not re-copied onto
+    each of its eight blocks.
+  - otherwise the block carries its own `// SAFETY:` note. This is **required**
+    for every `unsafe` block in a *safe* fn, and when the block sits under a
+    runtime feature check the note must **name the `is_*_feature_detected!`
+    guard** (`is_x86_feature_detected!` / `is_aarch64_feature_detected!`)
+    proving the callee's `#[target_feature]` precondition.
+
+  `tests/scripts/unsafe_block_safety_notes.bats` sweeps the live sources
+  (`simd_native.rs`, `simd.rs`, `simd/scalar.rs`, wasm half included) and fails
+  on a block with neither — the prose gate `unsafe_simd_invariants.bats` reads
+  only this file.
+- A `#[target_feature]` list must enable **every** feature its intrinsics need,
+  and the dispatch guard must detect every one of them. **AVX2 does not imply
+  FMA**: `_mm256_fmadd_ps` reached through an `avx2`-only guard is undefined
+  behaviour on a CPU (or hypervisor) that masks FMA, so the AVX2 record kernels
+  carry `#[target_feature(enable = "avx2", enable = "fma")]` and dispatch
+  through `avx2_fma_kernels_enabled(avx2_detected, fma_detected)` (Issue #605).
 
 ### Buffer reuse is sound only one-network-per-thread
 
