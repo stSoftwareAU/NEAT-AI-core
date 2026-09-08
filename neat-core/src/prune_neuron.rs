@@ -97,7 +97,10 @@
 use std::collections::HashMap;
 
 use crate::creature::{CreatureExport, parse_squash_name, parse_synapse_type, squash_name_from};
-use crate::prune_cleanup::{CleanupError, SynapseKey, cleanup_creature, zero_inward_activation};
+use crate::prune_cleanup::{
+    CleanupError, StaticIfRewrite, SynapseKey, cleanup_creature, fixed_activation,
+    is_observation_uuid,
+};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -239,9 +242,12 @@ pub struct UncompensatedTarget {
 pub struct PruneResult {
     /// The canonical, validated creature.
     pub creature: CreatureExport,
-    /// Wire UUID of the neuron the caller asked to remove.
-    pub removed_neuron: String,
-    /// The edges naming that neuron, in either direction, that went with it.
+    /// Wire UUID of the neuron the caller asked to remove, or `None` when the
+    /// request named a **synapse** ([`crate::prune_synapse::prune_synapse`], Issue #591).
+    pub removed_neuron: Option<String>,
+    /// The edges the request itself took: every edge naming the removed neuron
+    /// for [`prune_neuron`], the one requested triple for
+    /// [`crate::prune_synapse::prune_synapse`].
     pub removed_synapses: Vec<SynapseKey>,
     /// Neurons the cleanup cascade removed on top of the requested one.
     pub cascade_neurons: Vec<String>,
@@ -250,8 +256,17 @@ pub struct PruneResult {
     /// Hidden neurons the cascade folded into constant support.
     pub folded_neurons: Vec<String>,
     /// `IF` neurons downgraded to `IDENTITY` because a role went with the
-    /// removal — the one cleanup rewrite that is not exact.
+    /// removal — the one cleanup rewrite that is not exact. Always empty for
+    /// [`crate::prune_synapse::prune_synapse`], which asks for the exact
+    /// rewrites below instead.
     pub downgraded_if_neurons: Vec<String>,
+    /// `IF` neurons the removal left with a condition the creature itself
+    /// decides, flattened to the branch that survives (Issue #591).
+    pub static_if_neurons: Vec<StaticIfRewrite>,
+    /// Zero-weight support edges added to give an `IF` back a branch role the
+    /// removal emptied (Issue #591). Each one is a neuron the caller's creature
+    /// did not name, so it is reported rather than left to be discovered.
+    pub restored_if_roles: Vec<SynapseKey>,
     /// The mean folds applied, one per compensated target.
     pub bias_folds: Vec<BiasFold>,
     /// The correlated-survivor shares applied.
@@ -274,6 +289,19 @@ pub enum PruneError {
     UnknownNeuron {
         /// The UUID asked for.
         uuid: String,
+    },
+    /// The creature carries no synapse with that `(from, to, role)` triple.
+    ///
+    /// The role is part of the identity (Issue #577): asking for a role a pair
+    /// does not carry names no edge, and removing "the other one" instead
+    /// would delete structure the caller never asked about.
+    UnknownSynapse {
+        /// Wire UUID of the source asked for.
+        from_uuid: String,
+        /// Wire UUID of the target asked for.
+        to_uuid: String,
+        /// The role asked for.
+        role: SynapseType,
     },
     /// The neuron exists but is not a caller's to delete.
     Protected {
@@ -345,6 +373,14 @@ impl std::fmt::Display for PruneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PruneError::UnknownNeuron { uuid } => write!(f, "No neuron {uuid} to remove"),
+            PruneError::UnknownSynapse {
+                from_uuid,
+                to_uuid,
+                role,
+            } => write!(
+                f,
+                "No synapse {from_uuid} -> {to_uuid} ({role:?}) to remove"
+            ),
             PruneError::Protected { uuid, kind } => {
                 write!(
                     f,
@@ -492,7 +528,7 @@ pub fn prune_neuron(
     });
 
     if let Some(proxy) = supplied.and_then(|s| s.proxy.as_ref()) {
-        check_proxy(&cut, neuron_uuid, proxy)?;
+        check_proxy(&cut, Some(neuron_uuid), proxy)?;
     }
 
     let mut bias_folds = Vec::new();
@@ -569,12 +605,14 @@ pub fn prune_neuron(
 
     Ok(PruneResult {
         creature: outcome.creature,
-        removed_neuron: neuron_uuid.to_string(),
+        removed_neuron: Some(neuron_uuid.to_string()),
         removed_synapses,
         cascade_neurons: outcome.removed_neurons,
         cascade_synapses: outcome.removed_synapses,
         folded_neurons: outcome.folded_neurons,
         downgraded_if_neurons: outcome.downgraded_if_neurons,
+        static_if_neurons: outcome.static_if_neurons,
+        restored_if_roles: outcome.restored_if_roles,
         bias_folds,
         weight_shares,
         uncompensated,
@@ -588,20 +626,20 @@ pub fn prune_neuron(
 }
 
 /// What one target's compensation came to.
-struct Compensation {
+pub(crate) struct Compensation {
     /// Added to the target's bias.
-    bias_delta: f64,
+    pub(crate) bias_delta: f64,
     /// Added to the proxy's edge into the target; `0.0` when there is none.
-    share: f64,
+    pub(crate) share: f64,
     /// True when the folded value is the neuron's activation on every record.
-    exact: bool,
+    pub(crate) exact: bool,
     /// Variance the compensation could not carry, when it is derivable.
-    residual_variance: Option<f64>,
+    pub(crate) residual_variance: Option<f64>,
 }
 
 /// The compensation one target is owed, or `None` when there is nothing to
 /// derive it from.
-fn compensate(
+pub(crate) fn compensate(
     invariant_value: Option<f64>,
     stats: Option<&PruneStats>,
     weight_sum: f64,
@@ -673,36 +711,15 @@ fn classify_target(creature: &CreatureExport, uuid: &str) -> Result<(), PruneErr
     }
 }
 
-/// Is this the wire UUID of one of the creature's observation neurons?
-///
-/// Input neurons are not listed in `neurons` — the declared width is what says
-/// they exist (Issue #550) — so the name is the only thing to test.
-fn is_observation_uuid(creature: &CreatureExport, uuid: &str) -> bool {
-    uuid.strip_prefix("input-")
-        .and_then(|index| index.parse::<usize>().ok())
-        .is_some_and(|index| index < creature.input)
-}
-
 /// The value the neuron activates to on **every** record, when the creature
 /// alone proves there is one.
 ///
-/// A neuron with no inward edge sums nothing, so its activation is fixed —
-/// [`zero_inward_activation`] is the shared mirror of the forward pass for that
-/// case, reused rather than restated. A neuron that *is* fed varies with the
-/// record, and no amount of structure says otherwise.
+/// [`fixed_activation`] is the single home of that question (Issue #591), asked
+/// here rather than restated so a fold and an `IF` rewrite can never disagree
+/// about what "fixed" means. A neuron that *is* fed varies with the record, and
+/// no amount of structure says otherwise.
 fn structural_activation(creature: &CreatureExport, uuid: &str) -> Result<Option<f64>, PruneError> {
-    if creature.synapses.iter().any(|s| s.to_uuid == uuid) {
-        return Ok(None);
-    }
-    let neuron = creature
-        .neurons
-        .iter()
-        .find(|n| n.uuid == uuid)
-        .ok_or_else(|| PruneError::UnknownNeuron {
-            uuid: uuid.to_string(),
-        })?;
-    let squash = squash_of(neuron)?;
-    Ok(Some(f64::from(zero_inward_activation(squash, neuron.bias))))
+    Ok(fixed_activation(creature, uuid)?.map(f64::from))
 }
 
 /// The squash a target activates with, by UUID.
@@ -710,7 +727,10 @@ fn structural_activation(creature: &CreatureExport, uuid: &str) -> Result<Option
 /// A constant emits its bias whatever it declares, so it reads as `IDENTITY` —
 /// the same reading [`cleanup_creature`] takes, and a constant can never be a
 /// target anyway.
-fn target_squash(creature: &CreatureExport, uuid: &str) -> Result<SquashType, PruneError> {
+pub(crate) fn target_squash(
+    creature: &CreatureExport,
+    uuid: &str,
+) -> Result<SquashType, PruneError> {
     let neuron = creature
         .neurons
         .iter()
@@ -725,7 +745,7 @@ fn target_squash(creature: &CreatureExport, uuid: &str) -> Result<SquashType, Pr
 
 /// Parse one neuron's declared squash, reporting an unknown name the way
 /// cleanup would rather than guessing a default.
-fn squash_of(neuron: &crate::creature::NeuronExport) -> Result<SquashType, PruneError> {
+pub(crate) fn squash_of(neuron: &crate::creature::NeuronExport) -> Result<SquashType, PruneError> {
     if neuron.neuron_type == "constant" {
         return Ok(SquashType::Identity);
     }
@@ -775,7 +795,7 @@ fn outward_keys(
 
 /// Every supplied statistic must be a number a compensation can be derived
 /// from, checked before a single edit is made.
-fn check_stats(uuid: &str, stats: &PruneStats) -> Result<(), PruneError> {
+pub(crate) fn check_stats(uuid: &str, stats: &PruneStats) -> Result<(), PruneError> {
     finite(uuid, "mean_activation", stats.mean_activation)?;
     if let Some(variance) = stats.variance {
         finite(uuid, "variance", variance)?;
@@ -840,19 +860,24 @@ fn finite(uuid: &str, field: &'static str, value: f64) -> Result<(), PruneError>
 
 /// The proxy must be a neuron that survives the removal.
 ///
-/// Whether it also *reaches* each target is settled per target by
+/// `removed` names the neuron the request deletes, when it deletes one: a
+/// neuron prune (Issue #590) passes it, because a survivor cannot be the node
+/// that just went, and a synapse prune (Issue #591) passes `None`, because it
+/// deletes no neuron at all.
+///
+/// Whether the proxy also *reaches* each target is settled per target by
 /// [`add_to_edge`], because only there is the share it would carry known — a
 /// survivor that predicts nothing carries nothing and needs no edge. A proxy
 /// that must carry a share into a target it does not feed is a request this
 /// crate cannot carry out as described, so the whole prune is refused rather
 /// than half-applied: no partially compensated creature is ever returned. Call
 /// without the proxy — or add the missing edge first — to prune anyway.
-fn check_proxy(
+pub(crate) fn check_proxy(
     cut: &CreatureExport,
-    removed_uuid: &str,
+    removed: Option<&str>,
     proxy: &ProxyStats,
 ) -> Result<(), PruneError> {
-    if proxy.uuid == removed_uuid
+    if removed == Some(proxy.uuid.as_str())
         || !(is_observation_uuid(cut, &proxy.uuid)
             || cut.neurons.iter().any(|n| n.uuid == proxy.uuid))
     {
@@ -864,7 +889,7 @@ fn check_proxy(
 }
 
 /// Add `delta` to the existing `from -> to` edge, or refuse.
-fn add_to_edge(
+pub(crate) fn add_to_edge(
     creature: &mut CreatureExport,
     from_uuid: &str,
     to_uuid: &str,

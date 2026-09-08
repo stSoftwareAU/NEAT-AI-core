@@ -79,8 +79,23 @@
 //! **The `IF` repair follows the structural gate, not rule 12's exemption.**
 //! [`creature_validate`] skips rule 12 for a neuron at index `<= 2`, but
 //! [`validate_creature_topology`]'s structural leg has no such exemption and
-//! cleanup is gated on both, so an `IF` short a role is downgraded wherever it
+//! cleanup is gated on both, so an `IF` short a role is repaired wherever it
 //! sits.
+//!
+//! # Two `IF` repair policies, and why there are two
+//!
+//! [`cleanup_creature`] keeps TypeScript parity ([`IfRepair::Downgrade`]): an
+//! `IF` short a role becomes the `IDENTITY` sum of everything still reaching
+//! it. That is the one **inexact** rewrite in this module, and it is what the
+//! [`crate::prune_fixtures`] captures record.
+//!
+//! [`cleanup_creature_with`] lets a caller ask for [`IfRepair::Rewrite`]
+//! instead (Issue #591): the `IF` is rewritten into the closest form that
+//! computes the **same number on every record** — the branch a statically
+//! decided condition always takes, or a zero-weight support edge giving back
+//! the branch role the removal emptied. Synapse pruning uses it so typed
+//! structure is rewritten rather than refused; neuron pruning (Issue #590)
+//! keeps the parity default.
 //!
 //! # What is preserved
 //!
@@ -93,7 +108,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::creature::{
     CreatureError, CreatureExport, NeuronExport, SynapseExport, parse_squash_name,
-    parse_synapse_type, squash_name_from, validate_creature_width,
+    parse_synapse_type, squash_name_from, synapse_type_name_from, validate_creature_width,
 };
 use crate::creature_validate::{ValidateOptions, ValidationFailure, creature_validate};
 use crate::if_graft::{GraftError, sort_synapses_canonically, validate_creature_topology};
@@ -109,6 +124,12 @@ use crate::topology_invariants::{IfRoles, if_neuron_fault};
 /// training adjusts. Matches [`crate::if_graft::GRAFT_CONSTANT_BIAS`], so a
 /// grafted constant and a folded one are the same kind of node.
 pub const SUPPORT_CONSTANT_BIAS: f64 = 1.0;
+
+/// Name prefix of a support constant this module has to mint itself.
+///
+/// Only [`IfRepair::Rewrite`] ever needs one, and only for a creature that
+/// carries no constant at all to hang a restored `IF` role on.
+const SUPPORT_CONSTANT_PREFIX: &str = "prune-support-";
 
 /// The most constants a canonical creature carries.
 ///
@@ -163,7 +184,59 @@ pub struct CleanupOutcome {
     /// computes, and says so here.
     pub surplus_constants: Vec<String>,
     /// `IF` neurons downgraded to `IDENTITY` because a required role was gone.
+    ///
+    /// Only [`IfRepair::Downgrade`] fills this — the one inexact rewrite this
+    /// module has. Under [`IfRepair::Rewrite`] it is always empty, and
+    /// [`Self::static_if_neurons`] / [`Self::restored_if_roles`] carry the
+    /// exact rewrites that replaced it.
     pub downgraded_if_neurons: Vec<String>,
+    /// `IF` neurons flattened to `IDENTITY` because their condition was
+    /// decided by the creature alone (Issue #591).
+    pub static_if_neurons: Vec<StaticIfRewrite>,
+    /// Zero-weight support edges added to give an `IF` back a branch role it
+    /// lost, without changing what it computes (Issue #591).
+    pub restored_if_roles: Vec<SynapseKey>,
+}
+
+/// One `IF` whose condition the creature itself decides, and the branch that
+/// therefore survives.
+///
+/// The other branch cannot be reached on any record, so it is removed and its
+/// feeders go with it through the ordinary dead-structure cascade.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticIfRewrite {
+    /// Wire UUID of the `IF` neuron.
+    pub uuid: String,
+    /// The branch the condition always takes: [`SynapseType::Positive`] when
+    /// the condition sum is `> 0`, [`SynapseType::Negative`] otherwise.
+    pub branch: SynapseType,
+}
+
+/// How cleanup repairs an `IF` neuron a removal left short of a role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IfRepair {
+    /// TypeScript parity (`RepairInvalidIfNeurons.ts`): the `IF` becomes the
+    /// `IDENTITY` sum of **everything** still reaching it and its inward roles
+    /// are stripped. Cheap, total, and not what the `IF` computed — the one
+    /// inexact rewrite in this module, reported on
+    /// [`CleanupOutcome::downgraded_if_neurons`].
+    #[default]
+    Downgrade,
+    /// Issue #591: rewrite the `IF` into the closest form that computes the
+    /// **same number on every record**, and never blanket-downgrade.
+    ///
+    /// | What the removal left | Rewrite | Why it is exact |
+    /// |---|---|---|
+    /// | a condition the creature decides (no condition edge, or every condition source structurally constant) | `IDENTITY` over the branch that is always taken; the other branch and the condition edges go | the forward pass could never take the other branch |
+    /// | a missing `positive` / `negative` branch, condition still varying | a **zero-weight** edge from a support constant into that role | an empty branch sum is `0`, and so is `0 · 1` |
+    Rewrite,
+}
+
+/// What one cleanup run is allowed to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CleanupOptions {
+    /// How an `IF` short a role is repaired.
+    pub if_repair: IfRepair,
 }
 
 /// Why a cleanup produced no creature.
@@ -351,9 +424,57 @@ impl From<CreatureError> for CleanupError {
 /// assert_eq!(outcome.creature.neurons.len(), 1);
 /// ```
 pub fn cleanup_creature(creature: &CreatureExport) -> Result<CleanupOutcome, CleanupError> {
+    cleanup_creature_with(creature, CleanupOptions::default())
+}
+
+/// [`cleanup_creature`], with the caller's choice of `IF` repair policy.
+///
+/// The default policy is TypeScript parity ([`IfRepair::Downgrade`]); synapse
+/// pruning (Issue #591) asks for [`IfRepair::Rewrite`] instead, so an `IF` that
+/// lost a role is rewritten into a form that computes the same number rather
+/// than flattened into a sum it never took.
+///
+/// # Errors
+///
+/// The same [`CleanupError`]s as [`cleanup_creature`].
+///
+/// # Examples
+///
+/// ```
+/// use neat_core::{CleanupOptions, IfRepair, SynapseType, cleanup_creature_with, parse_creature_json};
+///
+/// // `if-1` lost its only condition source, so the condition sum is 0 on every
+/// // record and the negative branch is the only one the forward pass takes.
+/// let creature = parse_creature_json(r#"{
+///   "input":1,"output":1,"forwardOnly":true,
+///   "neurons":[
+///     {"type":"hidden","uuid":"h-a","bias":0.0,"squash":"IDENTITY"},
+///     {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+///     {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+///   ],
+///   "synapses":[
+///     {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
+///     {"weight":2.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
+///     {"weight":-3.0,"fromUUID":"h-a","toUUID":"if-1","type":"negative"},
+///     {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+///   ]
+/// }"#).unwrap();
+///
+/// let options = CleanupOptions { if_repair: IfRepair::Rewrite };
+/// let outcome = cleanup_creature_with(&creature, options).unwrap();
+///
+/// assert_eq!(outcome.static_if_neurons[0].uuid, "if-1");
+/// assert_eq!(outcome.static_if_neurons[0].branch, SynapseType::Negative);
+/// // Only the negative arm survives, at its own weight.
+/// assert_eq!(outcome.creature.synapses[1].weight, -3.0);
+/// ```
+pub fn cleanup_creature_with(
+    creature: &CreatureExport,
+    options: CleanupOptions,
+) -> Result<CleanupOutcome, CleanupError> {
     validate_creature_width(creature)?;
 
-    let mut engine = Engine::new(creature.clone());
+    let mut engine = Engine::new(creature.clone(), options);
     engine.check_references()?;
 
     let cap = 8 + 4 * (creature.neurons.len() + creature.synapses.len());
@@ -416,6 +537,8 @@ pub fn cleanup_creature(creature: &CreatureExport) -> Result<CleanupOutcome, Cle
         merged_constants: engine.merged_constants,
         surplus_constants,
         downgraded_if_neurons: engine.downgraded_if_neurons,
+        static_if_neurons: engine.static_if_neurons,
+        restored_if_roles: engine.restored_if_roles,
     })
 }
 
@@ -479,11 +602,25 @@ fn squash_of(neuron: &NeuronExport) -> Result<SquashType, CleanupError> {
 ///
 /// Only an `IF` keeps a sum per role; every other squash sums whatever reaches
 /// it, so two roles into one of those are the same edge written twice.
-fn canonical_role(target_squash: SquashType, role: SynapseType) -> SynapseType {
-    if target_squash == SquashType::If {
-        role
-    } else {
-        SynapseType::Standard
+///
+/// At an `IF`, [`SynapseType::Standard`] **is** the positive role: an untyped
+/// inward edge lands in the positive accumulator in
+/// [`crate::network::CompiledNetwork::activate`] and tallies as positive in
+/// [`IfRoles::tally`], so the two spellings name one branch and are folded to
+/// one answer here. Reading them apart is what would let a request for the
+/// positive arm miss an untyped row, which is the refusal Issue #591 exists to
+/// remove.
+///
+/// Crate-visible because [`crate::prune_synapse`] resolves the *requested*
+/// role through it (Issue #591): one definition of "what names an edge", so a
+/// request and a canonicalisation can never disagree.
+pub(crate) fn canonical_role(target_squash: SquashType, role: SynapseType) -> SynapseType {
+    if target_squash != SquashType::If {
+        return SynapseType::Standard;
+    }
+    match role {
+        SynapseType::Standard => SynapseType::Positive,
+        other => other,
     }
 }
 
@@ -494,24 +631,30 @@ fn role_of(synapse: &SynapseExport) -> SynapseType {
 /// The working state of one cleanup run.
 struct Engine {
     creature: CreatureExport,
+    options: CleanupOptions,
     removed_neurons: Vec<String>,
     removed_synapses: Vec<SynapseKey>,
     folded_neurons: Vec<String>,
     rescaled_constants: Vec<String>,
     merged_constants: Vec<String>,
     downgraded_if_neurons: Vec<String>,
+    static_if_neurons: Vec<StaticIfRewrite>,
+    restored_if_roles: Vec<SynapseKey>,
 }
 
 impl Engine {
-    fn new(creature: CreatureExport) -> Self {
+    fn new(creature: CreatureExport, options: CleanupOptions) -> Self {
         Self {
             creature,
+            options,
             removed_neurons: Vec::new(),
             removed_synapses: Vec::new(),
             folded_neurons: Vec::new(),
             rescaled_constants: Vec::new(),
             merged_constants: Vec::new(),
             downgraded_if_neurons: Vec::new(),
+            static_if_neurons: Vec::new(),
+            restored_if_roles: Vec::new(),
         }
     }
 
@@ -607,6 +750,38 @@ impl Engine {
         Ok(())
     }
 
+    /// Repair every `IF` neuron a removal left short of a role, under the
+    /// caller's [`IfRepair`] policy.
+    fn repair_if_neurons(&mut self) -> Result<bool, CleanupError> {
+        match self.options.if_repair {
+            IfRepair::Downgrade => self.downgrade_if_neurons(),
+            IfRepair::Rewrite => self.rewrite_if_neurons(),
+        }
+    }
+
+    /// Every `IF` neuron in the creature, in list order.
+    fn if_uuids(&self) -> Result<Vec<String>, CleanupError> {
+        let mut uuids = Vec::new();
+        for neuron in &self.creature.neurons {
+            if squash_of(neuron)? == SquashType::If {
+                uuids.push(neuron.uuid.clone());
+            }
+        }
+        Ok(uuids)
+    }
+
+    /// The roles still reaching one `IF`, and how many edges carry them.
+    fn inward_roles(&self, uuid: &str) -> (usize, IfRoles) {
+        let inward: Vec<SynapseType> = self
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.to_uuid == uuid)
+            .map(role_of)
+            .collect();
+        (inward.len(), IfRoles::tally(inward.iter().copied()))
+    }
+
     /// Downgrade every `IF` neuron a removal left short of a role.
     ///
     /// An `IF` needs a `condition`, a positive and a negative branch to mean
@@ -614,29 +789,16 @@ impl Engine {
     /// becomes the `IDENTITY` sum of whatever still reaches it and its inward
     /// roles — now unreadable — are stripped. The rows that were only distinct
     /// by role are summed into one by [`Engine::canonicalise`].
-    fn repair_if_neurons(&mut self) -> Result<bool, CleanupError> {
-        let if_uuids: Vec<String> = self
-            .creature
-            .neurons
-            .iter()
-            .filter(|n| squash_of(n).map(|s| s == SquashType::If).unwrap_or(false))
-            .map(|n| n.uuid.clone())
-            .collect();
+    fn downgrade_if_neurons(&mut self) -> Result<bool, CleanupError> {
+        let if_uuids = self.if_uuids()?;
 
         let mut changed = false;
         for uuid in if_uuids {
             // `IfRoles` / `if_neuron_fault` are the single home of "does this
             // IF carry all three roles" (Issue #560) — asked here rather than
             // restated, so a repair and a validation can never disagree.
-            let inward: Vec<SynapseType> = self
-                .creature
-                .synapses
-                .iter()
-                .filter(|s| s.to_uuid == uuid)
-                .map(role_of)
-                .collect();
-            let roles = IfRoles::tally(inward.iter().copied());
-            if if_neuron_fault(inward.len(), roles).is_none() {
+            let (inward, roles) = self.inward_roles(&uuid);
+            if if_neuron_fault(inward, roles).is_none() {
                 continue;
             }
 
@@ -654,6 +816,187 @@ impl Engine {
             changed = true;
         }
         Ok(changed)
+    }
+
+    /// Rewrite every `IF` neuron into the closest form that computes the same
+    /// number on every record (Issue #591).
+    ///
+    /// Two rewrites, both exact, and neither of them a refusal:
+    ///
+    /// - **the condition the creature decides.** With no condition edge the
+    ///   condition sum is `0`, and `0 > 0` is false, so the forward pass takes
+    ///   the negative branch on every record; with every condition source
+    ///   structurally fixed the sum is a number this module can compute. Either
+    ///   way one branch is unreachable, so the neuron becomes the `IDENTITY`
+    ///   sum of the branch that survives and the condition edges and the dead
+    ///   branch go — [`Engine::remove_dead_structure`] then takes whatever fed
+    ///   only them.
+    /// - **the branch that lost its last edge.** An empty branch sum is `0`,
+    ///   which is exactly what a zero-weight edge from a support constant
+    ///   contributes, so that edge restores validation rule 12 without moving a
+    ///   single output.
+    fn rewrite_if_neurons(&mut self) -> Result<bool, CleanupError> {
+        let if_uuids = self.if_uuids()?;
+
+        let mut changed = false;
+        for uuid in if_uuids {
+            if let Some(condition_sum) = self.static_condition_sum(&uuid)? {
+                // `> 0` chooses the positive arm, and an untyped edge belongs
+                // to it: both readings are
+                // [`crate::network::CompiledNetwork::activate`]'s, restated
+                // here because that helper reasons over a compiled synapse
+                // range and this pass has only the exported creature.
+                let branch = if condition_sum > 0.0 {
+                    SynapseType::Positive
+                } else {
+                    SynapseType::Negative
+                };
+                self.flatten_static_if(&uuid, branch);
+                self.static_if_neurons
+                    .push(StaticIfRewrite { uuid, branch });
+                changed = true;
+                continue;
+            }
+
+            // The condition varies, so the `IF` still has to branch: give back
+            // whichever arm the removal emptied rather than refuse the removal.
+            //
+            // `if_neuron_fault` (Issue #560) is the single home of "is this IF
+            // wired", and `downgrade_if_neurons` asks it; it reports only the
+            // *first* fault, so it cannot say which arms to restore when both
+            // are empty. The tally it is built from answers that, and restoring
+            // every empty arm satisfies the fault helper by construction.
+            let (_, roles) = self.inward_roles(&uuid);
+            for role in [SynapseType::Positive, SynapseType::Negative] {
+                let present = match role {
+                    SynapseType::Negative => roles.negative,
+                    _ => roles.positive,
+                };
+                if present {
+                    continue;
+                }
+                self.restore_if_role(&uuid, role);
+                changed = true;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// The `IF`'s condition sum, when the creature alone fixes it.
+    ///
+    /// `None` means at least one condition source varies with the record, so
+    /// the branch is genuinely dynamic.
+    ///
+    /// The sum is accumulated in `f32`, walking the creature's synapse list in
+    /// storage order, because that is the closest available mirror of what
+    /// [`crate::network::CompiledNetwork::activate`] computes for **this**
+    /// creature: `compile_creature` groups the inward edges of a target in the
+    /// order it meets them, and a condition edge only ever lands in the
+    /// condition accumulator. The creature in hand is the one whose behaviour
+    /// the rewrite must preserve, so mirroring its own storage order — not the
+    /// canonical order a later pass will impose — is what keeps the strict
+    /// `> 0` branch decision the same on both sides.
+    ///
+    /// The mirror is a mirror, not the pass itself: `compile_creature`
+    /// regroups the edges per target, so the two additions can associate
+    /// differently and a sum within `f32` rounding of `0` is a boundary
+    /// neither side can claim to settle for the other. Away from that
+    /// boundary — which is every condition any training run produces — the
+    /// branch the two pick is the same, and the flatten is exact.
+    fn static_condition_sum(&self, uuid: &str) -> Result<Option<f32>, CleanupError> {
+        let mut sum = 0.0f32;
+        for synapse in self
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.to_uuid == uuid && role_of(s) == SynapseType::Condition)
+        {
+            let Some(activation) = fixed_activation(&self.creature, &synapse.from_uuid)? else {
+                return Ok(None);
+            };
+            sum += activation * synapse.weight as f32;
+        }
+        Ok(Some(sum))
+    }
+
+    /// Turn a statically-decided `IF` into the `IDENTITY` sum of the branch it
+    /// always takes, dropping the condition edges and the branch it never does.
+    fn flatten_static_if(&mut self, uuid: &str, branch: SynapseType) {
+        for neuron in &mut self.creature.neurons {
+            if neuron.uuid == uuid {
+                neuron.squash = Some(squash_name_from(SquashType::Identity).to_string());
+            }
+        }
+
+        let mut kept = Vec::with_capacity(self.creature.synapses.len());
+        for mut synapse in std::mem::take(&mut self.creature.synapses) {
+            if synapse.to_uuid != uuid {
+                kept.push(synapse);
+                continue;
+            }
+            let role = role_of(&synapse);
+            let survives = match branch {
+                SynapseType::Negative => role == SynapseType::Negative,
+                _ => matches!(role, SynapseType::Positive | SynapseType::Standard),
+            };
+            if survives {
+                synapse.synapse_type = None;
+                kept.push(synapse);
+            } else {
+                self.removed_synapses.push(SynapseKey {
+                    from_uuid: synapse.from_uuid,
+                    to_uuid: synapse.to_uuid,
+                    role,
+                });
+            }
+        }
+        self.creature.synapses = kept;
+    }
+
+    /// Give an `IF` back a branch role, on a zero-weight edge from a support
+    /// constant so nothing it computes moves.
+    fn restore_if_role(&mut self, uuid: &str, role: SynapseType) {
+        let support = match self
+            .creature
+            .neurons
+            .iter()
+            .find(|n| n.neuron_type == "constant")
+        {
+            Some(constant) => constant.uuid.clone(),
+            None => self.mint_support_constant(),
+        };
+
+        self.creature.synapses.push(SynapseExport {
+            from_uuid: support.clone(),
+            to_uuid: uuid.to_string(),
+            weight: 0.0,
+            synapse_type: synapse_type_name_from(role).map(str::to_string),
+        });
+        self.restored_if_roles.push(SynapseKey {
+            from_uuid: support,
+            to_uuid: uuid.to_string(),
+            role,
+        });
+    }
+
+    /// Add a bias-1 support constant under a name no neuron already carries.
+    fn mint_support_constant(&mut self) -> String {
+        let mut index = 0usize;
+        let uuid = loop {
+            let candidate = format!("{SUPPORT_CONSTANT_PREFIX}{index}");
+            if !self.creature.neurons.iter().any(|n| n.uuid == candidate) {
+                break candidate;
+            }
+            index += 1;
+        };
+        self.creature.neurons.push(NeuronExport {
+            id: None,
+            neuron_type: "constant".to_string(),
+            uuid: uuid.clone(),
+            bias: SUPPORT_CONSTANT_BIAS,
+            squash: None,
+        });
+        uuid
     }
 
     /// Remove, recursively, every non-output neuron nothing reads.
@@ -1142,6 +1485,53 @@ pub(crate) fn zero_inward_activation(squash: SquashType, bias: f64) -> f32 {
         _ => apply_squash(squash, bias),
     };
     apply_limit_range(squash, raw)
+}
+
+/// The activation `uuid` produces on **every** record, when the creature alone
+/// proves there is one.
+///
+/// A constant emits its bias, and a neuron with no inward edge sums nothing —
+/// [`zero_inward_activation`] is the shared mirror of the forward pass for that
+/// case, and a constant reaches it through the same door. An observation
+/// neuron, and any neuron something still feeds, varies with the record and
+/// answers `None`.
+///
+/// This is the **one** home of that question: the `IF` static-condition rewrite
+/// here, `prune_neuron`'s structural fold (Issue #590) and `prune_synapse`'s
+/// source fold (Issue #591) all ask it here rather than restating it, so they
+/// cannot drift apart on what "fixed" means.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when the neuron declares a squash name
+/// this crate does not know.
+pub(crate) fn fixed_activation(
+    creature: &CreatureExport,
+    uuid: &str,
+) -> Result<Option<f32>, CleanupError> {
+    // An observation neuron is not listed in `neurons`, and it varies with the
+    // record; a name that is neither listed nor an observation is a dangling
+    // endpoint `check_references` fails on before any pass runs.
+    if is_observation_uuid(creature, uuid) || creature.synapses.iter().any(|s| s.to_uuid == uuid) {
+        return Ok(None);
+    }
+    let Some(neuron) = creature.neurons.iter().find(|n| n.uuid == uuid) else {
+        return Ok(None);
+    };
+    Ok(Some(zero_inward_activation(
+        squash_of(neuron)?,
+        neuron.bias,
+    )))
+}
+
+/// Is this the wire UUID of one of the creature's observation neurons?
+///
+/// Input neurons are not listed in `neurons` — the declared width is what says
+/// they exist (Issue #550) — so the name is the only thing to test.
+pub(crate) fn is_observation_uuid(creature: &CreatureExport, uuid: &str) -> bool {
+    uuid.strip_prefix("input-")
+        .and_then(|index| index.parse::<usize>().ok())
+        .is_some_and(|index| index < creature.input)
 }
 
 /// Combine two edges that share one readable key, or refuse to.

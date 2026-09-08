@@ -383,7 +383,7 @@ fn the_result_names_the_requested_removal_and_every_edge_it_took() {
     let before = creature(TWO_TARGETS_JSON);
     let result = pruned(&before, "h-1", Some(&mean_only(0.6)));
 
-    assert_eq!(result.removed_neuron, "h-1");
+    assert_eq!(result.removed_neuron.as_deref(), Some("h-1"));
     assert!(!has_neuron(&result.creature, "h-1"), "h-1 survived");
 
     let mut removed: Vec<String> = result

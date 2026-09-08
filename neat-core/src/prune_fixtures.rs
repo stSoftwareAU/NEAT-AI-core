@@ -9,11 +9,25 @@
 //! `(before, request, after)` triple where `after` is the creature the
 //! **TypeScript** produced, captured by driving the real mutation operators.
 //!
-//! Nothing here prunes. The helpers land in Issues #590 / #591, and
-//! [`PruneCase::after`] is the acceptance oracle they must reproduce:
-//! `prune(case.before(), case.request) == case.after()`. Until then the
-//! fixtures are pinned by `neat-core/tests/prune_parity.rs`, which checks every
-//! documented rule below against the captured pair.
+//! Nothing here prunes. [`PruneCase::after`] is the acceptance oracle the
+//! shared helpers are graded against, and both now exist:
+//! [`crate::prune_neuron::prune_neuron`] (Issue #590) for the
+//! [`PruneRequest::RemoveNeuron`] captures and
+//! [`crate::prune_synapse::prune_synapse`] (Issue #591) for the
+//! [`PruneRequest::RemoveSynapse`] ones.
+//!
+//! **How a case is graded depends on the case**, and the per-case table in
+//! `docs/research/pruning-parity-matrix.md` is the record. Where this crate's
+//! canonical form coincides with the capture, `prune(before, request) == after`
+//! holds byte for byte. Where the documented constant-support divergence
+//! applies — the capture keeps a folded value in a constant's *bias*, this
+//! crate keeps it in the reading edges' weights — the two are graded on the
+//! numbers they produce instead, by compiling and activating both. Claiming
+//! byte equality everywhere would be claiming a parity this crate deliberately
+//! does not have.
+//!
+//! The fixtures themselves stay pinned by `neat-core/tests/prune_parity.rs`,
+//! which checks every documented rule below against the captured pair.
 //!
 //! The full mapping — each TypeScript behaviour and test to its fixture, how
 //! the captures were taken, and what is deliberately not captured — is in

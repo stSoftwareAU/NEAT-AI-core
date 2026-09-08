@@ -655,8 +655,9 @@ reported as a `CleanupError`, never handed back.
 
 `CleanupOutcome` carries the creature plus what the cleanup cost: the neurons
 and synapses removed, the hidden neurons folded into constant support, the
-constants rescaled or merged, the `IF` neurons downgraded, and how many passes
-the fixed point took. Callers own *which* neuron or synapse to try and any
+constants rescaled or merged, the `IF` neurons downgraded (or, under
+`IfRepair::Rewrite`, flattened and role-restored), and how many passes the fixed
+point took. Callers own *which* neuron or synapse to try and any
 statistical compensation (Issues #590 / #591); cleanup owns the exact structural
 repair.
 
@@ -678,6 +679,17 @@ required role can no longer branch at all.
 A `MEAN` target divides by its inward **count** and a `HYPOT` squares each term,
 so merging two edges there would change the value — cleanup refuses, keeps the
 constants apart, and never trades correctness for the constant budget.
+
+#### Two `IF` repair policies (Issue #591)
+
+The inexact `IF` repair above is a **policy**, not a fixed rule.
+`cleanup_creature` keeps TypeScript parity (`IfRepair::Downgrade`), which is what
+the `prune_fixtures.rs` captures record and what Issue #590's neuron removal
+uses. `cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a
+caller ask for `IfRepair::Rewrite` instead — the exact rewrites synapse pruning
+uses, described under [Synapse pruning](#synapse-pruning-issue-591). Under that
+policy `CleanupOutcome::downgraded_if_neurons` is always empty and
+`static_if_neurons` / `restored_if_roles` carry the rewrites that replaced it.
 
 #### Constants are support nodes
 
@@ -780,6 +792,88 @@ no longer branch at all.
 wholesale on every removal; this crate applies rule 31's inverse
 (`CreatureExport::prune_memetic`, NEAT-AI-Lamarck#197) through cleanup, so every
 entry that still names live structure survives and exactly the dangling ones go.
+
+### Synapse pruning (Issue #591)
+
+`neat-core/src/prune_synapse.rs` is the shared answer to "remove this one edge
+and give me back something I can score". It cuts exactly the requested
+`(from, to, role)` triple, compensates the target that read it with the
+**caller's** statistics, rewrites whatever `IF` structure the removal made
+statically decidable, runs the Issue #589 cleanup fixed point, and validates the
+stable result before returning it.
+
+```rust
+pub fn prune_synapse(
+    creature: &CreatureExport,
+    key: &SynapseKey,
+    stats: Option<&PruneStats>,
+) -> Result<PruneResult, PruneError>;
+```
+
+```mermaid
+flowchart TD
+    Q["prune_synapse(creature, key, stats?)"] --> F{"does the creature carry<br/>that (from, to, role)?"}
+    F -- no --> U["Err(UnknownSynapse)"]
+    F -- yes --> S{"statistics supplied?"}
+    S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
+    S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
+    X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
+    C --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
+    R -- fails --> E["Err(Cleanup)"]
+    R -- passes --> O["Ok(PruneResult) —<br/>Exact or Approximate"]
+```
+
+**The role is part of what names an edge.** An `IF` keeps a sum per role, so one
+source may feed two of its branches (Issue #577, NEAT-AI #3873); removing "the
+`h-a → if-1` synapse" would delete a branch the caller never mentioned. The
+request therefore names the triple and only that triple goes. At an `IF`,
+`positive` and an **untyped** row are one branch rather than two — the forward
+pass adds an untyped inward edge to the positive accumulator and `IfRoles::tally`
+counts it as positive — so either spelling of the request names the same edge.
+Everywhere else a role means nothing: every other squash sums whatever reaches
+it, so the readable key is the pair. All of that is the same reading cleanup
+takes (`canonical_role`), so a request and a canonicalisation can never
+disagree. An edge sourced at an observation neuron, or targeting an output
+neuron, is an ordinary candidate.
+
+#### `IF` structure is rewritten, never refused
+
+NEAT-AI's `SubConnection.ts::#wouldBreakIfNeuron` declines to remove an edge that
+would leave an `IF` short a role, so a whole class of typed structure is
+unreachable to the mutation operators. This crate rewrites instead
+(`CleanupOptions { if_repair: IfRepair::Rewrite }`), and both rewrites compute
+the **same number on every record**:
+
+| What the removal left | Rewrite | Why it is exact |
+|---|---|---|
+| no condition edge, or every condition source structurally fixed | the branch the condition always takes, as an `IDENTITY` sum; the condition edges and the unreachable branch go, and their feeders cascade | the forward pass could never take the other branch |
+| a `positive` / `negative` branch with nothing left in it, condition still varying | a **zero-weight** edge from a support constant into that role | an empty branch sum is `0`, and so is `0 · 1` |
+
+Both are reported, on `CleanupOutcome` and again on `PruneResult`:
+`static_if_neurons` names the `IF` and the branch that survived,
+`restored_if_roles` names the support edges added — including the constant a
+rewrite had to mint when the creature carried none, so new structure is never
+left to be discovered. `downgraded_if_neurons` is correspondingly always empty
+for a synapse prune. Neither rewrite is a compensation: they restore what the
+creature already computed once the requested edge was gone, so
+`PruneResult::transform` still grades only the loss of the term itself.
+`cleanup_creature` keeps the TypeScript-parity `IfRepair::Downgrade` default, so
+Issue #590's neuron removal is unchanged.
+
+#### What the removal cost
+
+The edge carried `w · a` into its target, where `a` is the **source's**
+activation, so the same compensation table as Issue #590 applies with `W = w`:
+
+| Case | What happens |
+|---|---|
+| the creature fixes `a` (a constant, or a source with nothing to sum) | `target.bias += w · a`, exactly; no statistic is needed and a supplied mean never overrides it — `TransformClass::Exact` |
+| `a` varies and `PruneStats` are supplied | `w · μ` folds into the bias, and a supplied correlated survivor takes `β · w` on its own edge |
+| the target aggregates (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost |
+
+`PruneResult::removed_neuron` is `None` for a synapse prune and
+`removed_synapses` carries the one requested triple; for `prune_neuron` it is
+`Some(uuid)` and every edge naming that neuron.
 
 ### Creature validation contract (Issue #559)
 
