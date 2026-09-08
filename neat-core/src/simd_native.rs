@@ -949,6 +949,9 @@ pub unsafe fn weighted_sum_interleaved_unchecked<const R: usize>(
 
 /// The 8-lane tile of [`weighted_sum_interleaved`], kept as the name the
 /// batched **scoring** path (`BatchScratch::inter`) and its tests use.
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_interleaved`].
 #[inline]
 pub fn weighted_sum_interleaved_8(
     hot_weights: &[f32],

@@ -186,6 +186,21 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
 ///
 /// This compact format minimises memory access and enables efficient iteration.
 /// Issue #1175 - Uses typed structs for better cache locality and compiler optimisation.
+///
+/// # Field invariant the forward pass relies on
+///
+/// [`Self::new`] rejects any `from_index` outside `0..num_neurons`
+/// ([`NetworkError::InvalidSynapseIndex`]), and every activation buffer is sized
+/// to `num_neurons`. The forward and batched-scoring paths discharge the
+/// `simd::*_unchecked` index contract (Issue #613) from exactly that check, so
+/// **the invariant is a property of the values, not of the type**: these fields
+/// are `pub`, so writing `synapses`, `hot_weights`, `hot_from`, `activations` or
+/// `num_neurons` after construction — or assembling the struct as a literal —
+/// can break it, and a subsequent `activate*` / scoring call is then an
+/// out-of-bounds read. Treat the fields as read-only once `new` has returned;
+/// rebuild through `new` rather than editing in place. Closing this by
+/// construction (private fields plus accessors, or `#[non_exhaustive]`) is an
+/// API break for downstream consumers and is tracked by Issue #625.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 #[derive(Clone)]
 pub struct CompiledNetwork {

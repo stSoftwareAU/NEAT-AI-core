@@ -69,6 +69,14 @@ the activation buffer, an over-long `end` is refused rather than truncated, and
 each safe entry point is asserted bit-identical to its `*_unchecked` twin on
 spans that do satisfy the precondition.
 
+One residual path is **not** closed by that split and is tracked by Issue #625:
+`CompiledNetwork`'s fields are `pub`, so safe code can write `synapses` /
+`hot_from` / `activations` after `new` has validated them and then call
+`activate*`, which reaches the `*_unchecked` kernels on the strength of that
+now-stale check. Until the fields are closed by construction, treat a
+`CompiledNetwork` as read-only once `new` has returned — the invariant is stated
+on the struct itself in `neat-core/src/network.rs`.
+
 ## Dependency bump quarantine
 
 Dependency bumps honour a release-age **quarantine window**

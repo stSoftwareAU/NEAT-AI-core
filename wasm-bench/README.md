@@ -38,7 +38,8 @@ flowchart LR
 
 Fixtures come from `neat-core/benches/common/mod.rs` verbatim, so the creature
 and records are the ones the committed Criterion baseline uses. Three
-benchmarks: `kernel` (isolated `weighted_sum_simd`), `activate` (end-to-end
+benchmarks: `kernel` (isolated `weighted_sum_simd_unchecked` — the hot-path
+form the forward pass calls, Issue #613), `activate` (end-to-end
 single-record inference) and `score` (end-to-end batched scoring, which does
 *not* use `gather4` and so acts as the no-regression check). Each sample also
 returns an `f64` checksum, so `analyse.mjs` reports numerical parity alongside

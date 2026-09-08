@@ -291,8 +291,8 @@ network**. Nothing establishes it for a downstream crate calling
 - `weighted_sum_simd`, `weighted_sum_simd_8records`,
   `weighted_sum_interleaved`, … — **safe** `pub fn`s. Each runs the matching
   `simd::bounds` predicate over the span first and, when it does not hold,
-  falls through to the fully-checked scalar reference rather than an unchecked
-  read. These are the only kernels safe caller code may reach.
+  refuses the call with a panic rather than reaching an unchecked read. These
+  are the only kernels safe caller code may reach.
 - `weighted_sum_simd_unchecked`, `weighted_sum_simd_8records_unchecked`,
   `weighted_sum_interleaved_unchecked`, … — **`unsafe` `pub fn`s** carrying the
   index precondition as a `# Safety` contract. `CompiledNetwork`'s own forward

@@ -33,6 +33,16 @@ multi-record kernels were already bounds-checked internally, but they now run
 the same `simd::bounds` gate as the native ones so the documented behaviour is
 true on every target rather than by accident on one.
 
+One safe→UB path is deliberately **not** closed here, because it is a different
+root cause: `CompiledNetwork`'s fields are `pub`, so safe code can write
+`synapses` / `hot_from` after `new` validated them and then call `activate`.
+That is not a regression — the same write reached the same `get_unchecked`
+before this change — but closing it needs private fields or `#[non_exhaustive]`,
+an API break for NEAT-AI-scorer and NEAT-AI-Backpropagation. It is filed as
+Issue #625 with the reproducer, and mitigated here rather than left implied: the
+field invariant is now stated on `CompiledNetwork` itself and in `SECURITY.md`,
+so nothing in this diff documents that hole as closed.
+
 Closes #613.
 
 ## Evidence
@@ -164,7 +174,11 @@ rather than only from this summary:
 | `weighted_sum_simd/single_checked` (safe entry point) | 31.637 |
 
 That is **+67.6%** for the `O(end - start)` pre-pass on a 64-synapse span, and
-exactly the cost the split keeps off the forward pass. The remaining hot-path
+exactly the cost the split keeps off the forward pass. Re-measured from the
+committed tree before the PR was raised, under different container load, the
+same pair read 24.135 ns against 42.700 ns — **+76.9%**. The absolute figures
+move with host load; the ratio is what the split is about, and it sits in a
++68–77% band across both runs. The remaining hot-path
 kernels stay comparable with `neat-core/benches/BASELINE.md`:
 
 | kernel | before | after |
@@ -214,54 +228,103 @@ prototype and measured on the same host before being discarded:
 
 - **met** — the safe public SIMD surface can no longer cause UB from safe caller
   code, by whichever option is chosen (recorded in the PR summary) — evidence:
-  `neat-core/src/simd/bounds.rs`, the eight safe wrappers in
-  `neat-core/src/simd_native.rs` and `neat-core/src/simd.rs`, and
+  `neat-core/src/simd/bounds.rs`, the eight safe wrappers at
+  `neat-core/src/simd_native.rs:740,860,953,996,1098,1167,1228,1288` and their
+  `wasm` mirrors at `neat-core/src/simd.rs:200,293,358,423,505,601,755,835`, and
   `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_rejects_out_of_range_from_index`
-  — reviewer: met — reason: the reviewer independently confirmed all eight named
-  kernels are gated and that the only remaining unchecked reader, `gather4`, is
-  private.
+  — reviewer: met — reason: the reviewer enumerated every non-`unsafe` `pub fn`
+  reachable from `neat_core::simd`, checked each predicate **against the kernel
+  bodies** rather than the docs, and found no other escape (`mod x86` / `mod
+  aarch64` private, `simd::scalar` checked, its `tail_*` helpers already
+  `unsafe fn`). It qualified the verdict with one residual safe→UB path
+  **outside** the `simd` surface — see the `unrequested` entry on Issue #625
+  below.
 - **met** — a regression test in `neat-core/tests/` covers the out-of-range case
   for at least one single-record and one multi-record kernel — evidence:
   `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_rejects_out_of_range_from_index`
   and `…::weighted_sum_simd_8records_rejects_out_of_range_from_index`
-  — reviewer: met — reason: both named tests are declared in the added lines of
-  `neat-core/tests/simd_public_bounds.rs`.
+  — reviewer: met — reason: the standards reviewer additionally **mutated out**
+  the `span_in_bounds` guard in `weighted_sum_simd` and the
+  `interleaved_span_in_bounds` guard in `weighted_sum_interleaved`, one at a
+  time, and watched the suite go red (SIGABRT) for each — so the tests are not
+  vacuous.
 - **met** — benchmarks show no meaningful regression on the forward-pass hot
   path — evidence: the paired alternating A/B table above (+0.7% / +1.1% /
-  −1.2%, inside a 5–10% noise floor), and `weighted_sum_simd/single_checked` in
-  `neat-core/benches/hot_paths.rs` — reviewer: partial — reason: the reviewer
-  saw a diff snapshot in which this summary file was not yet committed and the
-  bench suite measured only the `*_unchecked` form, so it judged the perf claim
-  unverifiable from the tree. Both gaps are closed in the final diff: the
-  summary is committed with the paired numbers, and `single_checked` measures
-  the safe form beside the kernel it guards.
+  −1.2%, inside a 5–10% noise floor), and `weighted_sum_simd/single_checked` at
+  `neat-core/benches/hot_paths.rs:465` — reviewer: met — reason: the reviewer
+  noted the condition is largely moot because the hot path keeps the unchecked
+  kernel, and flagged that the A/B medians live in this file rather than in CI.
+  That is accepted: the committed `single_checked` bench is the reproducible
+  half, re-measured here at +76.9% on a differently loaded host.
+
+*Scope creep — every change in the diff the reviewer could not trace to the
+issue:*
+
+- **unrequested** — the residual safe→UB path the spec reviewer found and
+  reproduced: `CompiledNetwork`'s fields are `pub`, so safe code can write
+  `synapses` / `hot_from` after `new` validated them and then call `activate`,
+  reaching an unchecked read — evidence: `neat-core/src/network.rs:191-249` —
+  reviewer: unrequested — reason: it is real and **not a regression** (the same
+  safe write reached the same `get_unchecked` before this diff), but it is a
+  different root cause from the one #613 names — struct field visibility, not
+  the `neat_core::simd` boundary — and closing it by construction is an API
+  break for NEAT-AI-scorer and NEAT-AI-Backpropagation. Filed as
+  stSoftwareAU/NEAT-AI-core#625 with the reproducer and the three options, and
+  mitigated here rather than left implied: the field invariant is now stated on
+  `CompiledNetwork` itself (`neat-core/src/network.rs:196-203`) and in
+  `SECURITY.md`, so no `# Safety` note in this diff claims a discharge the type
+  does not give.
 - **unrequested** — the `wasm` multi-record kernels
   (`weighted_sum_simd_4records`, `_8records`, `weighted_sum_interleaved`) gained
   the same `simd::bounds` gate and `*_unchecked` twins, though the issue lists
   only the surface `simd.rs` re-exports — reviewer: unrequested — reason: the
   in-crate hot path needs one spelling on both targets, and without the gate the
   README/SECURITY/AGENTS statements would be true on native and false on `wasm`.
-- **unrequested** — `wasm-bench/src/lib.rs` switched to
-  `weighted_sum_simd_unchecked` — reviewer: unrequested — reason: the harness
-  exists to measure the forward-pass kernel; left on the safe name it would have
-  silently started measuring the pre-pass and invalidated
-  `docs/research/wasm-gather4-unchecked-loads.md`.
-- **unrequested** — `neat-core/benches/hot_paths.rs` bench bodies moved to the
-  `*_unchecked` kernels, plus the new `single_checked` case — reviewer:
-  unrequested — reason: keeps the group comparable with `BASELINE.md` while
-  making the safe form's cost reproducible, which is what acceptance criterion 3
-  asks for.
-- **unrequested** — new prose in `README.md`, `SECURITY.md`, `AGENTS.md` and
-  `neat-core/benches/README.md`, and the doc-comment sweep in `network.rs` /
-  `batch_scoring.rs` — reviewer: unrequested — reason: the standing "a code
-  change owes a docs change" rule; the rename and the two-form API are exactly
-  the kind of change that rule covers, and the AGENTS.md `// SAFETY:` rule
+- **unrequested** — the whole `pub mod bounds`
+  (`span_in_bounds`, `span_in_bounds_multi`, `interleaved_span_in_bounds`,
+  `reject_span`, `reject_interleaved_span`) is new permanent public API —
+  evidence: `neat-core/src/simd/bounds.rs` — reviewer: unrequested — reason:
+  the integration tests the issue asks for can only see the public API, and a
+  downstream crate that wants to hoist the check per span needs the predicate
+  the kernels use rather than a copy of it. `simd::bounds` being the single home
+  is what stops a span check being re-inlined into a kernel.
+- **unrequested** — behaviour change: an `end > synapses.len()` span on a
+  sub-SIMD count now panics where the pre-diff safe kernel fell into
+  `scalar::weighted_sum`'s `.take(end)` and silently truncated — evidence:
+  `neat-core/src/simd/bounds.rs:63` against `neat-core/src/simd/scalar.rs:51` —
+  reviewer: unrequested — reason: the issue names `from_index`, but the same
+  entry points read `synapses[start..end]` unchecked on the SIMD path, so both
+  halves must be refused or the fix is half a fix. Refusing them the same way is
+  the fail-loud rule; truncating was the silent fallback the standards reviewer
+  flagged.
+- **unrequested** — new public unsafe API with no production caller:
+  `weighted_sum_interleaved_8_unchecked` — evidence:
+  `neat-core/src/simd_native.rs:969` — reviewer: unrequested — reason: it is the
+  `*_unchecked` twin of a safe kernel the family otherwise pairs one-for-one;
+  omitting it alone would leave `weighted_sum_interleaved_8` with no validated
+  form for a caller that has already discharged the contract at `R == 8`.
+- **unrequested** — `wasm-bench/src/lib.rs` and the five bench bodies in
+  `neat-core/benches/hot_paths.rs` switched to `*_unchecked`, plus the new
+  `single_checked` case — evidence: `wasm-bench/src/lib.rs:127-157`,
+  `neat-core/benches/hot_paths.rs:446-547` — reviewer: unrequested — reason: a
+  harness left on the safe name silently starts measuring the pre-pass instead
+  of the kernel, which would invalidate `BASELINE.md` and
+  `docs/research/wasm-gather4-unchecked-loads.md`. The same sweep is why
+  `neat-core/examples/bench_single_record_weighted_sums.rs` moved too — the
+  standards reviewer caught that one as a miss.
+- **unrequested** — new prose in `README.md`, `SECURITY.md`, `AGENTS.md`,
+  `neat-core/benches/README.md`, `wasm-bench/README.md` and
+  `docs/research/wasm-gather4-unchecked-loads.md`, and the doc-comment sweep in
+  `network.rs` / `batch_scoring.rs` — reviewer: unrequested — reason: the
+  standing "a code change owes a docs change" rule; the two-form API renames
+  every symbol these files name, and the `AGENTS.md` `// SAFETY:` rule
   contradicted the code until it was swept.
 - **unrequested** — `checked_mul` / `checked_add` in
-  `bounds::interleaved_span_in_bounds` — reviewer: unrequested — reason: the
-  reviewer is right that the crate only ever passes `R <= 64`, but `lanes` is a
-  caller-supplied `usize` on a public predicate, so wrapping arithmetic there
-  would be a bypass rather than dead code. Documented and pinned by
+  `bounds::interleaved_span_in_bounds` — evidence:
+  `neat-core/src/simd/bounds.rs:100-115` — reviewer: unrequested — reason: the
+  crate only ever passes `R <= 64`, but `lanes` is a caller-supplied `usize` on
+  a public predicate, so wrapping arithmetic there would be a bypass rather than
+  dead code. Pinned by
   `interleaved_predicate_rejects_partial_and_overflowing_tiles`.
 
 ## Standards Review
@@ -269,70 +332,85 @@ prototype and measured on the same host before being discarded:
 <!-- vibe-standards-review inputs="diff+CODING-STANDARDS.md" -->
 
 `CODING-STANDARDS.md` does not exist in this repository; the reviewer was given
-the documented equivalents — `AGENTS.md`, `SECURITY.md`, `README.md` — plus the
-fleet standards.
+the documented equivalents — `AGENTS.md`, `SECURITY.md`, `README.md`,
+`neat-core/benches/README.md` — plus the fleet standards.
 
+- **violation** — `AGENTS.md` documented a silent fallback the code does not
+  perform: the safe-kernel bullet said a failed predicate "falls through to the
+  fully-checked scalar reference", which is the truncating behaviour this change
+  removes, and contradicts the paragraph eight lines below it — evidence:
+  `AGENTS.md:294` — reason: **fixed here** — the bullet now says the call is
+  refused with a panic, matching `bounds::reject_span`, `SECURITY.md` and every
+  rustdoc `# Panics` section. This is the same finding the spec reviewer raised
+  as W2.
+- **violation** — the hot-path caller sweep missed
+  `neat-core/examples/bench_single_record_weighted_sums.rs`: its header claims
+  to measure "the primitives that `activate()` calls per neuron", but `activate`
+  now calls the `*_unchecked` forms while the example still called the safe
+  ones, so it measured the kernel **plus** the pre-pass — evidence:
+  `neat-core/examples/bench_single_record_weighted_sums.rs:17` — reason:
+  **fixed here** — the example moved to the `*_unchecked` forms with a SAFETY
+  note naming the fixture that discharges them (`from_index = i % num_inputs`
+  against a `num_inputs`-long buffer), and its header records why.
+- **violation** — stale symbols after the crate they document changed:
+  `wasm-bench/README.md` called the `kernel` benchmark "isolated
+  `weighted_sum_simd`", and `docs/research/wasm-gather4-unchecked-loads.md` —
+  which `AGENTS.md:270` cites as the **live** rationale for the `gather4`
+  unchecked default, not an archived summary — said the same — evidence:
+  `wasm-bench/README.md:41`, `docs/research/wasm-gather4-unchecked-loads.md:84`
+  — reason: **fixed here** — both now name `weighted_sum_simd_unchecked` and say
+  why.
+- **violation** — `weighted_sum_interleaved_8` gained panicking behaviour with
+  no `# Panics` section, though every other safe wrapper in the diff got one —
+  including its own `wasm` twin — evidence:
+  `neat-core/src/simd_native.rs:950` — reason: **fixed here**.
+- **violation** — the mandatory `cargo check -p neat-core --target
+  wasm32-unknown-unknown` was not run, on a diff that adds ~290 lines to the
+  `wasm` half of `simd.rs`; `AGENTS.md` records that no PR gate compiles that
+  target, so this is the load-bearing manual check — evidence:
+  `AGENTS.md:247`, `AGENTS.md:764` — reason: **stands** — the container has
+  neither the `wasm32-unknown-unknown` target nor `rustup` to add one, so it
+  cannot be run here. Called out in Gate status below; the `wasm` edits mirror
+  the native ones and add no new intrinsic usage, but the check is owed before
+  merge.
+- **violation** *(lower confidence, from the reviewer)* —
+  `neat-core/benches/BASELINE.md` still names `weighted_sum_interleaved_8` /
+  `weighted_sum_interleaved::<R>` as the batched-scoring path — evidence:
+  `neat-core/benches/BASELINE.md:185` — reason: **stands, deliberately** — those
+  passages are the Issue #384/#530 architectural narrative about the gather
+  layout, and both names still exist as the safe entry points they describe; the
+  file is a historical baseline record, and rewriting its prose is outside this
+  issue.
 - **violation** — silent fallback masked a caller fault: when
   `end > synapses.len()` the safe kernels fell into
   `scalar::weighted_sum` / `*_scalar`, which iterate `.take(end).skip(start)`
-  and **truncate** instead of failing, contradicting the "fails loud" wording
-  the same diff added — evidence: `neat-core/src/simd/bounds.rs:34` and the
-  wrappers at `neat-core/src/simd_native.rs:1098`, `neat-core/src/simd.rs:203`
-  — reason: **fixed here** — the fallback is gone; every wrapper now calls
-  `bounds::reject_span` / `reject_interleaved_span`, which panics naming the
-  invariant. `weighted_sum_simd_rejects_a_span_past_the_synapse_slice` pins it.
-- **violation** — the same input class was handled two ways: `interleaved`
-  panicked (its fallback slices `hot_weights[start..end]`) while the single- and
-  multi-record kernels truncated — evidence: `neat-core/src/simd_native.rs:128`
-  against `:68` and `:98` — reason: **fixed here** — one refusal path for the
-  whole family.
-- **violation** — the three new public predicates in `simd/bounds.rs` had no
-  tests, and the test file covered the error path only — evidence:
-  `neat-core/src/simd/bounds.rs:1-85`, `neat-core/tests/simd_public_bounds.rs`
-  — reason: **fixed here**, and the root cause was worse than reported: a
-  `git checkout` on an untracked file during the red-run verification silently
-  left the committed test file truncated to 7 of its 12 tests. The suite is now
-  17 tests covering the error path, both contract halves, the happy path
-  (`safe_entry_points_match_their_unchecked_twins_on_valid_spans` asserts
-  bit-identical results against every `*_unchecked` twin), and each predicate's
-  edge cases.
-- **violation** — the `wasm` multi-record kernels never called `simd::bounds`,
-  falsifying the unconditional statements in `AGENTS.md`, `SECURITY.md` and
-  `README.md`; their `*_unchecked` names were pure forwarders whose `# Safety`
-  sections said the caller "**should**" hold the invariant — evidence:
-  `neat-core/src/simd.rs:705-803` — reason: **fixed here** — the `wasm`
-  multi-record kernels now carry the same safe/`*_unchecked` split and the same
-  gate as native, and their contracts are stated as obligations, with a note
-  that the `wasm` body's bounds-checked indexing is a stronger implementation
-  than the contract promises and not something a caller may rely on.
-- **violation** — `AGENTS.md` still required every SIMD `// SAFETY:` note to
-  name an `is_*_feature_detected!` guard, which ~25 new blocks correctly do not
-  — evidence: `AGENTS.md:333-337` — reason: **fixed here** — the rule now names
-  the two distinct obligations (feature availability, index validity) and which
-  note each kind of block owes.
+  and **truncate** instead of failing — evidence: `neat-core/src/simd/bounds.rs:34`
+  and the wrappers at `neat-core/src/simd_native.rs:1098`,
+  `neat-core/src/simd.rs:203` — reason: **fixed** in the second commit of this
+  branch — every wrapper now calls `bounds::reject_span` /
+  `reject_interleaved_span`. `weighted_sum_simd_rejects_a_span_past_the_synapse_slice`
+  pins it.
+- **violation** — `AGENTS.md` required every SIMD `// SAFETY:` note to name an
+  `is_*_feature_detected!` guard, which ~25 new blocks correctly do not —
+  evidence: `AGENTS.md:333-337` — reason: **fixed** in this branch — the rule now
+  names the two distinct obligations (feature availability, index validity) and
+  which note each kind of block owes.
 - **violation** — `expect_out_of_bounds_panic` mutated the process-global panic
-  hook per call across concurrently-run tests, so take/restore pairs could
-  interleave — evidence: `neat-core/tests/simd_public_bounds.rs:47-50` — reason:
-  **fixed here** — the silent hook is installed once through a `std::sync::Once`
-  and never restored, which is deterministic under the concurrent harness.
-- **violation** — `AGENTS.md` cited `docs/archive/pr-summaries/pr-summary-613.md`
-  for the benchmark evidence, and that file was absent from the reviewed diff —
-  evidence: `AGENTS.md:307` — reason: **fixed here** — the file is committed with
-  this PR, and `AGENTS.md` now also points at the `single_checked` bench so the
-  figure is reproducible from the tree rather than from prose.
-- **clean** — Australian English throughout the added lines; no hot-path caller
-  left on a safe kernel (every site in `neat-core/src` and `wasm-bench` moved to
-  `*_unchecked` with a SAFETY note naming `CompiledNetwork::new`); `simd::bounds`
-  is the sole home of the predicates with no span check re-inlined into a kernel;
-  the ISA-neutral scalar layer (`simd/scalar.rs`) untouched and still the count
-  prologue and reference-kernel owner; the chunk-walk scaffold
-  (`gather4` / `gather4_products` / `reduce4` and the per-kernel folds)
-  unchanged, with the split sitting strictly above it; every new item gated on
-  `cfg(target_family = "wasm")` rather than `target_arch = "wasm32"`;
-  `unsafe_op_in_unsafe_fn` respected in every new `unsafe fn` body; the bench
-  SAFETY comments are true of the fixture (`from_index = 0..64` against 64-long
-  buffers); `cargo fmt --all --check` clean; only two new files, no hidden paths
-  staged.
+  hook per call across concurrently-run tests — evidence:
+  `neat-core/tests/simd_public_bounds.rs:47-50` — reason: **fixed** in this
+  branch — the silent hook is installed once through a `std::sync::Once`.
+- **clean** — the reviewer verified, and named the evidence for: fail-loud in
+  every new path with no swallowed error or truncating fallback; the 17 tests
+  call real kernels, run in 0.00s with no sleeps or timing thresholds and no
+  source greps, and survive the mutation check above; Australian English in
+  every added line; no hidden paths staged; `simd::bounds` the single home of
+  the predicates with `simd/scalar.rs` and the `gather4`/`reduce4` scaffold
+  untouched; `# Safety` on all 15 new `unsafe fn`s with `unsafe_op_in_unsafe_fn`
+  respected; the `wasm` 4-/8-record `*_unchecked` bodies honestly documenting
+  that their bounds-checked indexing is stronger than the contract and not
+  something a caller may rely on; and `cargo fmt --all --check`, `clippy -D
+  warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc` and the full test suite all
+  clean in its own run.
 
 ## Test Plan
 
@@ -341,15 +419,19 @@ real public kernels and asserting on the outcome:
 
 *Obligation 1 — every `from_index` indexes the activation buffer*
 
-- `weighted_sum_simd_rejects_out_of_range_from_index` — the issue's reproducer;
-  **fails against `origin/Develop`** (out-of-bounds read, SIGABRT) and **passes
-  after the fix**.
+- `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_rejects_out_of_range_from_index`
+  — the issue's reproducer. It **fails against the unfixed code and passes after
+  the fix**: on `origin/Develop` the same assertion body aborts the process on an
+  out-of-bounds unchecked read (SIGABRT), and on this branch it passes.
 - `weighted_sum_no_bias_simd_…`, `weighted_sum_of_squares_simd_…`,
   `weighted_sum_of_squares_v2_simd_…` — the other three single-record kernels.
 - `weighted_sum_simd_4records_…`, `weighted_sum_simd_8records_…` — the
   multi-record kernels the acceptance criteria require.
 - `weighted_sum_interleaved_8_rejects_out_of_range_from_index` — the
   record-interleaved tile, whose contract is `inter.len() == num_neurons * R`.
+- `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_8records_rejects_out_of_range_from_index`
+  likewise **fails against the unfixed code and passes after the fix** (SIGABRT
+  on `origin/Develop`).
 - `weighted_sum_simd_8records_rejects_one_short_buffer` — seven long buffers and
   one short one must not slip through the multi-record predicate.
 
@@ -379,6 +461,15 @@ real public kernels and asserting on the outcome:
   edge cases of each public predicate, including the `checked_mul` overflow
   branch.
 
+*Follow-up review round (this run)*
+
+- `neat-core/examples/bench_single_record_weighted_sums.rs` moved to the
+  `*_unchecked` forms so it measures what `activate()` calls, as its own header
+  claims. `cargo check --example bench_single_record_weighted_sums` is clean.
+- No test was added for the `CompiledNetwork` field-mutation path found by the
+  spec review: the repro is real but the fix is an API break, so it is filed as
+  Issue #625 together with the acceptance criterion for its regression test.
+
 Existing suites are unchanged and still pass, which is the parity evidence that
 the safe entry points behave identically for valid input: `simd_weighted_sums.rs`,
 `simd_scalar_layer.rs`, `simd_chunk_walk_scaffold.rs`,
@@ -398,13 +489,18 @@ Two environmental caveats, both **pre-existing and unrelated to this change**:
 
 - the `bats tests/scripts` stage reports 109 failures because this container has
   no `python3` `yaml` module and no `pip` to install one. The count is
-  **identical on the parent commit** (109 before, 109 after), and every failing
-  case is a `.github/workflows` YAML assertion this diff does not touch.
+  **identical on the parent commit** — re-counted this run in a throwaway
+  worktree at `origin/Develop` (109 before, 109 after) — and every failing case
+  is a `.github/workflows` YAML assertion this diff does not touch.
 - the `wasm` half of `simd.rs` could not be compiled here: no
   `wasm32-unknown-unknown` target and no `rustup` in the container, so the
   `cargo check -p neat-core --target wasm32-unknown-unknown` that `AGENTS.md`
-  asks for before merging a `wasm` change must run in CI. The `wasm` edits
+  asks for before merging a `wasm` change could not be run. The `wasm` edits
   mirror the native ones exactly and add no new intrinsic usage.
+
+`AGENTS.md` records that **no PR gate compiles that target**, so this is a manual
+check rather than one CI will pick up: it is **owed before merge** and is called
+out as a standing violation above rather than quietly deferred.
 
 `./quality.sh` was re-run in full before the PR was raised. It still exits 1 at
 the `bats` stage on the same 109 environmental failures (`ModuleNotFoundError:
