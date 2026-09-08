@@ -154,6 +154,58 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.12.0` — `GraftError::CountNotRepresentable` (Issue #606)
+
+`GraftError` gains a variant. The enum is not `#[non_exhaustive]`, so a
+downstream exhaustive `match` on it stops compiling until it handles
+`CountNotRepresentable { field: &'static str, found: u64 }`.
+
+`validate_creature_topology` passed `creature.input` / `creature.output` to the
+index gates through `as u32`, so a declared `output` of `4_294_967_297` arrived
+as `1` and a creature no compiler could accept passed the gate. The counts are
+now checked with `u32::try_from` before anything reads them, and the new variant
+is what a count past `u32::MAX` returns. A creature whose declared widths fit
+`u32` — every creature this crate can compile, which caps at `MAX_NODE_COUNT` —
+is unaffected.
+
+The same change made `training_state`'s packed-record indexing checked. A record
+index whose start offset overflows `usize` is now out of range rather than
+wrapping onto a live record, and `init_training_state` panics rather than
+silently allocating a wrapped, far-too-small buffer.
+
+**Migration** — add an arm (or a `_ =>` catch-all) for the new variant:
+
+```rust
+match err {
+    // … existing arms …
+    GraftError::CountNotRepresentable { field, found } => {
+        eprintln!("declared {field} count {found} is past the u32 index space");
+    }
+}
+```
+
+### `0.11.0` — the pruning surface (Issues #588–#592)
+
+The Pruning milestone (#619) adds five public modules — `prune_cleanup`,
+`prune_fixtures`, `prune_json`, `prune_neuron` and `prune_synapse` — with
+`prune_neuron` / `prune_synapse` exported to JS through `wasm_exports` as
+`prune_neuron(request: string) -> string` and
+`prune_synapse(request: string) -> string`. `creature_validate_json`'s
+oversized-creature check is now the public `oversized_detail`, so every JSON
+boundary that accepts a creature asks one place for the ceiling.
+
+The minor bump was earned by a `BREAKING CHANGE` footer inside the milestone:
+`PruneResult::removed_neuron` became `Option<String>`, `PruneResult` and
+`CleanupOutcome` gained public fields, and `PruneError` gained
+`UnknownSynapse`. **Every one of those types was introduced in this same
+release**, so the break was internal to the milestone branch and no `0.10.x`
+consumer can observe it.
+
+**Migration** — none. The release is additive for anything compiled against
+`0.10.x`; a consumer picking up the new pruning API should read
+`prune_json`'s request/response shapes rather than porting from an earlier
+one, because there is no earlier one.
+
 ### `0.10.0` — `MemeticExport::weights` is a two-form enum
 
 `MemeticExport::weights` changes type from

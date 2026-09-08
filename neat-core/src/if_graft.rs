@@ -441,6 +441,15 @@ pub enum GraftError {
         /// The target that forced the earliest possible position.
         target: String,
     },
+    /// A declared width, or the node count it implies, does not fit the `u32`
+    /// the index gates read, so checking it would have meant silently
+    /// truncating the value (Issue #606).
+    CountNotRepresentable {
+        /// What the value counts — `"input"`, `"output"` or `"node"`.
+        field: &'static str,
+        /// The value that does not fit a `u32`.
+        found: u64,
+    },
     /// The creature failed [`validate_topology_typed`]; `code` is one of the
     /// `topology_ops` topology codes.
     ///
@@ -513,6 +522,10 @@ impl std::fmt::Display for GraftError {
                 f,
                 "No forward-only position: source {source} is evaluated after target {target}"
             ),
+            GraftError::CountNotRepresentable { field, found } => write!(
+                f,
+                "Declared {field} count {found} does not fit the u32 index space the topology gates read"
+            ),
             GraftError::MalformedTopology { code, index } => {
                 write!(f, "Topology validation failed (code {code}, index {index})")
             }
@@ -570,6 +583,66 @@ fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
     map
 }
 
+/// A creature's declared counts, each proven to fit the `u32` index space the
+/// topology and structural gates read.
+#[derive(Debug)]
+struct DeclaredCounts {
+    /// Declared observation width.
+    input: u32,
+    /// Declared output width.
+    output: u32,
+    /// Declared inputs plus listed neurons — the node count every neuron index
+    /// is below.
+    nodes: u32,
+}
+
+/// Bound a creature's declared counts against the `u32` index space the gates
+/// read (Issue #606).
+///
+/// These counts used to reach [`validate_structural_integrity`] through
+/// `as u32`, so a declared `output` of `4_294_967_297` arrived as `1` and a
+/// creature no compiler could accept passed the gate. A count past `u32::MAX`
+/// is now [`GraftError::CountNotRepresentable`], and the node count it returns
+/// is what makes the `from`/`to` casts in the edge loop lossless.
+///
+/// A creature at this boundary cannot be built in a test — `index_map` names
+/// one entry per declared input — so the rule is exercised directly at its
+/// accepting and rejecting edges (AGENTS.md oracle rule 5) rather than through
+/// a creature. This bounds *representability* only: a width that fits `u32` but
+/// far exceeds [`crate::network::MAX_NODE_COUNT`] is still walked one entry at a
+/// time by `index_map`, which is a separate root cause (Issue #622).
+fn bounded_counts(
+    input: usize,
+    output: usize,
+    neurons: usize,
+) -> Result<DeclaredCounts, GraftError> {
+    let input = fits_index_space("input", input)?;
+    let output = fits_index_space("output", output)?;
+    // Summed as `u64` so the sum itself cannot wrap on a 32-bit host, where
+    // `usize` is exactly as wide as the `u32` being checked for.
+    let nodes = u64::from(input) + neurons as u64;
+    let nodes = u32::try_from(nodes).map_err(|_| GraftError::CountNotRepresentable {
+        field: "node",
+        found: nodes,
+    })?;
+    Ok(DeclaredCounts {
+        input,
+        output,
+        nodes,
+    })
+}
+
+/// One declared count, narrowed to the `u32` the gates read or refused.
+///
+/// `value as u64` widens on every target Rust supports — `usize` is at most 64
+/// bits — so the reported value is the one the caller declared.
+fn fits_index_space(field: &'static str, value: usize) -> Result<u32, GraftError> {
+    u32::try_from(value).map_err(|_| GraftError::CountNotRepresentable {
+        field,
+        found: value as u64,
+    })
+}
+
 /// Run the fleet's shared width, topology and structural gates over a creature.
 ///
 /// Reuses [`validate_creature_width`], [`validate_topology_typed`],
@@ -585,8 +658,11 @@ fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
 pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), GraftError> {
     validate_creature_width(creature)?;
 
+    let counts = bounded_counts(creature.input, creature.output, creature.neurons.len())?;
+
     let map = index_map(creature);
-    let num_neurons = creature.input + creature.neurons.len();
+    // Lossless: `bounded_counts` has just proven the node count fits `u32`.
+    let num_neurons = counts.nodes as usize;
 
     let mut biases = vec![0.0f64; num_neurons];
     let mut is_constant = vec![0u8; num_neurons];
@@ -608,6 +684,8 @@ pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), Graft
             .get(&synapse.to_uuid)
             .ok_or_else(|| GraftError::UnknownTargetUuid(synapse.to_uuid.clone()))?;
         edges.push((
+            // Lossless: both index a map of `counts.nodes` entries, which
+            // `bounded_counts` has proven fits `u32`.
             from as u32,
             to as u32,
             parse_synapse_type(synapse.synapse_type.as_deref()) as u8,
@@ -638,8 +716,8 @@ pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), Graft
         &is_constant,
         &squash_types,
         &biases,
-        creature.input as u32,
-        creature.output as u32,
+        counts.input,
+        counts.output,
         &synapse_types,
     );
     if codes[0] != STRUCTURAL_VALID {
@@ -1152,4 +1230,60 @@ pub fn graft_if_correction(
     spec: &IfCorrectionSpec,
 ) -> Result<CreatureExport, GraftError> {
     graft_if_node(creature, &spec.to_node_spec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One past the largest count the `u32` index gates can read.
+    fn past_index_space() -> usize {
+        usize::try_from(u64::from(u32::MAX) + 1).expect("64-bit test host")
+    }
+
+    #[test]
+    fn the_largest_representable_node_count_is_accepted() {
+        // `u32::MAX - 1` declared inputs plus one listed neuron is exactly
+        // `u32::MAX` nodes — the last count the gates can index.
+        let counts = bounded_counts(u32::MAX as usize - 1, 1, 1).expect("accepted at the edge");
+        assert_eq!(counts.nodes, u32::MAX);
+        assert_eq!(counts.input, u32::MAX - 1);
+        assert_eq!(counts.output, 1);
+    }
+
+    #[test]
+    fn a_node_count_one_past_the_index_space_is_refused() {
+        let err = bounded_counts(u32::MAX as usize, 1, 1).expect_err("refused one past the edge");
+        assert!(matches!(
+            err,
+            GraftError::CountNotRepresentable { field: "node", found }
+                if found == u64::from(u32::MAX) + 1
+        ));
+    }
+
+    #[test]
+    fn the_largest_representable_output_width_is_accepted() {
+        let counts = bounded_counts(1, u32::MAX as usize, 0).expect("accepted at the edge");
+        assert_eq!(counts.output, u32::MAX);
+    }
+
+    #[test]
+    fn an_output_width_past_the_index_space_is_refused() {
+        let err = bounded_counts(1, past_index_space(), 0).expect_err("refused");
+        assert!(matches!(
+            err,
+            GraftError::CountNotRepresentable { field: "output", found }
+                if found == past_index_space() as u64
+        ));
+    }
+
+    #[test]
+    fn an_input_width_past_the_index_space_is_refused() {
+        let err = bounded_counts(past_index_space(), 1, 0).expect_err("refused");
+        assert!(matches!(
+            err,
+            GraftError::CountNotRepresentable { field: "input", found }
+                if found == past_index_space() as u64
+        ));
+    }
 }
