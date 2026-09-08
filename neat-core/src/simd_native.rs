@@ -252,7 +252,8 @@ mod x86 {
                 // validation documented above, and `o < R / 8`, so this
                 // unaligned 8-wide load is in bounds.
                 let acts = unsafe { _mm256_loadu_ps(ptr.add(base + o * 8)) };
-                // `_mm256_fmadd_ps` needs `fma` (mirrors the 8records kernel above).
+                // `_mm256_fmadd_ps` needs `fma`, enabled on this fn alongside `avx2`
+                // (mirrors the 8records kernel above).
                 *a = _mm256_fmadd_ps(ws, acts, *a);
             }
         }

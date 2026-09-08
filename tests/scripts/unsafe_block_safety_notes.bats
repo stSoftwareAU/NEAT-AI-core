@@ -18,8 +18,17 @@
 #   3. A block in a **safe** fn reached under an `is_*_feature_detected!` guard
 #      must have a note that names that guard — it is what discharges the
 #      callee's `#[target_feature]` precondition.
+#   4. Every `unsafe fn` carries a `# Safety` doc, whether or not its blocks
+#      happen to have notes of their own — deleting the contract must be red.
+#   5. When a block in a **safe** fn calls a `#[target_feature]` fn declared in
+#      the same file, an `is_*_feature_detected!` check must stand between the
+#      enclosing fn's declaration and the block for **every** feature that
+#      `#[target_feature]` list enables. An `avx2`-only guard in front of a
+#      kernel that also enables `fma` is the Issue #605 fault, and deleting the
+#      guard outright must not silence rule 3 — this is what catches it.
 
 setup() {
+  load helpers
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   AGENTS_MD="${REPO_ROOT}/AGENTS.md"
   SIMD_NATIVE="${REPO_ROOT}/neat-core/src/simd_native.rs"
@@ -34,6 +43,12 @@ setup() {
   export SAFETY_DOC_RE='^[ \t]*///[ \t]*#+[ \t]*Safety\b'
   export FN_DECL_RE='^(?P<indent>[ \t]*)(?:pub(?:\([^)]*\))?[ \t]+)?(?:const[ \t]+)?(?P<unsafe>unsafe[ \t]+)?(?:extern[ \t]+"[^"]*"[ \t]+)?fn[ \t]+(?P<name>[A-Za-z_][A-Za-z0-9_]*)'
   export FEATURE_GUARD_RE='is_(x86|aarch64)_feature_detected!'
+  # The feature a guard proves, and the features a `#[target_feature]` list
+  # enables: rule 5 compares one set against the other.
+  export GUARDED_FEATURE_RE='is_(?:x86|aarch64)_feature_detected!\([ \t]*"(?P<feature>[^"]+)"'
+  export TARGET_FEATURE_RE='^[ \t]*#\[target_feature\((?P<features>[^)]*)\)\]'
+  export ENABLE_RE='enable[ \t]*=[ \t]*"(?P<feature>[^"]+)"'
+  export CALL_RE='(?<![A-Za-z0-9_])(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:::<[^>]*>[ \t]*)?\('
   # A `// SAFETY:` note reaches a block through comment continuation lines and
   # through neighbouring statements that themselves open an `unsafe` block, so
   # one note may cover a contiguous run of them.
@@ -46,12 +61,8 @@ setup() {
 }
 
 teardown() {
-  [ -n "${WORK:-}" ] && rm -rf "$WORK"
-}
-
-require_python3() {
-  if ! command -v python3 &>/dev/null; then
-    skip "python3 required to compile the SAFETY-coverage patterns"
+  if [ -n "${WORK:-}" ]; then
+    rm -rf "$WORK"
   fi
 }
 
@@ -69,6 +80,10 @@ SAFETY_DOC_RE = re.compile(os.environ["SAFETY_DOC_RE"])
 FN_DECL_RE = re.compile(os.environ["FN_DECL_RE"])
 FEATURE_GUARD_RE = re.compile(os.environ["FEATURE_GUARD_RE"])
 CARRY_RE = re.compile(os.environ["CARRY_RE"])
+GUARDED_FEATURE_RE = re.compile(os.environ["GUARDED_FEATURE_RE"])
+TARGET_FEATURE_RE = re.compile(os.environ["TARGET_FEATURE_RE"])
+ENABLE_RE = re.compile(os.environ["ENABLE_RE"])
+CALL_RE = re.compile(os.environ["CALL_RE"])
 NOTE_WINDOW = int(os.environ["NOTE_WINDOW"])
 
 
@@ -120,13 +135,102 @@ def note_text(lines, note, idx):
 
 
 def guarded_by_feature_detection(lines, decl, idx):
-    return any(FEATURE_GUARD_RE.search(line) for line in lines[decl:idx])
+    # `code_part` matters: a note *mentioning* the guard is not the guard.
+    return any(FEATURE_GUARD_RE.search(code_part(line)) for line in lines[decl:idx])
+
+
+def detected_features(lines, decl, idx):
+    """Features an `is_*_feature_detected!` check proves between `decl` and the block.
+
+    Comments are stripped first — a `// SAFETY:` note that names the guard is
+    documentation, not a runtime check, and must not stand in for one.
+    """
+    found = set()
+    for line in lines[decl:idx]:
+        for m in GUARDED_FEATURE_RE.finditer(code_part(line)):
+            found.add(m.group("feature"))
+    return found
+
+
+def enabled_features(lines, decl):
+    """Features the `#[target_feature]` list above `decl` enables."""
+    found = set()
+    for j in range(decl - 1, -1, -1):
+        stripped = lines[j].strip()
+        if not (stripped.startswith("//") or stripped.startswith("#[")):
+            break
+        m = TARGET_FEATURE_RE.match(lines[j])
+        if m:
+            for enable in ENABLE_RE.finditer(m.group("features")):
+                found.add(enable.group("feature"))
+    return found
+
+
+def target_feature_fns(lines):
+    """Map every `#[target_feature]` fn declared in the file to the features it enables."""
+    table = {}
+    for j, line in enumerate(lines):
+        m = FN_DECL_RE.match(line)
+        if not m:
+            continue
+        features = enabled_features(lines, j)
+        if features:
+            table[m.group("name")] = features
+    return table
+
+
+def called_names(lines, idx):
+    """Function names called by the block at `idx` and the lines it spans."""
+    names = set()
+    depth = 0
+    started = False
+    for line in lines[idx:]:
+        code = code_part(line)
+        for m in CALL_RE.finditer(code):
+            names.add(m.group("name"))
+        depth += code.count("{") - code.count("}")
+        started = started or "{" in code
+        if started and depth <= 0:
+            break
+    return names
+
+
+def unsafe_fns_missing_safety_doc(lines):
+    """Yield (line_no, name) for every `unsafe fn` with no `# Safety` doc."""
+    for j, line in enumerate(lines):
+        m = FN_DECL_RE.match(line)
+        if m and m.group("unsafe") and not has_safety_doc(lines, j):
+            yield j + 1, m.group("name")
+
+
+def safety_doc_lines(lines):
+    """Yield the `# Safety` heading line of every `unsafe fn` in the file.
+
+    These are the contracts rule 4 makes load-bearing; a `# Safety` doc on a
+    *safe* fn is not one of them.
+    """
+    for j, line in enumerate(lines):
+        m = FN_DECL_RE.match(line)
+        if not (m and m.group("unsafe")):
+            continue
+        for k in range(j - 1, -1, -1):
+            stripped = lines[k].strip()
+            if not (stripped.startswith("//") or stripped.startswith("#[")):
+                break
+            if SAFETY_DOC_RE.match(lines[k]):
+                yield k + 1
+                break
 
 
 def sweep(path):
     """Yield (line_no, verdict, detail) for every `unsafe {` block in `path`."""
     with open(path, encoding="utf-8") as handle:
         lines = handle.read().splitlines()
+    kernels = target_feature_fns(lines)
+    for line_no, name in unsafe_fns_missing_safety_doc(lines):
+        yield line_no, "no-safety-doc", (
+            "`unsafe fn %s` states no `# Safety` contract for its caller" % name
+        )
     for i, line in enumerate(lines):
         if not UNSAFE_BLOCK_RE.search(code_part(line)):
             continue
@@ -151,6 +255,25 @@ def sweep(path):
                     "guard that discharges the `#[target_feature]` precondition"
                 )
                 continue
+        if decl is not None:
+            # Rule 5: the guard must detect every feature the callee enables,
+            # unless the enclosing fn already enables them itself.
+            detected = detected_features(lines, decl, i) | enabled_features(lines, decl)
+            for name in sorted(called_names(lines, i)):
+                required = kernels.get(name)
+                if required and not required <= detected:
+                    missing = "/".join(sorted(required - detected))
+                    seen = "/".join(sorted(detected)) or "no feature"
+                    yield i + 1, "unguarded-feature", (
+                        "calls `%s`, which enables %s, but only %s is detected "
+                        "before this block — %s is unguarded" % (
+                            name, "/".join(sorted(required)), seen, missing
+                        )
+                    )
+                    break
+            else:
+                yield i + 1, "ok", "`// SAFETY:` note at line %d" % (note + 1)
+            continue
         yield i + 1, "ok", "`// SAFETY:` note at line %d" % (note + 1)
 
 
@@ -159,6 +282,12 @@ def main(argv):
     paths = [a for a in argv if not a.startswith("--")]
     if not paths:
         sys.exit("no source files given — a sweep over nothing is not a pass")
+    if "--safety-docs" in argv:
+        for path in paths:
+            with open(path, encoding="utf-8") as handle:
+                for line_no in safety_doc_lines(handle.read().splitlines()):
+                    print(line_no)
+        return 0
     failures = 0
     blocks = 0
     for path in paths:
@@ -212,30 +341,54 @@ drop_line() {
 
 # --- mutation evidence: the sweep can fail on the live sources ------------
 
-@test "deleting one per-block SAFETY note from a live source turns the sweep red" {
+@test "deleting any load-bearing SAFETY note from a live source turns the sweep red" {
   require_python3
-  cp "$SIMD_NATIVE" "${WORK}/mutant.rs"
-  # The last per-block note in the file belongs to a *safe* dispatcher, where
-  # rule 2 makes the note the only thing covering the block.
-  note_line="$(grep -n '// SAFETY:' "${WORK}/mutant.rs" | tail -1 | cut -d: -f1)"
-  [ -n "$note_line" ]
-  drop_line "${WORK}/mutant.rs" "$note_line"
-  run python3 "$CHECKER" "${WORK}/mutant.rs"
-  echo "$output"
-  [ "$status" -eq 1 ]
-  [[ "$output" == *"uncovered"* ]]
+  # Exhaustive, not one hand-picked line: every note the sweep reports as the
+  # thing covering a block must be load-bearing. (A note inside an `unsafe fn`
+  # is *not* in this set — rule 1 covers those blocks, which is the whole point
+  # of the convention.)
+  for source in "$SIMD_NATIVE" "$SIMD_WASM" "$SIMD_SCALAR"; do
+    note_lines="$(python3 "$CHECKER" --report "$source" |
+      sed -n 's/.*`\/\/ SAFETY:` note at line \([0-9][0-9]*\)$/\1/p' | sort -run)"
+    for note_line in $note_lines; do
+      cp "$source" "${WORK}/mutant.rs"
+      drop_line "${WORK}/mutant.rs" "$note_line"
+      run python3 "$CHECKER" "${WORK}/mutant.rs"
+      echo "deleted ${source}:${note_line} — $output"
+      [ "$status" -eq 1 ]
+    done
+  done
 }
 
-@test "deleting a # Safety doc from a live unsafe fn turns the sweep red" {
+@test "deleting any # Safety doc from a live unsafe fn turns the sweep red" {
+  require_python3
+  # Also exhaustive, over the contracts rule 4 makes load-bearing: an
+  # `unsafe fn` without its `# Safety` doc is red even when every block in its
+  # body happens to carry a note of its own.
+  for source in "$SIMD_NATIVE" "$SIMD_WASM" "$SIMD_SCALAR"; do
+    doc_lines="$(python3 "$CHECKER" --safety-docs "$source" | sort -run)"
+    for doc_line in $doc_lines; do
+      cp "$source" "${WORK}/mutant.rs"
+      drop_line "${WORK}/mutant.rs" "$doc_line"
+      run python3 "$CHECKER" "${WORK}/mutant.rs"
+      echo "deleted ${source}:${doc_line} — $output"
+      [ "$status" -eq 1 ]
+    done
+  done
+}
+
+@test "weakening a dispatch guard to one of the kernel's two features turns the sweep red" {
   require_python3
   cp "$SIMD_NATIVE" "${WORK}/mutant.rs"
-  doc_line="$(grep -n '/// # Safety' "${WORK}/mutant.rs" | head -1 | cut -d: -f1)"
-  [ -n "$doc_line" ]
-  drop_line "${WORK}/mutant.rs" "$doc_line"
+  # The Issue #605 fault itself: the AVX2 kernels enable avx2 + fma, so dropping
+  # the fma detection leaves an FMA intrinsic reachable on an AVX2-only CPU.
+  fma_line="$(grep -n 'is_x86_feature_detected!("fma"),' "${WORK}/mutant.rs" | head -1 | cut -d: -f1)"
+  [ -n "$fma_line" ]
+  drop_line "${WORK}/mutant.rs" "$fma_line"
   run python3 "$CHECKER" "${WORK}/mutant.rs"
   echo "$output"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"uncovered"* ]]
+  [[ "$output" == *"unguarded-feature"* ]]
 }
 
 # --- good literals: the same pattern must accept these --------------------
@@ -336,20 +489,99 @@ RS
   [[ "$output" == *"unnamed-guard"* ]]
 }
 
+@test "an unsafe fn with no # Safety doc is rejected even when its blocks are annotated" {
+  require_python3
+  cat >"${WORK}/bad_annotated_no_doc.rs" <<'RS'
+    /// Fast path. No contract stated for the caller.
+    #[target_feature(enable = "avx2")]
+    pub unsafe fn kernel(xs: &[f32], i: usize) -> f32 {
+        // SAFETY: `i < xs.len()` by the caller's chunk-loop bound.
+        unsafe { *xs.get_unchecked(i) }
+    }
+RS
+  run python3 "$CHECKER" "${WORK}/bad_annotated_no_doc.rs"
+  echo "$output"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no-safety-doc"* ]]
+}
+
+@test "a guard that detects only one of the callee's two features is rejected" {
+  require_python3
+  cat >"${WORK}/bad_partial_guard.rs" <<'RS'
+    /// # Safety
+    /// Caller must ensure AVX2 and FMA are enabled.
+    #[target_feature(enable = "avx2", enable = "fma")]
+    pub unsafe fn kernel(xs: &[f32], i: usize) -> f32 {
+        unsafe { *xs.get_unchecked(i) }
+    }
+
+    pub fn dispatch(xs: &[f32], i: usize) -> f32 {
+        if std::arch::is_x86_feature_detected!("avx2") {
+            // SAFETY: the `is_x86_feature_detected!("avx2")` guard above proves
+            // the `#[target_feature]` precondition holds.
+            return unsafe { kernel(xs, i) };
+        }
+        scalar(xs, i)
+    }
+RS
+  run python3 "$CHECKER" "${WORK}/bad_partial_guard.rs"
+  echo "$output"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unguarded-feature"* ]]
+}
+
+@test "a guard that detects both of the callee's features is accepted" {
+  require_python3
+  cat >"${WORK}/good_full_guard.rs" <<'RS'
+    /// # Safety
+    /// Caller must ensure AVX2 and FMA are enabled.
+    #[target_feature(enable = "avx2", enable = "fma")]
+    pub unsafe fn kernel(xs: &[f32], i: usize) -> f32 {
+        unsafe { *xs.get_unchecked(i) }
+    }
+
+    pub fn dispatch(xs: &[f32], i: usize) -> f32 {
+        if std::arch::is_x86_feature_detected!("avx2")
+            && std::arch::is_x86_feature_detected!("fma")
+        {
+            // SAFETY: the `is_x86_feature_detected!("avx2")` and `("fma")` guards
+            // above prove the `#[target_feature]` precondition holds.
+            return unsafe { kernel(xs, i) };
+        }
+        scalar(xs, i)
+    }
+RS
+  run python3 "$CHECKER" "${WORK}/good_full_guard.rs"
+  echo "$output"
+  [ "$status" -eq 0 ]
+}
+
+@test "a note naming the guard does not stand in for the guard itself" {
+  require_python3
+  # The note text mentions `is_x86_feature_detected!("fma")` but no such check
+  # runs — comments must be stripped before the guard set is computed.
+  cat >"${WORK}/bad_note_only_guard.rs" <<'RS'
+    /// # Safety
+    /// Caller must ensure FMA is enabled.
+    #[target_feature(enable = "fma")]
+    pub unsafe fn kernel(xs: &[f32], i: usize) -> f32 {
+        unsafe { *xs.get_unchecked(i) }
+    }
+
+    pub fn dispatch(xs: &[f32], i: usize) -> f32 {
+        // SAFETY: the `is_x86_feature_detected!("fma")` guard proves the
+        // `#[target_feature(enable = "fma")]` precondition holds.
+        unsafe { kernel(xs, i) }
+    }
+RS
+  run python3 "$CHECKER" "${WORK}/bad_note_only_guard.rs"
+  echo "$output"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"unguarded-feature"* ]]
+}
+
 @test "a sweep over no source at all fails loud rather than passing" {
   require_python3
   run python3 "$CHECKER"
   [ "$status" -ne 0 ]
-}
-
-# --- AGENTS.md states the rule this gate enforces -------------------------
-
-@test "AGENTS.md states that a # Safety doc covers the unsafe blocks in its body" {
-  run grep -q 'covers every `unsafe {` block' "$AGENTS_MD"
-  [ "$status" -eq 0 ]
-}
-
-@test "AGENTS.md names this gate as the enforcing sweep" {
-  run grep -q 'tests/scripts/unsafe_block_safety_notes.bats' "$AGENTS_MD"
-  [ "$status" -eq 0 ]
 }

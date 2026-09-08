@@ -60,6 +60,24 @@ setup() {
   [ "$status" -eq 0 ]
 }
 
+@test "AGENTS.md states that a # Safety doc covers the unsafe blocks in its body" {
+  # Issue #605 - the convention the live-source sweep enforces must be the one
+  # written down here, or the gate and the doc drift apart.
+  run grep -q 'covers every `unsafe {` block' "$AGENTS_MD"
+  [ "$status" -eq 0 ]
+}
+
+@test "AGENTS.md names the live-source sweep that enforces the SAFETY rule" {
+  run grep -q 'tests/scripts/unsafe_block_safety_notes.bats' "$AGENTS_MD"
+  [ "$status" -eq 0 ]
+}
+
+@test "AGENTS.md records that a dispatch guard must detect every enabled feature" {
+  # Issue #605 - AVX2 does not imply FMA.
+  run grep -qi 'AVX2 does not imply' "$AGENTS_MD"
+  [ "$status" -eq 0 ]
+}
+
 # --- SECURITY.md: load-time memory-safety invariant -----------------------
 
 @test "SECURITY.md records the load-time memory-safety invariant" {

@@ -43,21 +43,6 @@ fn both_features_enable_the_avx2_kernels() {
     );
 }
 
-/// The gate is the *only* thing standing between this CPU and the FMA
-/// instruction, so on x86_64 a `true` verdict must imply FMA was detected.
-#[cfg(target_arch = "x86_64")]
-#[test]
-fn the_gate_never_admits_this_cpu_without_detected_fma() {
-    let avx2 = std::arch::is_x86_feature_detected!("avx2");
-    let fma = std::arch::is_x86_feature_detected!("fma");
-    if avx2_fma_kernels_enabled(avx2, fma) {
-        assert!(
-            fma,
-            "the AVX2 kernels were admitted on a CPU with no detected FMA"
-        );
-    }
-}
-
 /// Whatever the gate decides on this host, the dispatched result must equal the
 /// scalar reference — the gate may not silently change the numbers.
 #[test]
