@@ -139,21 +139,40 @@ async function loadBundle(pkgDir: string): Promise<any> {
   return mod;
 }
 
-/** Drive every golden request through the bundle and report the differences. */
-export async function checkBundle(pkgDir: string, golden: GoldenCase[]): Promise<string[]> {
-  const api = await loadBundle(pkgDir);
-  for (const name of ["prune_neuron", "prune_synapse"]) {
+/** The pruning surface a bundle must expose. */
+export interface PruneApi {
+  prune_neuron(request: string): string;
+  prune_synapse(request: string): string;
+}
+
+/**
+ * Drive every golden request through an already-loaded bundle and report the
+ * differences.
+ *
+ * Separate from {@link checkBundle} so the comparison — which is the part that
+ * decides whether the gate passes — is graded without a built bundle.
+ */
+export function checkAnswers(api: Partial<PruneApi>, golden: GoldenCase[]): string[] {
+  for (const name of ["prune_neuron", "prune_synapse"] as const) {
     if (typeof api[name] !== "function") {
       throw new Error(
-        `the bundle at ${pkgDir} exports no ${name}() — the pruning surface never reached wasm`,
+        `the bundle exports no ${name}() — the pruning surface never reached wasm`,
       );
     }
   }
 
   const failures: string[] = [];
   for (const testCase of golden) {
+    if (testCase.op !== "neuron" && testCase.op !== "synapse") {
+      // A record naming no entry point must not be answered by whichever one
+      // happened to be the fallback.
+      failures.push(`${testCase.name}: op '${testCase.op}' names no entry point`);
+      continue;
+    }
     const request = JSON.stringify(testCase.request);
-    const raw = testCase.op === "neuron" ? api.prune_neuron(request) : api.prune_synapse(request);
+    const raw = testCase.op === "neuron"
+      ? (api as PruneApi).prune_neuron(request)
+      : (api as PruneApi).prune_synapse(request);
     let answer: unknown;
     try {
       answer = JSON.parse(raw);
@@ -166,6 +185,11 @@ export async function checkBundle(pkgDir: string, golden: GoldenCase[]): Promise
     }
   }
   return failures;
+}
+
+/** Load the bundle at `pkgDir` and grade its answers against the record. */
+export async function checkBundle(pkgDir: string, golden: GoldenCase[]): Promise<string[]> {
+  return checkAnswers(await loadBundle(pkgDir), golden);
 }
 
 if (import.meta.main) {

@@ -9,6 +9,7 @@
 
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
+  checkAnswers,
   compareAnswer,
   FLOAT_TOLERANCE,
   type GoldenCase,
@@ -135,4 +136,49 @@ Deno.test("an empty or missing record fails loudly rather than passing vacuously
   assertThrows(() => parseGolden("[]"), Error, "carries no cases");
   assertThrows(() => parseGolden("{}"), Error, "carries no cases");
   await assertRejects(() => loadGolden(`${GOLDEN_PATH}.missing`));
+});
+
+// The comparison the CI gate rests on — routing each request to its entry
+// point, reading the answer and reporting the differences — is graded here
+// against a stub surface, so it is covered everywhere and not only in the one
+// place a built bundle exists. `checkBundle` adds the bundle load on top of
+// this and nothing else.
+function stub(answer: (request: string) => string) {
+  return { prune_neuron: answer, prune_synapse: answer };
+}
+
+Deno.test("the driver reports no difference when the surface answers the record", () => {
+  const answers = new Map(golden.map((c) => [JSON.stringify(c.request), c.response]));
+  assertEquals(
+    checkAnswers(stub((request) => JSON.stringify(answers.get(request))), golden),
+    [],
+  );
+});
+
+Deno.test("the driver reports a difference when the surface answers something else", () => {
+  const failures = checkAnswers(stub(() => JSON.stringify({ ok: false })), golden);
+  assert(failures.length > 0, "a surface answering nothing like the record must fail the gate");
+  assert(failures.some((f) => f.includes("$.ok")), failures.join("\n"));
+});
+
+Deno.test("the driver fails loudly when the surface carries no pruning exports", () => {
+  assertThrows(() => checkAnswers({}, golden), Error, "exports no prune_neuron()");
+  assertThrows(
+    () => checkAnswers({ prune_neuron: () => "{}" }, golden),
+    Error,
+    "exports no prune_synapse()",
+  );
+});
+
+Deno.test("the driver fails loudly when the surface answers something that is not JSON", () => {
+  const failures = checkAnswers(stub(() => "not json"), golden);
+  assertEquals(failures.length, golden.length);
+  assert(failures.every((f) => f.includes("not JSON")), failures.join("\n"));
+});
+
+Deno.test("the driver refuses a record naming no entry point", () => {
+  const broken = [{ ...golden[0], op: "both" as unknown as GoldenCase["op"] }];
+  const failures = checkAnswers(stub(() => "{}"), broken);
+  assertEquals(failures.length, 1);
+  assert(failures[0].includes("names no entry point"), failures[0]);
 });
