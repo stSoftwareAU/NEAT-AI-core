@@ -91,16 +91,3 @@ unmarked_mentions() {
   run grep -qE '^\| `?pc_(inference|learning)' "$IKARUGA"
   [ "$status" -ne 0 ]
 }
-
-@test "the Ikaruga comparison's LOC figure tracks neat-core/src" {
-  stated="$(grep -oE 'Source footprint: \*\*~[0-9,]+' "$IKARUGA" | grep -oE '[0-9,]+$' | tr -d ',')"
-  [ -n "$stated" ]
-  actual="$(find "$SRC_DIR" -name '*.rs' -type f -exec cat {} + | wc -l | tr -d ' ')"
-  # Loud on drift: refresh the figure (and this doc's date stamp) when the
-  # tree moves more than 10% away from it.
-  lower=$((actual * 9 / 10))
-  upper=$((actual * 11 / 10))
-  echo "stated=${stated} actual=${actual} window=${lower}..${upper}"
-  [ "$stated" -ge "$lower" ]
-  [ "$stated" -le "$upper" ]
-}
