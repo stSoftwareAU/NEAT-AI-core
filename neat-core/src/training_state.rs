@@ -80,6 +80,14 @@ thread_local! {
 /// # Arguments
 /// * `num_synapses` - Number of synapses in the network
 /// * `num_neurons` - Number of neurons in the network
+///
+/// # Panics
+///
+/// Panics when either count is so large that its packed buffer size does not
+/// fit `usize`. Wrapping instead would resize the buffer to a handful of values
+/// while the recorded count stayed huge, and every later accumulation would be
+/// dropped by the length guard — an epoch that trains nothing and reports
+/// success.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn init_training_state(num_synapses: usize, num_neurons: usize) {
     SYNAPSE_STATE.with(|s| {
