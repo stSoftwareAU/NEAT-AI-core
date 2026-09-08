@@ -184,6 +184,28 @@ match err {
 }
 ```
 
+### `0.11.0` — the pruning surface (Issues #588–#592)
+
+The Pruning milestone (#619) adds five public modules — `prune_cleanup`,
+`prune_fixtures`, `prune_json`, `prune_neuron` and `prune_synapse` — with
+`prune_neuron` / `prune_synapse` exported to JS through `wasm_exports` as
+`prune_neuron(request: string) -> string` and
+`prune_synapse(request: string) -> string`. `creature_validate_json`'s
+oversized-creature check is now the public `oversized_detail`, so every JSON
+boundary that accepts a creature asks one place for the ceiling.
+
+The minor bump was earned by a `BREAKING CHANGE` footer inside the milestone:
+`PruneResult::removed_neuron` became `Option<String>`, `PruneResult` and
+`CleanupOutcome` gained public fields, and `PruneError` gained
+`UnknownSynapse`. **Every one of those types was introduced in this same
+release**, so the break was internal to the milestone branch and no `0.10.x`
+consumer can observe it.
+
+**Migration** — none. The release is additive for anything compiled against
+`0.10.x`; a consumer picking up the new pruning API should read
+`prune_json`'s request/response shapes rather than porting from an earlier
+one, because there is no earlier one.
+
 ### `0.10.0` — `MemeticExport::weights` is a two-form enum
 
 `MemeticExport::weights` changes type from
