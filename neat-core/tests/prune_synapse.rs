@@ -168,6 +168,30 @@ const IF_STATIC_AFTER_CUT_JSON: &str = r#"{
   ]
 }"#;
 
+/// The same static-condition shape, with the negative branch fed through a
+/// two-step chain so dropping it strands a whole line of feeders.
+const IF_STATIC_MULTILEVEL_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-c","bias":0.5,"squash":"IDENTITY"},
+    {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-n2","bias":0.3,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-n","bias":0.4,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-c"},
+    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
+    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-n2"},
+    {"weight":1.0,"fromUUID":"h-n2","toUUID":"h-n"},
+    {"weight":1.0,"fromUUID":"h-c","toUUID":"if-1","type":"condition"},
+    {"weight":2.0,"fromUUID":"h-p","toUUID":"if-1","type":"positive"},
+    {"weight":-1.0,"fromUUID":"h-n","toUUID":"if-1","type":"negative"},
+    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+  ]
+}"#;
+
 /// A synapse naming a target the creature does not carry, on an edge the
 /// request does not touch.
 const DANGLING_TARGET_JSON: &str = r#"{
@@ -937,4 +961,30 @@ fn a_statically_true_condition_drops_the_unreachable_branch_and_cascades() {
         2.0,
     );
     assert_valid("a_statically_true_condition", &result.creature);
+}
+
+#[test]
+fn dropping_an_unreachable_branch_cascades_through_every_level_it_strands() {
+    let before = creature(IF_STATIC_MULTILEVEL_JSON);
+    let result = pruned(&before, &key("input-0", "h-c", SynapseType::Standard), None);
+
+    let twin = with_edge_zeroed(&before, "input-0", "h-c", None);
+    assert_same_function("static_if_multilevel", &twin, &result.creature);
+
+    for stranded in ["h-c", "h-n", "h-n2"] {
+        assert!(
+            !has_neuron(&result.creature, stranded),
+            "{stranded} still stands after its only reader went"
+        );
+    }
+    assert!(
+        has_neuron(&result.creature, "h-p"),
+        "the taken branch stays"
+    );
+    assert_close(
+        "the positive arm survives at its own weight",
+        weight(&result.creature, "h-p", "if-1"),
+        2.0,
+    );
+    assert_valid("dropping_an_unreachable_branch", &result.creature);
 }

@@ -64,7 +64,9 @@
 //!   needed and none allowed to override it;
 //! - where it does not, the caller's [`PruneStats`] fold `w · μ` (and hand the
 //!   correlated part to a supplied survivor), exactly as Issue #590's neuron
-//!   removal does;
+//!   removal does. A survivor that stands in for the source cannot *be* the
+//!   source: the edge it would carry the share on is the one just removed, so
+//!   such a request is refused rather than half-applied;
 //! - where the target **aggregates** — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`,
 //!   or an `IF` reading one role's sum — no bias fold stands in for the term,
 //!   so none is attempted and the target is named on
