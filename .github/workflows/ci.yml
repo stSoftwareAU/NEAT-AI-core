@@ -557,7 +557,7 @@ jobs:
           check_filenames: true
           check_hidden: true
           skip: "./target,./.git"
-          ignore_words_list: renderD,mape,indx
+          ignore_words_list: renderD,mape,froms,indx
 
   # Issue #297 — wasm64 lane (b) Memory64 runtime guard. The committed smoke
   # test instantiates a minimal `(memory i64 ...)` module, grows linear memory
