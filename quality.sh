@@ -96,6 +96,10 @@ if ! command -v cargo-deny &>/dev/null; then
     exit 1
 fi
 cargo deny check
+# The wasm-bench harness sits outside the root virtual workspace (Issue #607),
+# so its own dependency graph needs its own pass under this same deny.toml —
+# the licence allow-list and unknown-registry = "deny" included.
+cargo deny --manifest-path wasm-bench/Cargo.toml check
 
 # Use workspace for faster builds
 echo "🏗️ Building (debug) for quick feedback..."
