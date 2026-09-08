@@ -1,14 +1,65 @@
 # AGENTS.md
 
+> [!IMPORTANT]
+> **Family-wide engineering policy lives once, in
+> [`NEAT-AI/docs/ENGINEERING_PRINCIPLES.md`](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md)** — read it before changing
+> behaviour. It is written for human contributors and coding agents equally, so
+> there is no agent-only dialect here: this file holds what is specific to
+> *this* repository — the Rust/core invariants, the build and gate mechanics,
+> and the local reading of the shared rules. Shared policy is linked from here,
+> never restated (NEAT-AI#3979).
+
+## Family-wide engineering principles
+
+The canonical policy — TDD, one implementation owner per capability, DRY across
+the family, small independently revertible migrations, application-agnostic
+public libraries — is
+[`NEAT-AI/docs/ENGINEERING_PRINCIPLES.md`](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md). Read it there. What follows is
+only what those rules mean **here**, in the shared native core:
+
+- **Core is the receiving end of a TypeScript → Rust migration**
+  ([principles 6–7](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#6-migrate-typescript--rust-incrementally-and-finish-each-step)).
+  A capability moves only once Rust parity — or a deliberate, tested and
+  documented improvement — is proven against the existing TypeScript tests for
+  it; ownership then sits with `neat-core`, and the same migration deletes the
+  superseded TypeScript implementation together with any helper left without a
+  caller. No runtime fallback, shadow execution or long-lived dual path survives
+  the cut-over: a consumer that cannot reach the native side
+  [fails loud](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#7-no-fallback-no-shadow-implementation-no-long-lived-dual-path)
+  naming the fix. If core cannot yet serve a scenario, improve core first rather
+  than cutting that scenario over.
+- **A defect found after a migration starts with the smallest reproducing test**
+  ([principle 2](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#2-a-post-release-defect-starts-with-the-smallest-reproducing-test)).
+  Add that test to `neat-core`, watch it go red, then fix the canonical
+  implementation here. Never patch around the defect in a consumer, and never
+  revive the deleted TypeScript path to work around it.
+- **Rollback is a repin, not a duplicate implementation**
+  ([principle 8](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#8-rollback-is-versioning-and-pinning-not-duplicate-code)).
+  Consumers pin a published revision of this crate — NEAT-AI pins `neatCore.rev`
+  with its `assetSha256`, NEAT-AI-scorer pins the crate version — so a bad
+  release is rolled back by re-pinning the last known-good revision and
+  rebuilding the bundle, exactly as the per-commit wasm release lane already
+  treats wasm32 as the rollback for wasm64. Never keep a second, parallel
+  implementation alive as the rollback lever. Version and release mechanics:
+  [`RELEASING.md`](RELEASING.md).
+- **The ownership fence below is
+  [principle 10](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#10-shared-logic-belongs-in-the-lowest-sensible-reusable-component)
+  in local form** — shared per-sample logic belongs here; host orchestration
+  stays with the product that runs it.
+
 ## TDD (required)
 
-- **Test-driven development:** new behaviour or bugfixes start from **failing tests**, then minimal implementation, then refactor. Do not land Rust changes without **tests** in `neat-core` (or the relevant crate) and a green **`cargo test --workspace`**.
+[Principle 1](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#1-test-driven-development-tdd-comes-first) in local
+mechanics — new behaviour and bugfixes start from a failing test, and that rule
+is not restated here:
+
+- Do not land Rust changes without **tests** in `neat-core` (or the relevant crate) and a green **`cargo test --workspace`**.
 - **Characterisation-test exception — pure extractions only.** Collapsing N identical copies into one helper adds no behaviour for a failing-first test to describe, so write the tests against the **pre-change copies**, run them green there, and keep them green through the extraction (that is what proves the refactor behaviour-preserving — `pr-summary-442.md`). The red run you skip is repaid by the mutation evidence below: a characterisation test that never fails is worth nothing.
 - Run **`./quality.sh`** before commit/PR.
 
 ## Testing: "what" not "how"
 
-All test cases must be **"what" tests** (same rule as **NEAT-AI** `CONTRIBUTING.md`):
+All test cases must be **"what" tests** — [principle 3](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#3-tests-describe-behaviour-not-implementation), whose concrete list of what is ruled out in this repository is this one:
 
 - **What tests** run real code paths and assert on **observable outcomes**: return values, errors, compiled structures, numerical results, public invariants.
 - **How tests** tie to **implementation detail** and are discouraged: asserting on private fields, internal call order, source greps, line counts, or "this helper was invoked" unless the contract under test is explicitly that wiring.
