@@ -239,9 +239,12 @@ pub struct UncompensatedTarget {
 pub struct PruneResult {
     /// The canonical, validated creature.
     pub creature: CreatureExport,
-    /// Wire UUID of the neuron the caller asked to remove.
-    pub removed_neuron: String,
-    /// The edges naming that neuron, in either direction, that went with it.
+    /// Wire UUID of the neuron the caller asked to remove, or `None` when the
+    /// request named a **synapse** ([`crate::prune_synapse::prune_synapse`], Issue #591).
+    pub removed_neuron: Option<String>,
+    /// The edges the request itself took: every edge naming the removed neuron
+    /// for [`prune_neuron`], the one requested triple for
+    /// [`crate::prune_synapse::prune_synapse`].
     pub removed_synapses: Vec<SynapseKey>,
     /// Neurons the cleanup cascade removed on top of the requested one.
     pub cascade_neurons: Vec<String>,
@@ -274,6 +277,19 @@ pub enum PruneError {
     UnknownNeuron {
         /// The UUID asked for.
         uuid: String,
+    },
+    /// The creature carries no synapse with that `(from, to, role)` triple.
+    ///
+    /// The role is part of the identity (Issue #577): asking for a role a pair
+    /// does not carry names no edge, and removing "the other one" instead
+    /// would delete structure the caller never asked about.
+    UnknownSynapse {
+        /// Wire UUID of the source asked for.
+        from_uuid: String,
+        /// Wire UUID of the target asked for.
+        to_uuid: String,
+        /// The role asked for.
+        role: SynapseType,
     },
     /// The neuron exists but is not a caller's to delete.
     Protected {
@@ -345,6 +361,14 @@ impl std::fmt::Display for PruneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PruneError::UnknownNeuron { uuid } => write!(f, "No neuron {uuid} to remove"),
+            PruneError::UnknownSynapse {
+                from_uuid,
+                to_uuid,
+                role,
+            } => write!(
+                f,
+                "No synapse {from_uuid} -> {to_uuid} ({role:?}) to remove"
+            ),
             PruneError::Protected { uuid, kind } => {
                 write!(
                     f,
@@ -569,7 +593,7 @@ pub fn prune_neuron(
 
     Ok(PruneResult {
         creature: outcome.creature,
-        removed_neuron: neuron_uuid.to_string(),
+        removed_neuron: Some(neuron_uuid.to_string()),
         removed_synapses,
         cascade_neurons: outcome.removed_neurons,
         cascade_synapses: outcome.removed_synapses,
@@ -588,20 +612,20 @@ pub fn prune_neuron(
 }
 
 /// What one target's compensation came to.
-struct Compensation {
+pub(crate) struct Compensation {
     /// Added to the target's bias.
-    bias_delta: f64,
+    pub(crate) bias_delta: f64,
     /// Added to the proxy's edge into the target; `0.0` when there is none.
-    share: f64,
+    pub(crate) share: f64,
     /// True when the folded value is the neuron's activation on every record.
-    exact: bool,
+    pub(crate) exact: bool,
     /// Variance the compensation could not carry, when it is derivable.
-    residual_variance: Option<f64>,
+    pub(crate) residual_variance: Option<f64>,
 }
 
 /// The compensation one target is owed, or `None` when there is nothing to
 /// derive it from.
-fn compensate(
+pub(crate) fn compensate(
     invariant_value: Option<f64>,
     stats: Option<&PruneStats>,
     weight_sum: f64,
@@ -677,7 +701,7 @@ fn classify_target(creature: &CreatureExport, uuid: &str) -> Result<(), PruneErr
 ///
 /// Input neurons are not listed in `neurons` — the declared width is what says
 /// they exist (Issue #550) — so the name is the only thing to test.
-fn is_observation_uuid(creature: &CreatureExport, uuid: &str) -> bool {
+pub(crate) fn is_observation_uuid(creature: &CreatureExport, uuid: &str) -> bool {
     uuid.strip_prefix("input-")
         .and_then(|index| index.parse::<usize>().ok())
         .is_some_and(|index| index < creature.input)
@@ -710,7 +734,10 @@ fn structural_activation(creature: &CreatureExport, uuid: &str) -> Result<Option
 /// A constant emits its bias whatever it declares, so it reads as `IDENTITY` —
 /// the same reading [`cleanup_creature`] takes, and a constant can never be a
 /// target anyway.
-fn target_squash(creature: &CreatureExport, uuid: &str) -> Result<SquashType, PruneError> {
+pub(crate) fn target_squash(
+    creature: &CreatureExport,
+    uuid: &str,
+) -> Result<SquashType, PruneError> {
     let neuron = creature
         .neurons
         .iter()
@@ -725,7 +752,7 @@ fn target_squash(creature: &CreatureExport, uuid: &str) -> Result<SquashType, Pr
 
 /// Parse one neuron's declared squash, reporting an unknown name the way
 /// cleanup would rather than guessing a default.
-fn squash_of(neuron: &crate::creature::NeuronExport) -> Result<SquashType, PruneError> {
+pub(crate) fn squash_of(neuron: &crate::creature::NeuronExport) -> Result<SquashType, PruneError> {
     if neuron.neuron_type == "constant" {
         return Ok(SquashType::Identity);
     }
@@ -775,7 +802,7 @@ fn outward_keys(
 
 /// Every supplied statistic must be a number a compensation can be derived
 /// from, checked before a single edit is made.
-fn check_stats(uuid: &str, stats: &PruneStats) -> Result<(), PruneError> {
+pub(crate) fn check_stats(uuid: &str, stats: &PruneStats) -> Result<(), PruneError> {
     finite(uuid, "mean_activation", stats.mean_activation)?;
     if let Some(variance) = stats.variance {
         finite(uuid, "variance", variance)?;
@@ -847,7 +874,7 @@ fn finite(uuid: &str, field: &'static str, value: f64) -> Result<(), PruneError>
 /// crate cannot carry out as described, so the whole prune is refused rather
 /// than half-applied: no partially compensated creature is ever returned. Call
 /// without the proxy — or add the missing edge first — to prune anyway.
-fn check_proxy(
+pub(crate) fn check_proxy(
     cut: &CreatureExport,
     removed_uuid: &str,
     proxy: &ProxyStats,
@@ -864,7 +891,7 @@ fn check_proxy(
 }
 
 /// Add `delta` to the existing `from -> to` edge, or refuse.
-fn add_to_edge(
+pub(crate) fn add_to_edge(
     creature: &mut CreatureExport,
     from_uuid: &str,
     to_uuid: &str,

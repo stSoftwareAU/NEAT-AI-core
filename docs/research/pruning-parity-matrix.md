@@ -6,10 +6,10 @@ this matrix: every battle-tested TypeScript behaviour that a shared Rust helper
 must reproduce, mapped to the fixture that captures it and the test that pins
 it.
 
-Nothing here prunes yet. The fixtures are the acceptance oracle the helpers
-(Issues #590 / #591) are graded against —
-`prune(case.before(), case.request) == case.after()` — and until those helpers
-exist the captured pairs are checked against the rules they obey.
+Nothing here prunes. The fixtures are the acceptance oracle the shared helpers
+are graded against — `prune(case.before(), case.request) == case.after()` — and
+both now exist: `prune_neuron` (Issue #590) for the `RemoveNeuron` captures and
+`prune_synapse` (Issue #591) for the `RemoveSynapse` ones.
 
 ## Where the behaviour lives
 
@@ -174,6 +174,25 @@ be run against end to end. `neat-core/tests/prune_neuron.rs` grades it:
 | `MEMETIC_DROPPED_ON_REMOVAL` | structural equality on the neurons and synapses; the record is **pruned**, not dropped (the divergence above) |
 | `CONSTANT_BIAS_FOLD` | its request removes a *constant*, which `prune_neuron` protects, so the fold is graded on the hidden-neuron twin: an `IDENTITY` neuron that sums nothing is worth `0.5` on every record just as that constant is, on the same weight into the same target, and produces the capture's `after` |
 
+## How Issue #591 is graded against the captures
+
+`prune_synapse` (Issue #591) is the helper the `RemoveSynapse` captures grade,
+in `neat-core/tests/prune_synapse.rs`:
+
+| Case | Graded by |
+|---|---|
+| `EDGE_ROLE_IDENTITY` | structural equality with the capture — only the requested `(from, to, role)` triple goes |
+| `EDGE_SOURCE_BECOMES_DEAD` | structural equality with the capture |
+| `EDGE_TARGET_BECOMES_CONSTANT`, `CONSTANT_MOVES_INTO_PREFIX` | activation equality with the capture — the constant-support divergence above |
+| `CASCADE_ORPHAN_FEEDERS` | structural equality, driven from the synapse side: removing `h-x -> output-0` orphans the same five neurons the neuron removal does |
+
+The `IF` rewrites have no capture to grade against, because TypeScript refuses
+the requests that reach them. Their oracle is a **zero-weight twin** built in
+the test: the original creature with the removed edge's weight set to `0` is the
+same function of the inputs as the original without that edge, and it is reached
+without touching the code under test. Both creatures are compiled and activated,
+and the rewrite has to agree on every probe.
+
 ## Not captured here
 
 - **Selection policy.** Which neuron or synapse to try is the caller's, per the
@@ -190,11 +209,15 @@ be run against end to end. `neat-core/tests/prune_neuron.rs` grades it:
   alongside `memetic` on every removal, but a `CreatureExport` carries no
   creature-level `uuid` field, so there is nothing for a fixture to assert —
   the issue's "where represented in core" hedge is doing real work here.
-- **The refusal path.** `SubConnection.ts::#wouldBreakIfNeuron` declines to
-  remove an edge that would leave an `IF` short a role, and
-  `RepairInvalidIfNeurons.ts` skips `indx <= 2`. `PruneRequest` has no way to
-  express a request the helper must reject, so those belong with the synapse
-  rewrites in Issue #591.
+- **The refusal path — deliberately not reproduced.**
+  `SubConnection.ts::#wouldBreakIfNeuron` declines to remove an edge that would
+  leave an `IF` short a role, so a whole class of typed structure is unreachable
+  to the TypeScript mutation operators. Issue #591 **improves on it** rather
+  than porting it: `prune_synapse` rewrites the `IF` exactly instead of refusing
+  the request (see the section above), so there is no refusal for a fixture to
+  capture. `RepairInvalidIfNeurons.ts`'s `indx <= 2` skip is likewise not
+  reproduced — cleanup is gated on the structural leg, which has no such
+  exemption.
 - **Memetic pruning.** TypeScript drops the record wholesale; this crate
   already owns the finer-grained inverse of validation rule 31
   (see README, "Pruning — rule 31's inverse"). The fixture captures the
