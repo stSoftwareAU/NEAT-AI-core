@@ -74,77 +74,103 @@ fn expect_refusal<T>(what: &str, f: impl FnOnce() -> T) {
 }
 
 // ---------------------------------------------------------------------------
+// The safe entry points, and the two refusals each one owes
+// ---------------------------------------------------------------------------
+
+/// One safe entry point under test, with the name each of its two refusal
+/// cases is reported and cited under.
+///
+/// The six kernels differ only in arity and in the scalars they carry, so
+/// `call` adapts each to one shape — `synapses[0..end]` against `acts`, answer
+/// discarded, because a call that reaches this table must not produce one.
+/// Driving both obligations from a single table is what stops a kernel being
+/// added with only half of the unchecked contract covered.
+struct SafeKernel {
+    /// Case name for the out-of-range-`from_index` refusal — the issue's
+    /// reproducer, run by
+    /// [`every_safe_kernel_rejects_an_out_of_range_from_index`].
+    name: &'static str,
+    /// Case name for the `end > synapses.len()` refusal, run by
+    /// [`every_safe_kernel_rejects_a_span_past_the_synapse_slice`].
+    span_name: &'static str,
+    /// Calls the safe entry point over `synapses[0..end]` against `acts`,
+    /// passing `acts` for every record of the multi-record kernels.
+    call: fn(&[SynapseData], &[f32], usize),
+}
+
+/// Every safe entry point that reads `synapses[start..end]` against plain
+/// activation buffers. `weighted_sum_interleaved_8` is not here: its contract
+/// is over the hot SoA arrays and a tile-major buffer, so it keeps the two
+/// bespoke cases below.
+const SAFE_KERNELS: &[SafeKernel] = &[
+    SafeKernel {
+        name: "weighted_sum_simd_rejects_out_of_range_from_index",
+        span_name: "weighted_sum_simd_rejects_a_span_past_the_synapse_slice",
+        call: |synapses, acts, end| {
+            weighted_sum_simd(synapses, acts, 0, end, 0.0);
+        },
+    },
+    SafeKernel {
+        name: "weighted_sum_no_bias_simd_rejects_out_of_range_from_index",
+        span_name: "weighted_sum_no_bias_simd_rejects_a_span_past_the_synapse_slice",
+        call: |synapses, acts, end| {
+            weighted_sum_no_bias_simd(synapses, acts, 0, end);
+        },
+    },
+    SafeKernel {
+        name: "weighted_sum_of_squares_simd_rejects_out_of_range_from_index",
+        span_name: "weighted_sum_of_squares_simd_rejects_a_span_past_the_synapse_slice",
+        call: |synapses, acts, end| {
+            weighted_sum_of_squares_simd(synapses, acts, 0, end);
+        },
+    },
+    SafeKernel {
+        name: "weighted_sum_of_squares_v2_simd_rejects_out_of_range_from_index",
+        span_name: "weighted_sum_of_squares_v2_simd_rejects_a_span_past_the_synapse_slice",
+        call: |synapses, acts, end| {
+            weighted_sum_of_squares_v2_simd(synapses, acts, 0, end, 0.5);
+        },
+    },
+    SafeKernel {
+        name: "weighted_sum_simd_4records_rejects_out_of_range_from_index",
+        span_name: "weighted_sum_simd_4records_rejects_a_span_past_the_synapse_slice",
+        call: |synapses, acts, end| {
+            weighted_sum_simd_4records(synapses, acts, acts, acts, acts, 0, end, 0.0);
+        },
+    },
+    SafeKernel {
+        name: "weighted_sum_simd_8records_rejects_out_of_range_from_index",
+        span_name: "weighted_sum_simd_8records_rejects_a_span_past_the_synapse_slice",
+        call: |synapses, acts, end| {
+            weighted_sum_simd_8records(
+                synapses, acts, acts, acts, acts, acts, acts, acts, acts, 0, end, 0.0,
+            );
+        },
+    },
+];
+
+// ---------------------------------------------------------------------------
 // Obligation 1: every `from_index` in `start..end` indexes the activation buffer
 // ---------------------------------------------------------------------------
 
+/// The issue's reproducer, run against every safe entry point: eight synapses
+/// sourcing neuron 9,999 against a 1-long activation buffer must be refused,
+/// not read unchecked. Against the unfixed code each of these calls reads past
+/// the buffer instead.
 #[test]
-fn weighted_sum_simd_rejects_out_of_range_from_index() {
+fn every_safe_kernel_rejects_an_out_of_range_from_index() {
     let (synapses, activations) = out_of_range_span();
-    expect_refusal("weighted_sum_simd", || {
-        weighted_sum_simd(&synapses, &activations, 0, synapses.len(), 0.0)
-    });
-}
-
-#[test]
-fn weighted_sum_no_bias_simd_rejects_out_of_range_from_index() {
-    let (synapses, activations) = out_of_range_span();
-    expect_refusal("weighted_sum_no_bias_simd", || {
-        weighted_sum_no_bias_simd(&synapses, &activations, 0, synapses.len())
-    });
-}
-
-#[test]
-fn weighted_sum_of_squares_simd_rejects_out_of_range_from_index() {
-    let (synapses, activations) = out_of_range_span();
-    expect_refusal("weighted_sum_of_squares_simd", || {
-        weighted_sum_of_squares_simd(&synapses, &activations, 0, synapses.len())
-    });
-}
-
-#[test]
-fn weighted_sum_of_squares_v2_simd_rejects_out_of_range_from_index() {
-    let (synapses, activations) = out_of_range_span();
-    expect_refusal("weighted_sum_of_squares_v2_simd", || {
-        weighted_sum_of_squares_v2_simd(&synapses, &activations, 0, synapses.len(), 0.5)
-    });
-}
-
-#[test]
-fn weighted_sum_simd_4records_rejects_out_of_range_from_index() {
-    let (synapses, activations) = out_of_range_span();
-    expect_refusal("weighted_sum_simd_4records", || {
-        weighted_sum_simd_4records(
-            &synapses,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            0,
-            synapses.len(),
-            0.0,
-        )
-    });
-}
-
-#[test]
-fn weighted_sum_simd_8records_rejects_out_of_range_from_index() {
-    let (synapses, activations) = out_of_range_span();
-    expect_refusal("weighted_sum_simd_8records", || {
-        weighted_sum_simd_8records(
-            &synapses,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            0,
-            synapses.len(),
-            0.0,
-        )
-    });
+    assert!(!span_in_bounds(
+        &synapses,
+        0,
+        synapses.len(),
+        activations.len()
+    ));
+    for kernel in SAFE_KERNELS {
+        expect_refusal(kernel.name, || {
+            (kernel.call)(&synapses, &activations, synapses.len())
+        });
+    }
 }
 
 #[test]
@@ -176,38 +202,19 @@ fn weighted_sum_simd_8records_rejects_one_short_buffer() {
 // Obligation 2: `end <= synapses.len()`
 // ---------------------------------------------------------------------------
 
-/// The second half of the unchecked contract. The scalar reference would
-/// silently truncate this span and answer from the synapses that do exist, so
-/// the safe entry point refuses it instead of returning a plausible number for
-/// a span the caller never had.
+/// The second half of the unchecked contract, run against every safe entry
+/// point. The scalar reference would silently truncate this span and answer
+/// from the synapses that do exist, so each kernel refuses it instead of
+/// returning a plausible number for a span the caller never had.
 #[test]
-fn weighted_sum_simd_rejects_a_span_past_the_synapse_slice() {
+fn every_safe_kernel_rejects_a_span_past_the_synapse_slice() {
     let (synapses, activations) = valid_span();
     assert!(!span_in_bounds(&synapses, 0, 32, activations.len()));
-    expect_refusal("weighted_sum_simd (end past the slice)", || {
-        weighted_sum_simd(&synapses, &activations, 0, 32, 0.0)
-    });
-}
-
-#[test]
-fn weighted_sum_simd_8records_rejects_a_span_past_the_synapse_slice() {
-    let (synapses, activations) = valid_span();
-    expect_refusal("weighted_sum_simd_8records (end past the slice)", || {
-        weighted_sum_simd_8records(
-            &synapses,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            &activations,
-            0,
-            32,
-            0.0,
-        )
-    });
+    for kernel in SAFE_KERNELS {
+        expect_refusal(kernel.span_name, || {
+            (kernel.call)(&synapses, &activations, 32)
+        });
+    }
 }
 
 #[test]

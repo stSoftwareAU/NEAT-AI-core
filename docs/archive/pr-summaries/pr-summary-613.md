@@ -70,11 +70,16 @@ thread caused non-unwinding panic. aborting.
   … (signal: 6, SIGABRT: process abort signal)
 ```
 
-After the fix all seventeen tests pass:
+After the fix all eleven tests pass. The refusal cases are table-driven: each
+entry of `SAFE_KERNELS` names one safe entry point and carries the two case
+names it owes (`name` for the out-of-range `from_index` half, `span_name` for
+the `end > synapses.len()` half), and the two `every_safe_kernel_*` tests run
+every case one kernel at a time, so a kernel cannot be added with only half its
+contract covered:
 
 ```
-running 17 tests
-test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+running 11 tests
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 The abort/segfault signatures are this host's (aarch64, NEON detected), where
@@ -96,10 +101,12 @@ both trees. Each aborts the test process on the unfixed sources:
 | `weighted_sum_simd_8records`, same span | violated at `neat-core/src/simd_native.rs:460` — SIGABRT |
 | `weighted_sum_simd`, `end = 64` against a 2-long synapse slice | violated at `neat-core/src/simd_native.rs:607` — SIGABRT |
 
-The same three cases are `weighted_sum_simd_rejects_out_of_range_from_index`,
+The same three cases are the `SAFE_KERNELS` entries named
+`weighted_sum_simd_rejects_out_of_range_from_index`,
 `weighted_sum_simd_8records_rejects_out_of_range_from_index` and
 `weighted_sum_simd_rejects_a_span_past_the_synapse_slice` in the committed
-suite, where they pass.
+suite — run by `every_safe_kernel_rejects_an_out_of_range_from_index` and
+`every_safe_kernel_rejects_a_span_past_the_synapse_slice`, where they pass.
 
 ### Original trigger closed, with no trivial bypass
 
@@ -216,11 +223,16 @@ prototype and measured on the same host before being discarded:
   the `origin/Develop` code** (SIGABRT on `weighted_sum_simd`,
   `weighted_sum_simd_4records` and `weighted_sum_simd_8records`; SIGSEGV on
   `weighted_sum_interleaved_8`; SIGABRT on the `end > synapses.len()` case) and
-  **passing after the fix** (17 passed, 0 failed).
+  **passing after the fix** (11 passed, 0 failed).
 - **regression test** — `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_rejects_out_of_range_from_index`
   (single-record) and
   `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_8records_rejects_out_of_range_from_index`
-  (multi-record).
+  (multi-record) — the two `SAFE_KERNELS` cases that reproduce the issue's
+  `from_index: 9_999` span, declared by name in the added lines of
+  `neat-core/tests/simd_public_bounds.rs` and run by the `#[test]`
+  `every_safe_kernel_rejects_an_out_of_range_from_index`. Both fail against the
+  unfixed code (SIGABRT on an out-of-bounds unchecked read) and pass after the
+  fix.
 
 ## Acceptance Criteria
 
@@ -242,7 +254,8 @@ prototype and measured on the same host before being discarded:
 - **met** — a regression test in `neat-core/tests/` covers the out-of-range case
   for at least one single-record and one multi-record kernel — evidence:
   `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_rejects_out_of_range_from_index`
-  and `…::weighted_sum_simd_8records_rejects_out_of_range_from_index`
+  and `…::weighted_sum_simd_8records_rejects_out_of_range_from_index`, the two
+  `SAFE_KERNELS` cases run by `every_safe_kernel_rejects_an_out_of_range_from_index`
   — reviewer: met — reason: the standards reviewer additionally **mutated out**
   the `span_in_bounds` guard in `weighted_sum_simd` and the
   `interleaved_span_in_bounds` guard in `weighted_sum_interleaved`, one at a
@@ -400,7 +413,7 @@ the documented equivalents — `AGENTS.md`, `SECURITY.md`, `README.md`,
   `neat-core/tests/simd_public_bounds.rs:47-50` — reason: **fixed** in this
   branch — the silent hook is installed once through a `std::sync::Once`.
 - **clean** — the reviewer verified, and named the evidence for: fail-loud in
-  every new path with no swallowed error or truncating fallback; the 17 tests
+  every new path with no swallowed error or truncating fallback; the 11 tests
   call real kernels, run in 0.00s with no sleeps or timing thresholds and no
   source greps, and survive the mutation check above; Australian English in
   every added line; no hidden paths staged; `simd::bounds` the single home of
@@ -414,34 +427,48 @@ the documented equivalents — `AGENTS.md`, `SECURITY.md`, `README.md`,
 
 ## Test Plan
 
-New file `neat-core/tests/simd_public_bounds.rs` — 17 tests, all calling the
-real public kernels and asserting on the outcome:
+New file `neat-core/tests/simd_public_bounds.rs` — 11 tests, all calling the
+real public kernels and asserting on the outcome. The six single- and
+multi-record entry points are driven from one `SAFE_KERNELS` table: each entry
+declares the safe kernel's call shape and the two case names it owes, so both
+obligations are asserted for every kernel rather than for whichever ones were
+remembered. `weighted_sum_interleaved_8` keeps its own pair of tests — its
+contract is over the hot SoA arrays and a tile-major buffer, so it does not fit
+the table's shape.
 
 *Obligation 1 — every `from_index` indexes the activation buffer*
 
 - `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_rejects_out_of_range_from_index`
-  — the issue's reproducer. It **fails against the unfixed code and passes after
-  the fix**: on `origin/Develop` the same assertion body aborts the process on an
-  out-of-bounds unchecked read (SIGABRT), and on this branch it passes.
+  — the issue's reproducer, the first `SAFE_KERNELS` case, run by the `#[test]`
+  `every_safe_kernel_rejects_an_out_of_range_from_index`. It **fails against the
+  unfixed code and passes after the fix**: on `origin/Develop` the same
+  assertion body aborts the process on an out-of-bounds unchecked read
+  (SIGABRT), and on this branch it passes.
+- `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_8records_rejects_out_of_range_from_index`
+  — the multi-record case the acceptance criteria require, likewise **failing
+  against the unfixed code and passing after the fix** (SIGABRT on
+  `origin/Develop`).
 - `weighted_sum_no_bias_simd_…`, `weighted_sum_of_squares_simd_…`,
-  `weighted_sum_of_squares_v2_simd_…` — the other three single-record kernels.
-- `weighted_sum_simd_4records_…`, `weighted_sum_simd_8records_…` — the
-  multi-record kernels the acceptance criteria require.
+  `weighted_sum_of_squares_v2_simd_…`, `weighted_sum_simd_4records_…` — the
+  remaining table cases, one per safe entry point.
 - `weighted_sum_interleaved_8_rejects_out_of_range_from_index` — the
   record-interleaved tile, whose contract is `inter.len() == num_neurons * R`.
-- `neat-core/tests/simd_public_bounds.rs::weighted_sum_simd_8records_rejects_out_of_range_from_index`
-  likewise **fails against the unfixed code and passes after the fix** (SIGABRT
-  on `origin/Develop`).
 - `weighted_sum_simd_8records_rejects_one_short_buffer` — seven long buffers and
   one short one must not slip through the multi-record predicate.
 
 *Obligation 2 — `end <= synapses.len()`*
 
-- `weighted_sum_simd_rejects_a_span_past_the_synapse_slice`,
-  `weighted_sum_simd_8records_rejects_a_span_past_the_synapse_slice`,
-  `weighted_sum_interleaved_8_rejects_a_span_past_the_hot_arrays` — the half
-  that used to be a silent truncation (and an out-of-bounds synapse read on the
-  SIMD path); now refused loud on every kernel.
+- `every_safe_kernel_rejects_a_span_past_the_synapse_slice` runs the
+  `span_name` case of every `SAFE_KERNELS` entry —
+  `weighted_sum_simd_rejects_a_span_past_the_synapse_slice`,
+  `weighted_sum_no_bias_simd_…`, `weighted_sum_of_squares_simd_…`,
+  `weighted_sum_of_squares_v2_simd_…`, `weighted_sum_simd_4records_…` and
+  `weighted_sum_simd_8records_…` — so all six safe entry points are covered
+  rather than the two that had a hand-written test.
+- `weighted_sum_interleaved_8_rejects_a_span_past_the_hot_arrays` — the same
+  half for the tile kernel. This is the half that used to be a silent
+  truncation (and an out-of-bounds synapse read on the SIMD path); it is now
+  refused loud on every kernel.
 
 *Happy path — the pre-pass changes no answer*
 
@@ -469,6 +496,14 @@ real public kernels and asserting on the outcome:
 - No test was added for the `CompiledNetwork` field-mutation path found by the
   spec review: the repro is real but the fix is an API break, so it is filed as
   Issue #625 together with the acceptance criterion for its regression test.
+- The eight hand-written refusal tests became the `SAFE_KERNELS` table and its
+  two `every_safe_kernel_*` drivers, which also closed a coverage gap: the
+  `end > synapses.len()` half had a case for `weighted_sum_simd` and
+  `weighted_sum_simd_8records` only, and now has one for all six safe entry
+  points. The table was mutation-checked in the same way as the originals —
+  the `span_in_bounds` guard was taken out of `weighted_sum_of_squares_v2_simd`
+  (a kernel that previously had no `end`-half case) and the suite went red
+  (SIGABRT), then the guard was restored.
 
 Existing suites are unchanged and still pass, which is the parity evidence that
 the safe entry points behave identically for valid input: `simd_weighted_sums.rs`,
