@@ -186,9 +186,13 @@ fn reduce4(acc: v128) -> f32 {
 /// [`reduce4`], the seed-taking tail in [`scalar`]) — Issue #448.
 ///
 /// Bounds-validating entry point (Issue #613): a span that does not index
-/// `activations` throughout falls through to the fully-checked scalar
-/// reference, so safe caller code can never reach an out-of-bounds read.
+/// `activations` throughout is **refused with a panic** rather than read
+/// unchecked, so safe caller code can never reach an out-of-bounds read.
 /// Validated callers should use [`weighted_sum_simd_unchecked`].
+///
+/// # Panics
+/// If `end > synapses.len()`, or any `from_index` in `start..end` is not a valid
+/// index into `activations`.
 ///
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -200,12 +204,12 @@ pub fn weighted_sum_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe { weighted_sum_simd_unchecked(synapses, activations, start, end, bias) };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_simd");
     }
-    scalar::weighted_sum(synapses, activations, start, end, bias)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_simd_unchecked(synapses, activations, start, end, bias) }
 }
 
 /// [`weighted_sum_simd`] without the [`bounds`] pre-pass — the forward-pass
@@ -279,8 +283,9 @@ pub unsafe fn weighted_sum_simd_unchecked(
 /// Computes sum((activation[from] * weight)^2) using SIMD.
 /// Used by the Hypotenuse squash function: sqrt(sum_sq) + bias.
 ///
-/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`].
-/// Validated callers should use [`weighted_sum_of_squares_simd_unchecked`].
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked, and it
+/// panics on the same conditions. Validated callers should use [`weighted_sum_of_squares_simd_unchecked`].
 ///
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -291,14 +296,12 @@ pub fn weighted_sum_of_squares_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe {
-            weighted_sum_of_squares_simd_unchecked(synapses, activations, start, end)
-        };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_of_squares_simd");
     }
-    scalar::weighted_sum_of_squares(synapses, activations, start, end)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_of_squares_simd_unchecked(synapses, activations, start, end) }
 }
 
 /// [`weighted_sum_of_squares_simd`] without the [`bounds`] pre-pass.
@@ -345,8 +348,9 @@ pub unsafe fn weighted_sum_of_squares_simd_unchecked(
 /// Computes the plain weighted sum (without bias) using SIMD, intended for
 /// the Mean squash: sum / n + bias. Omits the bias to keep the division clean.
 ///
-/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`].
-/// Validated callers should use [`weighted_sum_no_bias_simd_unchecked`].
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked, and it
+/// panics on the same conditions. Validated callers should use [`weighted_sum_no_bias_simd_unchecked`].
 ///
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -357,12 +361,12 @@ pub fn weighted_sum_no_bias_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe { weighted_sum_no_bias_simd_unchecked(synapses, activations, start, end) };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_no_bias_simd");
     }
-    scalar::weighted_sum_no_bias(synapses, activations, start, end)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_no_bias_simd_unchecked(synapses, activations, start, end) }
 }
 
 /// [`weighted_sum_no_bias_simd`] without the [`bounds`] pre-pass.
@@ -409,8 +413,9 @@ pub unsafe fn weighted_sum_no_bias_simd_unchecked(
 /// Computes sum((bias + activation[from] * weight)^2) using SIMD.
 /// Used by the HypotenuseV2 squash function: sqrt(sum_sq).
 ///
-/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`].
-/// Validated callers should use [`weighted_sum_of_squares_v2_simd_unchecked`].
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked, and it
+/// panics on the same conditions. Validated callers should use [`weighted_sum_of_squares_v2_simd_unchecked`].
 ///
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
@@ -422,14 +427,12 @@ pub fn weighted_sum_of_squares_v2_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe {
-            weighted_sum_of_squares_v2_simd_unchecked(synapses, activations, start, end, bias)
-        };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_of_squares_v2_simd");
     }
-    scalar::weighted_sum_of_squares_v2(synapses, activations, start, end, bias)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_of_squares_v2_simd_unchecked(synapses, activations, start, end, bias) }
 }
 
 /// [`weighted_sum_of_squares_v2_simd`] without the [`bounds`] pre-pass.
@@ -488,10 +491,54 @@ pub unsafe fn weighted_sum_of_squares_v2_simd_unchecked(
 /// Processes the same neuron for 4 different records in parallel using SIMD.
 /// Each record has its own activation buffer, but weights are shared.
 ///
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_simd_4records_unchecked`].
+///
+/// # Panics
+/// If `end > synapses.len()`, or any `from_index` in `start..end` does not index
+/// every one of the four activation buffers.
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
+#[allow(clippy::too_many_arguments)]
 pub fn weighted_sum_simd_4records(
+    synapses: &[SynapseData],
+    act0: &[f32],
+    act1: &[f32],
+    act2: &[f32],
+    act3: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> (f32, f32, f32, f32) {
+    let lens = [act0.len(), act1.len(), act2.len(), act3.len()];
+    if !bounds::span_in_bounds_multi(synapses, start, end, &lens) {
+        bounds::reject_span("weighted_sum_simd_4records");
+    }
+    // SAFETY: `span_in_bounds_multi` has just established the kernel's index
+    // precondition against the shortest activation buffer.
+    unsafe {
+        weighted_sum_simd_4records_unchecked(synapses, act0, act1, act2, act3, start, end, bias)
+    }
+}
+
+/// [`weighted_sum_simd_4records`] without the [`bounds`] pre-pass — the hot-path
+/// form.
+///
+/// # Safety
+/// `end` must be `<= synapses.len()` and every `synapse.from_index` in
+/// `start..end` must be a valid index into each of the four activation buffers.
+/// `CompiledNetwork::new` enforces this at load time. This `wasm` body happens
+/// to index with bounds-checked operations, so a violation panics rather than
+/// reading out of bounds — a stronger guarantee than the contract promises, and
+/// not one a caller may rely on: the native kernel of the same name reads
+/// unchecked.
+#[cfg(target_family = "wasm")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn weighted_sum_simd_4records_unchecked(
     synapses: &[SynapseData],
     act0: &[f32],
     act1: &[f32],
@@ -540,11 +587,64 @@ pub fn weighted_sum_simd_4records(
 /// This extends the 4-record approach (Issue #1202) by stacking two v128 operations
 /// for better cache utilisation and amortised overhead.
 ///
+/// Bounds-validating entry point (Issue #613) — see
+/// [`weighted_sum_simd_4records`]. Validated callers should use
+/// [`weighted_sum_simd_8records_unchecked`].
+///
+/// # Panics
+/// If `end > synapses.len()`, or any `from_index` in `start..end` does not index
+/// every one of the eight activation buffers.
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn weighted_sum_simd_8records(
+    synapses: &[SynapseData],
+    act0: &[f32],
+    act1: &[f32],
+    act2: &[f32],
+    act3: &[f32],
+    act4: &[f32],
+    act5: &[f32],
+    act6: &[f32],
+    act7: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
+    let lens = [
+        act0.len(),
+        act1.len(),
+        act2.len(),
+        act3.len(),
+        act4.len(),
+        act5.len(),
+        act6.len(),
+        act7.len(),
+    ];
+    if !bounds::span_in_bounds_multi(synapses, start, end, &lens) {
+        bounds::reject_span("weighted_sum_simd_8records");
+    }
+    // SAFETY: `span_in_bounds_multi` has just established the kernel's index
+    // precondition against the shortest activation buffer.
+    unsafe {
+        weighted_sum_simd_8records_unchecked(
+            synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
+        )
+    }
+}
+
+/// [`weighted_sum_simd_8records`] without the [`bounds`] pre-pass — the hot-path
+/// form.
+///
+/// # Safety
+/// Same contract as [`weighted_sum_simd_4records_unchecked`], over the eight
+/// activation buffers.
+#[cfg(target_family = "wasm")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn weighted_sum_simd_8records_unchecked(
     synapses: &[SynapseData],
     act0: &[f32],
     act1: &[f32],
@@ -642,10 +742,48 @@ fn store_quad(out: &mut [f32], acc: v128) {
 /// is re-read once per tile rather than once per eight records. Numerically
 /// identical to [`weighted_sum_simd_8records`]: same per-synapse FMA order,
 /// bias seeded into every lane, each lane summed independently.
+/// Bounds-validating entry point (Issue #613): a tile that does not address
+/// `inter` throughout is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_interleaved_unchecked`].
+///
+/// # Panics
+/// If `end` exceeds either hot array, or any `hot_from` entry in `start..end`
+/// does not satisfy `from * R + R <= inter.len()`.
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
 pub fn weighted_sum_interleaved<const R: usize>(
+    hot_weights: &[f32],
+    hot_from: &[u16],
+    inter: &[f32],
+    start: usize,
+    end: usize,
+    bias: f32,
+) -> [f32; R] {
+    const { assert_interleaved_tile::<R>() };
+    if !bounds::interleaved_span_in_bounds(hot_weights, hot_from, inter.len(), R, start, end) {
+        bounds::reject_interleaved_span("weighted_sum_interleaved");
+    }
+    // SAFETY: `interleaved_span_in_bounds` has just established that every
+    // `hot_from` entry in `start..end` addresses a whole `R`-wide tile inside
+    // `inter`, and that the span indexes both hot arrays.
+    unsafe {
+        weighted_sum_interleaved_unchecked::<R>(hot_weights, hot_from, inter, start, end, bias)
+    }
+}
+
+/// [`weighted_sum_interleaved`] without the [`bounds`] pre-pass — the batched
+/// scoring hot-path form.
+///
+/// # Safety
+/// Same contract as the native `weighted_sum_interleaved_unchecked`: `end` must
+/// be `<= hot_weights.len()` and `<= hot_from.len()`, and every `hot_from` entry
+/// in `start..end` must satisfy `from * R + R <= inter.len()`.
+/// `CompiledNetwork::new` enforces the index range at load time.
+#[cfg(target_family = "wasm")]
+#[target_feature(enable = "simd128", enable = "relaxed-simd")]
+#[inline]
+pub unsafe fn weighted_sum_interleaved_unchecked<const R: usize>(
     hot_weights: &[f32],
     hot_from: &[u16],
     inter: &[f32],
@@ -688,6 +826,9 @@ pub fn weighted_sum_interleaved<const R: usize>(
 
 /// The 8-lane tile of [`weighted_sum_interleaved`], kept as the name the
 /// batched **scoring** path (`BatchScratch::inter`) and its tests use.
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_interleaved`].
 #[cfg(target_family = "wasm")]
 #[target_feature(enable = "simd128", enable = "relaxed-simd")]
 #[inline]
@@ -700,91 +841,6 @@ pub fn weighted_sum_interleaved_8(
     bias: f32,
 ) -> [f32; 8] {
     weighted_sum_interleaved::<8>(hot_weights, hot_from, inter, start, end, bias)
-}
-
-// ============================================================================
-// wasm multi-record `*_unchecked` surface (Issue #613)
-//
-// The wasm multi-record kernels above already index `synapses`, the per-record
-// activation buffers and `inter` with **checked** indexing, so they are sound
-// for any caller. The `*_unchecked` names exist so the crate's hot path — and
-// any downstream consumer — can use one spelling on both targets; each simply
-// forwards to the checked kernel, and its `# Safety` contract is the native
-// one, which the checked body discharges by panicking rather than reading out
-// of bounds.
-// ============================================================================
-
-/// 4-record weighted sum, hot-path spelling — see
-/// [`weighted_sum_simd_4records`].
-///
-/// # Safety
-/// Every `synapse.from_index` in `start..end` should be a valid index into each
-/// activation buffer. On `wasm` the kernel is bounds-checked regardless, so a
-/// violation panics instead of reading out of bounds.
-#[cfg(target_family = "wasm")]
-#[target_feature(enable = "simd128", enable = "relaxed-simd")]
-#[inline]
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn weighted_sum_simd_4records_unchecked(
-    synapses: &[SynapseData],
-    act0: &[f32],
-    act1: &[f32],
-    act2: &[f32],
-    act3: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> (f32, f32, f32, f32) {
-    weighted_sum_simd_4records(synapses, act0, act1, act2, act3, start, end, bias)
-}
-
-/// 8-record weighted sum, hot-path spelling — see
-/// [`weighted_sum_simd_8records`].
-///
-/// # Safety
-/// Same contract as [`weighted_sum_simd_4records_unchecked`].
-#[cfg(target_family = "wasm")]
-#[target_feature(enable = "simd128", enable = "relaxed-simd")]
-#[inline]
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn weighted_sum_simd_8records_unchecked(
-    synapses: &[SynapseData],
-    act0: &[f32],
-    act1: &[f32],
-    act2: &[f32],
-    act3: &[f32],
-    act4: &[f32],
-    act5: &[f32],
-    act6: &[f32],
-    act7: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> (f32, f32, f32, f32, f32, f32, f32, f32) {
-    weighted_sum_simd_8records(
-        synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
-    )
-}
-
-/// Record-interleaved `R`-lane weighted sum, hot-path spelling — see
-/// [`weighted_sum_interleaved`].
-///
-/// # Safety
-/// Every `hot_from` entry in `start..end` should satisfy
-/// `from * R + R <= inter.len()`. On `wasm` the kernel is bounds-checked
-/// regardless, so a violation panics instead of reading out of bounds.
-#[cfg(target_family = "wasm")]
-#[target_feature(enable = "simd128", enable = "relaxed-simd")]
-#[inline]
-pub unsafe fn weighted_sum_interleaved_unchecked<const R: usize>(
-    hot_weights: &[f32],
-    hot_from: &[u16],
-    inter: &[f32],
-    start: usize,
-    end: usize,
-    bias: f32,
-) -> [f32; R] {
-    weighted_sum_interleaved::<R>(hot_weights, hot_from, inter, start, end, bias)
 }
 
 /// The 8-lane tile of [`weighted_sum_interleaved_unchecked`].
@@ -802,7 +858,11 @@ pub unsafe fn weighted_sum_interleaved_8_unchecked(
     end: usize,
     bias: f32,
 ) -> [f32; 8] {
-    weighted_sum_interleaved::<8>(hot_weights, hot_from, inter, start, end, bias)
+    // SAFETY: forwarded verbatim to the generic kernel; the caller's obligation
+    // is the same contract at `R == 8`.
+    unsafe {
+        weighted_sum_interleaved_unchecked::<8>(hot_weights, hot_from, inter, start, end, bias)
+    }
 }
 
 // Native (non-wasm32) multi-record helpers now live in `simd_native.rs` and use

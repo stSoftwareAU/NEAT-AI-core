@@ -54,16 +54,20 @@ the public kernels are split in two:
 
 - The **safe** kernels (`weighted_sum_simd`, `weighted_sum_simd_8records`,
   `weighted_sum_interleaved`, and the rest of the family) validate the span
-  through `neat_core::simd::bounds` before dispatching, and fall through to the
-  fully-checked scalar reference when it does not hold. No combination of safe
-  arguments reaches an unchecked read.
+  through `neat_core::simd::bounds` before dispatching and **panic** when it
+  does not hold — both halves of the contract, an out-of-range `from_index` and
+  an `end` past the synapse slice, are refused the same way rather than answered
+  from a truncated span. No combination of safe arguments reaches an unchecked
+  read, on either the native or the `wasm` target.
 - The **`unsafe`** `*_unchecked` kernels carry the index precondition as a
   `# Safety` contract for callers — `CompiledNetwork` among them — that have
   already discharged it, so the forward-pass hot path is unchanged.
 
 `neat-core/tests/simd_public_bounds.rs` pins the safe half: the out-of-range
 reproducer from Issue #613 fails loud on every kernel instead of reading past
-the activation buffer.
+the activation buffer, an over-long `end` is refused rather than truncated, and
+each safe entry point is asserted bit-identical to its `*_unchecked` twin on
+spans that do satisfy the precondition.
 
 ## Dependency bump quarantine
 

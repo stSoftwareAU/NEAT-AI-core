@@ -18,7 +18,7 @@ use std::hint::black_box;
 use neat_core::loss::mse_sum_batch_packed;
 use neat_core::network::SynapseData;
 use neat_core::simd::{
-    weighted_sum_no_bias_simd_unchecked, weighted_sum_of_squares_simd_unchecked,
+    weighted_sum_no_bias_simd_unchecked, weighted_sum_of_squares_simd_unchecked, weighted_sum_simd,
     weighted_sum_simd_4records_unchecked, weighted_sum_simd_8records_unchecked,
     weighted_sum_simd_unchecked,
 };
@@ -415,9 +415,9 @@ fn bench_topology_ops(c: &mut Criterion) {
 ///
 /// Issue #613 - these measure the `*_unchecked` kernels, which are what the
 /// forward pass runs once `CompiledNetwork::new` has discharged the index
-/// precondition. The safe entry points of the same name add an
-/// `O(end - start)` bounds pre-pass for callers that hold no loaded network,
-/// and are exercised by `neat-core/tests/simd_public_bounds.rs` instead.
+/// precondition. `single_checked` is the safe entry point of the same name, so
+/// the `O(end - start)` bounds pre-pass a caller holding no loaded network pays
+/// is measurable side by side with the kernel it guards.
 fn bench_activation_primitives(c: &mut Criterion) {
     // weighted_sum_simd family over a representative synapse block.
     let mut sum_group = c.benchmark_group("weighted_sum_simd");
@@ -459,6 +459,20 @@ fn bench_activation_primitives(c: &mut Criterion) {
                     0.25,
                 )
             })
+        });
+    });
+    // Issue #613 - the safe entry point of the same name, so the cost of the
+    // bounds pre-pass a caller holding no loaded network pays is reproducible
+    // from the committed tree rather than only from the PR summary.
+    sum_group.bench_function("single_checked", |b| {
+        b.iter(|| {
+            black_box(weighted_sum_simd(
+                black_box(&synapses),
+                black_box(&activations),
+                0,
+                end,
+                0.25,
+            ))
         });
     });
     sum_group.bench_function("no_bias", |b| {

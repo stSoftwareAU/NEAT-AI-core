@@ -299,18 +299,25 @@ network**. Nothing establishes it for a downstream crate calling
   and batched-scoring paths call these, discharging the contract from the
   load-time validation, which is why the hot path pays nothing.
 
+A safe kernel handed a span it may not read **fails loud** — it panics through
+`bounds::reject_span` / `bounds::reject_interleaved_span` rather than answering
+from a truncated span. Both halves of the contract are refused the same way, on
+both targets: an out-of-range `from_index`, and an `end` past the synapse slice.
+
 `simd::bounds` is the **one** home of the predicates. Never re-inline a span
 check into a kernel, never bypass one by making a safe kernel reach an
 unchecked read, and never widen a hot-path caller to the safe form "to be
 tidy" — the pre-pass measured **+33% to +64%** on `forward_pass` when it was
-prototyped on the hot path (Issue #613, recorded in
-`docs/archive/pr-summaries/pr-summary-613.md`).
+prototyped on the hot path (Issue #613). The isolated cost is reproducible from
+the committed tree: `cargo bench -p neat-core --bench hot_paths -- weighted_sum_simd`
+reports `single` (the `*_unchecked` hot-path form) beside `single_checked` (the
+safe entry point).
 
 ```mermaid
 flowchart LR
     S["safe caller (no loaded network)"] --> W["weighted_sum_* (safe)"]
     W --> P{"simd::bounds predicate holds?"}
-    P -- no --> R["checked scalar reference — panics on the bad index"]
+    P -- no --> R["reject_span — panics, naming the invariant"]
     P -- yes --> U["weighted_sum_*_unchecked"]
     N["CompiledNetwork (invariant already held)"] --> U
     U --> G2["get_unchecked(from_index) — sound"]
@@ -330,10 +337,18 @@ function this changes how intrinsics must be wrapped:
   `vst1q_f32`, `_mm_storeu_ps` / `_mm256_storeu_ps`); and intrinsics needing a
   feature the enclosing fn does **not** enable (e.g. `_mm256_fmadd_ps` needs
   `fma` inside an `avx2`-only fn).
-- Every SIMD `unsafe` block must carry a `// SAFETY:` note that **names the
-  `is_*_feature_detected!` guard** (`is_x86_feature_detected!` /
-  `is_aarch64_feature_detected!`) proving the callee's `#[target_feature]`
-  precondition.
+- Every SIMD `unsafe` block must carry a `// SAFETY:` note naming **the
+  obligation that block actually discharges**. There are two, and a note that
+  names the wrong one is as bad as no note:
+  - **Feature availability** — a block calling a `#[target_feature]` fn names
+    the `is_*_feature_detected!` guard (`is_x86_feature_detected!` /
+    `is_aarch64_feature_detected!`) proving the callee's precondition.
+  - **Index validity** — a block calling a `*_unchecked` kernel or a
+    `scalar::tail_*` helper names the load-time `CompiledNetwork::new`
+    validation (or the `simd::bounds` predicate that has just run), since those
+    kernels' contracts are about indices, not features (Issue #613).
+
+  A block that crosses both obligations names both.
 
 ### Buffer reuse is sound only one-network-per-thread
 

@@ -15,6 +15,35 @@
 
 use crate::network::SynapseData;
 
+/// Fail loud when a safe kernel is handed a synapse span it may not read.
+///
+/// Reached only from the safe entry points, and only once a predicate below has
+/// refused the span, so no valid caller can hit it. Panicking rather than
+/// quietly answering from a truncated or partial span keeps a caller bug
+/// visible instead of folding it into a plausible-looking number.
+#[cold]
+#[inline(never)]
+pub fn reject_span(kernel: &str) -> ! {
+    panic!(
+        "{kernel}: out-of-bounds synapse span (Issue #613) — `end` must be <= the synapse \
+         slice length, and every `from_index` in `start..end` must index the activation \
+         buffer. `CompiledNetwork::new` upholds both for a loaded network."
+    )
+}
+
+/// [`reject_span`] for the record-interleaved tile, whose contract is stated
+/// over `inter` rather than a per-record activation buffer.
+#[cold]
+#[inline(never)]
+pub fn reject_interleaved_span(kernel: &str) -> ! {
+    panic!(
+        "{kernel}: out-of-bounds interleaved tile (Issue #613) — `end` must be <= both hot \
+         synapse arrays, and every `hot_from` entry in `start..end` must satisfy \
+         `from * R + R <= inter.len()`. `CompiledNetwork::new` upholds both for a loaded \
+         network."
+    )
+}
+
 /// Whether `synapses[start..end]` may be read with unchecked indexing against
 /// an activation buffer of `activation_len` entries.
 ///
@@ -58,8 +87,10 @@ pub fn span_in_bounds_multi(
 /// tile width of `lanes`.
 ///
 /// Each synapse reads `inter[from * lanes .. from * lanes + lanes]`, so the
-/// product is computed with checked arithmetic: a `from` large enough to
-/// overflow `usize` must fail the predicate rather than wrap into range.
+/// product is computed with checked arithmetic. `lanes` is a caller-supplied
+/// `usize` on this public predicate — the crate only ever passes a tile width
+/// `R <= MAX_INTERLEAVED_LANES`, but a caller passing a large one must fail the
+/// predicate rather than wrap the product back into range.
 #[inline]
 #[must_use]
 pub fn interleaved_span_in_bounds(

@@ -725,13 +725,16 @@ mod aarch64 {
 
 /// 8-record weighted sum: AVX2+FMA on x86_64, NEON on aarch64, else scalar.
 ///
-/// Bounds-validating entry point (Issue #613): a span whose `from_index`
-/// values do not all index every activation buffer takes the fully-checked
-/// scalar reference instead of the unchecked kernel, so safe caller code can
-/// never reach an out-of-bounds read. Validated callers — anything holding a
-/// `CompiledNetwork` — should call
+/// Bounds-validating entry point (Issue #613): a span whose `from_index` values
+/// do not all index every activation buffer is **refused with a panic** rather
+/// than read unchecked, so safe caller code can never reach an out-of-bounds
+/// read. Validated callers — anything holding a `CompiledNetwork` — should call
 /// [`weighted_sum_simd_8records_unchecked`] and skip the `O(end - start)`
 /// predicate.
+///
+/// # Panics
+/// If `end > synapses.len()`, or any `from_index` in `start..end` does not index
+/// every one of the eight activation buffers.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn weighted_sum_simd_8records(
@@ -759,9 +762,7 @@ pub fn weighted_sum_simd_8records(
         act7.len(),
     ];
     if !bounds::span_in_bounds_multi(synapses, start, end, &lens) {
-        return weighted_sum_simd_8records_scalar(
-            synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
-        );
+        bounds::reject_span("weighted_sum_simd_8records");
     }
     // SAFETY: `span_in_bounds_multi` has just established the kernel's index
     // precondition for this span against the shortest activation buffer.
@@ -848,9 +849,13 @@ pub unsafe fn weighted_sum_simd_8records_unchecked(
 /// other lanes, so widening `R` leaves each record's sum **bit-identical**.
 ///
 /// Bounds-validating entry point (Issue #613): a tile that does not address
-/// `inter` throughout takes the fully-checked scalar reference instead of the
-/// unchecked kernel, so safe caller code can never reach an out-of-bounds read.
-/// Validated callers should use [`weighted_sum_interleaved_unchecked`].
+/// `inter` throughout is **refused with a panic** rather than read unchecked, so
+/// safe caller code can never reach an out-of-bounds read. Validated callers
+/// should use [`weighted_sum_interleaved_unchecked`].
+///
+/// # Panics
+/// If `end` exceeds either hot array, or any `hot_from` entry in `start..end`
+/// does not satisfy `from * R + R <= inter.len()`.
 #[inline]
 pub fn weighted_sum_interleaved<const R: usize>(
     hot_weights: &[f32],
@@ -862,14 +867,7 @@ pub fn weighted_sum_interleaved<const R: usize>(
 ) -> [f32; R] {
     const { assert_interleaved_tile::<R>() };
     if !bounds::interleaved_span_in_bounds(hot_weights, hot_from, inter.len(), R, start, end) {
-        return weighted_sum_interleaved_scalar::<R>(
-            hot_weights,
-            hot_from,
-            inter,
-            start,
-            end,
-            bias,
-        );
+        bounds::reject_interleaved_span("weighted_sum_interleaved");
     }
     // SAFETY: `interleaved_span_in_bounds` has just established that every
     // `hot_from` entry in `start..end` addresses a whole `R`-wide tile inside
@@ -986,8 +984,13 @@ pub unsafe fn weighted_sum_interleaved_8_unchecked(
 /// 4-record weighted sum: FMA+SSE on x86_64, NEON on aarch64, else scalar.
 ///
 /// Bounds-validating entry point (Issue #613) — see
-/// [`weighted_sum_simd_8records`]. Validated callers should use
+/// [`weighted_sum_simd_8records`]: an out-of-bounds span is refused with a
+/// panic, never read unchecked. Validated callers should use
 /// [`weighted_sum_simd_4records_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd_8records`], over the four
+/// activation buffers.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub fn weighted_sum_simd_4records(
@@ -1002,9 +1005,7 @@ pub fn weighted_sum_simd_4records(
 ) -> (f32, f32, f32, f32) {
     let lens = [act0.len(), act1.len(), act2.len(), act3.len()];
     if !bounds::span_in_bounds_multi(synapses, start, end, &lens) {
-        return weighted_sum_simd_4records_scalar(
-            synapses, act0, act1, act2, act3, start, end, bias,
-        );
+        bounds::reject_span("weighted_sum_simd_4records");
     }
     // SAFETY: `span_in_bounds_multi` has just established the kernel's index
     // precondition for this span against the shortest activation buffer.
@@ -1083,10 +1084,16 @@ pub unsafe fn weighted_sum_simd_4records_unchecked(
 /// elsewhere and for counts below one SIMD lane.
 ///
 /// Bounds-validating entry point (Issue #613): a span that does not index
-/// `activations` throughout falls through to the fully-checked scalar
-/// reference, so safe caller code can never reach an out-of-bounds read.
+/// `activations` throughout is **refused with a panic** rather than read
+/// unchecked, so safe caller code can never reach an out-of-bounds read.
 /// Validated callers — anything holding a `CompiledNetwork` — should call
 /// [`weighted_sum_simd_unchecked`] and skip the `O(end - start)` predicate.
+///
+/// # Panics
+/// If `end > synapses.len()`, or any `from_index` in `start..end` is not a valid
+/// index into `activations`. Both are caller bugs the load-time
+/// `NetworkError::InvalidSynapseIndex` validation rules out for a loaded
+/// network, so failing loud beats answering from a truncated span.
 #[inline]
 pub fn weighted_sum_simd(
     synapses: &[SynapseData],
@@ -1095,12 +1102,12 @@ pub fn weighted_sum_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe { weighted_sum_simd_unchecked(synapses, activations, start, end, bias) };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_simd");
     }
-    scalar::weighted_sum(synapses, activations, start, end, bias)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_simd_unchecked(synapses, activations, start, end, bias) }
 }
 
 /// [`weighted_sum_simd`] without the [`bounds`] pre-pass — the forward-pass
@@ -1150,8 +1157,12 @@ pub unsafe fn weighted_sum_simd_unchecked(
 
 /// Single-record sum of squared weighted activations (Hypotenuse): `sum((a*w)^2)`.
 ///
-/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`].
-/// Validated callers should use [`weighted_sum_of_squares_simd_unchecked`].
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_of_squares_simd_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd`].
 #[inline]
 pub fn weighted_sum_of_squares_simd(
     synapses: &[SynapseData],
@@ -1159,14 +1170,12 @@ pub fn weighted_sum_of_squares_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe {
-            weighted_sum_of_squares_simd_unchecked(synapses, activations, start, end)
-        };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_of_squares_simd");
     }
-    scalar::weighted_sum_of_squares(synapses, activations, start, end)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_of_squares_simd_unchecked(synapses, activations, start, end) }
 }
 
 /// [`weighted_sum_of_squares_simd`] without the [`bounds`] pre-pass — the
@@ -1209,8 +1218,12 @@ pub unsafe fn weighted_sum_of_squares_simd_unchecked(
 
 /// Single-record weighted sum without bias (Mean): `sum(activation[from] * weight)`.
 ///
-/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`].
-/// Validated callers should use [`weighted_sum_no_bias_simd_unchecked`].
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_no_bias_simd_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd`].
 #[inline]
 pub fn weighted_sum_no_bias_simd(
     synapses: &[SynapseData],
@@ -1218,12 +1231,12 @@ pub fn weighted_sum_no_bias_simd(
     start: usize,
     end: usize,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe { weighted_sum_no_bias_simd_unchecked(synapses, activations, start, end) };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_no_bias_simd");
     }
-    scalar::weighted_sum_no_bias(synapses, activations, start, end)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_no_bias_simd_unchecked(synapses, activations, start, end) }
 }
 
 /// [`weighted_sum_no_bias_simd`] without the [`bounds`] pre-pass — the
@@ -1265,8 +1278,12 @@ pub unsafe fn weighted_sum_no_bias_simd_unchecked(
 /// Single-record sum of squared (bias + weighted activation) (HypotenuseV2):
 /// `sum((bias + a*w)^2)`.
 ///
-/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`].
-/// Validated callers should use [`weighted_sum_of_squares_v2_simd_unchecked`].
+/// Bounds-validating entry point (Issue #613) — see [`weighted_sum_simd`]: an
+/// out-of-bounds span is refused with a panic, never read unchecked. Validated
+/// callers should use [`weighted_sum_of_squares_v2_simd_unchecked`].
+///
+/// # Panics
+/// On the same conditions as [`weighted_sum_simd`].
 #[inline]
 pub fn weighted_sum_of_squares_v2_simd(
     synapses: &[SynapseData],
@@ -1275,14 +1292,12 @@ pub fn weighted_sum_of_squares_v2_simd(
     end: usize,
     bias: f32,
 ) -> f32 {
-    if bounds::span_in_bounds(synapses, start, end, activations.len()) {
-        // SAFETY: `span_in_bounds` has just established the kernel's index
-        // precondition for this span.
-        return unsafe {
-            weighted_sum_of_squares_v2_simd_unchecked(synapses, activations, start, end, bias)
-        };
+    if !bounds::span_in_bounds(synapses, start, end, activations.len()) {
+        bounds::reject_span("weighted_sum_of_squares_v2_simd");
     }
-    scalar::weighted_sum_of_squares_v2(synapses, activations, start, end, bias)
+    // SAFETY: `span_in_bounds` has just established the kernel's index
+    // precondition for this span.
+    unsafe { weighted_sum_of_squares_v2_simd_unchecked(synapses, activations, start, end, bias) }
 }
 
 /// [`weighted_sum_of_squares_v2_simd`] without the [`bounds`] pre-pass — the

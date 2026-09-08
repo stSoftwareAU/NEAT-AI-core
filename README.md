@@ -204,13 +204,16 @@ With the `parallel` feature the throughput additionally scales with core count.
 Every kernel in `neat_core::simd` ships in two forms (Issue #613). The plain
 name — `weighted_sum_simd`, `weighted_sum_simd_8records`,
 `weighted_sum_interleaved`, … — is a **safe** `pub fn` that validates the span
-through `neat_core::simd::bounds` and falls through to the checked scalar
-reference when a `from_index` does not index the activation buffer, so no safe
+through `neat_core::simd::bounds` and **panics** if it does not hold, so no safe
 caller can drive an out-of-bounds read. The `*_unchecked` twin is an `unsafe fn`
 whose `# Safety` contract is the load-time `InvalidSynapseIndex` invariant; use
 it only where that invariant is already held — as `CompiledNetwork`'s own
 forward and scoring paths do, which is why the hot path pays nothing for the
-safe half.
+safe half. The pre-pass is `O(end - start)` and is not free: on the committed
+64-synapse bench it costs **+68%** over the unchecked kernel
+(`weighted_sum_simd/single_checked` beside `weighted_sum_simd/single`), so a
+downstream consumer with its own load-time validation should call the
+`*_unchecked` form on its hot path.
 
 On the exact committed production topology the native lane beats the wasm32 lane
 **1.78×** per core (NEON + FMA vs `simd128` + relaxed-madd) and **4.75×** at 12
