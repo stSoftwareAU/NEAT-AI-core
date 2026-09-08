@@ -360,6 +360,12 @@ jobs:
       - name: cargo deny
         run: cargo deny check
 
+      # The wasm-bench harness is outside the root virtual workspace and
+      # resolves its own dependency graph (Issue #607), so the root check above
+      # never sees it. Same root deny.toml, second manifest.
+      - name: cargo deny (wasm-bench)
+        run: cargo deny --manifest-path wasm-bench/Cargo.toml check
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
