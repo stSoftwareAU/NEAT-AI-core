@@ -277,8 +277,43 @@ flowchart LR
     B --> C{"every from_index &lt; num_neurons?"}
     C -- no --> D["Err(NetworkError::InvalidSynapseIndex)"]
     C -- yes --> E["network loaded — invariant holds"]
-    E --> F["activate() → weighted_sum_simd"]
+    E --> F["activate() → weighted_sum_simd_unchecked"]
     F --> G["get_unchecked(from_index) — sound"]
+```
+
+### The kernel a caller reaches depends on who holds the invariant
+
+The load-time validation above only covers callers that **hold a loaded
+network**. Nothing establishes it for a downstream crate calling
+`neat_core::simd` directly, so every kernel is exported in two forms
+(Issue #613) and choosing the wrong one is either unsound or slow:
+
+- `weighted_sum_simd`, `weighted_sum_simd_8records`,
+  `weighted_sum_interleaved`, … — **safe** `pub fn`s. Each runs the matching
+  `simd::bounds` predicate over the span first and, when it does not hold,
+  falls through to the fully-checked scalar reference rather than an unchecked
+  read. These are the only kernels safe caller code may reach.
+- `weighted_sum_simd_unchecked`, `weighted_sum_simd_8records_unchecked`,
+  `weighted_sum_interleaved_unchecked`, … — **`unsafe` `pub fn`s** carrying the
+  index precondition as a `# Safety` contract. `CompiledNetwork`'s own forward
+  and batched-scoring paths call these, discharging the contract from the
+  load-time validation, which is why the hot path pays nothing.
+
+`simd::bounds` is the **one** home of the predicates. Never re-inline a span
+check into a kernel, never bypass one by making a safe kernel reach an
+unchecked read, and never widen a hot-path caller to the safe form "to be
+tidy" — the pre-pass measured **+33% to +64%** on `forward_pass` when it was
+prototyped on the hot path (Issue #613, recorded in
+`docs/archive/pr-summaries/pr-summary-613.md`).
+
+```mermaid
+flowchart LR
+    S["safe caller (no loaded network)"] --> W["weighted_sum_* (safe)"]
+    W --> P{"simd::bounds predicate holds?"}
+    P -- no --> R["checked scalar reference — panics on the bad index"]
+    P -- yes --> U["weighted_sum_*_unchecked"]
+    N["CompiledNetwork (invariant already held)"] --> U
+    U --> G2["get_unchecked(from_index) — sound"]
 ```
 
 ### `unsafe` blocks under `unsafe_op_in_unsafe_fn = "deny"`

@@ -194,11 +194,23 @@ Scoring a production-size dataset pushes many records through one [creature](#gl
 embarrassingly parallel workload *across records*. Both `score_records_flat`
 and `score_records_parallel_flat` drive the forward pass through the **8-record
 batched SIMD path** (Issue #230): records are grouped into 8s (then a 4-record group,
-then a scalar tail) and forwarded through `weighted_sum_simd_8records` /
-`weighted_sum_simd_4records`, loading each synapse weight once and applying it
-across the lanes. On the gather-bound production topology this cut single-core
+then a scalar tail) and forwarded through
+`weighted_sum_simd_8records_unchecked` /
+`weighted_sum_simd_4records_unchecked`, loading each synapse weight once and
+applying it across the lanes. On the gather-bound production topology this cut single-core
 scoring time by **~39%** (see `docs/archive/pr-summaries/pr-summary-230.md`).
 With the `parallel` feature the throughput additionally scales with core count.
+
+Every kernel in `neat_core::simd` ships in two forms (Issue #613). The plain
+name — `weighted_sum_simd`, `weighted_sum_simd_8records`,
+`weighted_sum_interleaved`, … — is a **safe** `pub fn` that validates the span
+through `neat_core::simd::bounds` and falls through to the checked scalar
+reference when a `from_index` does not index the activation buffer, so no safe
+caller can drive an out-of-bounds read. The `*_unchecked` twin is an `unsafe fn`
+whose `# Safety` contract is the load-time `InvalidSynapseIndex` invariant; use
+it only where that invariant is already held — as `CompiledNetwork`'s own
+forward and scoring paths do, which is why the hot path pays nothing for the
+safe half.
 
 On the exact committed production topology the native lane beats the wasm32 lane
 **1.78×** per core (NEON + FMA vs `simd128` + relaxed-madd) and **4.75×** at 12

@@ -46,6 +46,25 @@ It is the whole memory-safety guarantee for the SIMD hot path — deleting it as
 statement of this invariant in
 [`AGENTS.md`](AGENTS.md#unsafe--simd-invariants).
 
+### Callers that hold no loaded network (Issue #613)
+
+The load-time validation covers callers holding a `CompiledNetwork`. It cannot
+cover a downstream crate that calls `neat_core::simd` with slices of its own, so
+the public kernels are split in two:
+
+- The **safe** kernels (`weighted_sum_simd`, `weighted_sum_simd_8records`,
+  `weighted_sum_interleaved`, and the rest of the family) validate the span
+  through `neat_core::simd::bounds` before dispatching, and fall through to the
+  fully-checked scalar reference when it does not hold. No combination of safe
+  arguments reaches an unchecked read.
+- The **`unsafe`** `*_unchecked` kernels carry the index precondition as a
+  `# Safety` contract for callers — `CompiledNetwork` among them — that have
+  already discharged it, so the forward-pass hot path is unchanged.
+
+`neat-core/tests/simd_public_bounds.rs` pins the safe half: the out-of-range
+reproducer from Issue #613 fails loud on every kernel instead of reading past
+the activation buffer.
+
 ## Dependency bump quarantine
 
 Dependency bumps honour a release-age **quarantine window**
