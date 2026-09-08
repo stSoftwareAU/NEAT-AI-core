@@ -4,9 +4,17 @@ Measures a `wasm32`-only change against its control **inside a real wasm
 runtime**, which the native Criterion harness cannot do. Built for the Issue 509
 `gather4` prototype; reusable for any future wasm kernel change.
 
-Deliberately **outside** the root virtual workspace (`exclude`d there, empty
-`[workspace]` here): it is research tooling, not shipped code, so `quality.sh`,
-the version-bump job and `cargo deny` see exactly the crate set they saw before.
+Deliberately **outside** the root virtual *build* workspace (`exclude`d there,
+empty `[workspace]` here): it is research tooling, not shipped code, so the
+workspace build and the version-bump job see exactly the crate set they saw
+before.
+
+Its **supply chain is in scope** (Issue #607): the lockfile this crate resolves
+for itself is audited by `security.yml`
+(`cargo audit --file wasm-bench/Cargo.lock`), checked by `quality.sh`
+(`cargo deny --manifest-path wasm-bench/Cargo.toml check`, under the root
+`deny.toml`) and bumped by Dependabot (`directory: "/wasm-bench"`). The scope
+statement lives in [`SECURITY.md`](../SECURITY.md#supply-chain-audit-scope).
 
 ## Why it is shaped like this
 

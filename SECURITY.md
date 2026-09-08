@@ -55,6 +55,40 @@ fast-flagged malicious publishes that are later yanked. `bump-deps.sh` applies
 the window, and the *Upgrade Cargo Dependencies* workflow feeds it from the
 `VIBE_BUMP_QUARANTINE_HOURS` repository variable.
 
+## Supply-chain audit scope
+
+Two Cargo lockfiles live in this repository, and **both** are audited. The root
+`Cargo.toml` is a virtual workspace that `exclude`s `wasm-bench`, so the
+research harness resolves its own dependency graph — packages the root
+lockfile never names, and which a root-only audit therefore never reads
+(Issue #607).
+
+| Lockfile | Crates | Audit | Licence / source policy | Version bumps |
+| --- | --- | --- | --- | --- |
+| `Cargo.lock` | the `neat-core` workspace | `cargo audit` (`security.yml`) | `cargo deny check` | Dependabot `directory: "/"` |
+| `wasm-bench/Cargo.lock` | the Issue #509 wasm A/B harness | `cargo audit --file wasm-bench/Cargo.lock` (`security.yml`) | `cargo deny --manifest-path wasm-bench/Cargo.toml check` | Dependabot `directory: "/wasm-bench"` |
+
+Both `cargo deny` passes read the one root `deny.toml`, so the licence
+allow-list and `unknown-registry = "deny"` apply identically to each graph.
+
+```mermaid
+flowchart LR
+    R["Cargo.lock<br/>neat-core workspace"] --> A["cargo audit"]
+    W["wasm-bench/Cargo.lock<br/>research harness"] --> AW["cargo audit --file"]
+    R --> D["cargo deny check"]
+    W --> DW["cargo deny --manifest-path"]
+    D --> P["deny.toml — one policy"]
+    DW --> P
+    R --> B["Dependabot /"]
+    W --> BW["Dependabot /wasm-bench"]
+```
+
+A crate kept out of the root workspace brings a third lockfile with it: wire it
+into all three channels and add it to the table above in the same change.
+`tests/scripts/wasm_bench_supply_chain.bats` fails while a lockfile in the tree
+is missing from this table, or while the table names a lockfile `security.yml`
+does not audit.
+
 ## Emergency quarantine override
 
 This is the single authoritative home for the emergency override / out-of-cycle
