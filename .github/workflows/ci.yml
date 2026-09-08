@@ -81,9 +81,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Install cargo-audit and cargo-outdated
-        # cargo-audit is the advisory scanner bump-deps.sh falls back to; this
-        # runner has no cargo-deny, so that is the one it runs (Issue #598).
-        # cargo-outdated is used for the
+        # cargo-audit is required by bump-deps.sh; cargo-outdated is used for the
         # informational report below. cargo-edit is intentionally dropped — the
         # dep refresh now goes through bump-deps.sh (cargo update), not
         # cargo upgrade, so cargo-edit is no longer needed.
@@ -174,8 +172,8 @@ jobs:
           # too. A direct upgrade/update here would bypass the quarantine and
           # re-open the fast-flagged supply-chain window the script closes.
           # --skip-build: the downstream quality / rust-gates jobs already
-          # compile the bumped tree; the advisory scan still runs here for an
-          # early advisory signal.
+          # compile the bumped tree; cargo audit still runs here for an early
+          # advisory signal.
           echo "Refreshing dependencies via bump-deps.sh (quarantine-aware)..."
           chmod +x bump-deps.sh
           ./bump-deps.sh --quarantine-hours "${VIBE_BUMP_QUARANTINE_HOURS}" --skip-build

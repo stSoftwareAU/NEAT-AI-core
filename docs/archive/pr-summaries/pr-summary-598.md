@@ -246,12 +246,15 @@ Gates run:
   updates: two channels" description.
 - `AGENTS.md` — the CI/secrets PR-pipeline line. Kept to the one phrase that
   named `cargo audit`, to avoid conflicting with the `AGENTS.md` rewrite in #593.
-- `ci.yml` / `upgrade-dependencies.yml` — comment and generated-PR-body text only.
-  Neither runner installs cargo-deny, so both keep running `cargo audit` through
-  the new fallback exactly as before; what changed is that they no longer claim
-  cargo-audit is *required* by the script, and the PR body the scheduled workflow
-  writes no longer asserts the bumps "passed `cargo audit`" when a future runner
-  might have run cargo-deny instead.
+- `.github/workflows/` is **not** touched. Neither runner installs cargo-deny, so
+  both keep running `cargo audit` through the new fallback exactly as before, and
+  the issue's accepted scope says those workflows need no change. Five comment /
+  generated-PR-body strings there are now imprecise (they call cargo-audit
+  "required by bump-deps.sh" and the scheduled PR body asserts the bumps "passed
+  `cargo audit`"). They were corrected in this branch and then reverted: the
+  worker's token has no GitHub `workflow` scope, so a push carrying a
+  `.github/workflows/` change is rejected outright. Tracked in #614 alongside the
+  per-crate quarantine gap, which touches the same script.
 
 ## Acceptance Criteria
 
@@ -326,11 +329,11 @@ Gates run:
   unrequested — reason: the old awk required `ID:` before `Crate:`, but cargo
   audit prints `Crate:` first, so the fallback path could never produce the line
   the criterion demands. Fixing it is load-bearing for "whichever tool ran".
-- **unrequested** — comment/PR-body text in `ci.yml` and
-  `upgrade-dependencies.yml` — reviewer: unrequested — reason: those files
-  asserted cargo-audit "is required by bump-deps.sh" and that bumps "passed
-  `cargo audit`"; both became inaccurate with this change. No workflow behaviour
-  changed.
+- **unrequested** — none remaining in `.github/workflows/` — reviewer:
+  unrequested — reason: the reviewer flagged five now-imprecise strings there and
+  they were corrected, but the worker's token has no GitHub `workflow` scope and
+  the push was rejected, so the change was reverted and rolled into #614. No
+  workflow behaviour was ever changed.
 
 ## Standards Review
 
@@ -387,8 +390,11 @@ Gates run:
 - **violation** — five statements in `ci.yml` / `upgrade-dependencies.yml`
   contradicted the change, including a generated PR body asserting the bumps
   "passed `cargo audit`" — evidence: `.github/workflows/ci.yml:84`,
-  `.github/workflows/upgrade-dependencies.yml:88` — reason: fixed here, comment
-  and body text only.
+  `.github/workflows/upgrade-dependencies.yml:88` — reason: stands. The fix was
+  written and then reverted — the worker's token has no GitHub `workflow` scope,
+  so any push touching `.github/workflows/` is rejected. Rolled into #614. The
+  statements are imprecise, not wrong in effect: neither runner installs
+  cargo-deny, so both still run `cargo audit`.
 - **violation** — `local -a idx=("$@")` with an empty `$@` is the pattern the
   bash-3.2 `set -u` rule names, even though the call site guards it — evidence:
   `bump-deps.sh:grouped_retry` — reason: fixed here — `[[ $# -gt 0 ]] || return 0`
@@ -417,4 +423,5 @@ including one the run just printed `defer:` for — to a version that never pass
 the release-age check, and nothing reverts or reports it. The grouped retry now
 guards against exactly that, but the per-crate pass has behaved this way since
 Issue #38 and closing it is a separate change. Filed as its own issue rather than
-folded in here: **#614**.
+folded in here: **#614**, which also carries the `.github/workflows/` wording
+fix this branch could not push.
