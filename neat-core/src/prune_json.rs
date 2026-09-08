@@ -806,9 +806,21 @@ fn merge(target: &mut serde_json::Value, extra: serde_json::Value) {
 }
 
 /// Answer one golden case through the native ABI.
+///
+/// # Panics
+///
+/// Panics when the case's request cannot be re-serialised. The requests are
+/// built here from `serde_json::json!`, so that is a defect in the record
+/// rather than a runtime condition, and it must fail loudly rather than be
+/// answered as a malformed payload.
 #[must_use]
 pub fn run_golden_case(case: &PruneGoldenCase) -> String {
-    let request = serde_json::to_string(&case.request).unwrap_or_else(|_| String::from("{}"));
+    let request = serde_json::to_string(&case.request).unwrap_or_else(|e| {
+        panic!(
+            "golden case {} has an unserialisable request: {e}",
+            case.name
+        )
+    });
     match case.op {
         PruneOp::Neuron => prune_neuron_json(&request),
         PruneOp::Synapse => prune_synapse_json(&request),
@@ -848,14 +860,13 @@ mod golden_io {
     ///
     /// Returns the serialisation or write failure.
     pub fn write_golden() -> Result<(), String> {
-        let cases: Vec<PruneGoldenCase> = prune_golden_cases()
-            .into_iter()
-            .map(|mut case| {
-                case.response = serde_json::from_str(&run_golden_case(&case))
-                    .unwrap_or(serde_json::Value::Null);
-                case
-            })
-            .collect();
+        let mut cases = prune_golden_cases();
+        for case in &mut cases {
+            // An answer this crate cannot read back is a defect in the ABI, not
+            // a record to write down as `null`.
+            case.response = serde_json::from_str(&run_golden_case(case))
+                .map_err(|e| format!("{}: the native answer is not JSON: {e}", case.name))?;
+        }
         let mut text = serde_json::to_string_pretty(&cases)
             .map_err(|e| format!("the golden record could not be serialised: {e}"))?;
         text.push('\n');
