@@ -7,9 +7,13 @@ must reproduce, mapped to the fixture that captures it and the test that pins
 it.
 
 Nothing here prunes. The fixtures are the acceptance oracle the shared helpers
-are graded against — `prune(case.before(), case.request) == case.after()` — and
-both now exist: `prune_neuron` (Issue #590) for the `RemoveNeuron` captures and
-`prune_synapse` (Issue #591) for the `RemoveSynapse` ones.
+are graded against, and both now exist: `prune_neuron` (Issue #590) for the
+`RemoveNeuron` captures and `prune_synapse` (Issue #591) for the
+`RemoveSynapse` ones. **How each case is graded is per case** — byte equality
+where this crate's canonical form coincides with the capture, activation
+equality where the constant-support divergence below applies. The two
+"How Issue #59x is graded" tables are the record; nothing here claims byte
+parity across the board.
 
 ## Where the behaviour lives
 

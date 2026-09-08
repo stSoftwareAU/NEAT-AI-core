@@ -27,11 +27,17 @@
 //! (Issue #577, NEAT-AI #3873). Removing "the `h-a → if-1` synapse" is
 //! therefore not a request this crate can carry out — removing the pair would
 //! delete a branch the caller never mentioned — so the request names the
-//! triple and only that triple goes. Everywhere else a role means nothing:
-//! every other squash sums whatever reaches it, so two roles into one of those
-//! are the same term written twice and the readable key is the pair. That is
-//! the same reading [`cleanup_creature_with`] takes, so a request and a
-//! canonicalisation can never disagree about what one edge is.
+//! triple and only that triple goes.
+//!
+//! Everywhere else a role means nothing: every other squash sums whatever
+//! reaches it, so two rows written for one pair are the same term written
+//! twice, and the readable key is the pair. Asking for one role of such a pair
+//! therefore takes the whole term, both rows — which is not "every same-pair
+//! edge" being deleted but *one* edge being deleted in the two halves the
+//! caller happened to write it in, and it is what [`cleanup_creature_with`]
+//! would coalesce them into anyway. One reading of what names an edge
+//! (`prune_cleanup::canonical_role`), shared by the request and the
+//! canonicalisation, so the two can never disagree.
 //!
 //! An edge sourced at an observation neuron, and an edge targeting an output
 //! neuron, are ordinary candidates: nothing about the declared widths is
@@ -74,12 +80,12 @@
 
 use crate::creature::{CreatureExport, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
-    CleanupOptions, IfRepair, SynapseKey, cleanup_creature_with, zero_inward_activation,
+    CleanupOptions, IfRepair, SynapseKey, canonical_role, cleanup_creature_with, fixed_activation,
 };
 use crate::prune_neuron::{
     BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
     UncompensatedTarget, WeightShare, add_to_edge, check_proxy, check_stats, compensate,
-    is_observation_uuid, squash_of, target_squash,
+    target_squash,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -138,7 +144,7 @@ pub fn prune_synapse(
     stats: Option<&PruneStats>,
 ) -> Result<PruneResult, PruneError> {
     let squash = target_squash(creature, &key.to_uuid)?;
-    let wanted = readable_role(squash, key.role);
+    let wanted = canonical_role(squash, key.role);
 
     let weight_sum = matched_weight(creature, key, squash, wanted)?;
     if let Some(stats) = stats {
@@ -161,7 +167,7 @@ pub fn prune_synapse(
     cut.synapses.retain(|s| {
         let matches = s.from_uuid == key.from_uuid
             && s.to_uuid == key.to_uuid
-            && readable_role(squash, parse_synapse_type(s.synapse_type.as_deref())) == wanted;
+            && canonical_role(squash, parse_synapse_type(s.synapse_type.as_deref())) == wanted;
         if matches {
             removed_synapses.push(SynapseKey {
                 from_uuid: s.from_uuid.clone(),
@@ -173,7 +179,7 @@ pub fn prune_synapse(
     });
 
     if let Some(proxy) = stats.and_then(|s| s.proxy.as_ref()) {
-        check_proxy(&cut, &key.from_uuid, proxy)?;
+        check_proxy(&cut, None, proxy)?;
     }
 
     let mut bias_folds = Vec::new();
@@ -249,6 +255,8 @@ pub fn prune_synapse(
         cascade_synapses: outcome.removed_synapses,
         folded_neurons: outcome.folded_neurons,
         downgraded_if_neurons: outcome.downgraded_if_neurons,
+        static_if_neurons: outcome.static_if_neurons,
+        restored_if_roles: outcome.restored_if_roles,
         bias_folds,
         weight_shares,
         uncompensated,
@@ -259,16 +267,6 @@ pub fn prune_synapse(
         },
         passes: outcome.passes,
     })
-}
-
-/// The role as the **target** reads it: its own where the target keeps a sum
-/// per role, [`SynapseType::Standard`] everywhere else.
-fn readable_role(target_squash: SquashType, role: SynapseType) -> SynapseType {
-    if target_squash == SquashType::If {
-        role
-    } else {
-        SynapseType::Standard
-    }
 }
 
 /// Total weight the requested readable key carries, or a refusal.
@@ -287,7 +285,7 @@ fn matched_weight(
     for synapse in creature.synapses.iter().filter(|s| {
         s.from_uuid == key.from_uuid
             && s.to_uuid == key.to_uuid
-            && readable_role(squash, parse_synapse_type(s.synapse_type.as_deref())) == wanted
+            && canonical_role(squash, parse_synapse_type(s.synapse_type.as_deref())) == wanted
     }) {
         total += synapse.weight;
         found = true;
@@ -306,21 +304,9 @@ fn matched_weight(
 /// The value the **source** activates to on every record, when the creature
 /// alone proves there is one.
 ///
-/// An observation neuron varies with the record by definition, and so does
-/// anything something still feeds. Everything else sums nothing, so
-/// [`zero_inward_activation`] — the shared mirror of the forward pass for that
-/// case — is the value, and a constant reaches it through the same door.
+/// [`fixed_activation`] is the single home of that question, asked here rather
+/// than restated so the source fold, `prune_neuron`'s structural fold and the
+/// `IF` static-condition rewrite cannot drift apart on what "fixed" means.
 fn source_activation(creature: &CreatureExport, uuid: &str) -> Result<Option<f64>, PruneError> {
-    if is_observation_uuid(creature, uuid) || creature.synapses.iter().any(|s| s.to_uuid == uuid) {
-        return Ok(None);
-    }
-    let neuron = creature
-        .neurons
-        .iter()
-        .find(|n| n.uuid == uuid)
-        .ok_or_else(|| PruneError::UnknownNeuron {
-            uuid: uuid.to_string(),
-        })?;
-    let squash = squash_of(neuron)?;
-    Ok(Some(f64::from(zero_inward_activation(squash, neuron.bias))))
+    Ok(fixed_activation(creature, uuid)?.map(f64::from))
 }

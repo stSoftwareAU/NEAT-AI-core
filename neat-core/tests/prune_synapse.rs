@@ -25,8 +25,9 @@ use neat_core::prune_fixtures::{
     EDGE_SOURCE_BECOMES_DEAD, EDGE_TARGET_BECOMES_CONSTANT,
 };
 use neat_core::{
-    CreatureExport, ProxyStats, PruneError, PruneResult, PruneStats, SynapseKey, SynapseType,
-    TransformClass, UncompensatedReason, ValidateOptions, compile_creature, creature_validate,
+    CleanupError, CleanupOptions, CreatureExport, IfRepair, ProxyStats, PruneError, PruneResult,
+    PruneStats, SynapseKey, SynapseType, TransformClass, UncompensatedReason, ValidateOptions,
+    cleanup_creature, cleanup_creature_with, compile_creature, creature_validate,
     parse_creature_json, prune_synapse, validate_creature_topology,
 };
 
@@ -442,7 +443,9 @@ fn a_pair_the_creature_does_not_carry_is_refused() {
 fn a_target_the_creature_does_not_carry_is_refused() {
     let before = creature(DANGLING_TARGET_JSON);
     match prune_synapse(&before, &key("h-1", "h-ghost", SynapseType::Standard), None) {
-        Err(PruneError::Cleanup(_)) => {}
+        Err(PruneError::Cleanup(CleanupError::UnknownEndpoint { uuid })) => {
+            assert_eq!(uuid, "h-ghost");
+        }
         other => panic!("a dangling target was not refused: {other:?}"),
     }
 }
@@ -987,4 +990,135 @@ fn dropping_an_unreachable_branch_cascades_through_every_level_it_strands() {
         2.0,
     );
     assert_valid("dropping_an_unreachable_branch", &result.creature);
+}
+
+#[test]
+fn the_result_names_every_if_neuron_the_rewrite_touched() {
+    let before = creature(IF_JSON);
+
+    let flattened = pruned(
+        &before,
+        &key("h-cond", "if-1", SynapseType::Condition),
+        None,
+    );
+    assert_eq!(flattened.static_if_neurons.len(), 1);
+    assert_eq!(flattened.static_if_neurons[0].uuid, "if-1");
+    assert_eq!(
+        flattened.static_if_neurons[0].branch,
+        SynapseType::Negative,
+        "a condition sum of 0 is not > 0, so the negative arm is the one taken"
+    );
+    assert_eq!(flattened.restored_if_roles, vec![]);
+    assert_eq!(
+        flattened.downgraded_if_neurons,
+        Vec::<String>::new(),
+        "the exact rewrite replaces the downgrade, it does not accompany it"
+    );
+
+    let restored = pruned(&before, &key("h-a", "if-1", SynapseType::Positive), None);
+    assert_eq!(restored.static_if_neurons, vec![]);
+    assert_eq!(restored.restored_if_roles.len(), 1);
+    let edge = &restored.restored_if_roles[0];
+    assert_eq!(edge.to_uuid, "if-1");
+    assert_eq!(edge.role, SynapseType::Positive);
+    assert_close(
+        "the restored role carries nothing",
+        role_weight(
+            &restored.creature,
+            &edge.from_uuid,
+            "if-1",
+            Some("positive"),
+        ),
+        0.0,
+    );
+    // The creature named no constant, so the rewrite had to add one — and the
+    // result says so rather than leaving it to be discovered.
+    assert_eq!(
+        neuron(&restored.creature, &edge.from_uuid).neuron_type,
+        "constant"
+    );
+    assert!(
+        !has_neuron(&before, &edge.from_uuid),
+        "the support constant is new structure, not one the caller wrote"
+    );
+}
+
+#[test]
+fn the_default_cleanup_policy_still_downgrades_an_if_short_a_role() {
+    // The same cut, under each policy: parity keeps the blanket downgrade, the
+    // prune's policy rewrites exactly. `cleanup_creature` must not have moved.
+    let mut cut = creature(IF_JSON);
+    cut.synapses
+        .retain(|s| !(s.from_uuid == "h-cond" && s.to_uuid == "if-1"));
+
+    let parity = cleanup_creature(&cut).expect("the parity policy cleans up");
+    assert_eq!(parity.downgraded_if_neurons, vec!["if-1".to_string()]);
+    assert_eq!(parity.static_if_neurons, vec![]);
+    assert_eq!(parity.restored_if_roles, vec![]);
+    // IDENTITY sums both arms it inherited: 2.0 + -3.0.
+    assert_close(
+        "the downgrade coalesces the arms",
+        weight(&parity.creature, "h-a", "if-1"),
+        -1.0,
+    );
+
+    let exact = cleanup_creature_with(
+        &cut,
+        CleanupOptions {
+            if_repair: IfRepair::Rewrite,
+        },
+    )
+    .expect("the exact policy cleans up");
+    assert_eq!(exact.downgraded_if_neurons, Vec::<String>::new());
+    assert_eq!(exact.static_if_neurons.len(), 1);
+    assert_close(
+        "only the arm the condition takes survives",
+        weight(&exact.creature, "h-a", "if-1"),
+        -3.0,
+    );
+}
+
+#[test]
+fn a_proxy_that_is_the_removed_edges_own_source_is_refused() {
+    let before = creature(ORDINARY_JSON);
+    let stats = PruneStats {
+        mean_activation: 0.6,
+        variance: None,
+        proxy: Some(ProxyStats {
+            uuid: "h-1".to_string(),
+            mean_activation: 0.5,
+            variance: 0.02,
+            covariance: 0.01,
+        }),
+    };
+    // The only edge `h-1` could carry the share on into `output-0` is the one
+    // being removed, so the request cannot be carried out as described.
+    match prune_synapse(
+        &before,
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&stats),
+    ) {
+        Err(PruneError::MissingProxyEdge { from_uuid, to_uuid }) => {
+            assert_eq!(from_uuid, "h-1");
+            assert_eq!(to_uuid, "output-0");
+        }
+        other => panic!("a self-proxy was not refused: {other:?}"),
+    }
+}
+
+#[test]
+fn an_output_left_with_nothing_to_sum_still_comes_back_valid() {
+    let before = creature(CONSTANT_SOURCE_JSON);
+    // `output-0` keeps only the constant's edge once the observation edge goes,
+    // and loses that too when the constant folds — an output with no inward
+    // edge is the declared width, not dead structure.
+    let result = pruned(
+        &before,
+        &key("input-0", "output-0", SynapseType::Standard),
+        None,
+    );
+
+    assert_eq!(result.creature.output, 1, "the declared width moved");
+    assert!(has_neuron(&result.creature, "output-0"));
+    assert_valid("an_output_left_with_nothing_to_sum", &result.creature);
 }

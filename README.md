@@ -845,12 +845,16 @@ the **same number on every record**:
 | no condition edge, or every condition source structurally fixed | the branch the condition always takes, as an `IDENTITY` sum; the condition edges and the unreachable branch go, and their feeders cascade | the forward pass could never take the other branch |
 | a `positive` / `negative` branch with nothing left in it, condition still varying | a **zero-weight** edge from a support constant into that role | an empty branch sum is `0`, and so is `0 · 1` |
 
-Both are reported on `CleanupOutcome` — `static_if_neurons` names the `IF` and
-the branch that survived, `restored_if_roles` names the support edges added.
-Neither is a compensation: they restore what the creature already computed once
-the requested edge was gone, so `PruneResult::transform` still grades only the
-loss of the term itself. `cleanup_creature` keeps the TypeScript-parity
-`IfRepair::Downgrade` default, so Issue #590's neuron removal is unchanged.
+Both are reported, on `CleanupOutcome` and again on `PruneResult`:
+`static_if_neurons` names the `IF` and the branch that survived,
+`restored_if_roles` names the support edges added — including the constant a
+rewrite had to mint when the creature carried none, so new structure is never
+left to be discovered. `downgraded_if_neurons` is correspondingly always empty
+for a synapse prune. Neither rewrite is a compensation: they restore what the
+creature already computed once the requested edge was gone, so
+`PruneResult::transform` still grades only the loss of the term itself.
+`cleanup_creature` keeps the TypeScript-parity `IfRepair::Downgrade` default, so
+Issue #590's neuron removal is unchanged.
 
 #### What the removal cost
 

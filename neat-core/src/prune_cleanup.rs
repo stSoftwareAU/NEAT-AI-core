@@ -602,7 +602,11 @@ fn squash_of(neuron: &NeuronExport) -> Result<SquashType, CleanupError> {
 ///
 /// Only an `IF` keeps a sum per role; every other squash sums whatever reaches
 /// it, so two roles into one of those are the same edge written twice.
-fn canonical_role(target_squash: SquashType, role: SynapseType) -> SynapseType {
+///
+/// Crate-visible because [`crate::prune_synapse`] resolves the *requested*
+/// role through it (Issue #591): one definition of "what names an edge", so a
+/// request and a canonicalisation can never disagree.
+pub(crate) fn canonical_role(target_squash: SquashType, role: SynapseType) -> SynapseType {
     if target_squash == SquashType::If {
         role
     } else {
@@ -850,7 +854,7 @@ impl Engine {
                 if present {
                     continue;
                 }
-                self.restore_if_role(&uuid, role)?;
+                self.restore_if_role(&uuid, role);
                 changed = true;
             }
         }
@@ -860,11 +864,17 @@ impl Engine {
     /// The `IF`'s condition sum, when the creature alone fixes it.
     ///
     /// `None` means at least one condition source varies with the record, so
-    /// the branch is genuinely dynamic. The sum is accumulated in `f32`, in
-    /// synapse order, because that is what
-    /// [`crate::network::CompiledNetwork::activate`] does — the comparison is
-    /// against `0`, and a mirror that rounded differently could pick the other
-    /// branch.
+    /// the branch is genuinely dynamic.
+    ///
+    /// The sum is accumulated in `f32`, walking the creature's synapse list in
+    /// storage order, because that is exactly what
+    /// [`crate::network::CompiledNetwork::activate`] would compute for **this**
+    /// creature: `compile_creature` groups the inward edges of a target in the
+    /// order it meets them, and a condition edge only ever lands in the
+    /// condition accumulator. The creature in hand is the one whose behaviour
+    /// the rewrite must preserve, so mirroring its own compiled order — not the
+    /// canonical order a later pass will impose — is what keeps the strict
+    /// `> 0` branch decision the same on both sides.
     fn static_condition_sum(&self, uuid: &str) -> Result<Option<f32>, CleanupError> {
         let mut sum = 0.0f32;
         for synapse in self
@@ -873,34 +883,12 @@ impl Engine {
             .iter()
             .filter(|s| s.to_uuid == uuid && role_of(s) == SynapseType::Condition)
         {
-            let Some(activation) = self.fixed_activation(&synapse.from_uuid)? else {
+            let Some(activation) = fixed_activation(&self.creature, &synapse.from_uuid)? else {
                 return Ok(None);
             };
             sum += activation * synapse.weight as f32;
         }
         Ok(Some(sum))
-    }
-
-    /// The activation `uuid` produces on **every** record, when the creature
-    /// proves there is one.
-    ///
-    /// A constant emits its bias, and a neuron with no inward edge sums nothing
-    /// — [`zero_inward_activation`] is the shared mirror of the forward pass
-    /// for that case. An observation neuron, and any neuron something still
-    /// feeds, varies with the record.
-    fn fixed_activation(&self, uuid: &str) -> Result<Option<f32>, CleanupError> {
-        if self.creature.synapses.iter().any(|s| s.to_uuid == uuid) {
-            return Ok(None);
-        }
-        let Some(neuron) = self.creature.neurons.iter().find(|n| n.uuid == uuid) else {
-            // An observation neuron is not listed, and it varies; anything else
-            // unknown is caught by `check_references` before a pass runs.
-            return Ok(None);
-        };
-        Ok(Some(zero_inward_activation(
-            squash_of(neuron)?,
-            neuron.bias,
-        )))
     }
 
     /// Turn a statically-decided `IF` into the `IDENTITY` sum of the branch it
@@ -939,7 +927,7 @@ impl Engine {
 
     /// Give an `IF` back a branch role, on a zero-weight edge from a support
     /// constant so nothing it computes moves.
-    fn restore_if_role(&mut self, uuid: &str, role: SynapseType) -> Result<(), CleanupError> {
+    fn restore_if_role(&mut self, uuid: &str, role: SynapseType) {
         let support = match self
             .creature
             .neurons
@@ -961,7 +949,6 @@ impl Engine {
             to_uuid: uuid.to_string(),
             role,
         });
-        Ok(())
     }
 
     /// Add a bias-1 support constant under a name no neuron already carries.
@@ -1470,6 +1457,53 @@ pub(crate) fn zero_inward_activation(squash: SquashType, bias: f64) -> f32 {
         _ => apply_squash(squash, bias),
     };
     apply_limit_range(squash, raw)
+}
+
+/// The activation `uuid` produces on **every** record, when the creature alone
+/// proves there is one.
+///
+/// A constant emits its bias, and a neuron with no inward edge sums nothing —
+/// [`zero_inward_activation`] is the shared mirror of the forward pass for that
+/// case, and a constant reaches it through the same door. An observation
+/// neuron, and any neuron something still feeds, varies with the record and
+/// answers `None`.
+///
+/// This is the **one** home of that question: the `IF` static-condition rewrite
+/// here, `prune_neuron`'s structural fold (Issue #590) and `prune_synapse`'s
+/// source fold (Issue #591) all ask it here rather than restating it, so they
+/// cannot drift apart on what "fixed" means.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when the neuron declares a squash name
+/// this crate does not know.
+pub(crate) fn fixed_activation(
+    creature: &CreatureExport,
+    uuid: &str,
+) -> Result<Option<f32>, CleanupError> {
+    // An observation neuron is not listed in `neurons`, and it varies with the
+    // record; a name that is neither listed nor an observation is a dangling
+    // endpoint `check_references` fails on before any pass runs.
+    if is_observation_uuid(creature, uuid) || creature.synapses.iter().any(|s| s.to_uuid == uuid) {
+        return Ok(None);
+    }
+    let Some(neuron) = creature.neurons.iter().find(|n| n.uuid == uuid) else {
+        return Ok(None);
+    };
+    Ok(Some(zero_inward_activation(
+        squash_of(neuron)?,
+        neuron.bias,
+    )))
+}
+
+/// Is this the wire UUID of one of the creature's observation neurons?
+///
+/// Input neurons are not listed in `neurons` — the declared width is what says
+/// they exist (Issue #550) — so the name is the only thing to test.
+pub(crate) fn is_observation_uuid(creature: &CreatureExport, uuid: &str) -> bool {
+    uuid.strip_prefix("input-")
+        .and_then(|index| index.parse::<usize>().ok())
+        .is_some_and(|index| index < creature.input)
 }
 
 /// Combine two edges that share one readable key, or refuse to.
