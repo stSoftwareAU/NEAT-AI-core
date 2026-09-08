@@ -9,6 +9,17 @@ release-process redesign epic #248).
 
 ## Versioning policy
 
+Versioning is how this crate makes rollback possible without a second copy of
+anything:
+[principle 8 — rollback is versioning and pinning, not duplicate code](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#8-rollback-is-versioning-and-pinning-not-duplicate-code)
+of the family-wide
+[engineering principles](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md).
+A consumer recovers from a bad release by re-pinning the last known-good
+revision — NEAT-AI its `neatCore.rev` and `assetSha256`, NEAT-AI-scorer the
+crate version — never by reviving a superseded implementation as a fallback.
+[`AGENTS.md`](AGENTS.md#family-wide-engineering-principles) reads those
+principles for this crate.
+
 `neat-core` follows [Semantic Versioning](https://semver.org/). The single
 source of truth is `[workspace.package].version` in the root `Cargo.toml`; the
 `neat-core` crate inherits it via `version.workspace = true`.

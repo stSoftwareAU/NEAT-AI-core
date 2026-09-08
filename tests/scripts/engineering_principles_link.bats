@@ -19,6 +19,7 @@ setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   AGENTS="${REPO_ROOT}/AGENTS.md"
   README="${REPO_ROOT}/README.md"
+  RELEASING="${REPO_ROOT}/RELEASING.md"
   # The canonical document lives in another repository, so the link must be an
   # absolute URL on that repository's default branch.
   CANONICAL_URL="https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md"
@@ -105,11 +106,11 @@ PY
   # `docs/ENGINEERING_PRINCIPLES.md` does not exist in this repository, so a
   # relative link to it is a broken link for every reader.
   [ ! -f "${REPO_ROOT}/docs/ENGINEERING_PRINCIPLES.md" ]
-  run env AGENTS_MD="$AGENTS" README_MD="$README" python3 - <<'PY'
+  run env AGENTS_MD="$AGENTS" README_MD="$README" RELEASING_MD="$RELEASING" python3 - <<'PY'
 import os, re, sys
 
 bad = []
-for path in (os.environ["AGENTS_MD"], os.environ["README_MD"]):
+for path in (os.environ["AGENTS_MD"], os.environ["README_MD"], os.environ["RELEASING_MD"]):
     text = open(path, encoding="utf-8").read()
     for target in re.findall(r"\]\(([^)]*ENGINEERING_PRINCIPLES\.md[^)]*)\)", text):
         if not target.startswith("https://github.com/stSoftwareAU/NEAT-AI/"):
@@ -127,6 +128,18 @@ PY
   local body
   body="$(section_text "$README" "## Test-driven development")"
   run grep -qF "$CANONICAL_URL" <<<"$body"
+  [ "$status" -eq 0 ]
+}
+
+@test "RELEASING.md's versioning policy points at the canonical rollback rule" {
+  # Rollback by re-pinning is a release decision, so a releaser must meet the
+  # canonical rule in the document they are already reading.
+  run assert_section_matches "$RELEASING" "## Versioning policy" \
+    "the canonical principle is named=rollback is versioning and pinning" \
+    "rollback is a repin of a known-good revision=re-?pin\\w*[^.]*(revision|version)" \
+    "not a revived duplicate implementation=(never|not)[^.]*(revi\\w+|duplicate|second)[^.]*(implementation|fallback)"
+  [ "$status" -eq 0 ]
+  run grep -qF "$CANONICAL_URL" "$RELEASING"
   [ "$status" -eq 0 ]
 }
 
@@ -176,9 +189,9 @@ PY
   # pre-pull-request checklist; neither is duplicated into this repository.
   # (The numbered headings this file does carry — the oracle rules — are
   # core-specific and have no counterpart in the shared document.)
-  run grep -qiE '^#+ .*before you open a pull request' "$AGENTS" "$README"
+  run grep -qiE '^#+ .*before you open a pull request' "$AGENTS" "$README" "$RELEASING"
   [ "$status" -ne 0 ]
-  run env AGENTS_MD="$AGENTS" README_MD="$README" python3 - <<'PY'
+  run env AGENTS_MD="$AGENTS" README_MD="$README" RELEASING_MD="$RELEASING" python3 - <<'PY'
 import os, re, sys
 
 # Titles owned by the canonical document; a local heading repeating one of them
@@ -197,7 +210,7 @@ CANONICAL_TITLES = [
     "public libraries stay application-agnostic",
 ]
 copied = []
-for path in (os.environ["AGENTS_MD"], os.environ["README_MD"]):
+for path in (os.environ["AGENTS_MD"], os.environ["README_MD"], os.environ["RELEASING_MD"]):
     for line in open(path, encoding="utf-8"):
         if not line.startswith("#"):
             continue
