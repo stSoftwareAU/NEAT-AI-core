@@ -86,6 +86,12 @@ fast-flagged malicious publishes that are later yanked. `bump-deps.sh` applies
 the window, and the *Upgrade Cargo Dependencies* workflow feeds it from the
 `VIBE_BUMP_QUARANTINE_HOURS` repository variable.
 
+Deferring a version is not enough on its own: `cargo update` is free to move
+crates the bump plan never named. Both update passes therefore snapshot
+`Cargo.lock` and verify it afterwards — an update that drags a deferred crate
+off the version it was held at, or any planned crate off its approved target,
+is reverted and named in the log rather than left in the lock (Issue #614).
+
 ## Emergency quarantine override
 
 This is the single authoritative home for the emergency override / out-of-cycle

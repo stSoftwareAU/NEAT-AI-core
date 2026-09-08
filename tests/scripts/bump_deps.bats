@@ -513,3 +513,61 @@ TXT
   [[ "$output" != *"revert:"* ]]
   grep -qx 'version = "3.1.0"' "$TMP_REPO/Cargo.lock"
 }
+
+# --- Issue #614: the per-crate pass carries the same quarantine contract -----
+
+@test "external: per-crate update dragging a quarantined crate is reverted" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "quarantined 1.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+    Updating quarantined v1.0.0 -> v1.0.1
+TXT
+  python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())' \
+    >"$TMP_REPO/publish/quarantined-1.0.1.iso"
+  # Updating cc on its own drags the deferred crate past the release-age
+  # window — the per-crate update must be reverted, not silently kept.
+  printf 'quarantined 1.0.0 1.0.1\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of cc moved quarantined quarantined off 1.0.0"* ]]
+  [[ "$output" == *"fail: cc -> 1.4.5"* ]]
+  [[ "$output" != *"(cargo update rejected)"* ]]
+  grep -qx 'version = "1.0.0"' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: per-crate update dragging a planned crate off its target is reverted" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "find-msvc-tools 0.1.10"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+    Updating find-msvc-tools v0.1.10 -> v0.1.12
+TXT
+  # cc's update drags find-msvc-tools past the version the quarantine
+  # approved, so cc reverts; the restored lock then lets find-msvc-tools land
+  # its own approved target.
+  printf 'find-msvc-tools 0.1.10 0.1.99\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of cc moved find-msvc-tools off its approved target 0.1.12"* ]]
+  [[ "$output" == *"fail: cc -> 1.4.5"* ]]
+  ! grep -q '0.1.99' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: per-crate update moving an out-of-plan transitive crate is kept" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # cargo must stay free to move an out-of-plan dependency to satisfy the
+  # version it was asked for — the same allowance the grouped retry makes.
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bump: cc -> 1.4.5"* ]]
+  [[ "$output" != *"revert:"* ]]
+  grep -qx 'version = "3.1.0"' "$TMP_REPO/Cargo.lock"
+}
