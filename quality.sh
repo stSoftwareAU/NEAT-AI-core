@@ -57,6 +57,13 @@ echo "🧜 Validating Mermaid blocks..."
 deno test --allow-read --allow-write tests/check_mermaid_test.ts </dev/null
 deno run --allow-read scripts/check_mermaid.ts . </dev/null
 
+# Native/WASM pruning parity record (Issue #592) — the comparator and the
+# committed golden record, which are what stop the wasm entry surface drifting
+# from the native one. The end-to-end check needs a built bundle and runs in
+# wasm-bundle.yml; this half runs everywhere.
+echo "🌿 Checking the native/WASM pruning parity record..."
+deno test --allow-read tests/wasm_prune_parity_test.ts </dev/null
+
 # JSR supply-chain gate (Issue #603) — mirrors the CI typescript-gate step.
 # The committed `deno.json` quarantine (24h `minimumDependencyAge`) and the
 # frozen `deno.lock` are what keep every Deno gate off a freshly-published JSR

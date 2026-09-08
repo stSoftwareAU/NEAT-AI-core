@@ -24,6 +24,7 @@ use crate::derivative::apply_derivative;
 use crate::error::apply_calculate_error;
 use crate::fused_error::apply_fused_error_distribution;
 use crate::propagate_codec::{decode_propagate_buffer, encode_propagate_output};
+use crate::prune_json::{prune_neuron_json, prune_synapse_json};
 use crate::range::{apply_get_range, apply_limit_range, apply_validate_range};
 use crate::safe_zone::{apply_safe_zone_adjustment, apply_safe_zone_adjustment_batch};
 use crate::score_scan::{compute_score_components, scan_max_bias, scan_max_weight};
@@ -220,6 +221,45 @@ pub fn wasm_creature_validate(request: &str) -> String {
 #[wasm_bindgen(js_name = creature_validate_packed)]
 pub fn wasm_creature_validate_packed(request: &[u8], memetic: &str) -> String {
     creature_validate_packed(request, memetic)
+}
+
+// ---------------------------------------------------------------------------
+// prune_neuron / prune_synapse — JSON in, JSON out (Issue #592).
+//
+// One Rust implementation, two entry surfaces. The rewrites themselves are
+// `crate::prune_neuron` and `crate::prune_synapse`; `crate::prune_json` is the
+// only wire form, and these shims rename it for JS — so nothing about pruning
+// is decided on this side of the boundary and there is no second
+// implementation to drift.
+//
+//   In:  { "creature": <CreatureExport>, "uuid": "h-1", "stats"?: { … } }
+//        { "creature": <CreatureExport>,
+//          "synapse": { "fromUUID": …, "toUUID": …, "type"?: … },
+//          "stats"?: { … } }
+//   Out: { "ok": true,  "creature": <CreatureExport>, "transform": "exact",
+//          "passes": 2, "biasFolds": [ … ], "uncompensated": [ … ] }
+//        { "ok": false, "failure": { "reason", "message", "malformed" } }
+//
+// `malformed: true` marks a payload that never reached the rewrite, led by
+// `MALFORMED_REQUEST:` — the same convention `creature_validate` uses, and for
+// the same reason: a panic here aborts the module and `catch_unwind` is
+// unavailable on wasm.
+//
+// No scorer and no acceptance policy live here or in the native crate: a
+// successful call answers with a valid creature and an honest `transform`
+// label, and what to do with it is the caller's decision (Issue #587).
+// ---------------------------------------------------------------------------
+
+/// JS `prune_neuron(request: string) -> string`.
+#[wasm_bindgen(js_name = prune_neuron)]
+pub fn wasm_prune_neuron(request: &str) -> String {
+    prune_neuron_json(request)
+}
+
+/// JS `prune_synapse(request: string) -> string`.
+#[wasm_bindgen(js_name = prune_synapse)]
+pub fn wasm_prune_synapse(request: &str) -> String {
+    prune_synapse_json(request)
 }
 
 // ---------------------------------------------------------------------------

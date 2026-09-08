@@ -172,6 +172,24 @@ jobs:
             parity/wasm32/pkg parity/wasm64/pkg
           rm -rf parity
 
+      # Issue #592 — the pruning rewrite APIs are one Rust implementation behind
+      # two entry surfaces (native `prune_neuron_json` / `prune_synapse_json`
+      # and the `#[wasm_bindgen]` renames). The committed golden record holds
+      # the requests and the answers *native* gives them, so driving the
+      # published bytes through the same requests is what proves the second
+      # surface did not drift. Both arches are checked: a bundle that answers
+      # correctly on wasm32 and not on wasm64 is exactly the pointer-width
+      # failure this pair of gates exists to catch.
+      - name: Check native / WASM pruning parity
+        run: |
+          set -euo pipefail
+          rm -rf prune-parity && mkdir -p prune-parity/wasm32 prune-parity/wasm64
+          tar -xzf wasm_activation-pkg.tar.gz -C prune-parity/wasm32
+          tar -xzf wasm_activation-wasm64-pkg.tar.gz -C prune-parity/wasm64
+          deno run --allow-read scripts/check_wasm_prune_parity.ts prune-parity/wasm32/pkg
+          deno run --allow-read scripts/check_wasm_prune_parity.ts prune-parity/wasm64/pkg
+          rm -rf prune-parity
+
       # Issue #438 — publish a per-revision SHA-256 anchor next to each tarball.
       # NEAT-AI's build.sh verifies the downloaded bundle against this sidecar;
       # without it the only hash a consumer holds for a *new* revision is the

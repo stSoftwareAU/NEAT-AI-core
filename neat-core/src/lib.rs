@@ -34,6 +34,11 @@ pub mod loss;
 pub mod network;
 pub mod parallel_scoring;
 pub mod propagate_codec;
+pub mod prune_cleanup;
+pub mod prune_fixtures;
+pub mod prune_json;
+pub mod prune_neuron;
+pub mod prune_synapse;
 pub mod range;
 pub mod safe_zone;
 pub mod score_scan;
@@ -100,6 +105,29 @@ pub use if_graft::{
     graft_if_node, graft_if_nodes, graft_if_tree, graft_relay_node, validate_creature_topology,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
+// Issue #589 — the canonical fixed-point cleanup every prune operation reuses.
+pub use prune_cleanup::{
+    CleanupError, CleanupOptions, CleanupOutcome, IfRepair, MAX_SUPPORT_CONSTANTS,
+    SUPPORT_CONSTANT_BIAS, StaticIfRewrite, SynapseKey, cleanup_creature, cleanup_creature_with,
+};
+// Issue #588 — the TypeScript pruning behaviour, captured as parity fixtures.
+pub use prune_fixtures::{PRUNE_PARITY_CASES, PruneCase, PruneRequest};
+// Issue #590 — hidden-neuron pruning with optional statistical compensation.
+pub use prune_neuron::{
+    BiasFold, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, TransformClass,
+    UncompensatedReason, UncompensatedTarget, WeightShare, prune_neuron,
+};
+// Issue #591 — synapse pruning with typed-role and `IF`-aware rewrites.
+pub use prune_synapse::prune_synapse;
+// Issue #592 — the JSON ABI both the native and the WASM surface answer on.
+pub use prune_json::{
+    BiasFoldJson, PruneFailureJson, PruneResponse, StaticIfJson, SynapseKeyJson, UncompensatedJson,
+    WeightShareJson, prune_neuron_json, prune_synapse_json,
+};
+// The parity record is native-only test scaffolding, so it is not part of the
+// surface the published wasm bundle carries.
+#[cfg(not(target_family = "wasm"))]
+pub use prune_json::{GOLDEN_PATH, PruneGoldenCase, PruneOp, prune_golden_cases, run_golden_case};
 pub use squash::SquashType;
 pub use synapse_type::SynapseType;
 pub use training_data::{
