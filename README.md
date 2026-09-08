@@ -655,8 +655,9 @@ reported as a `CleanupError`, never handed back.
 
 `CleanupOutcome` carries the creature plus what the cleanup cost: the neurons
 and synapses removed, the hidden neurons folded into constant support, the
-constants rescaled or merged, the `IF` neurons downgraded, and how many passes
-the fixed point took. Callers own *which* neuron or synapse to try and any
+constants rescaled or merged, the `IF` neurons downgraded (or, under
+`IfRepair::Rewrite`, flattened and role-restored), and how many passes the fixed
+point took. Callers own *which* neuron or synapse to try and any
 statistical compensation (Issues #590 / #591); cleanup owns the exact structural
 repair.
 
@@ -678,6 +679,17 @@ required role can no longer branch at all.
 A `MEAN` target divides by its inward **count** and a `HYPOT` squares each term,
 so merging two edges there would change the value — cleanup refuses, keeps the
 constants apart, and never trades correctness for the constant budget.
+
+#### Two `IF` repair policies (Issue #591)
+
+The inexact `IF` repair above is a **policy**, not a fixed rule.
+`cleanup_creature` keeps TypeScript parity (`IfRepair::Downgrade`), which is what
+the `prune_fixtures.rs` captures record and what Issue #590's neuron removal
+uses. `cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a
+caller ask for `IfRepair::Rewrite` instead — the exact rewrites synapse pruning
+uses, described under [Synapse pruning](#synapse-pruning-issue-591). Under that
+policy `CleanupOutcome::downgraded_if_neurons` is always empty and
+`static_if_neurons` / `restored_if_roles` carry the rewrites that replaced it.
 
 #### Constants are support nodes
 

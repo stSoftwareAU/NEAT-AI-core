@@ -7,10 +7,14 @@
 //! the case-specific tests below derive the numbers from the documented formula
 //! rather than restating the fixture.
 //!
-//! The oracle is deliberately *not* a pruning implementation — there is none
-//! yet. It is the TypeScript output plus the rules that output obeys, so when
-//! the shared helpers land (Issues #590 / #591) the same fixtures grade them
-//! with `prune(case.before(), case.request) == case.after()`.
+//! The oracle here is deliberately *not* a pruning implementation. It is the
+//! TypeScript output plus the rules that output obeys, so this suite keeps its
+//! value independently of the shared helpers. Those helpers now exist and are
+//! graded by the same fixtures with
+//! `prune(case.before(), case.request) == case.after()`:
+//! `neat-core/tests/prune_neuron.rs` (Issue #590) for the `RemoveNeuron`
+//! captures, `neat-core/tests/prune_synapse.rs` (Issue #591) for the
+//! `RemoveSynapse` ones.
 
 use neat_core::{
     CreatureExport, PRUNE_PARITY_CASES, PruneCase, PruneRequest, SquashType, SynapseType,
