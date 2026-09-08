@@ -62,6 +62,11 @@ Bumping is automated by the `version-increment` job in
 - By default it bumps the **patch**.
 - When a **breaking signal** is present it bumps the **minor** (pre-1.0) instead,
   via `scripts/next-version.sh`.
+- It skips the bump only when the head version **already satisfies the policy**
+  for that signal, decided by `scripts/version-bump-needed.sh`. A bump commit
+  already sitting on the branch is not proof on its own: a milestone branch
+  collects patch bumps from its sub-PRs and may then acquire a breaking commit,
+  so the branch still owes a minor bump.
 
 ### Signalling a breaking change
 
@@ -87,8 +92,9 @@ compares the base-branch version against the head version using
 - a non-breaking PR may bump the patch (over-bumping is allowed).
 
 These scripts are pure and unit-tested under `tests/scripts/`
-(`next_version.bats`, `check_version_bump.bats`, `detect_breaking.bats`), so the
-policy logic is verified independently of CI.
+(`next_version.bats`, `check_version_bump.bats`, `detect_breaking.bats`,
+`version_bump_needed.bats`), so the policy logic is verified independently of
+CI.
 
 ## Tags and GitHub releases
 
