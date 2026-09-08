@@ -145,7 +145,7 @@ fn read_f64_le(buf: &[u8], offset: usize) -> f64 {
 /// (the release profile carries no `overflow-checks`), agrees with a buffer
 /// nowhere near long enough, and sends the per-record reads below off the end
 /// of it — and a panic here aborts the module. Sixty-four bits hold the
-/// largest total the counts can express (about 240 GB) with room to spare, so
+/// largest total the counts can express (256 GiB) with room to spare, so
 /// the comparison against `data.len()` is decided before any `usize` offset is
 /// built. Mirrors `packed_request_len_wide` in `creature_validate_packed`.
 fn expected_size_wide(

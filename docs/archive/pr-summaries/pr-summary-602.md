@@ -23,27 +23,31 @@ Closes #602.
 Backend/codec change with no web interface to screenshot. The evidence is the
 regression tests, observed red then green.
 
-**Red against the unfixed arithmetic.** The native test host is 64-bit, where
-the pre-fix `usize` sum does not wrap, so the fault is unreachable natively as
-written. To observe the original symptom, `expected_size_wide`'s body was
-temporarily replaced with the pre-fix sum evaluated at the shipped wasm32
-width (`u32` wrapping arithmetic — the same expression, the same operand
-order). Against that, all three boundary tests failed — each with the exact
-reported symptom, an out-of-bounds index off the end of the short buffer
-rather than a `BufferTruncated` error:
+**Red against the unfixed arithmetic.** Added
+`neat-core/tests/propagate_codec_header_bounds.rs::a_neuron_count_whose_size_wraps_a_32_bit_usize_is_refused`,
+which reproduces the flaw, fails against the unfixed code and passes after the
+fix — together with the two sibling tests below.
+
+The native test host is 64-bit, where the pre-fix `usize` sum does not wrap, so
+the fault is unreachable natively as written. To observe the original symptom,
+`expected_size_wide`'s body was temporarily replaced with the pre-fix sum
+evaluated at the shipped wasm32 width (`u32` wrapping arithmetic — the same
+expression, the same operand order). Against that, all three boundary tests
+failed — each with the exact reported symptom, an out-of-bounds index off the
+end of the short buffer rather than a `BufferTruncated` error:
 
 ```
 ---- a_neuron_count_whose_size_wraps_a_32_bit_usize_is_refused stdout ----
-thread '...' panicked at neat-core/src/propagate_codec.rs:215:26:
-index out of bounds: the len is 36 but the index is 36
----- a_synapse_count_no_buffer_could_hold_is_refused stdout ----
-thread '...' panicked at neat-core/src/propagate_codec.rs:108:9:
+thread '...' panicked at neat-core/src/propagate_codec.rs:216:26:
 index out of bounds: the len is 36 but the index is 36
 ---- flat_section_counts_no_buffer_could_hold_are_refused stdout ----
 thread '...' panicked at neat-core/src/propagate_codec.rs:118:9:
 index out of bounds: the len is 36 but the index is 36
+---- a_synapse_count_no_buffer_could_hold_is_refused stdout ----
+thread '...' panicked at neat-core/src/propagate_codec.rs:108:9:
+index out of bounds: the len is 36 but the index is 36
 
-test result: FAILED. 0 passed; 3 failed
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 The two in-module unit tests fail against the same simulation on their
@@ -60,11 +64,13 @@ running 3 tests
 test a_synapse_count_no_buffer_could_hold_is_refused ... ok
 test a_neuron_count_whose_size_wraps_a_32_bit_usize_is_refused ... ok
 test flat_section_counts_no_buffer_could_hold_are_refused ... ok
-test result: ok. 3 passed; 0 failed
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-`./quality.sh` passes in full (fmt, clippy `-D warnings`, `cargo check`,
-workspace tests, doctests, docs, release build, `cargo deny`).
+`./quality.sh` passes in full, exit 0 — shellcheck, the Deno TypeScript,
+Mermaid and JSR supply-chain gates, `cargo deny`, `cargo fmt --all`, clippy
+`-D warnings`, `cargo check`, 271 lib tests plus every integration test, 8
+doctests, `cargo doc -D warnings` and the release build.
 
 **Original trigger closed, no trivial bypass.** The trigger is a header whose
 declared counts require more bytes than a 32-bit `usize` can express.
