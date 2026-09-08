@@ -57,6 +57,13 @@ echo "🧜 Validating Mermaid blocks..."
 deno test --allow-read --allow-write tests/check_mermaid_test.ts </dev/null
 deno run --allow-read scripts/check_mermaid.ts . </dev/null
 
+# JSR supply-chain gate (Issue #603) — mirrors the CI typescript-gate step.
+# The committed `deno.json` quarantine (24h `minimumDependencyAge`) and the
+# frozen `deno.lock` are what keep every Deno gate off a freshly-published JSR
+# release; this test fails loud if either is removed or weakened.
+echo "🔒 Checking JSR dependency quarantine and lockfile..."
+deno test --allow-read --allow-write --allow-run=deno tests/deno_supply_chain_test.ts </dev/null
+
 # Optional: codespell (CI runs this; install: pip install codespell)
 if command -v codespell &>/dev/null; then
     echo "📖 Running codespell..."
