@@ -213,7 +213,7 @@ This repository has no `CODING-STANDARDS.md`; its documented standards live in
 - **violation** — a reported statistic a caller could not act on: `residual_variance` could come back negative from statistics no sample could produce — evidence: `neat-core/src/prune_neuron.rs::compensate` — reason: fixed here — `PruneError::InconsistentCovariance` refuses them, with the `|ρ| = 1` boundary pinned so the guard cannot over-reach (M27/M28)
 - **violation** — the mutation record and the PR summary were not committed with the diff — evidence: `docs/archive/pr-summaries/pr-summary-590.md` — reason: fixed here — this file is committed with the change, and its counts are the ones the final sweep produced
 - **clean** — Australian English throughout; no hidden files or config drift; tests call real functions and assert on returned creatures, biases, weights and typed errors, never on source text
-- **clean** — oracle rule 1: three independent oracles (activation equality, arithmetic derived in the test, the Issue #588 captures), none re-using the code under test
+- **clean** — oracle rule 1: three independent oracles (activation equality, arithmetic derived in the test, the Issue #588 captures), none reusing the code under test
 - **clean** — fail-closed error surface: typed `PruneError` with `Display` and `Error::source`, every variant returning no creature, and no `unwrap`/`expect`/`panic!` in the library code
 - **clean** — single-home reuse: `zero_inward_activation` widened to `pub(crate)` rather than restated, `SquashType::is_aggregate` rather than a second membership list, cleanup and validation delegated
 - **clean** — ownership fence (Issue #544), build profiles, wasm cfg and `unsafe` untouched; README and the parity matrix updated in step with the code
