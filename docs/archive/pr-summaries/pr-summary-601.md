@@ -117,8 +117,9 @@ the toolchain shim.
 
 ## Rebase note
 
-The branch's checkpointed work predated 40+ commits on `Develop` and its own
-merged-in `Develop` commits had since been squash-merged upstream, so a PR from
-it would have reverted ~12k lines. The fix commit was replayed onto the current
-`Develop` tip and the branch force-pushed; the previous head is preserved on the
-`wip-601-old-head` tag locally.
+The branch's checkpointed work predated 40+ commits on `Develop`, and the
+`Develop` commits it had merged in were since squash-merged upstream under
+different SHAs, so a PR from it would have reverted ~12k lines of `Develop`.
+The checkpointed fix commit (`Reject headers declaring more inputs than
+neurons`) was replayed verbatim onto the current `Develop` tip and the branch
+force-pushed — nothing else on it was this issue's work.
