@@ -81,7 +81,12 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       - name: Install cargo-audit and cargo-outdated
-        # cargo-audit is required by bump-deps.sh; cargo-outdated is used for the
+        # cargo-audit is the *fallback* advisory scanner for bump-deps.sh, not a
+        # requirement: since Issue #598 the script prefers `cargo deny check
+        # advisories` and falls back to `cargo audit`, and since Issue #621 it
+        # skips the scan — reverting the run's bumps rather than landing them
+        # unscanned — when neither is installed. Installing it here keeps this
+        # runner's scan working without cargo-deny. cargo-outdated is used for the
         # informational report below. cargo-edit is intentionally dropped — the
         # dep refresh now goes through bump-deps.sh (cargo update), not
         # cargo upgrade, so cargo-edit is no longer needed.
