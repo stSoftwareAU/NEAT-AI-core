@@ -53,7 +53,7 @@ if [ ! -d "tests/scripts" ]; then
     echo "tests/scripts is required — the bats shell-harness suite is missing"
     exit 1
 fi
-if [ -z "$(find tests/scripts -maxdepth 1 -type f -name '*.bats')" ]; then
+if [ -z "$(find tests/scripts -maxdepth 1 ! -type d -name '*.bats')" ]; then
     echo "tests/scripts holds no *.bats files — the shell-harness suite is empty"
     exit 1
 fi
