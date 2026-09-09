@@ -149,7 +149,7 @@ quality.sh` clean. `cargo test --workspace --lib --tests --all-features` green
   (`find -maxdepth 1 ! -type d -name`, `mktemp -d`, `command -v`, no GNU-only
   flags); tests call real code rather than grepping source text; the harness
   fails loud when the marker block or the success line disappears; no hidden
-  paths staged; file size 121 lines, within suite norms; markdownlint and CI
+  paths staged; file size 130 lines, within suite norms; markdownlint and CI
   unaffected
 
 ## Test Plan
