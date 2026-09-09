@@ -621,31 +621,58 @@ fn gate_rejects_an_output_width_past_the_u32_index_space() {
 /// The same rule for the observation width, and it is checked before the UUID
 /// index is built: the index names one entry per declared input, so a width
 /// this size has to be refused on sight rather than walked.
+///
+/// **The refusal moved earlier in Issue #622, and this assertion moved with
+/// it.** The declared width is now bounded against `MAX_NODE_COUNT` by
+/// `validate_creature_width` — the first thing `validate_creature_topology`
+/// runs — so an input width past the `u32` index space is refused as
+/// [`CreatureError::TooManyNodes`] and never reaches the representability gate
+/// behind it. That is strictly stronger, not weaker: 65 536 is far below
+/// `u32::MAX`, so every width this test used to refuse is still refused, and
+/// sooner. The representability rule keeps its own coverage at both edges in
+/// `if_graft`'s in-module tests
+/// (`an_input_width_past_the_index_space_is_refused`).
 #[test]
 fn gate_rejects_an_input_width_past_the_u32_index_space() {
     let mut creature = base_creature();
     creature.input = width_past_u32_index_space();
+    // The typed error carries the declared node count — the width plus the two
+    // listed neurons — exactly as it does after compilation.
+    let expected = width_past_u32_index_space() + creature.neurons.len();
     let err = validate_creature_topology(&creature).expect_err("rejected");
-    assert!(matches!(
-        err,
-        GraftError::CountNotRepresentable { field: "input", found }
-            if found == width_past_u32_index_space() as u64
-    ));
+    assert!(
+        matches!(
+            err,
+            GraftError::Creature(CreatureError::TooManyNodes { count }) if count == expected
+        ),
+        "expected a typed TooManyNodes refusal naming {expected} nodes, got {err:?}"
+    );
 }
 
 /// A declared width that fits `u32` but pushes the node count past it is
 /// refused too — every `from`/`to` index the gate casts is bounded by that
 /// count, so the cast is lossless only while the count fits.
+///
+/// Same move as above (Issue #622): the ceiling on the declared width answers
+/// first, so the node count never gets the chance to overflow the index space
+/// through `input`. Reaching the `node` leg of `bounded_counts` through a
+/// creature would now take `u32::MAX` *listed* neurons — unbuildable — so that
+/// leg is exercised directly in-module
+/// (`a_node_count_one_past_the_index_space_is_refused`), per AGENTS.md oracle
+/// rule 5.
 #[test]
 fn gate_rejects_a_node_count_past_the_u32_index_space() {
     let mut creature = base_creature();
     creature.input = u32::MAX as usize;
+    let expected = u32::MAX as usize + creature.neurons.len();
     let err = validate_creature_topology(&creature).expect_err("rejected");
-    let expected = u64::from(u32::MAX) + creature.neurons.len() as u64;
-    assert!(matches!(
-        err,
-        GraftError::CountNotRepresentable { field: "node", found } if found == expected
-    ));
+    assert!(
+        matches!(
+            err,
+            GraftError::Creature(CreatureError::TooManyNodes { count }) if count == expected
+        ),
+        "expected a typed TooManyNodes refusal naming {expected} nodes, got {err:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -18,21 +18,44 @@
 //! Modelled on `tests/topology_ops_allocations.rs`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::cell::Cell;
 
 use neat_core::if_graft::{GraftError, validate_creature_topology};
 use neat_core::network::MAX_NODE_COUNT;
 use neat_core::{CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature};
 
+thread_local! {
+    /// Bytes handed to **this thread** since it last zeroed the counter.
+    ///
+    /// Per-thread rather than process-wide: `quality.sh` runs the suite with
+    /// `--test-threads=2`, so the two tests below execute concurrently and a
+    /// global counter bills each of them for the other's allocations — a real
+    /// failure this file saw. A thread-local counter needs no lock and is
+    /// exact, because every allocation a measured call makes happens on the
+    /// thread that made the call.
+    ///
+    /// `const`-initialised on purpose: a lazily initialised thread-local would
+    /// allocate on first touch, and the first touch is *inside* the allocator.
+    /// `Cell<usize>` has no destructor either, so there is no TLS-teardown
+    /// window in which the access could fail.
+    ///
+    /// The counter is **monotonic** — `dealloc` does not decrement it — so
+    /// zeroing it before a measurement can never leave it out of step with
+    /// memory that was already live. A live-bytes counter cannot: freeing
+    /// something allocated before the reset underflows it, and the arithmetic
+    /// then panics *inside* the allocator, which deadlocks the harness rather
+    /// than failing a test.
+    static THREAD_BYTES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Bill the calling thread for `bytes`, saturating rather than wrapping so a
+/// runaway walk cannot roll the reading back around to a small number.
+fn bill(bytes: usize) {
+    let _ = THREAD_BYTES.try_with(|counter| counter.set(counter.get().saturating_add(bytes)));
+}
+
 /// Global allocator forwarding to the system allocator while totalling the
-/// bytes it hands out.
-///
-/// The counter is **monotonic** — `dealloc` does not decrement it — so zeroing
-/// it before a measurement can never leave it out of step with memory that was
-/// already live. A live-bytes counter cannot: freeing something allocated
-/// before the reset underflows it, and the arithmetic then panics *inside* the
-/// allocator, which deadlocks the harness rather than failing a test.
+/// bytes it hands out, per thread.
 ///
 /// `realloc` is deliberately *not* forwarded to `System.realloc` — the default
 /// `GlobalAlloc::realloc` allocates, copies and frees, which is the behaviour a
@@ -41,17 +64,15 @@ use neat_core::{CreatureError, CreatureExport, NeuronExport, SynapseExport, comp
 /// allocator happened to extend a block in place.
 struct TrackingAllocator;
 
-static TOTAL_BYTES: AtomicUsize = AtomicUsize::new(0);
-
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        TOTAL_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        bill(layout.size());
         // SAFETY: forwarding an unchanged layout to the system allocator.
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        TOTAL_BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+        bill(layout.size());
         // SAFETY: forwarding an unchanged layout to the system allocator.
         unsafe { System.alloc_zeroed(layout) }
     }
@@ -64,9 +85,6 @@ unsafe impl GlobalAlloc for TrackingAllocator {
 
 #[global_allocator]
 static ALLOCATOR: TrackingAllocator = TrackingAllocator;
-
-/// The counters are process-wide, so only one measurement runs at a time.
-static MEASURING: Mutex<()> = Mutex::new(());
 
 /// A declared width far above [`MAX_NODE_COUNT`], kept small enough that an
 /// unbounded walk still finishes rather than exhausting the test runner: the
@@ -127,21 +145,16 @@ fn creature_declaring(input: usize) -> CreatureExport {
     }
 }
 
-/// Take the measurement lock and zero the counter.
-fn start_measuring() -> MutexGuard<'static, ()> {
-    let guard = MEASURING.lock().unwrap_or_else(|e| e.into_inner());
-    TOTAL_BYTES.store(0, Ordering::Relaxed);
-    guard
-}
-
-/// Bytes allocated while `refuse` turns `input` away, measured on its own.
+/// Bytes this thread allocated while `refuse` turned `input` away.
+///
+/// The creature is built *before* the counter is zeroed, so the reading covers
+/// the refusal alone and nothing that set it up.
 fn cost_of_refusing(input: usize, refuse: impl Fn(&CreatureExport) -> bool) -> usize {
     let creature = creature_declaring(input);
 
-    let guard = start_measuring();
+    THREAD_BYTES.with(|counter| counter.set(0));
     let refused = refuse(&creature);
-    let spent = TOTAL_BYTES.load(Ordering::Relaxed);
-    drop(guard);
+    let spent = THREAD_BYTES.with(Cell::get);
 
     assert!(refused, "a declared input of {input} must be refused");
     spent

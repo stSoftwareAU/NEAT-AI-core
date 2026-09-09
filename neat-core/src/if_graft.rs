@@ -617,12 +617,15 @@ struct DeclaredCounts {
 /// is now [`GraftError::CountNotRepresentable`], and the node count it returns
 /// is what makes the `from`/`to` casts in the edge loop lossless.
 ///
-/// A creature at this boundary cannot be built in a test — `index_map` names
-/// one entry per declared input — so the rule is exercised directly at its
-/// accepting and rejecting edges (AGENTS.md oracle rule 5) rather than through
-/// a creature. This bounds *representability* only: a width that fits `u32` but
-/// far exceeds [`crate::network::MAX_NODE_COUNT`] is still walked one entry at a
-/// time by `index_map`, which is a separate root cause (Issue #622).
+/// This bounds *representability* only. The narrower rule — a declared width
+/// must fit [`crate::network::MAX_NODE_COUNT`] — is
+/// [`validate_creature_width`], which [`validate_creature_topology`] now runs
+/// first (Issue #622), so by the time a creature reaches here its `input` is
+/// already known to be at most 65 536. That leaves the `input` leg below
+/// unreachable through a creature, and the `node` leg reachable only through
+/// `u32::MAX` *listed* neurons, which no test can build: both are exercised
+/// directly at their accepting and rejecting edges (AGENTS.md oracle rule 5)
+/// rather than through a creature.
 fn bounded_counts(
     input: usize,
     output: usize,
