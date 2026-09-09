@@ -37,15 +37,28 @@ fi
 echo "shellcheck: all scripts passed"
 
 # Bash helper tests (bats) — covers bump-deps.sh and any future shell helpers.
+# Fail loud (Issue #631): `bash -n` and shellcheck above read the shell scripts
+# without running them, so this is the only gate over their behaviour — a
+# missing binary or a missing/empty suite must fail rather than warn and let the
+# run reach "All quality checks passed!".
+# The block between the markers below is extracted and executed verbatim by
+# tests/scripts/quality_bats_gate.bats — keep it self-contained.
+# >>> bats-gate
 echo "🧰 Running bash helper tests (bats)..."
-if command -v bats &>/dev/null; then
-    if [ -d "tests/scripts" ]; then
-        bats tests/scripts
-    fi
-else
-    echo "⚠️  bats not installed — skipping shell helper tests"
-    echo "   Install with: brew install bats-core  (or your package manager)"
+if ! command -v bats &>/dev/null; then
+    echo "bats is required — install: brew install bats-core (or your package manager, e.g. sudo apt-get install -y bats)"
+    exit 1
 fi
+if [ ! -d "tests/scripts" ]; then
+    echo "tests/scripts is required — the bats shell-harness suite is missing"
+    exit 1
+fi
+if [ -z "$(find tests/scripts -maxdepth 1 ! -type d -name '*.bats')" ]; then
+    echo "tests/scripts holds no *.bats files — the shell-harness suite is empty"
+    exit 1
+fi
+bats tests/scripts
+# <<< bats-gate
 
 # Downstream consumers gate (Issue #644) — mirrors the CI downstream-consumers
 # job: every repository in scripts/downstream-consumers.txt must still compile
