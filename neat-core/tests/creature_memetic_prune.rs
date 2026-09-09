@@ -296,3 +296,113 @@ fn prune_to_prunes_a_detached_record() {
         "prune_to does not attach the record"
     );
 }
+
+/// A declared observation width no payload backs — the implicit input neurons
+/// are not listed, so `"input": 1000000` is a hundred bytes of JSON.
+const WIDE_INPUT: usize = 1_000_000;
+
+/// `input-999999 -> o1`, declaring a million observations (Issue #650).
+fn wide_creature() -> CreatureExport {
+    CreatureExport {
+        memetic: None,
+        input: WIDE_INPUT,
+        output: 1,
+        neurons: vec![NeuronExport {
+            id: None,
+            neuron_type: "output".into(),
+            uuid: "o1".into(),
+            bias: 0.0,
+            squash: Some("IDENTITY".into()),
+        }],
+        synapses: vec![SynapseExport {
+            from_uuid: format!("input-{}", WIDE_INPUT - 1),
+            to_uuid: "o1".into(),
+            weight: 1.0,
+            synapse_type: None,
+        }],
+        semantic_version: None,
+        forward_only: false,
+    }
+}
+
+/// The implicit input neurons are derived arithmetically rather than
+/// materialised one view each (Issue #650), so the prune must still answer
+/// exactly as it did: a reference to an input *inside* the declared width
+/// resolves — by either vocabulary — and one past it does not.
+#[test]
+fn prune_resolves_implicit_inputs_across_a_wide_declared_width() {
+    let mut host = wide_creature();
+    host.memetic = Some(MemeticExport {
+        biases: BTreeMap::from([
+            (format!("input-{}", WIDE_INPUT - 1), 0.01),
+            ((WIDE_INPUT - 1).to_string(), 0.02),
+            (format!("input-{WIDE_INPUT}"), 0.03),
+            (WIDE_INPUT.to_string(), 0.04),
+        ]),
+        weights: MemeticWeights::Rows(vec![
+            row(&format!("input-{}", WIDE_INPUT - 1), "o1", 0.9),
+            row("input-0", "o1", 0.8),
+            row(&format!("input-{WIDE_INPUT}"), "o1", 0.7),
+        ]),
+        extra: serde_json::Map::new(),
+    });
+
+    host.prune_memetic();
+
+    let memetic = host.memetic.as_ref().expect("the record itself survives");
+    assert_eq!(
+        memetic.biases.keys().collect::<Vec<_>>(),
+        vec!["999999", "input-999999"],
+        "both vocabularies resolve the last declared input; neither resolves one past it"
+    );
+    assert_eq!(
+        rows_of(memetic),
+        vec![("input-999999".to_string(), "o1".to_string())],
+        "input-0 exists but carries no synapse to o1, and input-1000000 does not exist"
+    );
+}
+
+/// The same arithmetic, through the id-keyed map form: the key and the `toId`
+/// both resolve against a width no payload backs.
+#[test]
+fn prune_resolves_implicit_input_ids_in_the_map_form() {
+    let mut host = wide_creature();
+    host.memetic = Some(MemeticExport {
+        biases: BTreeMap::new(),
+        weights: MemeticWeights::ById(BTreeMap::from([
+            (
+                (WIDE_INPUT - 1).to_string(),
+                vec![
+                    // `o1` is the first output, so its runtime id is -1.
+                    MemeticWeightExport {
+                        to_id: Some(-1),
+                        weight: Some(0.9),
+                    },
+                    // Input 0 exists, but `input-999999 -> input-0` does not.
+                    MemeticWeightExport {
+                        to_id: Some(0),
+                        weight: Some(0.8),
+                    },
+                ],
+            ),
+            // A key one past the declared width names no neuron at all.
+            (
+                WIDE_INPUT.to_string(),
+                vec![MemeticWeightExport {
+                    to_id: Some(-1),
+                    weight: Some(0.7),
+                }],
+            ),
+        ])),
+        extra: serde_json::Map::new(),
+    });
+
+    host.prune_memetic();
+
+    let memetic = host.memetic.as_ref().expect("the record itself survives");
+    assert_eq!(
+        by_id_of(memetic),
+        vec![("999999".to_string(), vec![-1])],
+        "the live edge survives; the absent pair and the out-of-range key go"
+    );
+}
