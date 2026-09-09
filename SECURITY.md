@@ -50,6 +50,13 @@ it rejects any synapse referencing an index outside `0..num_neurons` with
 A network that loads successfully is guaranteed to have every `from_index` in
 range, which is what makes the downstream `get_unchecked` calls sound.
 
+The same entry point also validates the 8-byte header before it allocates:
+`num_inputs > num_neurons` is rejected with `NetworkError::InvalidInputCount`
+(Issue #601). Without it the `num_neurons - num_inputs` subtraction wrapped near
+`usize::MAX` under the release profile's `overflow-checks = false` and aborted
+the whole WASM module in `Vec::with_capacity` — WASM has no `catch_unwind`, so a
+malformed buffer took the host session with it.
+
 **This `from_index < num_neurons` check must never be removed or bypassed.**
 It is the whole memory-safety guarantee for the SIMD hot path — deleting it as
 "redundant" reintroduces the out-of-bounds read. See the engineering-facing
