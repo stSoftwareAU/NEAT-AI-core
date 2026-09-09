@@ -32,6 +32,8 @@
 # lint and the compile gate, and it is still not PR-only.
 
 setup() {
+  # Wires the vendored YAML parser in when PyYAML is missing (Issue #642).
+  load helpers
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   WORKFLOW="${REPO_ROOT}/.github/workflows/ci.yml"
 
