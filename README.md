@@ -517,9 +517,14 @@ straight to `creature_validate`, or to its standalone synapse half
 `ValidationError` / `OTHER` carrying that boundary's wording, instead of buying
 one `NeuronView` per declared input. The JSON boundaries still refuse the same
 creature first, as a *malformed request* rather than a verdict — see the
-boundary table in `creature_validate_json`. `MemeticExport::prune_to` walks the
-same width and is the one route still unbounded (Issue #650): it answers with
-`()`, so refusing needs a public signature change rather than a guard.
+boundary table in `creature_validate_json`. `MemeticExport::prune_to` — and so
+`CreatureExport::prune_memetic` — answers with `()`, so a refusal has nowhere
+to go without a public signature change; it is bounded the other way instead
+(Issue #650). The implicit input neurons take their own index as their runtime
+id, so that half of the id lookup is the identity function: `NeuronIdIndex`
+stores only the listed neurons and derives the input range arithmetically. The
+prune therefore costs what the payload costs, needs no ceiling of its own, and
+resolves every reference exactly as it did before.
 
 The Display text (`Must have at least one input neurons was: 0`) mirrors
 NEAT-AI `src/architecture/CreatureValidate.ts` so logs line up across the TS

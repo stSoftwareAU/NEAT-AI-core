@@ -1034,11 +1034,10 @@ fn derived_neuron_id(uuid: &str) -> Option<i64> {
 /// spent here from a payload under 100 bytes. [`creature_validate`] and
 /// [`validate_synapse_and_memetic_rules`] call that check first.
 /// [`MemeticExport::prune_to`] — and so [`CreatureExport::prune_memetic`] —
-/// does **not**, and is the residual this crate still owes a bound (Issue
-/// #650): it answers with `()`, so it cannot report the refusal without a
-/// public signature change, and every route reaching it inside this crate
-/// comes through a boundary that bounded the width first. A new caller owes
-/// the same check.
+/// answers with `()` and so has nowhere to report that refusal; it does not
+/// call this at all, resolving through [`NeuronIdIndex`] instead, which prices
+/// the same lookup by the payload (Issue #650). A new caller of *this* owes the
+/// check.
 fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
     let mut views = Vec::with_capacity(declared_node_count(creature));
 
@@ -1054,21 +1053,11 @@ fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
         });
     }
 
-    let mut output_index: i64 = 0;
-    for neuron in &creature.neurons {
-        let kind = NeuronKind::from_declared(&neuron.neuron_type);
-        let id = if kind == NeuronKind::Output {
-            let id = -(output_index + 1);
-            output_index += 1;
-            Some(id)
-        } else {
-            neuron.id.or_else(|| derived_neuron_id(&neuron.uuid))
-        };
-
+    for (neuron, id) in creature.neurons.iter().zip(listed_neuron_ids(creature)) {
         views.push(NeuronView {
             id,
             non_integer_id: None,
-            kind,
+            kind: NeuronKind::from_declared(&neuron.neuron_type),
             declared_type: &neuron.neuron_type,
             uuid: Some(neuron.uuid.as_str()),
             bias: Some(neuron.bias),
@@ -1077,6 +1066,94 @@ fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
     }
 
     views
+}
+
+/// The runtime id NEAT-AI's loader assigns each **listed** neuron, in order —
+/// `None` where no id can be derived at all.
+///
+/// Outputs are numbered `-(outputIndex + 1)` from their position among the
+/// outputs, so the derivation is stateful and has to be walked in order. It
+/// lives here rather than inline so [`neuron_views`] and [`NeuronIdIndex`] read
+/// the same rule: the two must agree on every id, or a memetic reference would
+/// resolve differently depending on which of them the caller went through.
+fn listed_neuron_ids(creature: &CreatureExport) -> impl Iterator<Item = Option<i64>> + '_ {
+    let mut output_index: i64 = 0;
+    creature.neurons.iter().map(move |neuron| {
+        if NeuronKind::from_declared(&neuron.neuron_type) == NeuronKind::Output {
+            let id = -(output_index + 1);
+            output_index += 1;
+            Some(id)
+        } else {
+            neuron.id.or_else(|| derived_neuron_id(&neuron.uuid))
+        }
+    })
+}
+
+/// The walk index each runtime **id** names.
+///
+/// Rule 31 and its inverse both resolve an id-keyed memetic reference to the
+/// index the rules walk over, and both used to do it by building a map from
+/// materialised [`NeuronView`]s — one view per *declared* input, a count no
+/// payload backs (Issues #622, #639, #650).
+///
+/// Only the listed neurons need storing. The implicit input neurons occupy
+/// indices `0..input` and take their own index as their id, so that half of the
+/// map is the identity function and is answered arithmetically: the cost
+/// follows the payload, and an entry point with nowhere to report a refusal —
+/// [`MemeticExport::prune_to`] — needs no ceiling of its own.
+///
+/// A listed neuron declaring an id inside the input range shadows that input,
+/// which is the order [`neuron_views`] built the map in: inputs first, listed
+/// neurons over the top.
+struct NeuronIdIndex {
+    /// Listed neurons by derived id, at their walk index (`input + i`).
+    listed: HashMap<i64, u32>,
+    /// The declared observation width — the implicit `0..input` id range.
+    input: usize,
+}
+
+impl NeuronIdIndex {
+    /// The index for a creature in export form: the listed neurons stored, the
+    /// implicit inputs derived.
+    fn build(creature: &CreatureExport) -> Self {
+        let mut listed: HashMap<i64, u32> = HashMap::with_capacity(creature.neurons.len());
+        for (i, id) in listed_neuron_ids(creature).enumerate() {
+            if let Some(id) = id {
+                listed.insert(id, (creature.input + i) as u32);
+            }
+        }
+
+        Self {
+            listed,
+            input: creature.input,
+        }
+    }
+
+    /// The index for views already materialised. The runtime shape carries its
+    /// inputs as views like any other neuron, so nothing is derived here and
+    /// the arithmetic half is switched off with an empty input range.
+    fn from_views(views: &[NeuronView<'_>]) -> Self {
+        let mut listed: HashMap<i64, u32> = HashMap::with_capacity(views.len());
+        for (index, view) in views.iter().enumerate() {
+            if let Some(id) = view.id {
+                listed.insert(id, index as u32);
+            }
+        }
+
+        Self { listed, input: 0 }
+    }
+
+    /// The walk index this runtime id names, or `None` when it names no neuron.
+    fn index_of_id(&self, id: i64) -> Option<u32> {
+        if let Some(index) = self.listed.get(&id) {
+            return Some(*index);
+        }
+        // An implicit input neuron is its own index.
+        let index = usize::try_from(id).ok()?;
+        (index < self.input)
+            .then(|| u32::try_from(index).ok())
+            .flatten()
+    }
 }
 
 /// The one home of the rule that turns a **wire UUID** into the index the
@@ -1688,12 +1765,7 @@ fn memetic_rules(
     to_indices: &[u32],
     memetic: &MemeticView<'_>,
 ) -> Result<(), ValidationFailure> {
-    let mut id_to_index: HashMap<i64, u32> = HashMap::with_capacity(views.len());
-    for (index, view) in views.iter().enumerate() {
-        if let Some(id) = view.id {
-            id_to_index.insert(id, index as u32);
-        }
-    }
+    let ids = NeuronIdIndex::from_views(views);
 
     let pairs: HashSet<(u32, u32)> = from_indices
         .iter()
@@ -1701,7 +1773,7 @@ fn memetic_rules(
         .map(|(&from_index, &to_index)| (from_index, to_index))
         .collect();
 
-    let resolve = |key: &str| resolve_memetic_reference(key, &id_to_index, wire);
+    let resolve = |key: &str| resolve_memetic_reference(key, &ids, wire);
 
     for neuron_id in &memetic.biases {
         if resolve(neuron_id).is_none() {
@@ -1714,7 +1786,7 @@ fn memetic_rules(
 
     match &memetic.weights {
         MemeticWeightsView::ById(by_id) => {
-            memetic_map_rules(by_id, &id_to_index, &pairs, &resolve)?;
+            memetic_map_rules(by_id, &ids, &pairs, &resolve)?;
         }
         MemeticWeightsView::Rows(rows) => {
             memetic_row_rules(rows, &pairs, &resolve)?;
@@ -1734,13 +1806,13 @@ fn memetic_rules(
 /// its callers pass `None` and only the id half ever resolves.
 fn resolve_memetic_reference(
     key: &str,
-    id_to_index: &HashMap<i64, u32>,
+    ids: &NeuronIdIndex,
     wire: Option<&WireIndex<'_>>,
 ) -> Option<u32> {
     if let Ok(id) = key.parse::<i64>()
-        && let Some(index) = id_to_index.get(&id)
+        && let Some(index) = ids.index_of_id(id)
     {
-        return Some(*index);
+        return Some(index);
     }
     wire.and_then(|wire| wire.resolve(key))
 }
@@ -1751,7 +1823,7 @@ fn resolve_memetic_reference(
 /// [`MemeticWeightEntries`] is the neutral shape for.
 fn memetic_map_rules(
     by_id: &[(&str, MemeticWeightEntries<'_>)],
-    id_to_index: &HashMap<i64, u32>,
+    ids: &NeuronIdIndex,
     pairs: &HashSet<(u32, u32)>,
     resolve: &impl Fn(&str) -> Option<u32>,
 ) -> Result<(), ValidationFailure> {
@@ -1789,7 +1861,7 @@ fn memetic_map_rules(
                     ),
                 ));
             }
-            let Some(&to_index) = entry.to_id.as_ref().and_then(|id| id_to_index.get(id)) else {
+            let Some(to_index) = entry.to_id.and_then(|id| ids.index_of_id(id)) else {
                 return Err(ValidationFailure::validation(
                     reason::MEMETIC,
                     format!("Memetic from id {synapse_id} has no valid neuron."),
@@ -1908,15 +1980,9 @@ impl MemeticExport {
     /// something a removal caused, so it is left for rule 31 to report in
     /// NEAT-AI's own words rather than quietly deleted here.
     pub fn prune_to(&mut self, creature: &CreatureExport) {
-        let views = neuron_views(creature);
         let wire = WireIndex::build(creature);
+        let ids = NeuronIdIndex::build(creature);
 
-        let mut id_to_index: HashMap<i64, u32> = HashMap::with_capacity(views.len());
-        for (index, view) in views.iter().enumerate() {
-            if let Some(id) = view.id {
-                id_to_index.insert(id, index as u32);
-            }
-        }
         let pairs: HashSet<(u32, u32)> = creature
             .synapses
             .iter()
@@ -1927,7 +1993,7 @@ impl MemeticExport {
                 ))
             })
             .collect();
-        let resolve = |key: &str| resolve_memetic_reference(key, &id_to_index, Some(&wire));
+        let resolve = |key: &str| resolve_memetic_reference(key, &ids, Some(&wire));
 
         self.biases.retain(|key, _| resolve(key).is_some());
 
@@ -1949,9 +2015,9 @@ impl MemeticExport {
                 };
                 entries.retain(|entry| match entry.to_id {
                     None => true, // malformed, not dangling
-                    Some(to_id) => id_to_index
-                        .get(&to_id)
-                        .is_some_and(|&to| pairs.contains(&(from, to))),
+                    Some(to_id) => ids
+                        .index_of_id(to_id)
+                        .is_some_and(|to| pairs.contains(&(from, to))),
                 });
                 true
             }),

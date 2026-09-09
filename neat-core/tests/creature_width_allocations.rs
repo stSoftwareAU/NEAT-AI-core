@@ -19,10 +19,16 @@
 //! width and were left out of that fix (Issue #639). They owe NEAT-AI's own
 //! rule wording rather than a typed `CreatureError`, so they carry the ceiling
 //! as a rule of their own; the cost of the refusal is measured here exactly as
-//! it is for the two above. `MemeticExport::prune_to` walks it too and is not
-//! measured here: it answers with `()` and cannot report a refusal without a
-//! public signature change, so it is tracked as a residual (Issue #650) rather
-//! than fixed alongside these.
+//! it is for the two above.
+//!
+//! `MemeticExport::prune_to` — and so `CreatureExport::prune_memetic` — walked
+//! it too, and answers with `()`, so it has nowhere to report a refusal
+//! (Issue #650). It is bounded the other way instead: it resolves the implicit
+//! input neurons arithmetically rather than materialising one view each, so its
+//! cost follows the payload and no refusal is needed. The measurement is the
+//! same comparison — quadruple the declaration, the bill must not move — over
+//! a prune that *succeeds* rather than a refusal, and the outcome is asserted
+//! beside the cost so a prune that silently did nothing cannot read as a pass.
 //!
 //! Modelled on `tests/topology_ops_allocations.rs`.
 
@@ -32,9 +38,11 @@ use std::cell::Cell;
 use neat_core::if_graft::{GraftError, validate_creature_topology};
 use neat_core::network::MAX_NODE_COUNT;
 use neat_core::{
-    CreatureError, CreatureExport, NeuronExport, SynapseExport, ValidateOptions, ValidationFailure,
-    ValidationStats, compile_creature, creature_validate, validate_synapse_and_memetic_rules,
+    CreatureError, CreatureExport, MemeticExport, MemeticWeightRowExport, MemeticWeights,
+    NeuronExport, SynapseExport, ValidateOptions, ValidationFailure, ValidationStats,
+    compile_creature, creature_validate, validate_synapse_and_memetic_rules,
 };
+use std::collections::BTreeMap;
 
 thread_local! {
     /// Bytes handed to **this thread** since it last zeroed the counter.
@@ -103,9 +111,9 @@ static ALLOCATOR: TrackingAllocator = TrackingAllocator;
 /// point is the *shape* of the cost, not how far it can be pushed.
 const OVERSIZED_INPUT: usize = 1_000_000;
 
-/// The same declaration, four times as wide. Both are refused for the same
-/// reason, so the difference between the two costs is what the declared width
-/// bought — see [`GROWTH_SLACK_BYTES`].
+/// The same declaration, four times as wide. Both are answered the same way, so
+/// the difference between the two costs is what the declared width bought — see
+/// [`GROWTH_SLACK_BYTES`].
 const QUADRUPLED_INPUT: usize = 4 * OVERSIZED_INPUT;
 
 /// Floor on the heap one *walked* input costs: the `input-N` map entry holds a
@@ -116,14 +124,14 @@ const QUADRUPLED_INPUT: usize = 4 * OVERSIZED_INPUT;
 /// flattering the fix.
 const BYTES_PER_WALKED_INPUT: usize = 32;
 
-/// Bytes a refusal may allocate in total, derived rather than picked: refusing
-/// an impossible width must cost less than *accepting* the widest creature the
-/// `u16` index space allows, which is the largest walk this crate ever
+/// Bytes one call may allocate in total, derived rather than picked: answering
+/// on an impossible width must cost less than *accepting* the widest creature
+/// the `u16` index space allows, which is the largest walk this crate ever
 /// legitimately performs. At [`BYTES_PER_WALKED_INPUT`] that is 2 MiB, and the
-/// refusal in fact spends none of it.
-const REFUSAL_BUDGET_BYTES: usize = MAX_NODE_COUNT * BYTES_PER_WALKED_INPUT;
+/// bounded entry points in fact spend none of it.
+const WIDTH_BUDGET_BYTES: usize = MAX_NODE_COUNT * BYTES_PER_WALKED_INPUT;
 
-/// How far the cost of a refusal may move when the declared width is
+/// How far the cost of one call may move when the declared width is
 /// **quadrupled**. A width that is walked before it is bounded quadruples with
 /// it (tens of megabytes here); a width bounded first does not move at all, so
 /// a few kilobytes of slack covers allocator noise without covering a walk.
@@ -172,25 +180,32 @@ fn cost_of_refusing(input: usize, refuse: impl Fn(&CreatureExport) -> bool) -> u
     spent
 }
 
-/// The two readings a bounded width must produce: small in absolute terms, and
-/// unmoved by quadrupling the declared count.
-fn assert_width_is_not_walked(entry_point: &str, refuse: impl Fn(&CreatureExport) -> bool) {
-    let at_width = cost_of_refusing(OVERSIZED_INPUT, &refuse);
-    let at_quadruple = cost_of_refusing(QUADRUPLED_INPUT, &refuse);
+/// The two readings a bounded width must produce, whatever the entry point did
+/// with it: small in absolute terms, and unmoved by quadrupling the declared
+/// count. `cost` is billed the bytes one call spends at the width it is given.
+fn assert_cost_does_not_follow_the_width(entry_point: &str, cost: impl Fn(usize) -> usize) {
+    let at_width = cost(OVERSIZED_INPUT);
+    let at_quadruple = cost(QUADRUPLED_INPUT);
     let growth = at_quadruple.saturating_sub(at_width);
 
     assert!(
-        at_width <= REFUSAL_BUDGET_BYTES,
-        "{entry_point} allocated {at_width} B refusing a declared input of {OVERSIZED_INPUT} \
-         (budget {REFUSAL_BUDGET_BYTES} B, ceiling {MAX_NODE_COUNT}); \
+        at_width <= WIDTH_BUDGET_BYTES,
+        "{entry_point} allocated {at_width} B against a declared input of {OVERSIZED_INPUT} \
+         (budget {WIDTH_BUDGET_BYTES} B, ceiling {MAX_NODE_COUNT}); \
          the declared width is being walked before it is bounded"
     );
     assert!(
         growth <= GROWTH_SLACK_BYTES,
-        "{entry_point} spent {growth} B more refusing {QUADRUPLED_INPUT} inputs than \
+        "{entry_point} spent {growth} B more at {QUADRUPLED_INPUT} inputs than at \
          {OVERSIZED_INPUT} ({at_quadruple} B against {at_width} B, slack \
          {GROWTH_SLACK_BYTES} B); the cost still scales with the declared width"
     );
+}
+
+/// The same two readings over an entry point that answers by *refusing* the
+/// width.
+fn assert_width_is_not_walked(entry_point: &str, refuse: impl Fn(&CreatureExport) -> bool) {
+    assert_cost_does_not_follow_the_width(entry_point, |input| cost_of_refusing(input, &refuse));
 }
 
 #[test]
@@ -250,4 +265,81 @@ fn the_synapse_half_refuses_an_oversized_declared_input_without_paying_for_it() 
             &mut stats,
         ))
     });
+}
+
+/// One UUID-keyed memetic weight row.
+fn row(from: &str, to: &str, weight: f64) -> MemeticWeightRowExport {
+    MemeticWeightRowExport {
+        from_uuid: Some(from.to_string()),
+        to_uuid: Some(to.to_string()),
+        weight: Some(weight),
+    }
+}
+
+/// Bytes this thread allocated pruning a memetic record against a creature
+/// declaring `input` observations — and the assertion that the prune actually
+/// pruned.
+///
+/// The record names one live reference and one dangling one in each half, so a
+/// prune that dropped everything, or nothing, fails here rather than reading as
+/// a cheap pass. The creature and the record are built *before* the counter is
+/// zeroed, so the reading covers the prune alone.
+fn cost_of_pruning(input: usize) -> usize {
+    let mut creature = creature_declaring(input);
+    creature.memetic = Some(MemeticExport {
+        biases: BTreeMap::from([
+            // The implicit input neuron `input-0` — resolvable, and by both
+            // vocabularies: the wire UUID here, its runtime id below.
+            ("input-0".to_string(), 0.5),
+            ("0".to_string(), 0.25),
+            ("no-such-neuron".to_string(), 0.75),
+        ]),
+        weights: MemeticWeights::Rows(vec![
+            row("input-0", "output-0", 0.9),
+            row("input-0", "no-such-neuron", 0.1),
+        ]),
+        extra: serde_json::Map::new(),
+    });
+
+    THREAD_BYTES.with(|counter| counter.set(0));
+    creature.prune_memetic();
+    let spent = THREAD_BYTES.with(Cell::get);
+
+    let memetic = creature
+        .memetic
+        .as_ref()
+        .expect("the record itself survives");
+    assert_eq!(
+        memetic.biases.keys().collect::<Vec<_>>(),
+        vec!["0", "input-0"],
+        "both vocabularies still resolve the implicit input; the dangling bias goes"
+    );
+    let surviving: Vec<(&str, &str)> = match &memetic.weights {
+        MemeticWeights::Rows(rows) => rows
+            .iter()
+            .map(|r| {
+                (
+                    r.from_uuid.as_deref().unwrap_or_default(),
+                    r.to_uuid.as_deref().unwrap_or_default(),
+                )
+            })
+            .collect(),
+        MemeticWeights::ById(_) => panic!("the fixture is the row form"),
+    };
+    assert_eq!(
+        surviving,
+        vec![("input-0", "output-0")],
+        "only the row naming a neuron the creature does not carry is dropped"
+    );
+
+    spent
+}
+
+#[test]
+fn pruning_a_memetic_record_does_not_walk_the_declared_input_width() {
+    // Issue #650 — the one entry point that cannot report a refusal: it answers
+    // with `()`. It is bounded by deriving the implicit input neurons
+    // arithmetically instead, so the cost follows the payload; `cost_of_pruning`
+    // asserts the prune still resolved both vocabularies while spending it.
+    assert_cost_does_not_follow_the_width("CreatureExport::prune_memetic", cost_of_pruning);
 }
