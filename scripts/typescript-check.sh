@@ -47,6 +47,24 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 0
 fi
 
+# `deno check` discovers its config from the *cwd*, not from the files it is
+# handed, so a run from anywhere but <root> resolves nothing through the import
+# map and every mapped specifier fails as "not a dependency" (Issue #646). Name
+# the config the tree actually commits, and pass no --config when there is none
+# (the temp-tree cases in typescript_check.bats).
+config=""
+for candidate in "$root/deno.json" "$root/deno.jsonc"; do
+  if [ -f "$candidate" ]; then
+    config="$candidate"
+    break
+  fi
+done
+
 echo "typescript-check: checking ${#files[@]} TypeScript file(s) with deno check"
-deno check "${files[@]}" </dev/null
+if [ -n "$config" ]; then
+  echo "typescript-check: using config $config"
+  deno check --config "$config" "${files[@]}" </dev/null
+else
+  deno check "${files[@]}" </dev/null
+fi
 echo "typescript-check: all TypeScript files passed basic validity"

@@ -9,5 +9,8 @@
       "jsr:@stsoftware/*",
       "npm:@stsoftware/*"
     ]
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1.0.19"
   }
 }

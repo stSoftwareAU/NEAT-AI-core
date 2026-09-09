@@ -12,7 +12,7 @@
 //
 // Run: deno test tests/wasm64_memory64_smoke_test.ts
 
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   buildMemory64Module,
   instantiateMemory64,

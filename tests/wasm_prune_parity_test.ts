@@ -7,7 +7,7 @@
 //
 // Run: deno test --allow-read tests/wasm_prune_parity_test.ts
 
-import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   checkAnswers,
   compareAnswer,

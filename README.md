@@ -118,7 +118,8 @@ safe-fall-back invariants; see
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
 | `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). Exits non-zero only when the tree it produced must not be kept — see [Dependency updates](#dependency-updates-two-channels). |
 | `.github/dependabot.yml` | Weekly Cargo **version-updates** channel for both lockfiles (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
-| `deno.json` | Deno/JSR supply-chain config (Issue #603): a 24h `minimumDependencyAge` release-age quarantine for external JSR/npm specifiers (internal `@stsoftware/*` scopes excluded, they bump at 0h) and a **frozen** `deno.lock` — see [JSR (Deno) dependencies](#jsr-deno-dependencies). |
+| `deno.json` | Deno/JSR supply-chain config (Issue #603): a 24h `minimumDependencyAge` release-age quarantine for external JSR/npm specifiers (internal `@stsoftware/*` scopes excluded, they bump at 0h), a **frozen** `deno.lock`, and the `imports` map holding the pinned version of every JSR dependency the `.ts` gates use (Issue #646) — see [JSR (Deno) dependencies](#jsr-deno-dependencies). |
+| `.github/workflows/deno-outdated.yml` | Weekly JSR/Deno dependency-update PR (Issue #646) — `deno outdated --update --latest` under the `deno.json` quarantine, verified against the frozen lockfile before the PR is opened. The Deno counterpart of `upgrade-dependencies.yml`. |
 | `deno.lock` | Committed integrity pin for every JSR dependency the `.ts` gates import. Frozen: `deno check`/`deno test` fail rather than re-resolve a floating range. |
 | `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`) and for the CI workflow contracts. Shared assertions live in `tests/scripts/helpers.bash` (loaded with `load helpers`, unit-tested by `helpers_shared.bats`) — put a new assertion there rather than copying it between suites (Issue #477). Any suite that parses YAML must `load helpers`, which is what makes `import yaml` work everywhere (next row). |
 | `tests/scripts/lib/yaml_fallback/` | Vendored YAML subset parser, used **only** when `import yaml` fails (Issue #642). The workflow-contract suites parse YAML with PyYAML, which the unattended worker container's python3 does not ship: 121 of 535 tests failed with `ModuleNotFoundError` instead of running, and `./quality.sh` never reached its later stages. `helpers.bash` puts this directory on `PYTHONPATH` when PyYAML is missing — loudly, on stderr — so the assertions are still *made* rather than skipped; where PyYAML is installed (CI included) it is still what parses. `yaml_fallback.bats` pins the parser against PyYAML — over every YAML file in the repository, and over a corpus of constructs the workflows here do not yet contain — so a divergence fails the suite; on CI, where PyYAML is the oracle, that sweep fails rather than skips if PyYAML ever goes missing. |
@@ -1621,27 +1622,46 @@ tooling rather than in `bump-deps.sh` (Issue #603):
   integrity-verified versions recorded there. A specifier the lockfile does not
   pin fails the run (`The lockfile is out of date`) instead of silently
   re-resolving a floating `@1` range on the runner.
+- **Managed versions** — the versions live in `deno.json`'s `imports` map and
+  the `.ts` gates import the mapped name (`@std/assert`), never an inline
+  `jsr:` specifier. `deno outdated` only sees dependencies the config declares,
+  so an inline specifier would be invisible to the updater below and never bump
+  (Issue #646).
 
-Bumping is deliberate, as with the pinned `markdownlint-cli2` install:
+Bumping is scheduled, not remembered —
+[`.github/workflows/deno-outdated.yml`](.github/workflows/deno-outdated.yml)
+runs every Monday (`cron "0 6 * * 1"`, the slot `upgrade-dependencies.yml`
+uses) and on `workflow_dispatch`:
 
 ```bash
-deno outdated --update --latest   # honours minimumDependencyAge from deno.json
-git add deno.lock                 # commit the refreshed pin
+deno outdated --update --latest --minimum-dependency-age=P1D --frozen=false
+deno install --frozen=true        # the refreshed lockfile must satisfy the gate
 ```
 
+`--frozen=false` is load-bearing: the lockfile is frozen, so without it the
+update rewrites `deno.json` and then refuses to write `deno.lock`, leaving a
+tree whose every Deno gate fails while the step still exits 0. The workflow
+verifies the refreshed lockfile before opening its PR, and commits `deno.json`
+and `deno.lock` only. Run the same two commands by hand for an out-of-band bump.
+
 `tests/deno_supply_chain_test.ts` is the gate — run by `quality.sh` and by the
-CI `typescript-gate` job, it fails if the quarantine or the frozen lockfile is
-removed or weakened.
+CI `typescript-gate` job, it fails if the quarantine, the frozen lockfile or the
+import map is removed or weakened.
+`tests/scripts/deno_outdated_workflow.bats` executes the workflow's own refresh
+step against a throwaway workspace, so a bump that would leave the lockfile
+stale fails there rather than on `Develop`.
 
 ```mermaid
 flowchart LR
-    Src["tests/*.ts<br/>jsr:@std/assert@1"] --> Res{deno resolves}
+    Src["tests/*.ts<br/>import &quot;@std/assert&quot;"] --> Res{deno resolves}
+    Map["deno.json imports<br/>jsr:@std/assert@x.y.z"] --> Res
     Lock["deno.lock (frozen)<br/>exact version + integrity"] --> Res
     Res -->|pinned version| Pass[Gate runs]
     Res -->|specifier not pinned| Fail["Fails: lockfile is out of date"]
-    Bump["deliberate bump<br/>deno outdated --update --latest"] --> Age{"minimumDependencyAge<br/>P1D"}
+    Cron["deno-outdated.yml<br/>weekly cron"] --> Bump["deno outdated --update --latest"]
+    Bump --> Age{"minimumDependencyAge<br/>P1D"}
     Age -->|"external release &lt; 24h old"| Defer[Deferred]
-    Age -->|"aged, or internal @stsoftware/*"| Lock
+    Age -->|"aged, or internal @stsoftware/*"| Map
 ```
 
 ```mermaid

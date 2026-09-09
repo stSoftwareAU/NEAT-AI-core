@@ -6,7 +6,7 @@
 //
 // Run: deno test --allow-read tests/check_mermaid_test.ts
 
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
   checkMarkdown,
   checkTree,
