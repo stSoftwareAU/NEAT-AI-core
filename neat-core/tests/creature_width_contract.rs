@@ -441,6 +441,23 @@ fn the_issues_exact_payload_is_refused_rather_than_walked() {
 }
 
 #[test]
+fn the_input_ceiling_is_reported_before_the_output_floor() {
+    // Both halves of the width rule check `input` first, floor and ceiling
+    // alike, because `input` is the value that can never be recovered from the
+    // rest of the export. A creature that is both over-wide and output-less
+    // therefore reports the width it declared, not the output it omitted —
+    // pinned here so the order cannot be shuffled unnoticed.
+    let mut creature = creature_with_widths(100_000_000, 0);
+    creature.neurons.clear();
+    creature.synapses.clear();
+    match compile_creature(&creature) {
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, 100_000_000),
+        Err(other) => panic!("expected TooManyNodes ahead of the output floor, got {other:?}"),
+        Ok(_) => panic!("an over-wide, output-less creature must not compile"),
+    }
+}
+
+#[test]
 fn the_width_ceiling_error_reads_as_a_node_count() {
     // The Display text is shared with the post-compilation check, so the number
     // it names must be a node count on this path too.

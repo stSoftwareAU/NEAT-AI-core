@@ -496,9 +496,13 @@ the process on the allocation instead of returning. So the ceiling lives in
 `MAX_NODE_COUNT` (65 536, the widest network a `u16` source index can address)
 is `CreatureError::TooManyNodes { count }`, the same typed error a creature
 whose *total* node count overflows the index space already earns (Issue #177).
-The ceiling is inclusive, and `count` is the declared width itself — the listed
-neurons are never added to it, because adding them is the walk the check
-prevents. `output` needs no companion bound: it sizes no allocation, and the
+The ceiling is inclusive, and `count` is the declared **node** count — the
+declared width plus the listed neurons, added with a saturating sum because the
+declaration is untrusted — so the shared `Display` ("Creature has N nodes,
+exceeding the maximum of 65536…") says the same thing whichever of the two
+checks spoke. Counting the listed neurons costs nothing: they are a real vector,
+already in memory. It is the *declared* width, which backs no data, that is
+never walked. `output` needs no companion bound: it sizes no allocation, and the
 output neurons it declares are counted from `neurons`, so an unreachable value
 is already `CreatureError::OutputCountMismatch`.
 

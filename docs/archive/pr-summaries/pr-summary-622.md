@@ -158,12 +158,80 @@ carries a `BREAKING CHANGE:` footer and `scripts/detect-breaking.sh` reports
 
 <!-- vibe-spec-review inputs="diff+issue-body" -->
 
-- **met** — Neither `index_map` nor `compile_creature` allocates or iterates on a declared width before that width is bounded — evidence: `neat-core/src/creature.rs` (`validate_creature_width` ceiling, called by `compile_creature` before the UUID loop and by `validate_creature_topology` before `index_map`); all `index_map` / `place_and_build` / `sort_synapses_canonically` call sites traced — reviewer: met
-- **met** — A creature declaring `"input": 100000000` is refused with a typed error, not by allocation cost — evidence: `neat-core/tests/creature_width_contract.rs::parse_rejects_a_declared_input_past_the_node_ceiling`, `::compile_rejects_a_declared_input_past_the_node_ceiling`, `::neither_serialiser_writes_a_declared_input_past_the_node_ceiling`, and `neat-core/tests/if_graft.rs::gate_rejects_a_declared_input_past_the_node_ceiling` — reviewer: met
-- **met** — Regression tests for both entry points; `./quality.sh` green — evidence: `neat-core/tests/creature_width_allocations.rs::compiling_refuses_an_oversized_declared_input_without_paying_for_it` and `::topology_validation_refuses_an_oversized_declared_input_without_paying_for_it`; the reviewer independently mutation-checked the oracle and watched both go red — reviewer: met — reason: the reviewer judged the gate from the stages it could run; the bats leg's 109 pre-existing PyYAML failures are recorded above rather than claimed green
-- **unrequested** — `parse_creature_json`, `creature_to_json` and `creature_to_json_pretty` now refuse a wide declaration too — reviewer: unrequested — reason: unavoidable consequence of putting the ceiling in the single home of the width rule, which the issue named as the preferred placement and flagged as changing all four call sites; kept rather than special-cased, and signalled as a breaking change
-- **unrequested** — `neat-core/tests/creature_width_contract.rs::a_declared_input_at_the_node_ceiling_is_still_accepted` — reviewer: unrequested — reason: the off-by-one guard the new bound owes, pinning the ceiling as inclusive
-- **unrequested** — README and AGENTS.md prose plus two Mermaid diagrams — reviewer: unrequested — reason: both documents state the width contract as a rule, so a change to that rule owes a docs change
+The Spec reviewer was given the diff and the issue body and nothing else. It
+judged commit `9707129`; the two commits after it are the fixes for what it and
+the Standards reviewer found, and each is named below.
+
+- **met** — Neither `index_map` nor `compile_creature` allocates or iterates on a
+  declared width before that width is bounded — evidence:
+  `neat-core/src/creature.rs:680` (the one new comparison, above every caller);
+  the reviewer independently traced all three `index_map` routes —
+  `validate_creature_topology` (`if_graft.rs:683`), `place_and_build` behind
+  every `graft_*` entry point, and `sort_synapses_canonically` behind
+  `prune_cleanup.rs:475` and `decision_tree`'s own fixtures — reviewer: met —
+  reason: the reviewer notes the property holds at `index_map` by documented
+  precondition rather than by construction, so a *new* caller could still bypass
+  it; recorded rather than fixed, because making it structural means changing
+  `index_map`'s signature at three already-validated call sites, which is a
+  larger change than this issue asked for
+- **met** — A creature declaring `"input": 100000000` is refused with a typed
+  error, not by allocation cost — evidence:
+  `neat-core/tests/creature_width_contract.rs::compile_creature_refuses_a_declared_input_past_the_node_ceiling`
+  and its five `CEILING_SITES` siblings, plus
+  `::the_issues_exact_payload_is_refused_rather_than_walked` on the issue's
+  literal JSON — reviewer: met — reason: the reviewer additionally ran the
+  issue's abort-scale literal (`"input": 17179869180`) against the branch and
+  got `TooManyNodes { count: 17179869181 }` instantly, with no abort
+- **met** — Regression tests for both entry points; `./quality.sh` green —
+  evidence:
+  `neat-core/tests/creature_width_allocations.rs::compiling_refuses_an_oversized_declared_input_without_paying_for_it`
+  and `::topology_validation_refuses_an_oversized_declared_input_without_paying_for_it`
+  — reviewer: met — reason: the reviewer mutation-checked the oracle itself
+  (disabling the ceiling: 81 206 344 B against a 2 MiB budget, and the topology
+  case degrading to *accepting* the 1 M-wide creature), and ran every gate stage
+  it could; the stages it did not run — `cargo deny`, `codespell`, the release
+  build and the bats leg — were run here and are recorded under **Gate** above
+- **unrequested** — `TooManyNodes.count` on the width path means
+  `input + neurons.len()`, a saturating sum, rather than the width alone —
+  reviewer: unrequested — reason: the issue asked only for "the existing typed
+  error"; choosing what `count` means is an added decision, taken so the shared
+  `Display` ("Creature has N nodes…") stays true whichever check spoke, and
+  pinned by `::the_width_ceiling_error_reads_as_a_node_count`
+- **unrequested** — `validate_creature_topology` and `cleanup_creature_with`
+  inherit the new contract, beyond the four call sites the issue enumerated —
+  reviewer: unrequested — reason: inherent to putting the ceiling in the single
+  home of the width rule, which is the placement the issue named as preferred;
+  `cleanup_creature` is covered by the `CEILING_SITES` table so the extra site
+  is tested rather than merely inherited
+- **unrequested** — the ceiling on `input` now runs before the `output < 1`
+  floor, so a creature that is both over-wide and output-less reports
+  `TooManyNodes` where it used to report `InvalidOutputCount` — reviewer:
+  unrequested — reason: the reviewer found no test pinned either precedence;
+  the order is deliberate (`input` is the value that can never be recovered, so
+  both its checks come first) and is now pinned by
+  `neat-core/tests/creature_width_contract.rs::the_input_ceiling_is_reported_before_the_output_floor`
+- **unrequested** — a 202-line allocator-instrumented test binary,
+  `neat-core/tests/creature_width_allocations.rs` — reviewer: unrequested —
+  reason: heavier than "the typed error in bounded time" asks for, but it is the
+  only thing that catches a re-ordering regression, and `topology_ops_allocations.rs`
+  is the existing precedent; the reviewer said it would keep it
+- **unrequested** — README, AGENTS.md and this PR summary — reviewer:
+  unrequested — reason: both documents state the width contract as a rule, so a
+  change to that rule owes a docs change; `docs/archive/pr-summaries/` is the
+  repo's established home for the third
+
+### Residual of the same class, deliberately not fixed here
+
+Both reviewers independently landed on the same out-of-scope finding:
+`creature_validate` walks the declared width identically
+(`neat-core/src/creature_validate.rs::neuron_views` builds one `NeuronView` per
+declared input) and is **not** a caller of `validate_creature_width` — it owes
+NEAT-AI's own rule wording for a violation rather than a typed `CreatureError`,
+so it cannot simply call the helper. Its JSON and WASM routes are bounded by
+`MAX_REQUEST_NEURONS` (`creature_validate_json::oversized_detail`,
+`prune_json`), so the exposure is limited to direct Rust callers. The issue
+named two entry points and this is a third with its own design question, so it
+is filed as **stSoftwareAU/NEAT-AI-core#639** rather than folded in here.
 
 ## Standards Review
 
@@ -292,6 +360,9 @@ Added:
   - `a_declared_input_at_the_node_ceiling_is_still_accepted` and
     `every_entry_point_accepts_the_widest_addressable_declaration` — the
     accepting edge, so the bound cannot pass by refusing everything
+  - `the_input_ceiling_is_reported_before_the_output_floor` — the check order,
+    which the ceiling changed for a creature that is both over-wide and
+    output-less
 
 - `neat-core/tests/if_graft.rs`:
   - `gate_rejects_a_declared_input_past_the_node_ceiling`
