@@ -135,11 +135,16 @@ EOF
 # value was parsed as a cd option (`cd -P` takes no operand and lands in $HOME),
 # running the cargo passes outside the repository and reporting nothing to bump.
 
-@test "rejects an option-shaped --repo instead of running outside the repository" {
-  run "$SCRIPT_UNDER_TEST" --skip-audit --skip-build --repo "-P"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"--repo must be an existing directory"* ]]
-  [[ "$output" != *"external="* ]]
+@test "rejects a --repo that does not exist, whatever its shape" {
+  # Both shapes take the same branch, so they are one test rather than two.
+  # --skip-external keeps an unguarded script (during a mutation run) from
+  # launching cargo outside its temp dir, matching the neighbours above.
+  local value
+  for value in "-P" "${TMP_REPO}/absent"; do
+    run "$SCRIPT_UNDER_TEST" --skip-external --skip-audit --skip-build --repo "$value"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--repo must be an existing directory (got '${value}')"* ]]
+  done
 }
 
 @test "an option-shaped --repo that does exist is still handed to cd as a path" {
@@ -170,10 +175,4 @@ EOF
   while IFS= read -r dir; do
     [ "$dir" = "$work/-P" ]
   done <"$log"
-}
-
-@test "rejects a --repo that does not exist" {
-  run "$SCRIPT_UNDER_TEST" --skip-audit --skip-build --repo "${TMP_REPO}/absent"
-  [ "$status" -eq 2 ]
-  [[ "$output" == *"--repo must be an existing directory"* ]]
 }

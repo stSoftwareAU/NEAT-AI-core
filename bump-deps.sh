@@ -40,7 +40,10 @@ Options:
   --skip-external        Skip cargo update (crates.io).
   --skip-audit           Skip cargo audit.
   --skip-build           Skip native + wasm32 cargo build.
-  --repo DIR             Repository root (default: cwd).
+  --repo DIR             Repository root (default: cwd). Must be an existing
+                         directory; anything else exits 2, and the value is
+                         resolved to an absolute path so it can never be
+                         parsed as a cd option (Issue #608).
   --check-published TS H Internal helper: exit 0 if TS (ISO 8601) is older
                          than H hours, else exit 1. Used by tests.
   -h, --help             Show this message.
