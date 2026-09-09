@@ -16,6 +16,8 @@
 # outcomes (the resolved image ref shape), not on source-text heuristics.
 
 setup() {
+  # Wires the vendored YAML parser in when PyYAML is missing (Issue #642).
+  load helpers
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   export WORKFLOWS_DIR="${REPO_ROOT}/.github/workflows"
   # Single source of truth for the digest shape (Issue #478). Both sweeps over

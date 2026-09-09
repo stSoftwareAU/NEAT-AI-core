@@ -18,6 +18,33 @@ require_python3() {
   fi
 }
 
+# Directory holding the vendored YAML subset parser (Issue #642).
+YAML_FALLBACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib/yaml_fallback" && pwd)"
+
+# Make `import yaml` work on a host whose python3 has no PyYAML, by putting the
+# vendored subset parser on PYTHONPATH (Issue #642). Without it, every helper
+# below died with ModuleNotFoundError on the worker container — 111 of 507 tests
+# failed rather than ran, and ./quality.sh could never reach its later stages.
+# Skipping those tests instead would drop ~110 CI-carrying assertions silently,
+# so the parser stands in and the assertions are still made. PyYAML wins
+# wherever it is installed: the fallback is only wired when importing it fails.
+wire_yaml_fallback() {
+  command -v python3 &>/dev/null || return 0
+  python3 -c 'import yaml' 2>/dev/null && return 0
+  export PYTHONPATH="${YAML_FALLBACK_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
+  # Fail loud rather than leaving the caller with a broken `import yaml`.
+  python3 -c 'import yaml' 2>/dev/null || return 1
+  echo "helpers.bash: PyYAML is not installed — parsing YAML with the vendored" \
+    "subset parser at ${YAML_FALLBACK_DIR} (Issue #642)" >&2
+  return 0
+}
+
+if ! wire_yaml_fallback; then
+  echo "helpers.bash: no YAML parser — PyYAML is missing and the vendored" \
+    "parser at ${YAML_FALLBACK_DIR} failed to import" >&2
+  exit 1
+fi
+
 # Strip YAML comments from file $1 to stdout, so an assertion cannot be defeated
 # by leaving the offending line behind as a comment.
 strip_comments() {
