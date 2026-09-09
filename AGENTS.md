@@ -513,8 +513,11 @@ never walks the declared width at all (Issue #650). Adding a *new* caller of
 `validate_creature_width` inherits the ceiling; adding a new width walk that
 bypasses it needs its own.
 `neat-core/tests/creature_width_allocations.rs` is the oracle: a counting global
-allocator asserts a refusal costs O(1) bytes, so re-ordering the check back
-behind the walk fails even though the returned error would be unchanged.
+allocator asserts that answering an impossible width costs O(1) bytes — for the
+routes that refuse it, so re-ordering the check back behind the walk fails even
+though the returned error would be unchanged; and for the prune, which succeeds,
+so re-materialising the input range fails even though the pruned record would be
+unchanged.
 
 ## `serde_json` keeps `float_roundtrip` (PR #571)
 
