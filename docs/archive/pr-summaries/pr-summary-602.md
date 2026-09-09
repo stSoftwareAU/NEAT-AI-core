@@ -21,7 +21,10 @@ Closes #602.
 ## Evidence
 
 Backend/codec change with no web interface to screenshot. The evidence is the
-regression tests, observed red then green.
+regression tests, observed red then green. The branch was rebased onto the
+current `Develop` (`8224b51`) before this run's evidence was captured; the fix
+touches `propagate_codec.rs`, which `Develop` has not changed, so the rebase
+carried no conflicts.
 
 **Red against the unfixed arithmetic.** Added
 `neat-core/tests/propagate_codec_header_bounds.rs::a_neuron_count_whose_size_wraps_a_32_bit_usize_is_refused`,
@@ -38,7 +41,7 @@ end of the short buffer rather than a `BufferTruncated` error:
 
 ```
 ---- a_neuron_count_whose_size_wraps_a_32_bit_usize_is_refused stdout ----
-thread '...' panicked at neat-core/src/propagate_codec.rs:215:26:
+thread '...' panicked at neat-core/src/propagate_codec.rs:217:26:
 index out of bounds: the len is 36 but the index is 36
 ---- flat_section_counts_no_buffer_could_hold_are_refused stdout ----
 thread '...' panicked at neat-core/src/propagate_codec.rs:118:9:
@@ -69,21 +72,21 @@ test flat_section_counts_no_buffer_could_hold_are_refused ... ok
 test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-**Quality gate.** `./quality.sh` was run and every stage this change can
-affect is green: shellcheck, the Deno TypeScript check, the Mermaid gate,
-`cargo deny check` (advisories, bans, licences, sources all ok),
-`cargo fmt --all --check`, clippy `--all-targets --all-features -D warnings`,
-`cargo test --workspace --lib --tests --all-features` and the 8 doctests — all
-exit 0.
+**Quality gate.** `./quality.sh` was run in full on the rebased branch and
+**exits 0** — shellcheck, all 535 bats cases, the Deno TypeScript check and
+supply-chain tests, codespell, `cargo deny check` (advisories, bans, licences,
+sources all ok), `cargo fmt --all --check`, clippy
+`--all-targets --all-features -D warnings`,
+`cargo test --workspace --lib --tests --all-features`, the 17 doctests, the
+docs build and the release build.
 
-The gate as a whole exits 1 on this container for an environment reason
-unrelated to this change: the `bats` stage's workflow-YAML helpers shell out to
-`python3 -c "import yaml"`, and PyYAML is not installed here (no `pip`
-available to add it), so 109 of the 394 bats cases that parse
-`.github/workflows/*.yml` fail with `ModuleNotFoundError: No module named
-'yaml'`. This diff touches no workflow, script or bats file — only
-`neat-core/src/propagate_codec.rs`, a new Rust test and this summary — so those
-cases are unaffected by it; CI runs the same gate with PyYAML present.
+One container-environment note, unrelated to this diff: `$CARGO_HOME/bin` on
+this worker holds rustup shims with no toolchain installed, so cargo's
+subcommand lookup resolves `cargo fmt`/`cargo clippy` to a rustup that cannot
+choose a version. The gate was therefore run with `CARGO_HOME` pointed at a
+directory carrying the same `registry`/`git` caches but no shims, which lets
+cargo find the real `/usr/local/bin/cargo-fmt` and `cargo-clippy`. Nothing in
+the repository was changed for it, and CI has a normal toolchain.
 
 **Original trigger closed, no trivial bypass.** The trigger is a header whose
 declared counts require more bytes than a 32-bit `usize` can express.
