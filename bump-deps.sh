@@ -13,13 +13,19 @@
 #      land on their own are retried together in one grouped `cargo update`.
 #   2. Advisory scan — `cargo deny check advisories` when `cargo-deny` is on
 #      PATH, otherwise `cargo audit`. Fails non-zero on any reported advisory,
-#      naming the offending crate + advisory ID; also fails when neither tool
-#      is installed (Issue #598).
+#      naming the offending crate + advisory ID. With neither tool installed
+#      the scan is skipped with a warning and any bump this run applied is
+#      reverted, so nothing lands unscanned and a missing tool never fails the
+#      run (Issue #621).
 #   3. `cargo build` (native) and `cargo build --target wasm32-unknown-unknown`
 #      — both must succeed against the bumped tree.
 #
-# Exit 0 = clean (or no-op). Non-zero = bump rejected by audit/build/etc.;
-# the worker reverts per the contract.
+# Exit 0 = clean, no-op, or partial success: a crate that cannot be bumped
+# safely — rejected by cargo, inside the quarantine window, or of unknown
+# release age — is reported as a **deferral**, left at its current version,
+# and the run carries on. Non-zero = the tree the run produced must not be
+# kept: cargo missing, an advisory, a build failure, or a Cargo.lock that
+# could not be restored; the worker reverts per the contract.
 set -euo pipefail
 
 # Source cargo environment if available (needed for non-login shells).
@@ -36,7 +42,9 @@ Usage: bump-deps.sh [options]
 
 Refreshes Cargo dependencies, then runs the advisory scan (cargo deny check
 advisories, falling back to cargo audit) and dual native/WASM builds. Prints a
-one-line summary.
+one-line summary. Crates that cannot be bumped safely are deferred, not
+failed; with no advisory scanner installed the scan is skipped and the run's
+bumps are reverted rather than landing unscanned.
 
 Options:
   --quarantine-hours N   Skip crates.io versions newer than N hours.
@@ -50,9 +58,9 @@ Options:
   -h, --help             Show this message.
 
 Exit codes:
-  0  clean / no-op
-  1  bump produced a non-passing tree (advisory / build failure, or no
-     advisory scanner installed)
+  0  clean / no-op / partial success — deferred crates are not failures
+  1  the resulting tree must not be kept: advisory found, build failure,
+     cargo missing, or Cargo.lock could not be restored
   2  usage error
 EOF
 }
@@ -131,6 +139,11 @@ if [[ "$MODE" == "check-published" ]]; then
   exit "$rc"
 fi
 
+if [[ ! -d "$REPO_DIR" ]]; then
+  echo "Usage error: --repo '$REPO_DIR' is not a directory" >&2
+  exit 2
+fi
+
 if ! [[ "$QUARANTINE_HOURS" =~ ^[0-9]+$ ]]; then
   echo "Usage error: --quarantine-hours must be a non-negative integer (got '$QUARANTINE_HOURS')" >&2
   exit 2
@@ -140,30 +153,33 @@ fi
 # Honours $BUMP_DEPS_PUBLISH_FIXTURE (a directory of <crate>-<version>.iso
 # files) so tests can exercise the quarantine branches without network.
 crate_published_at() {
-  local crate="$1" version="$2"
+  local crate="$1" version="$2" created=""
   if [[ -n "${BUMP_DEPS_PUBLISH_FIXTURE:-}" ]]; then
     local f="${BUMP_DEPS_PUBLISH_FIXTURE}/${crate}-${version}.iso"
     if [[ -f "$f" ]]; then
-      tr -d '\n' <"$f"
-      printf '\n'
-      return 0
+      created="$(tr -d '\n' <"$f")"
+    else
+      # Missing fixture → treat as ancient so the bump proceeds.
+      created="1970-01-01T00:00:00Z"
     fi
-    # Missing fixture → treat as ancient so the bump proceeds.
-    printf '1970-01-01T00:00:00Z\n'
-    return 0
-  fi
-  if ! command -v curl >/dev/null 2>&1; then
-    echo "Error: curl required to query crates.io" >&2
-    return 1
-  fi
-  local base="${BUMP_DEPS_CRATES_IO_URL:-https://crates.io/api/v1}"
-  local payload
-  if ! payload=$(curl -fsSL --user-agent "neat-ai-core-bump-deps" \
-    "${base}/crates/${crate}/versions" 2>/dev/null); then
-    echo "Error: crates.io request for ${crate} failed" >&2
-    return 1
-  fi
-  printf '%s' "$payload" | python3 -c '
+  else
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "Error: curl required to query crates.io" >&2
+      return 1
+    fi
+    local base="${BUMP_DEPS_CRATES_IO_URL:-https://crates.io/api/v1}"
+    local payload
+    # Bounded retries and hard timeouts: a transient crates.io blip must not
+    # silently drop a crate from the plan, and a stalled connection must never
+    # hang an unattended run (Issue #621).
+    if ! payload=$(curl -fsSL --user-agent "neat-ai-core-bump-deps" \
+      --connect-timeout 10 --max-time 30 \
+      --retry 2 --retry-delay 1 \
+      "${base}/crates/${crate}/versions" 2>/dev/null); then
+      echo "Error: crates.io request for ${crate} failed" >&2
+      return 1
+    fi
+    created=$(printf '%s' "$payload" | python3 -c '
 import json, sys
 target = sys.argv[1]
 data = json.load(sys.stdin)
@@ -171,7 +187,15 @@ for v in data.get("versions", []):
     if v.get("num") == target:
         print(v.get("created_at", ""))
         break
-' "$version"
+' "$version")
+  fi
+  # An answer naming no publish time is a failed lookup, not an ancient one:
+  # the release age is unknown, so the crate is held rather than bumped blind.
+  if [[ -z "${created//[[:space:]]/}" ]]; then
+    echo "Error: no publish time found for ${crate} ${version}" >&2
+    return 1
+  fi
+  printf '%s\n' "$created"
 }
 
 # --- lockfile helpers ------------------------------------------------------
@@ -223,10 +247,43 @@ crate_pkg_spec() {
   return 1
 }
 
+# Snapshot of Cargo.lock as the run found it, filled in by main before any
+# stage touches it. It is what lets a stage that cannot verify a bump drop the
+# bump instead of failing the whole run.
+RUN_LOCK_BACKUP=""
+
+# Restore the lockfile to the state the run started in, when a later stage
+# cannot vouch for what the run changed. $1 says why. Returns 1 — fatal, the
+# one "lockfile left in a broken state" case — when the restore cannot be done.
+#
+# The trigger is the lockfile itself, not the bump counter: `cargo update` also
+# rewrites out-of-plan transitive entries, which the quarantine check allows
+# and which leave `external_changed` at 0. Comparing against the snapshot is
+# what makes "nothing lands unscanned" true of every byte of the file, not
+# just of the crates the plan named. A run that found no lockfile cannot have
+# changed one — every update pass refuses to run without it.
+revert_run_bumps() {
+  local reason="$1"
+  [[ -n "$RUN_LOCK_BACKUP" && -f "$RUN_LOCK_BACKUP" ]] || return 0
+  cmp -s "$RUN_LOCK_BACKUP" "$LOCK_FILE" && return 0
+  if ! cp "$RUN_LOCK_BACKUP" "$LOCK_FILE"; then
+    echo "Error: could not restore ${LOCK_FILE} — the lockfile may be inconsistent" >&2
+    return 1
+  fi
+  external_changed=0
+  # Restate the counts: a run whose lockfile went back bumped nothing.
+  external_msg="0 bumped, ${EXTERNAL_DEFERRED} deferred${EXTERNAL_UNKNOWN_MSG} (lockfile restored — ${reason})"
+  echo "external: reverted — ${reason}"
+}
+
 # --- stages ----------------------------------------------------------------
 
 external_changed=0
 external_msg="skipped"
+EXTERNAL_UNKNOWN_MSG=""
+# The counts behind external_msg, so a revert can restate them rather than
+# leaving a summary that still claims bumps the run then dropped.
+EXTERNAL_DEFERRED=0
 audit_msg="skipped"
 build_msg="skipped"
 
@@ -240,7 +297,7 @@ BUMP_TARGETS=()
 BUMP_DEFERRED_LOCK=""
 # Why a planned bump did not land, by plan index. Unset means the plain
 # "cargo update rejected" case; a quarantine revert fills in its own reason.
-BUMP_FAIL_REASON=()
+BUMP_DEFER_REASON=()
 
 # Name the first quarantine breach a `cargo update` left in the lockfile, or
 # print nothing when the lock is clean. $1 is the lock_snapshot taken before
@@ -332,7 +389,7 @@ grouped_retry() {
     echo "  revert: grouped retry $breach"
     cp "$backup" "$LOCK_FILE"
     for i in "${members[@]}"; do
-      BUMP_FAIL_REASON[i]="reverted — grouped retry $breach"
+      BUMP_DEFER_REASON[i]="reverted — grouped retry $breach"
     done
   fi
   rm -f "$backup"
@@ -344,15 +401,24 @@ bump_external() {
     external_msg="error"
     return 1
   fi
-  local dry_log
-  dry_log="$({ cd "$REPO_DIR" && cargo update --dry-run 2>&1; } || true)"
+  # A dry run that fails read no plan at all. Report that rather than the
+  # "no updates" a swallowed failure used to look like (Issue #621): nothing
+  # was changed, so the run stays exit 0, but the log names the cause.
+  local dry_log dry_rc=0
+  dry_log="$({ cd "$REPO_DIR" && cargo update --dry-run 2>&1; })" || dry_rc=$?
+  if [[ "$dry_rc" -ne 0 ]]; then
+    printf '%s\n' "$dry_log" >&2
+    external_msg="plan unavailable (cargo update --dry-run failed)"
+    echo "external: $external_msg"
+    return 0
+  fi
 
   BUMP_NAMES=()
   BUMP_FROMS=()
   BUMP_TARGETS=()
   BUMP_DEFERRED_LOCK=""
-  BUMP_FAIL_REASON=()
-  local applied=0 deferred=0 failed=0
+  BUMP_DEFER_REASON=()
+  local applied=0 deferred=0 unknown=0
   local line crate from_v new_v published_at
   # Pass 0 — read the plan and split it into quarantine-approved and deferred.
   while IFS= read -r line; do
@@ -364,8 +430,16 @@ bump_external() {
       from_v="${BASH_REMATCH[3]}"
       new_v="${BASH_REMATCH[4]}"
       if ! published_at="$(crate_published_at "$crate" "$new_v")"; then
-        echo "  skip: $crate $new_v (publish time lookup failed)"
-        failed=$((failed + 1))
+        # Unknown release age is treated exactly like an unexpired one: the
+        # crate is held at the version it is on, and every update in this run
+        # is checked against that hold.
+        # Counted apart from a quarantine hold: waiting out the release-age
+        # window is routine, but a lookup nobody could answer is a host or
+        # registry fault, and a run where every crate lands here has silently
+        # stopped bumping anything.
+        unknown=$((unknown + 1))
+        BUMP_DEFERRED_LOCK+="$crate $from_v"$'\n'
+        echo "  defer: $crate $new_v (publish time lookup failed)"
         continue
       fi
       if is_older_than_hours "$published_at" "$QUARANTINE_HOURS"; then
@@ -396,7 +470,7 @@ bump_external() {
       # bump is refused and named, never run quietly (as grouped_retry does).
       if [[ ! -f "$LOCK_FILE" ]]; then
         echo "  skip: ${BUMP_NAMES[i]} ${BUMP_TARGETS[i]} (no ${LOCK_FILE} to verify against)"
-        BUMP_FAIL_REASON[i]="no ${LOCK_FILE} to verify against"
+        BUMP_DEFER_REASON[i]="no ${LOCK_FILE} to verify against"
         continue
       fi
       # An earlier bump may already have dragged this crate to its target.
@@ -417,7 +491,7 @@ bump_external() {
         if [[ -n "$breach" ]]; then
           echo "  revert: per-crate update of ${BUMP_NAMES[i]} $breach"
           cp "$backup" "$LOCK_FILE"
-          BUMP_FAIL_REASON[i]="reverted — $breach"
+          BUMP_DEFER_REASON[i]="reverted — $breach"
         fi
       fi
       rm -f "$backup"
@@ -435,8 +509,10 @@ bump_external() {
         applied=$((applied + 1))
         echo "  bump: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]}"
       else
-        failed=$((failed + 1))
-        echo "  fail: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]} (${BUMP_FAIL_REASON[i]:-cargo update rejected})"
+        # Not landed is not failed: the crate stays on the version it was
+        # already on, which is a safe outcome the run reports and moves past.
+        deferred=$((deferred + 1))
+        echo "  defer: ${BUMP_NAMES[i]} -> ${BUMP_TARGETS[i]} (${BUMP_DEFER_REASON[i]:-cargo update rejected})"
       fi
     done
   fi
@@ -444,10 +520,15 @@ bump_external() {
   if [[ "$applied" -gt 0 ]]; then
     external_changed=1
   fi
-  if [[ "$applied" -eq 0 && "$deferred" -eq 0 && "$failed" -eq 0 ]]; then
+  EXTERNAL_DEFERRED="$deferred"
+  EXTERNAL_UNKNOWN_MSG=""
+  if [[ "$unknown" -gt 0 ]]; then
+    EXTERNAL_UNKNOWN_MSG=", ${unknown} release age unknown"
+  fi
+  if [[ "$applied" -eq 0 && "$deferred" -eq 0 && "$unknown" -eq 0 ]]; then
     external_msg="no updates"
   else
-    external_msg="${applied} bumped, ${deferred} deferred, ${failed} failed"
+    external_msg="${applied} bumped, ${deferred} deferred${EXTERNAL_UNKNOWN_MSG}"
   fi
   echo "external: $external_msg"
 }
@@ -521,9 +602,15 @@ run_audit() {
   elif command -v cargo-audit >/dev/null 2>&1; then
     tool="cargo-audit"
   else
-    echo "Error: no advisory scanner on PATH — install with 'cargo install cargo-deny --locked' (preferred) or 'cargo install cargo-audit --locked'" >&2
-    audit_msg="error"
-    return 1
+    # Failing here is what disabled bumps for this repo (Issues #598, #621): a
+    # scanner missing from an unattended host says nothing about the tree. The
+    # scan is skipped loudly and this run's bumps are dropped, so nothing
+    # lands unscanned and the run still reports a truthful no-op.
+    echo "Warning: no advisory scanner on PATH — install with 'cargo install cargo-deny --locked' (preferred) or 'cargo install cargo-audit --locked'" >&2
+    echo "audit: SKIPPED (no advisory scanner on PATH)"
+    audit_msg="SKIPPED (no scanner)"
+    revert_run_bumps "no advisory scanner to verify them" || return 1
+    return 0
   fi
   local audit_log records
   if [[ "$tool" == "cargo-deny" ]]; then
@@ -591,6 +678,13 @@ run_build() {
 }
 
 # --- main ------------------------------------------------------------------
+
+if [[ -f "$LOCK_FILE" ]]; then
+  RUN_LOCK_BACKUP="$(mktemp "${TMPDIR:-/tmp}/bump-deps-run-lock.XXXXXX")"
+  cp "$LOCK_FILE" "$RUN_LOCK_BACKUP"
+  # shellcheck disable=SC2064  # expand now: the path must survive the trap.
+  trap "rm -f '$RUN_LOCK_BACKUP'" EXIT
+fi
 
 if [[ "$SKIP_EXTERNAL" -eq 0 ]]; then bump_external; fi
 if [[ "$SKIP_AUDIT"    -eq 0 ]]; then run_audit;     fi

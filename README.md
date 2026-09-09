@@ -116,7 +116,7 @@ safe-fall-back invariants; see
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
-| `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
+| `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). Exits non-zero only when the tree it produced must not be kept — see [Dependency updates](#dependency-updates-two-channels). |
 | `.github/dependabot.yml` | Weekly Cargo **version-updates** channel (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
 | `deno.json` | Deno/JSR supply-chain config (Issue #603): a 24h `minimumDependencyAge` release-age quarantine for external JSR/npm specifiers (internal `@stsoftware/*` scopes excluded, they bump at 0h) and a **frozen** `deno.lock` — see [JSR (Deno) dependencies](#jsr-deno-dependencies). |
 | `deno.lock` | Committed integrity pin for every JSR dependency the `.ts` gates import. Frozen: `deno check`/`deno test` fail rather than re-resolve a floating range. |
@@ -1409,6 +1409,41 @@ bump:
   (`cargo deny check advisories`, falling back to `cargo audit`), and
   dual native/WASM builds before raising a general upgrade PR. The same script
   runs on every PR from the `ci.yml` `version-increment` job.
+
+  `bump-deps.sh` is deliberately resilient (Issue #621), because a run that
+  exits non-zero has its whole bump reverted by the caller and, repeated,
+  disables dependency updates for the repository. A crate that cannot be
+  bumped **safely** — rejected by `cargo update`, still inside the quarantine
+  window, or of a release age the registry would not name — is reported as a
+  **deferral**, left on the version it is already on, and the run carries on.
+  A release age nobody could establish is counted apart from a quarantine wait
+  (`… , N release age unknown`), because that is a host or registry fault
+  rather than a routine hold — a run where every crate lands there has quietly
+  stopped bumping anything, and the summary has to say so.
+  Non-zero is reserved for a tree that must not be kept: `cargo` missing, an
+  advisory found, a build failure, or a `Cargo.lock` that could not be
+  restored. With **no** advisory scanner installed the scan cannot vouch for
+  the bump, so the run warns, restores the `Cargo.lock` it started with and
+  reports the resulting no-op. The restore is driven by comparing the file
+  against a pre-run snapshot rather than by the bump counter, so a transitive
+  entry `cargo update` rewrote on its own way past the plan is dropped too —
+  nothing lands unscanned, and a missing tool never fails the run:
+
+  ```mermaid
+  flowchart TD
+      Plan["cargo update --dry-run"] -->|plan unread| Report["external: plan unavailable — exit 0"]
+      Plan -->|plan read| Crate{"crate bumpable safely?"}
+      Crate -->|no| Defer["defer: crate — left as it is"]
+      Crate -->|yes| Bump["bump: crate -> target"]
+      Defer --> Scan
+      Bump --> Scan{"advisory scanner on PATH?"}
+      Scan -->|no| Revert["warn, revert this run's bumps — exit 0"]
+      Scan -->|yes, clean| Build{"native + wasm build"}
+      Scan -->|yes, advisory| Fail["audit: FAILED — exit 1"]
+      Build -->|ok| Done["exit 0"]
+      Build -->|broken| Fail
+  ```
+
 - **Dependabot version updates** — [`.github/dependabot.yml`](.github/dependabot.yml)
   configures a Cargo **version-updates** entry: `interval: weekly`, a 7-day
   `cooldown` (newly published crates are not proposed until they have aged),
