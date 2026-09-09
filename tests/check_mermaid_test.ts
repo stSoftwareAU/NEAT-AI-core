@@ -122,7 +122,10 @@ Deno.test("checkMarkdown reports every offending line in a block", () => {
 });
 
 Deno.test("checkMarkdown rejects an empty mermaid block", () => {
-  const findings = checkMarkdown("doc.md", ["```mermaid", "", "```"].join("\n"));
+  const findings = checkMarkdown(
+    "doc.md",
+    ["```mermaid", "", "```"].join("\n"),
+  );
 
   assertEquals(findings.length, 1);
   assertStringIncludes(findings[0].message, "empty");
@@ -149,16 +152,18 @@ Deno.test("checkMarkdown fails loud on a mermaid fence that is never closed", ()
 });
 
 Deno.test("checkMarkdown accepts every diagram type used in this repository", () => {
-  for (const header of [
-    "flowchart LR",
-    "flowchart TD",
-    "flowchart TB",
-    "graph TD",
-    "sequenceDiagram",
-    "classDiagram",
-    "stateDiagram-v2",
-    "gitGraph",
-  ]) {
+  for (
+    const header of [
+      "flowchart LR",
+      "flowchart TD",
+      "flowchart TB",
+      "graph TD",
+      "sequenceDiagram",
+      "classDiagram",
+      "stateDiagram-v2",
+      "gitGraph",
+    ]
+  ) {
     const source = ["```mermaid", header, "    A --> B", "```"].join("\n");
     assertEquals(checkMarkdown("doc.md", source), [], header);
   }

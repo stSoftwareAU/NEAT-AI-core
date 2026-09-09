@@ -3,14 +3,24 @@
     "path": "deno.lock",
     "frozen": true
   },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1.0.19"
+  },
+  "exclude": [
+    "neat-core/wasm_activation/pkg"
+  ],
+  "fmt": {
+    "include": [
+      "**/*.ts",
+      "**/*.mjs",
+      "**/*.js"
+    ]
+  },
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": [
       "jsr:@stsoftware/*",
       "npm:@stsoftware/*"
     ]
-  },
-  "imports": {
-    "@std/assert": "jsr:@std/assert@1.0.19"
   }
 }

@@ -61,6 +61,14 @@ for candidate in "$root/deno.json" "$root/deno.jsonc"; do
 done
 
 echo "typescript-check: checking ${#files[@]} TypeScript file(s) with deno check"
+# Run from inside the tree being checked: Deno discovers deno.json — and with it
+# the import map the helpers resolve `@std/assert` through — by walking up from
+# the *current directory*, not from the files named on the command line. Called
+# from anywhere else, every bare specifier failed as "not a dependency"
+# (Issue #647). The paths in `files` are absolute, so the `cd` does not move
+# them. Pass --config explicitly too when the tree commits one, so discovery
+# does not depend on cwd alone (Issue #646).
+cd -- "$root"
 if [ -n "$config" ]; then
   echo "typescript-check: using config $config"
   deno check --config "$config" "${files[@]}" </dev/null

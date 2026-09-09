@@ -140,8 +140,17 @@ The committed TypeScript helpers under `tests/` carry their own basic-validity
 gate (Issue #307): `./scripts/typescript-check.sh` type-checks every `.ts` file
 with `deno check`. It runs inside `./quality.sh` and as the CI `typescript-gate`
 job on every push and pull request, so a syntax or type error fails the build.
-Basic validity only — it is not a style or lint gate, and it requires
-[Deno](https://docs.deno.com/runtime/getting_started/installation/).
+It requires [Deno](https://docs.deno.com/runtime/getting_started/installation/).
+
+Style is gated beside it (Issue #647): the same `typescript-gate` job and the
+same `./quality.sh` run `deno lint` and `deno fmt --check`, so an unformatted or
+lint-broken helper cannot land either. `fmt.include` in `deno.json` gives the
+formatter JavaScript and TypeScript only: Markdown keeps its single
+implementation owner in the `markdown-lint` workflow's markdownlint-cli2, and
+two formatters never fight over the same file. The top-level `exclude` drops the
+generated wasm-pack output under `neat-core/wasm_activation/pkg/`, which
+`.gitignore` does not cover, so a local bundle build does not redden the gate
+with code nobody wrote. Fix a formatting failure with `deno fmt`.
 
 ### Build profiles (Issue #546)
 
@@ -1617,6 +1626,11 @@ tooling rather than in `bump-deps.sh` (Issue #603):
   default), so a freshly published external JSR/npm release is not resolvable
   until it has aged. Internal `jsr:@stsoftware/*` / `npm:@stsoftware/*` scopes
   are excluded and bump immediately.
+- **Single declaration point** — the helpers import the bare specifier
+  `@std/assert`, which [`deno.json`](deno.json) maps to `jsr:@std/assert@1`
+  (Issue #647). One place records the range, `deno lint`'s `no-import-prefix`
+  rule keeps an inline `jsr:` URL from reintroducing a second, unquarantined
+  one, and the quarantine and pin below apply to it.
 - **Integrity pin** — [`deno.lock`](deno.lock) is committed and the config marks
   it **frozen**, so every `deno check` / `deno test` resolves the exact,
   integrity-verified versions recorded there. A specifier the lockfile does not
@@ -1653,8 +1667,8 @@ stale fails there rather than on `Develop`.
 
 ```mermaid
 flowchart LR
-    Src["tests/*.ts<br/>import &quot;@std/assert&quot;"] --> Res{deno resolves}
-    Map["deno.json imports<br/>jsr:@std/assert@x.y.z"] --> Res
+    Src["tests/*.ts<br/>@std/assert"] --> Map["deno.json imports<br/>jsr:@std/assert@1"]
+    Map --> Res{deno resolves}
     Lock["deno.lock (frozen)<br/>exact version + integrity"] --> Res
     Res -->|pinned version| Pass[Gate runs]
     Res -->|specifier not pinned| Fail["Fails: lockfile is out of date"]

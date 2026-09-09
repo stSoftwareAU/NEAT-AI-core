@@ -68,7 +68,9 @@ for (const bench of benches) {
     const s = stats.get(`${bench}/${variant}`);
     if (!s) continue;
     console.log(
-      `| ${bench} | ${variant} | ${s.n} | ${ms(s.median)} | ${ms(s.p25)}–${ms(s.p75)} | ${ms(s.min)} | ${ms(s.max)} |`,
+      `| ${bench} | ${variant} | ${s.n} | ${ms(s.median)} | ${ms(s.p25)}–${
+        ms(s.p75)
+      } | ${ms(s.min)} | ${ms(s.max)} |`,
     );
   }
 }
@@ -79,7 +81,10 @@ for (const bench of benches) {
 console.log("\n| bench | paired median ratio | paired IQR | pairs faster |");
 console.log("| --- | ---: | ---: | ---: |");
 for (const bench of benches) {
-  const take = (v) => rows.filter((r) => r.bench === bench && r.variant === v).map((r) => r.nanos);
+  const take = (v) =>
+    rows.filter((r) => r.bench === bench && r.variant === v).map((r) =>
+      r.nanos
+    );
   const c = take("control");
   const u = take("unchecked");
   const pairs = Math.min(c.length, u.length);
@@ -90,7 +95,9 @@ for (const bench of benches) {
   const faster = ratios.filter((r) => r < 1).length;
   console.log(
     `| ${bench} | ${quantile(sorted, 0.5).toFixed(4)} | ` +
-      `${quantile(sorted, 0.25).toFixed(4)}–${quantile(sorted, 0.75).toFixed(4)} | ` +
+      `${quantile(sorted, 0.25).toFixed(4)}–${
+        quantile(sorted, 0.75).toFixed(4)
+      } | ` +
       `${faster}/${pairs} |`,
   );
 }
@@ -99,13 +106,17 @@ console.log("(ratio < 1 = unchecked faster)");
 // Repeatability: the same paired ratio, per session. A gain that only appears
 // in one session is a session artefact, not an optimisation.
 const sessions = [...new Set(rows.map((r) => r.session))].sort((a, b) => a - b);
-console.log("\n| bench | " + sessions.map((s) => `session ${s}`).join(" | ") + " |");
+console.log(
+  "\n| bench | " + sessions.map((s) => `session ${s}`).join(" | ") + " |",
+);
 console.log("| --- |" + sessions.map(() => " ---: |").join(""));
 for (const bench of benches) {
   const cells = sessions.map((session) => {
     const take = (v) =>
       rows
-        .filter((r) => r.bench === bench && r.variant === v && r.session === session)
+        .filter((r) =>
+          r.bench === bench && r.variant === v && r.session === session
+        )
         .map((r) => r.nanos);
     const c = take("control");
     const u = take("unchecked");
@@ -143,6 +154,10 @@ for (const bench of benches) {
   const parity = mismatches.length === 0
     ? "bit-identical"
     : `DIFFERS at samples ${mismatches.join(",")}`;
-  console.log(`| ${bench} | ${pct(c.median, u.median)} | ${pct(c.min, u.min)} | ${parity} |`);
+  console.log(
+    `| ${bench} | ${pct(c.median, u.median)} | ${
+      pct(c.min, u.min)
+    } | ${parity} |`,
+  );
 }
 console.log("\n(negative delta = unchecked faster)");

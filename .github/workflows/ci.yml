@@ -517,17 +517,18 @@ jobs:
           chmod +x scripts/check-downstream-consumers.sh
           scripts/check-downstream-consumers.sh
 
-  # Issue #307 — TypeScript basic-validity gate. Carries no event guard, so it
-  # runs on every pull request (and on a manual dispatch), and a syntax or type
-  # error in the committed .ts helpers cannot land unnoticed. Basic validity
-  # only — this is not a style or lint gate. The same script backs the local
-  # quality.sh run.
+  # Issue #307 — TypeScript gate. Carries no event guard, so it runs on every
+  # pull request (and on a manual dispatch), and a syntax or type error in the
+  # committed .ts helpers cannot land unnoticed. Issue #647 widened it from
+  # validity alone to validity + style: `deno check`, then `deno lint` and
+  # `deno fmt --check`. The same script and the same two commands back the
+  # local quality.sh run.
   typescript-gate:
-    name: TypeScript validity gate
+    name: TypeScript validity and style gate
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # deno check over committed .ts helpers
+    timeout-minutes: 10 # deno check/lint/fmt over committed .ts helpers
     # Issue #482 — least-privilege GITHUB_TOKEN. This job only reads the repo
-    # (checkout, install Deno, deno check); it never writes.
+    # (checkout, install Deno, deno check/lint/fmt); it never writes.
     permissions:
       contents: read
 
@@ -554,6 +555,17 @@ jobs:
           set -euo pipefail
           chmod +x scripts/typescript-check.sh
           ./scripts/typescript-check.sh
+
+      # Issue #647 — style gate beside the validity gate above. `deno check`
+      # proves the committed .ts helpers compile; these prove they are linted
+      # and formatted, which nothing gated before. `fmt.include` in deno.json
+      # gives the formatter JavaScript and TypeScript only, so Markdown keeps
+      # its single owner in the markdown-lint workflow's markdownlint-cli2.
+      - name: Lint TypeScript sources (deno lint)
+        run: deno lint < /dev/null
+
+      - name: Check TypeScript formatting (deno fmt --check)
+        run: deno fmt --check < /dev/null
 
       # Issue #603 — the JSR half of the dependency tree gets the same
       # treatment as the Cargo half: a 24h release-age quarantine

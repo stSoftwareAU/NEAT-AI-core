@@ -54,16 +54,23 @@ export const FLOAT_TOLERANCE = 1e-9;
 export const GOLDEN_PATH = "neat-core/tests/golden/prune_wasm_parity.json";
 
 /** Parse the golden record, refusing one that would grade nothing. */
-export function parseGolden(text: string, path: string = GOLDEN_PATH): GoldenCase[] {
+export function parseGolden(
+  text: string,
+  path: string = GOLDEN_PATH,
+): GoldenCase[] {
   const cases = JSON.parse(text);
   if (!Array.isArray(cases) || cases.length === 0) {
-    throw new Error(`${path} carries no cases — the parity gate would pass vacuously`);
+    throw new Error(
+      `${path} carries no cases — the parity gate would pass vacuously`,
+    );
   }
   return cases;
 }
 
 /** Read and parse the golden record. */
-export async function loadGolden(path: string = GOLDEN_PATH): Promise<GoldenCase[]> {
+export async function loadGolden(
+  path: string = GOLDEN_PATH,
+): Promise<GoldenCase[]> {
   return parseGolden(await Deno.readTextFile(path), path);
 }
 
@@ -71,7 +78,8 @@ export async function loadGolden(path: string = GOLDEN_PATH): Promise<GoldenCase
 function numbersAgree(expected: number, actual: number): boolean {
   if (Object.is(expected, actual)) return true;
   if (!Number.isFinite(expected) || !Number.isFinite(actual)) return false;
-  return Math.abs(expected - actual) <= FLOAT_TOLERANCE * Math.max(1, Math.abs(expected));
+  return Math.abs(expected - actual) <=
+    FLOAT_TOLERANCE * Math.max(1, Math.abs(expected));
 }
 
 /**
@@ -87,8 +95,12 @@ export function compareAnswer(
   actual: any,
   path = "$",
 ): string[] {
-  if (expected === null || actual === null || typeof expected !== typeof actual) {
-    return expected === actual ? [] : [`${path}: native ${show(expected)}, wasm ${show(actual)}`];
+  if (
+    expected === null || actual === null || typeof expected !== typeof actual
+  ) {
+    return expected === actual
+      ? []
+      : [`${path}: native ${show(expected)}, wasm ${show(actual)}`];
   }
 
   if (typeof expected === "number") {
@@ -102,9 +114,13 @@ export function compareAnswer(
       return [`${path}: native ${show(expected)}, wasm ${show(actual)}`];
     }
     if (expected.length !== actual.length) {
-      return [`${path}: native has ${expected.length} entries, wasm has ${actual.length}`];
+      return [
+        `${path}: native has ${expected.length} entries, wasm has ${actual.length}`,
+      ];
     }
-    return expected.flatMap((entry, i) => compareAnswer(entry, actual[i], `${path}[${i}]`));
+    return expected.flatMap((entry, i) =>
+      compareAnswer(entry, actual[i], `${path}[${i}]`)
+    );
   }
 
   if (typeof expected === "object") {
@@ -112,17 +128,25 @@ export function compareAnswer(
     const keys = new Set([...Object.keys(expected), ...Object.keys(actual)]);
     for (const key of [...keys].sort()) {
       if (!(key in expected)) {
-        differences.push(`${path}.${key}: absent natively, wasm ${show(actual[key])}`);
+        differences.push(
+          `${path}.${key}: absent natively, wasm ${show(actual[key])}`,
+        );
       } else if (!(key in actual)) {
-        differences.push(`${path}.${key}: native ${show(expected[key])}, absent from wasm`);
+        differences.push(
+          `${path}.${key}: native ${show(expected[key])}, absent from wasm`,
+        );
       } else {
-        differences.push(...compareAnswer(expected[key], actual[key], `${path}.${key}`));
+        differences.push(
+          ...compareAnswer(expected[key], actual[key], `${path}.${key}`),
+        );
       }
     }
     return differences;
   }
 
-  return expected === actual ? [] : [`${path}: native ${show(expected)}, wasm ${show(actual)}`];
+  return expected === actual
+    ? []
+    : [`${path}: native ${show(expected)}, wasm ${show(actual)}`];
 }
 
 // deno-lint-ignore no-explicit-any
@@ -153,7 +177,10 @@ export interface PruneApi {
  * Separate from {@link checkBundle} so the comparison — which is the part that
  * decides whether the gate passes — is graded without a built bundle.
  */
-export function checkAnswers(api: Partial<PruneApi>, golden: GoldenCase[]): string[] {
+export function checkAnswers(
+  api: Partial<PruneApi>,
+  golden: GoldenCase[],
+): string[] {
   for (const name of ["prune_neuron", "prune_synapse"] as const) {
     if (typeof api[name] !== "function") {
       throw new Error(
@@ -167,7 +194,9 @@ export function checkAnswers(api: Partial<PruneApi>, golden: GoldenCase[]): stri
     if (testCase.op !== "neuron" && testCase.op !== "synapse") {
       // A record naming no entry point must not be answered by whichever one
       // happened to be the fallback.
-      failures.push(`${testCase.name}: op '${testCase.op}' names no entry point`);
+      failures.push(
+        `${testCase.name}: op '${testCase.op}' names no entry point`,
+      );
       continue;
     }
     const request = JSON.stringify(testCase.request);
@@ -178,7 +207,9 @@ export function checkAnswers(api: Partial<PruneApi>, golden: GoldenCase[]): stri
     try {
       answer = JSON.parse(raw);
     } catch (error) {
-      failures.push(`${testCase.name}: wasm answered something that is not JSON: ${error}`);
+      failures.push(
+        `${testCase.name}: wasm answered something that is not JSON: ${error}`,
+      );
       continue;
     }
     for (const difference of compareAnswer(testCase.response, answer)) {
@@ -189,7 +220,10 @@ export function checkAnswers(api: Partial<PruneApi>, golden: GoldenCase[]): stri
 }
 
 /** Load the bundle at `pkgDir` and grade its answers against the record. */
-export async function checkBundle(pkgDir: string, golden: GoldenCase[]): Promise<string[]> {
+export async function checkBundle(
+  pkgDir: string,
+  golden: GoldenCase[],
+): Promise<string[]> {
   return checkAnswers(await loadBundle(pkgDir), golden);
 }
 
@@ -205,7 +239,9 @@ if (import.meta.main) {
   const golden = await loadGolden(goldenPath ?? GOLDEN_PATH);
   const failures = await checkBundle(pkgDir, golden);
   if (failures.length > 0) {
-    console.error(`❌ native/WASM pruning parity failed on ${failures.length} difference(s):`);
+    console.error(
+      `❌ native/WASM pruning parity failed on ${failures.length} difference(s):`,
+    );
     for (const failure of failures) console.error(`   ${failure}`);
     Deno.exit(1);
   }
