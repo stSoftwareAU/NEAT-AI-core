@@ -23,25 +23,53 @@ YAML_FALLBACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/lib/yaml_fallback" && pw
 
 # Make `import yaml` work on a host whose python3 has no PyYAML, by putting the
 # vendored subset parser on PYTHONPATH (Issue #642). Without it, every helper
-# below died with ModuleNotFoundError on the worker container — 111 of 507 tests
+# below died with ModuleNotFoundError on the worker container — 121 of 535 tests
 # failed rather than ran, and ./quality.sh could never reach its later stages.
-# Skipping those tests instead would drop ~110 CI-carrying assertions silently,
+# Skipping those tests instead would drop ~120 CI-carrying assertions silently,
 # so the parser stands in and the assertions are still made. PyYAML wins
 # wherever it is installed: the fallback is only wired when importing it fails.
+#
+# Returns 0 when `import yaml` works afterwards, or when python3 itself is
+# absent — there is no YAML to parse on such a host and `require_python3` skips
+# the tests that would have. Returns non-zero only when python3 is present and
+# neither parser imports, which the guard below turns into a loud abort. The
+# import error is reported rather than swallowed, so "PyYAML is missing" is
+# never guessed at over an install that is present but broken.
 wire_yaml_fallback() {
   command -v python3 &>/dev/null || return 0
   python3 -c 'import yaml' 2>/dev/null && return 0
   export PYTHONPATH="${YAML_FALLBACK_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
   # Fail loud rather than leaving the caller with a broken `import yaml`.
-  python3 -c 'import yaml' 2>/dev/null || return 1
-  echo "helpers.bash: PyYAML is not installed — parsing YAML with the vendored" \
-    "subset parser at ${YAML_FALLBACK_DIR} (Issue #642)" >&2
+  local error
+  if ! error="$(python3 -c 'import yaml' 2>&1)"; then
+    echo "helpers.bash: ${error}" >&2
+    return 1
+  fi
+  yaml_fallback_notice "helpers.bash: PyYAML did not import — parsing YAML" \
+    "with the vendored subset parser at ${YAML_FALLBACK_DIR} (Issue #642)"
+  return 0
+}
+
+# Announce the fallback on stderr, and once per bats run on bats' own output
+# stream (fd 3), which is shown even when every test passes. Every test file
+# wires the parser afresh, so an unconditional fd-3 write would repeat the same
+# line hundreds of times; a notice nobody sees is not loud, and one repeated
+# 500 times is noise.
+yaml_fallback_notice() {
+  echo "$*" >&2
+  local marker="${BATS_RUN_TMPDIR:-}/yaml-fallback-notice"
+  [ -n "${BATS_RUN_TMPDIR:-}" ] || return 0
+  [ -e "$marker" ] && return 0
+  : >"$marker"
+  if { : >&3; } 2>/dev/null; then
+    echo "$*" >&3
+  fi
   return 0
 }
 
 if ! wire_yaml_fallback; then
-  echo "helpers.bash: no YAML parser — PyYAML is missing and the vendored" \
-    "parser at ${YAML_FALLBACK_DIR} failed to import" >&2
+  echo "helpers.bash: no YAML parser — PyYAML did not import and neither did" \
+    "the vendored parser at ${YAML_FALLBACK_DIR}" >&2
   exit 1
 fi
 

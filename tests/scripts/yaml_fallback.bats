@@ -3,7 +3,7 @@
 #
 # Contract under test: the bats suite parses workflow YAML with
 # `python3 … import yaml`, and a host whose python3 has no PyYAML — the
-# unattended worker container — failed 111 of 507 tests with
+# unattended worker container — failed 121 of 535 tests with
 # ModuleNotFoundError rather than running them, so ./quality.sh never reached
 # its TypeScript, Mermaid, Deno or Rust stages. `helpers.bash` now puts
 # `lib/yaml_fallback` on PYTHONPATH when, and only when, importing PyYAML
@@ -46,7 +46,7 @@ use_real_pyyaml_only() {
     scrubbed="${scrubbed:+${scrubbed}:}${entry}"
   done
   export PYTHONPATH="$scrubbed"
-  python3 - <<'PY' || skip "PyYAML is not installed on this host"
+  if python3 - <<'PY'
 import os
 import sys
 
@@ -58,6 +58,18 @@ except ImportError:
 vendored = os.path.join(os.environ["FALLBACK_DIR"], "yaml.py")
 sys.exit(1 if os.path.realpath(yaml.__file__) == os.path.realpath(vendored) else 0)
 PY
+  then
+    return 0
+  fi
+  # On CI the oracle is not optional: without PyYAML every workflow-contract
+  # assertion would run on an unvalidated parser and the sweep would vanish
+  # into a green skip. Fail there; skip only on a developer host.
+  if [ -n "${CI:-}" ]; then
+    echo "PyYAML must be installed on CI — it is the oracle for the vendored" \
+      "parser, and skipping it would leave the parser unvalidated" >&2
+    return 1
+  fi
+  skip "PyYAML is not installed on this host"
 }
 
 # A minimal workflow with the shapes the helpers read: a permissions block, a
@@ -91,7 +103,8 @@ YAML
   write_workflow
   PYTHONPATH="$BLOCKER" run assert_job_least_privilege "${FIXTURES}/wf.yml" gate pull-requests
   [ "$status" -ne 0 ]
-  [[ "$output" == *"yaml"* ]]
+  # The reported symptom exactly: the parser is missing, not some other fault.
+  [[ "$output" == *"No module named 'yaml'"* ]]
 }
 
 @test "wire_yaml_fallback restores YAML parsing when PyYAML is missing" {
@@ -119,8 +132,24 @@ echo "hello # not a comment"' ]
   export PYTHONPATH="$BLOCKER"
   run wire_yaml_fallback
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PyYAML is not installed"* ]]
+  [[ "$output" == *"PyYAML did not import"* ]]
   [[ "$output" == *"${FALLBACK_DIR}"* ]]
+}
+
+@test "the fallback notice reaches the bats output stream once per run" {
+  # Every test file wires the parser afresh, so the notice goes to stderr each
+  # time but to bats' always-shown stream (fd 3) only once — visible without
+  # being 500 lines of noise.
+  export BATS_RUN_TMPDIR="${BATS_TEST_TMPDIR}/run"
+  mkdir -p "$BATS_RUN_TMPDIR"
+  local shown="${BATS_TEST_TMPDIR}/fd3.log"
+  yaml_fallback_notice "first" 3>"$shown"
+  yaml_fallback_notice "second" 3>>"$shown"
+  [ "$(cat "$shown")" = "first" ]
+
+  run yaml_fallback_notice "third"
+  [ "$status" -eq 0 ]
+  [ "$output" = "third" ]
 }
 
 @test "wire_yaml_fallback leaves PyYAML in charge where it is installed" {
@@ -130,6 +159,28 @@ echo "hello # not a comment"' ]
   wire_yaml_fallback
   [ -z "$PYTHONPATH" ]
   [ "$(python3 -c 'import yaml, sys; sys.stdout.write(yaml.__file__)')" != "${FALLBACK_DIR}/yaml.py" ]
+}
+
+@test "helpers.bash aborts when neither PyYAML nor the vendored parser imports" {
+  require_python3
+  # A copy of the live helpers.bash beside a vendored parser that cannot be
+  # imported: the one state in which the suite must refuse to run at all
+  # rather than let YAML gates pass with no parser behind them.
+  broken="${BATS_TEST_TMPDIR}/broken"
+  mkdir -p "${broken}/lib/yaml_fallback"
+  cp "${BATS_TEST_DIRNAME}/helpers.bash" "${broken}/helpers.bash"
+  printf 'raise ImportError("vendored parser is broken")\n' \
+    >"${broken}/lib/yaml_fallback/yaml.py"
+
+  PYTHONPATH="$BLOCKER" run bash -c 'source "$1"' _ "${broken}/helpers.bash"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no YAML parser"* ]]
+  [[ "$output" == *"vendored parser is broken"* ]]
+
+  # The same copy, with the real parser beside it, sources cleanly.
+  cp "${FALLBACK_DIR}/yaml.py" "${broken}/lib/yaml_fallback/yaml.py"
+  PYTHONPATH="$BLOCKER" run bash -c 'source "$1"' _ "${broken}/helpers.bash"
+  [ "$status" -eq 0 ]
 }
 
 # --- the parser, against an independent oracle -------------------------------
@@ -156,9 +207,15 @@ spec = importlib.util.spec_from_file_location("yaml_fallback", vendored)
 fallback = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fallback)
 
-root = pathlib.Path(os.environ["REPO_ROOT"], ".github")
-files = sorted(p for p in root.rglob("*.yml"))
-assert len(files) >= 10, f"expected the workflow set, found {files}"
+root = pathlib.Path(os.environ["REPO_ROOT"])
+skipped = ("target", ".git", "node_modules")
+files = sorted(
+    path
+    for pattern in ("*.yml", "*.yaml")
+    for path in root.rglob(pattern)
+    if not any(part in skipped for part in path.parts)
+)
+assert len(files) >= 10, f"expected at least the workflow set, found {files}"
 
 
 def typed(node):
@@ -178,12 +235,125 @@ for path in files:
 PY
 }
 
+@test "the vendored parser matches PyYAML across the constructs workflow YAML uses" {
+  require_python3
+  use_real_pyyaml_only
+  FALLBACK_DIR="$FALLBACK_DIR" python3 - <<'PY'
+import importlib.util
+import math
+import os
+
+import yaml as pyyaml
+
+vendored = os.path.join(os.environ["FALLBACK_DIR"], "yaml.py")
+assert os.path.realpath(pyyaml.__file__) != os.path.realpath(vendored), (
+    "the oracle resolved to the parser under test: %s" % pyyaml.__file__)
+spec = importlib.util.spec_from_file_location("yaml_fallback", vendored)
+fallback = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fallback)
+
+# The repository's own workflows exercise only part of the subset, so these
+# documents carry the constructs a workflow may grow tomorrow. Each is judged
+# against PyYAML, never against a hand-written expectation.
+AGREE = {
+    "flow mapping as a sequence item": "include:\n  - {os: ubuntu-latest, rust: stable}\n",
+    "flow sequence as a sequence item": "a:\n  - [1, 2]\n",
+    "tab inside a block scalar body": (
+        "steps:\n  - run: |\n      cat <<'EOF'\n      \tindented with a tab\n      EOF\n"),
+    "trailing comment containing a colon": "a:\n  - hello # see: docs\n",
+    "trailing comment containing a colon, on a value": "a: hello # see: docs\n",
+    "bare dash is a null entry": "a:\n  -\n  - x\n",
+    "bare dash before a mapping entry": "a:\n  -\n  - x: 1\n",
+    "not-a-number": "a: .nan\n",
+    "infinities": "a: .inf\nb: -.Inf\n",
+    "whitespace-only line inside a literal block": "key: |\n  a\n     \n  b\n",
+    "folded block, blank line before a more-indented line": "key: >\n  a\n\n   b\n",
+    "folded block, a more-indented run": "key: >\n  a\n   b\n  c\n",
+    "colon inside a flow scalar": "a: [x:y]\n",
+    "digest pin inside a flow mapping": "a: {image: node@sha256:abc}\n",
+    "nested block sequence": "a:\n  - - x\n    - y\n",
+    "nested block sequence at the document root": "- - a\n- b\n",
+    "byte-order mark": "\ufeffa: 1\n",
+    "quoted sequence entries": "a:\n  - \"x: y\"\n  - 'z'\n",
+    "empty flow collections as entries": "a:\n  - {}\n  - []\n",
+}
+
+# PyYAML refuses these. Accepting them would let a workflow that fails the gate
+# on CI pass on a host running the vendored parser.
+BOTH_REJECT = {
+    "block indent smaller on a later line": "key: |\n    a\n  b\n",
+    "folded indent smaller on a later line": "key: >\n   a\n  b\n",
+    "a second colon in a plain scalar": "run: echo foo: bar\n",
+    "an expression followed by a colon": "name: ${{ github.workflow }}: build\n",
+    "a trailing colon": "a: b:\n",
+    "a dash as a value": "a: -\n",
+    "a sequence opened on the key's line": "a: - x\n",
+    "a tab between key and value": "a:\tb\n",
+    "tab indentation": "jobs:\n\tgate: 1\n",
+    "an unterminated quote": 'name: "unclosed\n',
+    "stray text after a mapping": "a: 1\njust text\n",
+    "an over-indented mapping entry": "a: 1\n    b: 2\n",
+    "two documents": "a: 1\n---\nb: 2\n",
+}
+
+# PyYAML parses these; the subset deliberately refuses them rather than
+# returning a value that differs from what CI would see.
+REFUSED = {
+    "anchors and aliases": "base: &d\n  a: 1\nuse: *d\n",
+    "tags": "value: !!binary aGk=\n",
+    "a date": "d: 2024-01-15\n",
+    "a timestamp": "d: 2024-01-15 10:20:30\n",
+    "a flow collection spanning lines": "a: [\n  x,\n  y,\n]\n",
+}
+
+
+def same(left, right):
+    if isinstance(left, float) and isinstance(right, float):
+        return (math.isnan(left) and math.isnan(right)) or left == right
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return len(left) == len(right) and all(
+            key in right and same(value, right[key]) for key, value in left.items())
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            same(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+for name, text in AGREE.items():
+    expected = pyyaml.safe_load(text)          # fails loud if the case is bogus
+    actual = fallback.safe_load(text)
+    assert same(expected, actual), f"{name}: {expected!r} != {actual!r}"
+
+for name, text in BOTH_REJECT.items():
+    try:
+        parsed = pyyaml.safe_load(text)
+    except Exception:
+        pass
+    else:
+        raise AssertionError(f"{name}: PyYAML accepts it, parsing to {parsed!r}")
+    try:
+        parsed = fallback.safe_load(text)
+    except fallback.YAMLError:
+        continue
+    raise AssertionError(f"{name}: accepted, parsing to {parsed!r}")
+
+for name, text in REFUSED.items():
+    pyyaml.safe_load(text)                     # fails loud if the case is bogus
+    try:
+        parsed = fallback.safe_load(text)
+    except fallback.YAMLError:
+        continue
+    raise AssertionError(f"{name}: silently accepted, parsing to {parsed!r}")
+PY
+}
+
 # --- the parser, construct by construct --------------------------------------
 
 @test "PYTHONPATH makes the vendored parser the module an import of yaml resolves to" {
   require_python3
   run vendored_python <<'PY'
-import os
 import sys
 
 import yaml

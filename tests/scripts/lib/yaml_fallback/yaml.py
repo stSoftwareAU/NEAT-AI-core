@@ -2,7 +2,7 @@
 
 Issue #642: the `tests/scripts` bats suite reads GitHub workflow YAML through
 `python3 … import yaml`, and a host whose python3 has no PyYAML (the unattended
-worker container) failed 111 of 507 tests rather than running them, so
+worker container) failed 121 of 535 tests rather than running them, so
 `./quality.sh` never reached its TypeScript, Mermaid, Deno or Rust stages
 locally. `tests/scripts/helpers.bash` puts this directory on `PYTHONPATH` only
 when PyYAML is genuinely unavailable, so those assertions keep being *made*
@@ -19,11 +19,20 @@ Scope — the subset GitHub workflow, dependabot and issue-template YAML uses:
 * the YAML 1.1 plain-scalar resolution PyYAML applies, so ``on:`` is the key
   ``True``, ``false`` is a bool and ``20`` is an int.
 
-Everything outside that subset — anchors, aliases, tags, multiple documents,
-complex keys, multi-line plain scalars — raises `YAMLError` rather than being
-guessed at, because a gate that mis-parses a workflow is worse than one that
-stops. `tests/scripts/yaml_fallback.bats` pins the parser against PyYAML over
-every YAML file in the repository, so a divergence fails the suite.
+Everything outside that subset raises `YAMLError` rather than being guessed
+at, because a gate that mis-parses a workflow is worse than one that stops:
+anchors, aliases, tags, multiple documents, complex keys, scalars continued
+over several lines (plain, quoted or flow), and timestamps — which PyYAML
+resolves to `datetime` objects, a fidelity this parser does not attempt.
+
+Input PyYAML itself rejects is rejected here too, so a workflow that fails the
+gate on CI cannot pass on a host running this parser: a second ``: `` in a
+plain scalar, a tab used as indentation or as a key separator, a block-scalar
+line indented less than the block, and an over-indented mapping entry.
+
+`tests/scripts/yaml_fallback.bats` pins all of this against PyYAML — over every
+YAML file in the repository, and over a corpus of constructs the repository's
+own workflows do not yet contain — so a divergence fails the suite.
 """
 
 import re
@@ -68,6 +77,16 @@ _FLOAT_RE = re.compile(
 
 _BLOCK_HEADER_RE = re.compile(r"^([|>])([0-9]*)([-+]?)([0-9]*)\s*(#.*)?$")
 
+# PyYAML resolves these to datetime.date/datetime objects. Nothing in this
+# repository writes one, and guessing at timezone handling would diverge
+# silently, so a timestamp is refused rather than returned as a string.
+_TIMESTAMP_RE = re.compile(
+    r"""^(?:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
+         |[0-9][0-9][0-9][0-9]-[0-9][0-9]?-[0-9][0-9]?
+          (?:[Tt]|[ \t]+)[0-9][0-9]?:[0-9][0-9]:[0-9][0-9].*)$""",
+    re.X,
+)
+
 
 def _resolve_int(text):
     body = text.replace("_", "")
@@ -101,8 +120,12 @@ def _resolve_float(text):
         for part in head.split(":"):
             total = total * 60 + int(part)
         return sign * (total * 60 + float(tail))
-    return float(body.replace(".inf", "1e999").replace(".Inf", "1e999")
-                 .replace(".INF", "1e999"))
+    lowered = body.lstrip("+-").lower()
+    if lowered == ".nan":
+        return float("nan")
+    if lowered == ".inf":
+        return float("-inf") if body.startswith("-") else float("inf")
+    return float(body)
 
 
 def resolve(text):
@@ -115,6 +138,9 @@ def resolve(text):
         return _resolve_int(text)
     if _FLOAT_RE.match(text):
         return _resolve_float(text)
+    if _TIMESTAMP_RE.match(text):
+        raise YAMLError("timestamps are outside the supported subset — PyYAML "
+                        "resolves %r to a date/datetime object" % text)
     return text
 
 
@@ -225,7 +251,14 @@ def _scan_flow_scalar(text, i):
         raise YAMLError("anchors, aliases and tags are outside the supported "
                         "subset: %r" % text)
     start = i
-    while i < len(text) and text[i] not in ",[]{}:":
+    while i < len(text):
+        char = text[i]
+        if char in ",[]{}":
+            break
+        # `:` ends the scalar only where it separates a flow key from its
+        # value; `sha256:abc` and `x:y` are plain scalars, as PyYAML reads them.
+        if char == ":" and (i + 1 == len(text) or text[i + 1] in " \t,[]{}"):
+            break
         i += 1
     return resolve(text[start:i].strip()), i
 
@@ -243,7 +276,17 @@ def _parse_value_text(text):
         raise YAMLError("anchors, aliases and tags are outside the supported "
                         "subset: %r" % text)
     else:
-        return resolve(_strip_comment(text).strip())
+        plain = _strip_comment(text).strip()
+        # PyYAML raises on a second `: ` in a plain scalar, and on a value that
+        # opens a block sequence on the same line. Accepting either would let a
+        # workflow that fails the gate on CI pass on a host using this parser.
+        if ": " in plain or plain.endswith(":"):
+            raise YAMLError("mapping values are not allowed in a plain "
+                            "scalar: %r" % text)
+        if plain == "-" or plain.startswith("- "):
+            raise YAMLError("a block sequence cannot start on the same line as "
+                            "its key: %r" % text)
+        return resolve(plain)
     trailing = text[end:].strip()
     if trailing and not trailing.startswith("#"):
         raise YAMLError("trailing content after value: %r" % text)
@@ -260,6 +303,10 @@ def _split_key(text):
         while i < len(text):
             if text[i] == ":" and (i + 1 == len(text) or text[i + 1] in " \t"):
                 break
+            # A `: ` inside a trailing comment is not a key separator: the
+            # value `hello # see: docs` is the scalar `hello`, not a mapping.
+            if text[i] == "#" and (i == 0 or text[i - 1] in " \t"):
+                return None
             i += 1
         if i >= len(text):
             return None
@@ -303,11 +350,18 @@ class _Line(object):
 def _scan_lines(text):
     lines = []
     for number, raw in enumerate(text.splitlines(), start=1):
-        if "\t" in raw[:len(raw) - len(raw.lstrip(" \t"))]:
-            raise YAMLError("line %d: tabs cannot be used for indentation" % number)
         stripped = raw.lstrip(" ")
         lines.append(_Line(len(raw) - len(stripped), stripped.rstrip(), raw, number))
     return lines
+
+
+def _reject_structural_tab(line):
+    """Refuse a tab used as indentation, as PyYAML does — but only outside a
+    block scalar, whose body may legitimately contain tabs (a here-doc in a
+    `run:` step, say), which is why this is checked per structural line."""
+    if "\t" in line.raw[:len(line.raw) - len(line.raw.lstrip(" \t"))]:
+        raise YAMLError("line %d: tabs cannot be used for indentation"
+                        % line.number)
 
 
 class _Parser(object):
@@ -353,6 +407,7 @@ class _Parser(object):
             if line.indent > indent:
                 raise YAMLError("line %d: unexpected indentation in mapping: %r"
                                 % (line.number, line.text))
+            _reject_structural_tab(line)
             if line.text == "-" or line.text.startswith("- "):
                 raise YAMLError("line %d: sequence entry inside a mapping: %r"
                                 % (line.number, line.text))
@@ -361,6 +416,9 @@ class _Parser(object):
                 raise YAMLError("line %d: expected 'key: value', got %r"
                                 % (line.number, line.text))
             key_text, rest = split
+            if rest.startswith("\t"):
+                raise YAMLError("line %d: a tab cannot separate a key from its "
+                                "value: %r" % (line.number, line.text))
             key = _parse_key(key_text)
             header = _BLOCK_HEADER_RE.match(rest.strip())
             if rest.strip() == "" or rest.strip().startswith("#"):
@@ -385,8 +443,12 @@ class _Parser(object):
                                 % (line.number, line.text))
             if not (line.text == "-" or line.text.startswith("- ")):
                 return items, i
+            _reject_structural_tab(line)
             if line.text == "-":
-                value, i = self.parse_child(i, indent)
+                # Only a *more* indented node belongs to a bare dash: a `- ` at
+                # this same indentation is the next entry, so `-\n- x` is
+                # [None, "x"] rather than a nested sequence.
+                value, i = self.parse_child(i, indent, same_indent_sequence=False)
                 items.append(value)
                 continue
             body = line.text[1:]
@@ -401,13 +463,19 @@ class _Parser(object):
                 items.append(value)
                 continue
             self.lines[i] = child
-            if _split_key(child.text) is None:
+            if child.text == "-" or child.text.startswith("- "):
+                # A nested block sequence: `- - x`.
+                value, i = self.parse_sequence(i, child_indent)
+            elif child.text[0] in "[{\"'":
+                # A flow collection or quoted scalar entry: `- {os: ubuntu}`.
+                value, i = _parse_value_text(child.text), i + 1
+            elif _split_key(child.text) is None:
                 value, i = _parse_value_text(child.text), i + 1
             else:
-                value, i = self.parse_node(i, child_indent)
+                value, i = self.parse_mapping(i, child_indent)
             items.append(value)
 
-    def parse_child(self, i, indent):
+    def parse_child(self, i, indent, same_indent_sequence=True):
         """Parse the nested node owned by the key or dash on line i."""
         j = self.next_significant(i + 1)
         if j >= len(self.lines):
@@ -415,8 +483,8 @@ class _Parser(object):
         child = self.lines[j]
         if child.indent > indent:
             return self.parse_node(j, child.indent)
-        if child.indent == indent and (child.text == "-"
-                                       or child.text.startswith("- ")):
+        if same_indent_sequence and child.indent == indent and (
+                child.text == "-" or child.text.startswith("- ")):
             # A sequence may sit at its key's own indentation.
             return self.parse_sequence(j, indent)
         return None, i + 1
@@ -445,11 +513,14 @@ class _Parser(object):
         if explicit:
             block_indent = parent_indent + int(explicit)
         else:
-            block_indent = min(line.indent for line in content)
+            # YAML takes the indentation from the *first* non-empty line; a
+            # later line indented less than that is an error, not a re-basing
+            # of the whole block.
+            block_indent = content[0].indent
         body = []
         for line in collected:
             if line.raw.strip() == "":
-                body.append("")
+                body.append(line.raw[block_indent:])
             else:
                 if line.indent < block_indent:
                     raise YAMLError("line %d: block scalar line is less "
@@ -475,14 +546,15 @@ def _fold(body):
             kind = "text"
         if previous is None:
             text = line
+        elif kind == "more" or previous == "more":
+            # Breaks around a more-indented line are kept literally.
+            text += "\n" + line
         elif kind == "empty":
             text += "\n"
         elif previous == "empty":
             text += line
-        elif previous == "text" and kind == "text":
-            text += " " + line
         else:
-            text += "\n" + line
+            text += " " + line
         previous = kind
     return text + "\n"
 
@@ -504,7 +576,7 @@ def safe_load(stream):
         stream = stream.read()
     if isinstance(stream, bytes):
         stream = stream.decode("utf-8")
-    return _Parser(_scan_lines(stream)).parse_document()
+    return _Parser(_scan_lines(stream.lstrip("\ufeff"))).parse_document()
 
 
 def _sort_key(key):
