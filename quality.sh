@@ -78,13 +78,19 @@ echo "🧾 Checking TypeScript sources (deno check)..."
 
 # TypeScript style gate (Issue #647) — mirrors the CI typescript-gate job.
 # `deno check` above proves the helpers compile; these prove they are linted and
-# formatted. `fmt.include` in deno.json scopes the formatter to .ts/.mjs so
-# Markdown keeps its single owner in markdownlint-cli2; deno lint reads
-# JavaScript/TypeScript only and needs no such fence.
+# formatted. `fmt.include` in deno.json gives the formatter JavaScript and
+# TypeScript only, so Markdown keeps its single owner in markdownlint-cli2 and
+# the committed JSON keeps whatever shape its writer gives it; the top-level
+# `exclude` drops the generated wasm-pack output under
+# neat-core/wasm_activation/pkg/, which .gitignore does not cover.
+# The block between the markers below is extracted and executed verbatim by
+# tests/scripts/deno_style_gate.bats — keep it self-contained.
+# >>> deno-style-gate
 echo "🧹 Linting TypeScript sources (deno lint)..."
 deno lint </dev/null
 echo "🎨 Checking TypeScript formatting (deno fmt --check)..."
 deno fmt --check </dev/null
+# <<< deno-style-gate
 
 # Mermaid gate (Issue #379) — repo-owned, always-on; mirrors the CI
 # markdown-lint job. Fails loud: a missing deno exits non-zero under `set -e`.

@@ -143,10 +143,13 @@ It requires [Deno](https://docs.deno.com/runtime/getting_started/installation/).
 
 Style is gated beside it (Issue #647): the same `typescript-gate` job and the
 same `./quality.sh` run `deno lint` and `deno fmt --check`, so an unformatted or
-lint-broken helper cannot land either. `fmt.include` in `deno.json` fences the
-formatter to `**/*.ts` and `**/*.mjs`: Markdown keeps its single implementation
-owner in the `markdown-lint` workflow's markdownlint-cli2, and two formatters
-never fight over the same file. Fix a formatting failure with `deno fmt`.
+lint-broken helper cannot land either. `fmt.include` in `deno.json` gives the
+formatter JavaScript and TypeScript only: Markdown keeps its single
+implementation owner in the `markdown-lint` workflow's markdownlint-cli2, and
+two formatters never fight over the same file. The top-level `exclude` drops the
+generated wasm-pack output under `neat-core/wasm_activation/pkg/`, which
+`.gitignore` does not cover, so a local bundle build does not redden the gate
+with code nobody wrote. Fix a formatting failure with `deno fmt`.
 
 ### Build profiles (Issue #546)
 

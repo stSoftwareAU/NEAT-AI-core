@@ -31,13 +31,13 @@ require_deno() {
 
 @test "deno lint reports no problems in this repository" {
   require_deno
-  run deno lint --quiet </dev/null
+  run bash -c "cd '$REPO_ROOT' && deno lint --quiet </dev/null"
   [ "$status" -eq 0 ]
 }
 
 @test "deno fmt --check reports no unformatted files in this repository" {
   require_deno
-  run deno fmt --check --quiet </dev/null
+  run bash -c "cd '$REPO_ROOT' && deno fmt --check --quiet </dev/null"
   [ "$status" -eq 0 ]
 }
 
@@ -58,6 +58,29 @@ require_deno() {
   [[ "$output" != *"notes.md"* ]]
 }
 
+# scripts/build-wasm-bundle.sh writes wasm-pack output to
+# neat-core/wasm_activation/pkg/, which .gitignore does not cover. Unfenced, the
+# generated .d.ts made ./quality.sh red for every contributor who had built the
+# bundle — a gate failing on code nobody wrote.
+@test "generated wasm-pack output does not fail the style gate" {
+  require_deno
+  local pkg="${REPO_ROOT}/neat-core/wasm_activation/pkg"
+  [ ! -e "$pkg" ] || skip "a real wasm-pack build is present; refusing to touch it"
+  mkdir -p "$pkg"
+  printf 'export function foo( a:number ):number\n' >"$pkg/neat_core.d.ts"
+
+  run bash -c "cd '$REPO_ROOT' && deno fmt --check </dev/null"
+  local fmt_status="$status"
+  local fmt_output="$output"
+  run bash -c "cd '$REPO_ROOT' && deno lint --quiet </dev/null"
+  local lint_status="$status"
+  local lint_output="$output"
+  rm -rf "${REPO_ROOT}/neat-core/wasm_activation"
+
+  [ "$fmt_status" -eq 0 ] || { echo "$fmt_output"; false; }
+  [ "$lint_status" -eq 0 ] || { echo "$lint_output"; false; }
+}
+
 @test "the CI typescript-gate job runs deno lint and deno fmt --check" {
   require_python3
   run python3 - "$WORKFLOW" <<'PY'
@@ -76,9 +99,70 @@ PY
 
 # The local gate and the CI gate must agree: a contributor who runs
 # ./quality.sh should not discover the style failure only on the pull request.
-@test "quality.sh runs the same deno lint and fmt gate as CI" {
-  run grep -E '^[[:space:]]*deno lint' "$QUALITY"
+# The block is extracted from quality.sh and executed, so these assert on what
+# the gate does rather than on the text it is written in.
+
+# Extract the delimited block from quality.sh into $WORK/gate.sh, wrapped in the
+# same `set -euo pipefail` quality.sh itself runs under.
+extract_local_gate() {
+  awk '/^# >>> deno-style-gate/{f=1;next} /^# <<< deno-style-gate/{f=0} f' \
+    "$QUALITY" >"${WORK}/body.sh"
+  if [ ! -s "${WORK}/body.sh" ]; then
+    echo "quality.sh has no '# >>> deno-style-gate' … '# <<< deno-style-gate' block" >&2
+    return 1
+  fi
+  {
+    echo 'set -euo pipefail'
+    cat "${WORK}/body.sh"
+  } >"${WORK}/gate.sh"
+}
+
+# A stand-in for deno, so the gate is observed without a real lint/fmt run.
+# It records each invocation and reports the status the caller chose per
+# subcommand.
+stub_deno() {
+  mkdir -p "${WORK}/shim"
+  cat >"${WORK}/shim/deno" <<'SH'
+#!/usr/bin/env bash
+printf 'deno %s
+' "$*" >>"$GATE_STUB_LOG"
+case "$1" in
+  lint) exit "${GATE_STUB_EXIT_LINT:-0}" ;;
+  fmt) exit "${GATE_STUB_EXIT_FMT:-0}" ;;
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "${WORK}/shim/deno"
+}
+
+# Run the extracted gate with the stub deno on PATH. $1/$2 are the statuses the
+# stubbed `deno lint` and `deno fmt` report (default 0).
+run_local_gate() {
+  extract_local_gate || return 1
+  stub_deno
+  : >"${WORK}/deno-invocations.log"
+  run env PATH="${WORK}/shim:${PATH}" \
+    GATE_STUB_LOG="${WORK}/deno-invocations.log" \
+    GATE_STUB_EXIT_LINT="${1:-0}" GATE_STUB_EXIT_FMT="${2:-0}" \
+    "$BASH" "${WORK}/gate.sh"
+}
+
+@test "quality.sh runs deno lint and deno fmt --check" {
+  run_local_gate
   [ "$status" -eq 0 ]
-  run grep -E '^[[:space:]]*deno fmt --check' "$QUALITY"
-  [ "$status" -eq 0 ]
+  run cat "${WORK}/deno-invocations.log"
+  [[ "$output" == *"deno lint"* ]]
+  [[ "$output" == *"deno fmt --check"* ]]
+}
+
+@test "a failing deno lint fails quality.sh instead of falling through to fmt" {
+  run_local_gate 1 0
+  [ "$status" -ne 0 ]
+  run cat "${WORK}/deno-invocations.log"
+  [[ "$output" != *"deno fmt"* ]]
+}
+
+@test "a failing deno fmt --check fails quality.sh" {
+  run_local_gate 0 1
+  [ "$status" -ne 0 ]
 }
