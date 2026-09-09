@@ -72,12 +72,12 @@ refuses an oversized declaration. Removing the new ceiling from
 
 ```
 ---- topology_validation_refuses_an_oversized_declared_input_without_paying_for_it stdout ----
-panicked at neat-core/tests/creature_width_allocations.rs:146:5:
+panicked at neat-core/tests/creature_width_allocations.rs:157:5:
 a declared input of 1000000 must be refused
 
 ---- compiling_refuses_an_oversized_declared_input_without_paying_for_it stdout ----
-panicked at neat-core/tests/creature_width_allocations.rs:157:5:
-compile_creature allocated 81217543 B refusing a declared input of 1000000
+panicked at neat-core/tests/creature_width_allocations.rs:168:5:
+compile_creature allocated 81206344 B refusing a declared input of 1000000
 (budget 2097152 B, ceiling 65536); the declared width is being walked before it
 is bounded
 
@@ -92,6 +92,15 @@ test compiling_refuses_an_oversized_declared_input_without_paying_for_it ... ok
 test topology_validation_refuses_an_oversized_declared_input_without_paying_for_it ... ok
 test result: ok. 2 passed; 0 failed
 ```
+
+The oracle counts bytes **per thread**, not process-wide. That is not a detail:
+with a global counter the two tests bill each other for their allocations under
+`quality.sh`'s `--test-threads=2`, and the suite failed on this branch for
+exactly that reason before the counter was made thread-local and
+`const`-initialised (a `const` init matters because the first touch of a lazy
+thread-local happens *inside* the allocator). The re-worked oracle was
+mutation-checked again afterwards, under `--test-threads=2`, and still reports
+the 81 MB walk.
 
 The oracle deliberately does **not** rest on a magic byte figure. It takes two
 readings of the same refusal — at the declared width and at four times it — and
@@ -114,19 +123,29 @@ flowchart TD
 
 ### Gate
 
-`./quality.sh` was run. Every Rust and Deno stage is green: `cargo fmt --check`,
-`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
-`cargo check`, `cargo test --workspace --lib --tests --all-features` (68 test
-binaries, 0 failures), doctests, `RUSTDOCFLAGS="-D warnings" cargo doc`,
+`./quality.sh` was run. Every Rust and Deno stage is green: formatting
+(`rustfmt --edition 2024 --check`), lint
+(`RUSTC_WORKSPACE_WRAPPER=clippy-driver cargo check --workspace --all-targets
+--all-features` under `-D warnings`), `cargo check`,
+`cargo test --workspace --lib --tests --all-features -- --test-threads=2`
+(0 failures), doctests, `RUSTDOCFLAGS="-D warnings" cargo doc`,
 `cargo deny check` (advisories/bans/licenses/sources ok), the TypeScript,
 Mermaid, WASM-parity and JSR supply-chain gates, `codespell`, and the release
 build.
 
-The **bats** leg fails 109 of 448 cases in this container, every one of them
-with `ModuleNotFoundError: No module named 'yaml'` — PyYAML is not installed and
-there is no `pip`. Those cases only read `.github/workflows/*.yml`, which this
-PR does not touch, so the failures are environmental and pre-existing; CI runs
-the same suite on the PR.
+Two container caveats, stated rather than papered over:
+
+- The lint and format stages could not be invoked as `cargo fmt` / `cargo
+  clippy` — this container has no `rustup` default toolchain, so those two
+  shims exit with "rustup could not choose a version". `rustfmt` and
+  `clippy-driver` themselves are present, so the same checks were run directly
+  through them, over the same files and with the same `-D warnings`.
+- The **bats** leg fails 110 of 495 cases here, every one of them with
+  `ModuleNotFoundError: No module named 'yaml'` — PyYAML is not installed and
+  there is no `pip`. This was confirmed **pre-existing** rather than assumed:
+  stashing the whole branch and re-running the gate on a clean tree produces the
+  identical 110 failures. Those cases only read `.github/workflows/*.yml`, which
+  this PR does not touch; CI runs the same suite on the PR.
 
 ### Breaking-change signal
 
@@ -152,17 +171,94 @@ carries a `BREAKING CHANGE:` footer and `scripts/detect-breaking.sh` reports
 
 There is no `CODING-STANDARDS.md` in this repository; the reviewer was pointed
 at `AGENTS.md`, which is the repo's standards document (TDD, oracle-integrity
-and mutation-evidence rules, "what not how" tests, Australian English).
+and mutation-evidence rules, "what not how" tests, Australian English), plus the
+local surfaces it links — `README.md`, `RELEASING.md`, `SECURITY.md`.
 
-- **violation** — the allocation tests asserted `outcome.is_err()`, an untyped oracle any unrelated refusal would satisfy — evidence: `neat-core/tests/creature_width_allocations.rs:130` — reason: fixed here; both tests now match `CreatureError::TooManyNodes` / `GraftError::Creature(TooManyNodes)`
-- **violation** — `REFUSAL_BUDGET_BYTES = 64 * 1024` was a magic threshold, and a single-point measurement cannot demonstrate an O(1) cost — evidence: `neat-core/tests/creature_width_allocations.rs:77` — reason: fixed here; the budget is derived from `MAX_NODE_COUNT * BYTES_PER_WALKED_INPUT` (the widest legitimate walk) and the load-bearing assertion is now a two-reading growth comparison at W and 4W
-- **violation** — the `index_map` precondition doc claimed every caller arrives via `validate_creature_topology`, untrue for two of three call sites — evidence: `neat-core/src/if_graft.rs:567` — reason: fixed here; the doc now names both routes (`validate_creature_topology`, and `cleanup_creature_with` via `sort_synapses_canonically`)
-- **violation** — a 96-character doc line, and an inserted sentence that separated "The last of those…" from its antecedent — evidence: `neat-core/src/if_graft.rs:589` — reason: fixed here; the width paragraph is now its own block and every line wraps under 80
-- **violation** — "abort the module on the allocation" is ungrammatical and inconsistent with README's "abort the process" for the same rule — evidence: `AGENTS.md:440` — reason: fixed here; both documents now say "process"
-- **violation** — `TooManyNodes`'s shared Display reads "Creature has {count} nodes", but the new path passed the declared *input* alone — evidence: `neat-core/src/creature.rs:454` — reason: fixed here; the width path now reports `input + neurons.len()` (saturating), so `count` means one thing on both paths, pinned by `neat-core/tests/creature_width_contract.rs::the_width_ceiling_error_reads_as_a_node_count`
-- **violation** — the ceiling was pinned at parse, compile and `creature_to_json`, but not `creature_to_json_pretty`, while AGENTS.md states this file pins the rule at all four sites — evidence: `neat-core/tests/creature_width_contract.rs:325` — reason: fixed here; the test covers both writers and is renamed `neither_serialiser_writes_a_declared_input_past_the_node_ceiling`
-- **violation** — refusing previously-accepted payloads is breaking under `RELEASING.md`, and the branch carried no breaking marker — evidence: commit `b8bcdc9` — reason: fixed here; commit `416f6de` carries a `BREAKING CHANGE:` footer and `scripts/detect-breaking.sh origin/Develop..HEAD` now reports `true`
-- **clean** — TDD and mutation evidence are real (the reviewer independently removed the bound and watched both allocation tests go red); behaviour-named tests with no source-grep or private-field assertions; the single-home rule holds, with the comparison inlined at no boundary; Australian English throughout (`serialise`, `behaviour`, `modelled`; no `-ize`/`color`/`behavior` in the added lines); every `GlobalAlloc` impl carries a `// SAFETY:` note and no `unsafe` was added to library code; no `unwrap`/`expect`/`panic!` outside test targets; the load-bearing doc claims were each verified against the code; both Mermaid diagrams pass the gate; no hidden, secret or stray files staged
+Two independent standards passes ran over this branch, at different tips. Both
+are recorded; every violation either was fixed here or carries its reason.
+
+Second pass (tip `a551a87`):
+
+- **violation** — `AGENTS.md`'s Issue #555 section still said the declared
+  `input` / `output` / node counts are bounded against `u32::MAX` first, which
+  only `output` still reaches through a creature — evidence: `AGENTS.md:430` —
+  reason: fixed here; the paragraph now names the narrower `MAX_NODE_COUNT`
+  ceiling as the one that answers first
+- **violation** — the same stale claim in `README.md`, plus "the gate bounds the
+  declared counts against that index space **first** — before the UUID map" —
+  evidence: `README.md:690` — reason: fixed here, in the same wording as
+  AGENTS.md so the two cannot drift again
+- **violation** — "Every caller of this helper turns that count into one owned
+  `String` UUID per declared input" is untrue of three of the six callers, and
+  contradicted the caller list three lines above it — evidence:
+  `neat-core/src/creature.rs:649` and the same sentence at `README.md:485` —
+  reason: fixed here; both now say three of the callers walk the width and name
+  what the other three take the ceiling for
+- **violation** — the two adapted Issue #606 tests kept names describing a
+  mechanism neither can now reach, breaching the "name tests after the
+  behaviour" rule — evidence: `neat-core/tests/if_graft.rs:636`, `:664` —
+  reason: fixed here; renamed to
+  `gate_refuses_..._rather_than_narrowing_it` / `..._rather_than_wrapping_it`,
+  and the doc above each now says what it still adds beside the 100-million case
+- **violation** — this PR summary claimed "No existing test was removed,
+  commented out or weakened" while two existing tests had been rewritten, and
+  its Test Plan listed only the added one; its quoted red-run line numbers were
+  stale and it did not record the oracle's thread-local rework — evidence:
+  `docs/archive/pr-summaries/pr-summary-622.md:191` — reason: fixed here; the
+  Test Plan now carries a "Modified" section naming both tests, both renames and
+  the rework, and the quoted output was re-captured
+
+First pass (tip `b8bcdc9`), all fixed in `416f6de` before the second pass:
+
+- **violation** — the allocation tests asserted `outcome.is_err()`, an untyped
+  oracle any unrelated refusal would satisfy — evidence:
+  `neat-core/tests/creature_width_allocations.rs:130` — reason: fixed; both now
+  match `CreatureError::TooManyNodes` / `GraftError::Creature(TooManyNodes)`
+- **violation** — `REFUSAL_BUDGET_BYTES = 64 * 1024` was a magic threshold, and
+  one measurement cannot demonstrate an O(1) cost — evidence:
+  `neat-core/tests/creature_width_allocations.rs:77` — reason: fixed; the budget
+  is derived from `MAX_NODE_COUNT * BYTES_PER_WALKED_INPUT` and the load-bearing
+  assertion is a two-reading growth comparison at W and 4W
+- **violation** — the `index_map` precondition doc claimed every caller arrives
+  via `validate_creature_topology`, untrue for two of three call sites —
+  evidence: `neat-core/src/if_graft.rs:567` — reason: fixed; the doc names both
+  routes
+- **violation** — a 96-character doc line, and an inserted sentence separating
+  "The last of those…" from its antecedent — evidence:
+  `neat-core/src/if_graft.rs:589` — reason: fixed; every line wraps under 80
+- **violation** — "abort the module on the allocation" is ungrammatical and
+  inconsistent with README's "abort the process" — evidence: `AGENTS.md:440` —
+  reason: fixed; both documents say "process"
+- **violation** — `TooManyNodes`'s shared `Display` reads "Creature has {count}
+  nodes", but the new path passed the declared *input* alone — evidence:
+  `neat-core/src/creature.rs:454` — reason: fixed; the width path reports
+  `input + neurons.len()` (saturating), pinned by
+  `creature_width_contract.rs::the_width_ceiling_error_reads_as_a_node_count`
+- **violation** — the ceiling was pinned at parse, compile and
+  `creature_to_json` but not `creature_to_json_pretty` — evidence:
+  `neat-core/tests/creature_width_contract.rs:325` — reason: fixed, and since
+  superseded by the `CEILING_SITES` table, which pins all six routes
+- **violation** — refusing previously-accepted payloads is breaking under
+  `RELEASING.md`, and the branch carried no breaking marker — evidence: commit
+  `b8bcdc9` — reason: fixed; `416f6de` carries a `BREAKING CHANGE:` footer and
+  `scripts/detect-breaking.sh` reports `true`
+
+- **clean** — the areas the second pass checked and found compliant: Australian
+  English throughout the added lines (`serialise`, `behaviour`, `modelled`,
+  `defence`; no `-ize`/`color`/`behavior`), `codespell` clean over all eight
+  files; tests assert observable outcomes only — typed errors, the verbatim
+  `Display` string, and heap bytes through a `#[global_allocator]` — with no
+  source greps, line counts or private-field access; oracle rule 1, the
+  allocator shares no code path with `validate_creature_width`; oracle rule 3,
+  every threshold derived with its derivation beside it and the accepting edge
+  pinned so the branch cannot pass vacuously; oracle rule 5, `bounded_counts`'
+  now-unreachable legs are covered directly in-module at both edges; mutation
+  evidence reproduced independently by the reviewer; the Issue #550 single-home
+  rule holds, with no `> MAX_NODE_COUNT` inlined at any boundary; no `unsafe`
+  added to library code and every test `GlobalAlloc` block carries a `// SAFETY:`
+  note; no hidden, secret or stray file staged; `rustfmt --check`, clippy under
+  `-D warnings`, `RUSTDOCFLAGS="-D warnings" cargo doc`, `markdownlint-cli2` and
+  the Mermaid gate all clean.
 
 ## Test Plan
 
@@ -178,15 +274,66 @@ Added:
   cost. Both were observed failing against the unfixed code (81 MB spent, and
   the topology gate not refusing at all) and passing after the fix.
 
-- `neat-core/tests/creature_width_contract.rs` — the width rule's existing home:
-  - `parse_rejects_a_declared_input_past_the_node_ceiling`
-  - `compile_rejects_a_declared_input_past_the_node_ceiling`
-  - `neither_serialiser_writes_a_declared_input_past_the_node_ceiling`
-  - `the_width_ceiling_error_reads_as_a_node_count`
-  - `a_declared_input_at_the_node_ceiling_is_still_accepted`
+- `neat-core/tests/creature_width_contract.rs` — the width rule's existing home.
+  One named-case table, `CEILING_SITES`, drives every route that accepts or
+  emits a creature and then trusts the declared width, so a *new* entry point
+  cannot be added with the floor wired up and the ceiling forgotten:
+  - `parse_creature_json_refuses_a_declared_input_past_the_node_ceiling`
+  - `compile_creature_refuses_a_declared_input_past_the_node_ceiling`
+  - `creature_to_json_refuses_a_declared_input_past_the_node_ceiling`
+  - `creature_to_json_pretty_refuses_a_declared_input_past_the_node_ceiling`
+  - `validate_creature_topology_refuses_a_declared_input_past_the_node_ceiling`
+  - `cleanup_creature_refuses_a_declared_input_past_the_node_ceiling`
+
+  Plus, beside the table:
+  - `the_issues_exact_payload_is_refused_rather_than_walked` — the issue's
+    literal JSON, byte for byte
+  - `the_width_ceiling_error_reads_as_a_node_count` — the shared `Display` text
+  - `a_declared_input_at_the_node_ceiling_is_still_accepted` and
+    `every_entry_point_accepts_the_widest_addressable_declaration` — the
+    accepting edge, so the bound cannot pass by refusing everything
 
 - `neat-core/tests/if_graft.rs`:
   - `gate_rejects_a_declared_input_past_the_node_ceiling`
 
-No existing test was removed, commented out or weakened. The full workspace
-suite (68 test binaries) and the doctests are green.
+Modified, with the reason documented in place at each test — no test was
+removed, commented out or weakened:
+
+- `neat-core/tests/if_graft.rs::gate_refuses_an_input_width_past_the_u32_index_space_rather_than_narrowing_it`
+  and
+  `::gate_refuses_a_node_count_past_the_u32_index_space_rather_than_wrapping_it`
+  (was `gate_rejects_an_input_width_past_the_u32_index_space` /
+  `gate_rejects_a_node_count_past_the_u32_index_space`). These Issue #606 tests
+  declare an `input` past `u32::MAX`. The new ceiling is **narrower**
+  (65 536 ≪ `u32::MAX`) and runs first, so both creatures are now refused as
+  `GraftError::Creature(CreatureError::TooManyNodes)` rather than
+  `CountNotRepresentable`: every width they used to refuse is still refused,
+  sooner and more cheaply. The assertions were updated to the earlier refusal
+  and both were renamed, because the old names promised a mechanism the creature
+  can no longer reach. What they still add beside the 100-million case is the
+  *magnitude* — a count past the `u32` index space is refused whole, never
+  narrowed to the `1` its low 32 bits hold, and never wrapped by the
+  `input + neurons.len()` sum. `bounded_counts` keeps its own direct coverage of
+  both legs at their accepting and rejecting edges in `if_graft`'s in-module
+  tests (`an_input_width_past_the_index_space_is_refused`,
+  `a_node_count_one_past_the_index_space_is_refused`), per AGENTS.md oracle
+  rule 5.
+
+- `neat-core/tests/creature_width_allocations.rs` — the byte counter moved from
+  a process-wide `AtomicUsize` behind a mutex to a `const`-initialised
+  thread-local `Cell`. Under `quality.sh`'s `--test-threads=2` the two tests ran
+  concurrently and each was billed for the other's set-up allocations, so the
+  target failed in the gate while passing when run alone. Per-thread counting is
+  exact and needs no lock. Re-mutation-checked afterwards under
+  `--test-threads=2`: removing the ceiling still reports the 81 MB walk.
+
+Mutation evidence for the bound itself, run in both directions:
+
+- remove the `input > MAX_NODE_COUNT` check → both allocation tests fail
+  (81 206 344 B against a 2 MiB budget) and every `CEILING_SITES` case fails;
+- weaken it to `>=` → `every_entry_point_accepts_the_widest_addressable_declaration`
+  and `a_declared_input_at_the_node_ceiling_is_still_accepted` fail, so the
+  inclusive edge is pinned from both sides.
+
+The full workspace suite and the doctests are green under the gate's own
+`--test-threads=2`.
