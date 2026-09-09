@@ -49,6 +49,32 @@ only what those rules mean **here**, in the shared native core:
   in local form** — shared per-sample logic belongs here; host orchestration
   stays with the product that runs it.
 
+## A change that breaks a registered downstream does not merge (Issue #644)
+
+This is a working system. Six repositories compile `neat-core` through a
+`../../NEAT-AI-core/neat-core` path dependency at `Develop` head, and the
+production fleet builds them the same way — so a public-API break here is a
+fleet outage the moment it merges, not a red build in someone else's PR later.
+That is what `0.12.0` (#633, private `CompiledNetwork` fields) did: signalled
+correctly, no consumer migrated, five of six consumers broken on merge.
+
+Any public-API change — remove, rename, narrow, privatise, change a signature
+or documented behaviour — is **three PRs, in order: add the alternative in
+core → migrate every registered consumer → remove the old surface.** The rule
+and its mechanics live in
+[`RELEASING.md`](RELEASING.md#changing-or-removing-public-api-the-three-phase-flow).
+The registry is
+[`scripts/downstream-consumers.txt`](scripts/downstream-consumers.txt) (add a
+repository there in the PR that gives it the path dependency); the gate is
+`scripts/check-downstream-consumers.sh` — the `downstream-consumers` CI job,
+required on `Develop`, and locally
+`scripts/check-downstream-consumers.sh --workspace ..` against your sibling
+checkouts. `tests/scripts/check_downstream_consumers.bats` pins the gate: it
+names the consumer that broke, checks every consumer rather than stopping at
+the first, refuses an empty or malformed registry, and compiles consumers
+without `-D warnings` so a phase-1 `#[deprecated]` warns them instead of
+breaking them.
+
 ## TDD (required)
 
 [Principle 1](https://github.com/stSoftwareAU/NEAT-AI/blob/Develop/docs/ENGINEERING_PRINCIPLES.md#1-test-driven-development-tdd-comes-first) owns the
@@ -834,6 +860,7 @@ flowchart TD
 - **`cargo upgrade --incompatible` is local-only** — it runs from `quality.sh` (guarded by `command -v cargo-upgrade`) and from **no workflow**. Do not "fix" CI to call it: a direct upgrade bypasses the quarantine `bump-deps.sh` applies, which is why `ci.yml` drops `cargo-edit` and `tests/scripts/ci_workflow_quarantine.bats` fails any unguarded invocation.
 - **`ACTIONS_PUSH` is supplied just-in-time** (Issue #483): the `version-increment` / `auto-format` checkouts run with **`persist-credentials: false`** and no `token:`, and the PAT reaches only the one step that pushes, through an explicit `https://x-access-token:…` remote URL. Never hand it to a checkout — those jobs execute PR-authored code (`bump-deps.sh`, `cargo fmt`) that would then be able to read an org-wide credential off `.git/config`.
 - **Versioning/release policy:** **`RELEASING.md`** is the single source of truth (Issue #251) — semver, what counts as breaking, and how to signal it. In CI the `version-increment` job bumps minor on a break (patch otherwise); the `version-gate` job **fails** a break shipped on a patch-only bump; `release.yml` cuts a **`v<version>`** tag + GitHub release on `Develop`, decoupled from `wasm-bundle-<sha>`.
+- **`downstream-consumers` compiles every registered consumer against the PR** (Issue #644): `scripts/check-downstream-consumers.sh` over `scripts/downstream-consumers.txt`, unconditional on every pull request and a required check on `Develop`. A red run means a phase-2 migration is missing — fix the consumer, never the gate. See the section above.
 - **`clippy::uninlined_format_args`** is not denied in CI until the test corpus is cleaned up; workspace lints still deny **`filter_next`** / **`collapsible_if`**.
 - **`wasm32` is not gated on PRs — check it yourself before touching wasm-only code.** Neither `quality.sh` nor any `ci.yml` job builds for `wasm32-unknown-unknown` (the `wasm64-memory64-smoke` job is a Deno Memory64 runtime test plus the shipped-bundle gate unit tests, not a wasm32 build); the target compiles only *after* merge — on **push to `Develop`** through `wasm-bundle.yml`, and on the scheduled `upgrade-dependencies.yml` run, whose `bump-deps.sh` dual build the PR lane skips with `--skip-build`. The load-bearing manual check is **`cargo check -p neat-core --target wasm32-unknown-unknown`**. What it catches: deleting the last consumer of a `#[cfg(target_family = "wasm")]` block leaves an orphaned `use crate::wasm_arch::{…}` that every host gate compiles right past and only the bundle build rejects (Issues #422, #423). For **numeric** wasm changes go further, as Issue #448 did — compile to `wasm32-wasip1`, run under Node's WASI with `-C target-feature=+simd128,+relaxed-simd`, and diff the raw `f32` bit patterns before against after.
 - **`wasm64` is ungated on PRs for the same reason, and costs more to check.** `wasm64-unknown-unknown` is a Rust **Tier 3** target: no prebuilt `std`, so it needs a nightly toolchain, the `rust-src` component and `-Z build-std` — `rustup target add` refuses it outright. The local check is **`cargo +nightly build -p neat-core --target wasm64-unknown-unknown --release -Z build-std=std,panic_abort`**. Both bundles are built and gated on push to `Develop` (see the wasm64 section below).

@@ -1,0 +1,18 @@
+# Registered downstream consumers of neat-core (Issue #644).
+#
+# One GitHub repository per line, `owner/name`. Each is a Cargo workspace whose
+# crate declares `neat-core = { path = "../../NEAT-AI-core/neat-core" }`, so the
+# repository name is also the sibling directory that path dependency resolves
+# through. `scripts/check-downstream-consumers.sh` compiles every entry against
+# the candidate core on every pull request: a change that stops one of them
+# compiling cannot merge until that consumer is migrated first — see
+# RELEASING.md, "Changing or removing public API: the three-phase flow".
+#
+# Add a repository here in the same PR that gives it the path dependency. A
+# consumer that is not listed is not protected.
+stSoftwareAU/NEAT-AI-scorer
+stSoftwareAU/NEAT-AI-Backpropagation
+stSoftwareAU/NEAT-AI-Rebase
+stSoftwareAU/NEAT-AI-Forests
+stSoftwareAU/NEAT-AI-Ockham
+stSoftwareAU/NEAT-AI-Lamarck

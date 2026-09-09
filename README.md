@@ -1416,10 +1416,15 @@ graph TD
 ## Propagation to downstream repositories
 
 Once an enhancement merges to `Develop` here, it flows automatically to the
-next pull request raised in either consumer repository — no manual SHA bump
-is required. The two consumer paths differ in mechanism but share the same
-Vibe Coder hook (`bump-deps.sh` runs on every PR; the CI `quality` job then
-applies the same gates `quality.sh` runs locally).
+next pull request raised in a consumer repository — no manual SHA bump is
+required. The two consumer paths differ in mechanism but share the same Vibe
+Coder hook (`bump-deps.sh` runs on every PR; the CI `quality` job then applies
+the same gates `quality.sh` runs locally). The flow is guarded in the other
+direction too: every pull request here compiles each registered
+path-dependency consumer against the candidate core (the `downstream-consumers`
+job, Issue #644), so a change that would break one cannot merge before that
+consumer is migrated — see
+[`RELEASING.md`](RELEASING.md#changing-or-removing-public-api-the-three-phase-flow).
 
 ### NEAT-AI (Deno + WASM consumer)
 
@@ -1452,6 +1457,11 @@ applies the same gates `quality.sh` runs locally).
 
 ### NEAT-AI-scorer (Rust + path dependency)
 
+- NEAT-AI-scorer is one of the registered path-dependency consumers in
+  [`scripts/downstream-consumers.txt`](scripts/downstream-consumers.txt) —
+  with NEAT-AI-Backpropagation, NEAT-AI-Rebase, NEAT-AI-Forests, NEAT-AI-Ockham
+  and NEAT-AI-Lamarck — that the `downstream-consumers` gate compiles against
+  every pull request here before it can merge (Issue #644).
 - NEAT-AI-scorer's CI uses `actions/checkout` to clone
   `stSoftwareAU/NEAT-AI-core@Develop` into the workspace on every PR.
 - `rust_scorer/Cargo.toml`'s `path = "../../NEAT-AI-core/neat-core"` resolves
