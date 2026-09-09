@@ -79,9 +79,12 @@ TS
   [[ "$output" == *"deno is required"* ]]
 }
 
+# The usage error is reported before the toolchain probe, so the exit status is
+# 2 whether or not deno is installed on the runner.
 @test "a non-existent root directory is rejected" {
-  run "$SCRIPT" "$WORK/does-not-exist"
-  [ "$status" -ne 0 ]
+  run env PATH=/nonexistent "$BASH" "$SCRIPT" "$WORK/does-not-exist"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not a directory"* ]]
 }
 
 @test "the repository's own TypeScript sources pass the gate" {

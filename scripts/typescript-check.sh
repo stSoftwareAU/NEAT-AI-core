@@ -11,13 +11,6 @@
 # This repository commits its own gate; there is no shared cross-repo Action.
 set -euo pipefail
 
-# Fail loud: a missing toolchain must never be reconciled as a passing gate.
-# Checked first so the diagnostic survives a stripped PATH.
-if ! command -v deno &>/dev/null; then
-  echo "typescript-check: deno is required — install: https://docs.deno.com/runtime/getting_started/installation/" >&2
-  exit 1
-fi
-
 root="${1:-$(cd "${BASH_SOURCE[0]%/*}/.." && pwd)}"
 
 if [ ! -d "$root" ]; then
@@ -31,6 +24,15 @@ fi
 # an absolute path once, through a `cd --` that cannot be optioned — the same
 # shape the default above already has (Issue #608).
 root="$(cd -- "$root" && pwd)"
+
+# Fail loud: a missing toolchain must never be reconciled as a passing gate.
+# Probed after the argument is validated so a bad root is always reported as a
+# usage error (exit 2), toolchain or no toolchain. Both checks use shell
+# builtins only, so the diagnostics survive a stripped PATH.
+if ! command -v deno &>/dev/null; then
+  echo "typescript-check: deno is required — install: https://docs.deno.com/runtime/getting_started/installation/" >&2
+  exit 1
+fi
 
 files=()
 while IFS= read -r file; do
