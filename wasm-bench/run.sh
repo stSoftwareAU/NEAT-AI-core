@@ -23,6 +23,24 @@ SHAPE="${2:-5}"
 RECORDS="${3:-4096}"
 SESSIONS="${4:-3}"
 
+# require_integer <name> <value> — every positional argument is forwarded to
+# `node runner.mjs`, and SHAPE also builds the `results/shape<N>.csv` path, so a
+# `-`-prefixed, path-bearing or otherwise non-numeric value must never reach
+# either (Issue #608). Same guard shape as build-wasm-bundle.sh's
+# --min-size-bytes check. This runs before the toolchain check below so the
+# rejection is reachable on a host with neither cargo nor node installed.
+require_integer() {
+  if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+    echo "run.sh: $1 must be a non-negative integer (got '$2')" >&2
+    exit 2
+  fi
+}
+
+require_integer samples "$SAMPLES"
+require_integer "shape-index" "$SHAPE"
+require_integer records "$RECORDS"
+require_integer sessions "$SESSIONS"
+
 TARGET="wasm32-unknown-unknown"
 ARTEFACTS="../target/wasm-bench"
 # Production wasm build flags: the release profile (opt-level 3, lto,

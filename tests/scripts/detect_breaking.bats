@@ -47,3 +47,22 @@ teardown() {
   run "$SCRIPT"
   [ "$status" -ne 0 ]
 }
+
+# Issue #608 — `range="$1"` was passed straight to `git log`, so a `-`-prefixed
+# value was parsed as a git option: `--output=<path>` wrote a file of the
+# caller's choosing, and `--all` widened the scan past the range asked about.
+
+@test "an option-shaped range is rejected and writes no file" {
+  local leak="${WORK}/leak.txt"
+  run "$SCRIPT" "--output=${leak}"
+  [ "$status" -ne 0 ]
+  [ ! -e "$leak" ]
+}
+
+@test "an option-shaped range cannot widen the scan to the whole history" {
+  # A breaking commit outside any range a caller would ask about.
+  git commit -q --allow-empty -m "feat!: unrelated breaking change"
+  run "$SCRIPT" "--all"
+  [ "$status" -ne 0 ]
+  [ "$output" != "true" ]
+}
