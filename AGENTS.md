@@ -428,9 +428,13 @@ restate their rules here. The last of those is what carries the Issue #577 rule
 that only an `IF` target may take two roles from one source. The ordering
 gate runs only for `forwardOnly` creatures; a recurrent creature legitimately
 carries backward edges, which that gate rejects by design. Those gates read
-`u32` widths and indices, so the declared `input` / `output` / node counts are
-bounded against `u32::MAX` before anything walks them — past it is
-`GraftError::CountNotRepresentable`, never a silent narrowing (Issue #606). The
+`u32` widths and indices, so a declared count is bounded before anything walks
+it — past `u32::MAX` is `GraftError::CountNotRepresentable`, never a silent
+narrowing (Issue #606). Since Issue #622 the *narrower* ceiling answers first:
+`validate_creature_width` bounds `input` against `MAX_NODE_COUNT` (65 536) at
+the top of `validate_creature_topology`, so through a creature only `output`
+still reaches the representability gate — `input` and the node count come back
+as `GraftError::Creature(CreatureError::TooManyNodes)`. The
 post-build check
 is deliberate defence in depth: it is unreachable while the pre-checks are
 complete, so it is exercised directly against synthetic creatures

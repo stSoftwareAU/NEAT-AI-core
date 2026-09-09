@@ -482,10 +482,13 @@ calls it:
 | `creature_to_json` / `creature_to_json_pretty` | same typed error — a widthless creature is never *written* | — | — |
 
 **The rule is bounded at the top as well (Issue #622).** `input` is a *declared*
-count with no backing data in the JSON, and every caller of
-`validate_creature_width` turns it into one owned `String` UUID per declared
-input — `compile_creature`, `validate_creature_topology` (and so every `graft_*`
-helper) and `cleanup_creature_with` all build that map. Sizing an allocation by
+count with no backing data in the JSON, and three of the callers that trust it
+go on to turn it into one owned `String` UUID per declared input —
+`compile_creature`, `validate_creature_topology` (and so every `graft_*` helper)
+and `cleanup_creature_with` each build that map. The other three
+(`parse_creature_json` and the two serialisers) allocate nothing per input, and
+take the ceiling so that a width no site can honour is never parsed in or
+written back out. Sizing an allocation by
 a number the payload never backed is what lets `{"input": 100000000, …}` — under
 100 bytes — cost a hundred million map entries, and a large enough literal abort
 the process on the allocation instead of returning. So the ceiling lives in
@@ -687,12 +690,14 @@ itself.
 restating their rules. The ordering gate only runs for `forwardOnly` creatures,
 because a recurrent creature legitimately carries backward edges.
 
-Those gates read `u32` widths and `u32` neuron indices, so the gate bounds the
-declared counts against that index space **first** — before the UUID map names
-one entry per declared input. An `input`, `output` or node count past
-`u32::MAX` earns `GraftError::CountNotRepresentable`; it is never narrowed
+Those gates read `u32` widths and `u32` neuron indices, so a declared count is
+bounded **before** the UUID map names one entry per declared input. A count past
+`u32::MAX` earns `GraftError::CountNotRepresentable` and is never narrowed
 (Issue #606, which is what a declared `output` of `4_294_967_297` read as `1`
-before).
+before). Since Issue #622 the narrower `MAX_NODE_COUNT` ceiling on `input` runs
+ahead of it, so through a creature only `output` still reaches that gate:
+an over-wide `input`, and the node count it drives, come back as
+`GraftError::Creature(CreatureError::TooManyNodes)` instead.
 
 ```mermaid
 flowchart LR

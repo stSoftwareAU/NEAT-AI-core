@@ -646,10 +646,14 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
 ///
 /// `input` is a **declared** count with no backing data in the JSON — input
 /// neurons are not listed in `neurons` — so a payload under 100 bytes can say
-/// `"input": 100000000`. Every caller of this helper turns that count into one
-/// owned `String` UUID per declared input ([`compile_creature`],
-/// [`crate::if_graft::validate_creature_topology`] and so every `graft_*`
-/// helper, and [`crate::prune_cleanup::cleanup_creature_with`]), which is why
+/// `"input": 100000000`. Three of the callers that trust this helper then turn
+/// that count into one owned `String` UUID per declared input
+/// ([`compile_creature`], [`crate::if_graft::validate_creature_topology`] and so
+/// every `graft_*` helper, and
+/// [`crate::prune_cleanup::cleanup_creature_with`]) — the other three
+/// ([`parse_creature_json`] and the two serialisers) allocate nothing per input
+/// and take the ceiling so a width no site can honour is never read in or
+/// written back out. The three that walk it are why
 /// the ceiling belongs *here*, ahead of them all: bounding the width afterwards
 /// means the declared count, not the payload, decides the memory spent, and a
 /// large enough literal aborts the process on the allocation instead of
