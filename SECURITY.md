@@ -34,7 +34,9 @@ sites:
 
 - `neat-core/src/simd_native.rs` — the native SSE2/AVX2/NEON kernels;
 - `neat-core/src/simd.rs` — the wasm `gather4` scaffold helper, which reads
-  four synapses and four indirect activations unchecked (Issue #509);
+  four synapses and four indirect activations unchecked in the default build
+  (the `checked-gather4` feature restores the bounds-checked control, Issue
+  #509);
 - `neat-core/src/simd/scalar.rs` — the `tail_*` helpers both kernel families
   delegate their 0..3 remainder to.
 

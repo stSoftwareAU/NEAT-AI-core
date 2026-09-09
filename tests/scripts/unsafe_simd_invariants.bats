@@ -137,29 +137,45 @@ src = open(sys.argv[1], encoding="utf-8").read()
 if not re.search(r"\bInvalidSynapseIndex\s*\{", src):
     sys.exit("network.rs declares no InvalidSynapseIndex variant")
 
-# Locate `pub fn new` inside `impl CompiledNetwork` and read its body by brace
-# depth, so the guard must live in the constructor the docs name.
-impl_start = src.find("impl CompiledNetwork {")
-if impl_start < 0:
+
+
+def block_end(text, open_brace):
+    """Index just past the `}` closing the block that starts at open_brace."""
+    depth = 0
+    for i in range(open_brace, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return None
+
+
+# `pub fn new` must live inside an `impl CompiledNetwork` block — searching the
+# whole file would latch onto any other type's constructor once this one went.
+impls = [m.end() - 1 for m in re.finditer(r"impl CompiledNetwork \{", src)]
+if not impls:
     sys.exit("network.rs has no `impl CompiledNetwork` block")
-new_start = src.find("pub fn new(", impl_start)
-if new_start < 0:
+
+body = None
+for impl_open in impls:
+    impl_close = block_end(src, impl_open)
+    if impl_close is None:
+        sys.exit("could not read an `impl CompiledNetwork` block")
+    new_start = src.find("pub fn new(", impl_open, impl_close)
+    if new_start < 0:
+        continue
+    fn_open = src.index("{", src.index(")", new_start))
+    fn_close = block_end(src, fn_open)
+    if fn_close is None:
+        sys.exit("could not read the body of CompiledNetwork::new")
+    body = src[fn_open:fn_close]
+    break
+
+if body is None:
     sys.exit("network.rs has no CompiledNetwork::new constructor")
 
-body_start = src.index("{", src.index(")", new_start))
-depth, end = 0, None
-for i in range(body_start, len(src)):
-    if src[i] == "{":
-        depth += 1
-    elif src[i] == "}":
-        depth -= 1
-        if depth == 0:
-            end = i
-            break
-if end is None:
-    sys.exit("could not read the body of CompiledNetwork::new")
-
-body = src[body_start:end]
 if "NetworkError::InvalidSynapseIndex" not in body:
     sys.exit("CompiledNetwork::new no longer raises NetworkError::"
              "InvalidSynapseIndex — the docs' soundness claim is stale")
