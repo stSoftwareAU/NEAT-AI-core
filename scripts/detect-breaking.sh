@@ -15,11 +15,22 @@ set -euo pipefail
 }
 range="$1"
 
-if git log --format='%s' "$range" | grep -Eq '^[a-zA-Z]+(\([^)]*\))?!:'; then
+# A `-`-prefixed range would be parsed by `git log` as an option rather than a
+# revision range — `--output=<path>` writes a file of the caller's choosing and
+# `--all` widens the scan past the range asked about (Issue #608). Reject it
+# here, and pass `--end-of-options` below so git refuses one anyway.
+case "$range" in
+  -*)
+    echo "detect-breaking.sh: <git-range> must not start with '-' (got '$range')" >&2
+    exit 2
+    ;;
+esac
+
+if git log --format='%s' --end-of-options "$range" | grep -Eq '^[a-zA-Z]+(\([^)]*\))?!:'; then
   echo true
   exit 0
 fi
-if git log --format='%B' "$range" | grep -Eq '(^|[[:space:]])BREAKING[ -]CHANGE:'; then
+if git log --format='%B' --end-of-options "$range" | grep -Eq '(^|[[:space:]])BREAKING[ -]CHANGE:'; then
   echo true
   exit 0
 fi

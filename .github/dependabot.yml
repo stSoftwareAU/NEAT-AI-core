@@ -24,3 +24,18 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
+
+  # The wasm-bench harness is excluded from the root virtual workspace
+  # (Issue #607), so it resolves its own Cargo.lock that the entry above never
+  # reads. Same weekly cadence, same 7-day cooldown, same labels and prefix.
+  - package-ecosystem: "cargo"
+    directory: "/wasm-bench"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"

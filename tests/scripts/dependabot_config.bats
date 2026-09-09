@@ -93,6 +93,27 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# The wasm-bench harness is excluded from the root virtual workspace and
+# resolves its own Cargo.lock (Issue #607), which the `directory: "/"` entry
+# never reads. Without its own entry the harness never receives a version bump,
+# so a compromised transitive crate stays pinned there indefinitely. The
+# cooldown assertion above already sweeps every cargo entry, this one included.
+@test "dependabot covers the excluded wasm-bench crate directory" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import sys, yaml
+with open("$DEPENDABOT_FILE") as fh:
+    data = yaml.safe_load(fh)
+cargo = [u for u in (data.get("updates") or []) if u.get("package-ecosystem") == "cargo"]
+dirs = [u.get("directory") for u in cargo]
+assert "/wasm-bench" in dirs, \
+    f"cargo ecosystem must also target '/wasm-bench', got {dirs!r}"
+PY
+  [ "$status" -eq 0 ]
+}
+
 # Security-update PRs are raised independently of the version-update schedule,
 # but a bounded open-pull-requests-limit keeps the advisory fast-lane from
 # being throttled to the default of 5. Assert the cargo entry sets one.

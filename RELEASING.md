@@ -78,7 +78,16 @@ Signal a breaking change in **either** of these ways:
   `perf(network)!: narrow from_index to u16`) or a `BREAKING CHANGE:` footer.
 
 `scripts/detect-breaking.sh` reads the commit markers; the label is read from the
-PR metadata. Either signal triggers the major-equivalent bump.
+PR metadata. Either signal triggers the major-equivalent bump. Its single
+argument is a revision range and nothing else: an option-shaped value exits 2
+with a diagnostic on stderr rather than reaching `git log` as a flag, and the
+range is passed behind `--end-of-options` so git would refuse it even then
+(Issue #608). `tests/scripts/detect_breaking.bats` is the gate. Note that both CI
+callers capture stdout only (`[ "$(… detect-breaking.sh …)" = "true" ]`), so that
+exit 2 is discarded and the lane reads "not breaking" — the guard is defence in
+depth for a future caller, not a signal the current lanes act on, and `RANGE` is
+always `HEAD` or `origin/$BASE_BRANCH..HEAD` so no lane can trip it today. That
+caller-side gap is tracked separately as #634.
 
 ## Enforcement: breaking cannot ship on a patch-only bump
 
@@ -153,6 +162,36 @@ still needs a log entry — `0.4.0` and `0.5.0` below are that shape.
 Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
+
+### `0.13.0` — `GraftError::CountNotRepresentable` (Issue #606)
+
+`GraftError` gains a variant. The enum is not `#[non_exhaustive]`, so a
+downstream exhaustive `match` on it stops compiling until it handles
+`CountNotRepresentable { field: &'static str, found: u64 }`.
+
+`validate_creature_topology` passed `creature.input` / `creature.output` to the
+index gates through `as u32`, so a declared `output` of `4_294_967_297` arrived
+as `1` and a creature no compiler could accept passed the gate. The counts are
+now checked with `u32::try_from` before anything reads them, and the new variant
+is what a count past `u32::MAX` returns. A creature whose declared widths fit
+`u32` — every creature this crate can compile, which caps at `MAX_NODE_COUNT` —
+is unaffected.
+
+The same change made `training_state`'s packed-record indexing checked. A record
+index whose start offset overflows `usize` is now out of range rather than
+wrapping onto a live record, and `init_training_state` panics rather than
+silently allocating a wrapped, far-too-small buffer.
+
+**Migration** — add an arm (or a `_ =>` catch-all) for the new variant:
+
+```rust
+match err {
+    // … existing arms …
+    GraftError::CountNotRepresentable { field, found } => {
+        eprintln!("declared {field} count {found} is past the u32 index space");
+    }
+}
+```
 
 ### `0.12.0` — `CompiledNetwork`'s fields are private (Issue #625)
 

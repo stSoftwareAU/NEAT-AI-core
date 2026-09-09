@@ -1,9 +1,12 @@
 # Issue #509 — WASM gather4 prototype benchmark harness.
 #
-# Deliberately **outside** the root virtual workspace (`exclude`d there, and an
-# empty `[workspace]` table here): it is a research harness, not shipped code,
-# and keeping it out means `quality.sh`, the version-bump job and `cargo deny`
-# see exactly the crate set they saw before.
+# Deliberately **outside** the root virtual *build* workspace (`exclude`d there,
+# and an empty `[workspace]` table here): it is a research harness, not shipped
+# code, so it takes no part in the workspace build or the version bump.
+#
+# Its supply chain is **not** excluded (Issue #607): the lockfile this crate
+# resolves for itself is audited, denied and bumped like the root one. The
+# per-lockfile wiring lives once, in SECURITY.md "Supply-chain audit scope".
 [package]
 name = "wasm-gather4-bench"
 version = "0.0.0"

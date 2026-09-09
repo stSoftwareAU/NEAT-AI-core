@@ -52,6 +52,13 @@ jobs:
       - name: Run cargo audit (fallback)
         run: cargo audit
 
+      # The wasm-bench harness is excluded from the root virtual workspace, so
+      # it resolves its own lockfile that neither audit above reads (Issue
+      # #607). Audit it here so an advisory against a crate only the harness
+      # depends on fails this job.
+      - name: Run cargo audit (wasm-bench lockfile)
+        run: cargo audit --file wasm-bench/Cargo.lock
+
       - name: Dependency review (GitHub Advisory / license diff on PR)
         if: ${{ inputs.include-dependency-review && github.event_name == 'pull_request' }}
         # actions/dependency-review-action@v5.0.0

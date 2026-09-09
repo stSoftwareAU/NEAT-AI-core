@@ -52,7 +52,10 @@ Options:
   --skip-external        Skip cargo update (crates.io).
   --skip-audit           Skip the advisory scan.
   --skip-build           Skip native + wasm32 cargo build.
-  --repo DIR             Repository root (default: cwd).
+  --repo DIR             Repository root (default: cwd). Must be an existing
+                         directory; anything else exits 2, and the value is
+                         resolved to an absolute path so it can never be
+                         parsed as a cd option (Issue #608).
   --check-published TS H Internal helper: exit 0 if TS (ISO 8601) is older
                          than H hours, else exit 1. Used by tests.
   -h, --help             Show this message.
@@ -139,15 +142,26 @@ if [[ "$MODE" == "check-published" ]]; then
   exit "$rc"
 fi
 
-if [[ ! -d "$REPO_DIR" ]]; then
-  echo "Usage error: --repo '$REPO_DIR' is not a directory" >&2
-  exit 2
-fi
-
 if ! [[ "$QUARANTINE_HOURS" =~ ^[0-9]+$ ]]; then
   echo "Usage error: --quarantine-hours must be a non-negative integer (got '$QUARANTINE_HOURS')" >&2
   exit 2
 fi
+
+# --repo reaches `cd "$REPO_DIR"` below, where a `-`-prefixed value is parsed as
+# a cd option: `cd -P` takes no operand and lands in $HOME, so the cargo passes
+# would run outside the repository and find nothing to bump — and because the
+# dry-run capture is wrapped in `|| true`, that was reported as "no updates"
+# rather than surfacing (Issue #608).
+#
+# An existence test alone does NOT close this: `[[ -d "-P" ]]` is true whenever a
+# directory named `-P` exists in the cwd, and `cd "-P"` still consumes it as an
+# option. So resolve the value to an absolute path once, through a `cd --` that
+# cannot be optioned, and let every later `cd "$REPO_DIR"` inherit the result.
+if [[ ! -d "$REPO_DIR" ]]; then
+  echo "Usage error: --repo must be an existing directory (got '$REPO_DIR')" >&2
+  exit 2
+fi
+REPO_DIR="$(cd -- "$REPO_DIR" && pwd)"
 
 # Look up the published-at timestamp for a specific crates.io version.
 # Honours $BUMP_DEPS_PUBLISH_FIXTURE (a directory of <crate>-<version>.iso

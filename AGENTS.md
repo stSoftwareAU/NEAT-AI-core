@@ -255,7 +255,7 @@ with **unchecked** indexing, `get_unchecked(from_index)`. A compiled network
 declaring a synapse with `from_index >= num_neurons` would be an out-of-bounds
 read — **undefined behaviour** on every `activate()`. This is guarded **once, at
 load time**: `CompiledNetwork::new` rejects any out-of-range `from_index` with
-`NetworkError::InvalidSynapseIndex`. A network
+`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs`). A network
 that loads successfully is guaranteed in-range, so the `get_unchecked` calls are
 sound and the hot path stays branch-free. **Never remove or bypass that check as
 "redundant" — doing so reintroduces UB behind `get_unchecked`.** (See also the
@@ -350,22 +350,49 @@ function this changes how intrinsics must be wrapped:
   *safe* to call and must **not** be wrapped in `unsafe { … }` — wrapping it
   trips the `unused_unsafe` lint and fails the `-D warnings` build.
 - Only these genuinely need an `unsafe { … }` block: `get_unchecked` indexing
-  and its pointer derefs; pointer load/store intrinsics (`vld1q_f32` /
-  `vst1q_f32`, `_mm_storeu_ps` / `_mm256_storeu_ps`); and intrinsics needing a
-  feature the enclosing fn does **not** enable (e.g. `_mm256_fmadd_ps` needs
-  `fma` inside an `avx2`-only fn).
-- Every SIMD `unsafe` block must carry a `// SAFETY:` note naming **the
-  obligation that block actually discharges**. There are two, and a note that
-  names the wrong one is as bad as no note:
+  and its pointer derefs, and pointer load/store intrinsics (`vld1q_f32` /
+  `vst1q_f32`, `_mm_storeu_ps` / `_mm256_storeu_ps`). An intrinsic needing a
+  feature the enclosing fn does **not** enable is **not** on that list: wrapping
+  it in `unsafe { … }` does not make it sound. Add the feature to the fn's
+  `#[target_feature]` list instead, and detect it at dispatch — see the
+  AVX2/FMA bullet below (Issue #605).
+- Every SIMD `unsafe` block must be **discharged in writing**, one of two ways
+  (Issue #605):
+  - a `# Safety` doc on the enclosing `unsafe fn` covers every `unsafe {` block
+    in its body. A kernel's index and target-feature preconditions belong in
+    that one contract — the caller is who must satisfy them — not re-copied onto
+    each of its eight blocks.
+  - otherwise the block carries its own `// SAFETY:` note. This is **required**
+    for every `unsafe` block in a *safe* fn.
+
+  A written discharge names **the obligation that block actually discharges**.
+  There are two, and a note that names the wrong one is as bad as no note
+  (Issue #613):
   - **Feature availability** — a block calling a `#[target_feature]` fn names
     the `is_*_feature_detected!` guard (`is_x86_feature_detected!` /
     `is_aarch64_feature_detected!`) proving the callee's precondition.
   - **Index validity** — a block calling a `*_unchecked` kernel or a
     `scalar::tail_*` helper names the load-time `CompiledNetwork::new`
     validation (or the `simd::bounds` predicate that has just run), since those
-    kernels' contracts are about indices, not features (Issue #613).
+    kernels' contracts are about indices, not features.
 
   A block that crosses both obligations names both.
+
+  `tests/scripts/unsafe_block_safety_notes.bats` sweeps the live sources
+  (`simd_native.rs`, `simd.rs`, `simd/scalar.rs`, wasm half included) and fails
+  on a block with neither, and on an `unsafe fn` with no `# Safety` doc at all —
+  the prose gate `unsafe_simd_invariants.bats` reads only AGENTS.md and
+  SECURITY.md, never a line of Rust.
+- A `#[target_feature]` list must enable **every** feature its intrinsics need,
+  and the runtime guard in front of it must detect **every** feature that list
+  enables. **AVX2 does not imply FMA**: `_mm256_fmadd_ps` reached through an
+  `avx2`-only guard is undefined behaviour on a CPU (or hypervisor) that masks
+  FMA, so the AVX2 record kernels carry
+  `#[target_feature(enable = "avx2", enable = "fma")]` and dispatch through
+  `avx2_fma_kernels_enabled(avx2_detected, fma_detected)` (Issue #605). The same
+  bats sweep enforces the guard-covers-the-list half: an `unsafe` block in a
+  safe fn that calls a `#[target_feature]` kernel is red unless an
+  `is_*_feature_detected!` check for each enabled feature stands between the two.
 
 ### Buffer reuse is sound only one-network-per-thread
 
@@ -400,7 +427,11 @@ its interpretation of the roles from here rather than inventing one.
 restate their rules here. The last of those is what carries the Issue #577 rule
 that only an `IF` target may take two roles from one source. The ordering
 gate runs only for `forwardOnly` creatures; a recurrent creature legitimately
-carries backward edges, which that gate rejects by design. The post-build check
+carries backward edges, which that gate rejects by design. Those gates read
+`u32` widths and indices, so the declared `input` / `output` / node counts are
+bounded against `u32::MAX` before anything walks them — past it is
+`GraftError::CountNotRepresentable`, never a silent narrowing (Issue #606). The
+post-build check
 is deliberate defence in depth: it is unreachable while the pre-checks are
 complete, so it is exercised directly against synthetic creatures
 (`neat-core/tests/if_graft.rs`, AGENTS.md oracle rule 5) rather than through a
