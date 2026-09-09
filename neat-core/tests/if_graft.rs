@@ -595,6 +595,59 @@ fn gate_rejects_a_widthless_creature() {
     assert!(matches!(err, GraftError::Creature(_)));
 }
 
+/// `2^32 + 1` — past the `u32` index space the gates read, and chosen for what
+/// its low 32 bits hold: `1`, which is exactly `base_creature`'s real output
+/// width, so a gate that truncates cannot tell the two apart.
+fn width_past_u32_index_space() -> usize {
+    usize::try_from(u64::from(u32::MAX) + 2).expect("64-bit test host")
+}
+
+/// Issue #606 — `creature.output` reached [`validate_structural_integrity`]
+/// through an `as u32` cast, so a declared width of `4_294_967_297` arrived as
+/// `1` and a creature no compiler could ever accept passed the gate. The
+/// declared width must be refused, never truncated.
+#[test]
+fn gate_rejects_an_output_width_past_the_u32_index_space() {
+    let mut creature = base_creature();
+    creature.output = width_past_u32_index_space();
+    let err = validate_creature_topology(&creature).expect_err("rejected");
+    assert!(matches!(
+        err,
+        GraftError::CountNotRepresentable { field: "output", found }
+            if found == width_past_u32_index_space() as u64
+    ));
+}
+
+/// The same rule for the observation width, and it is checked before the UUID
+/// index is built: the index names one entry per declared input, so a width
+/// this size has to be refused on sight rather than walked.
+#[test]
+fn gate_rejects_an_input_width_past_the_u32_index_space() {
+    let mut creature = base_creature();
+    creature.input = width_past_u32_index_space();
+    let err = validate_creature_topology(&creature).expect_err("rejected");
+    assert!(matches!(
+        err,
+        GraftError::CountNotRepresentable { field: "input", found }
+            if found == width_past_u32_index_space() as u64
+    ));
+}
+
+/// A declared width that fits `u32` but pushes the node count past it is
+/// refused too — every `from`/`to` index the gate casts is bounded by that
+/// count, so the cast is lossless only while the count fits.
+#[test]
+fn gate_rejects_a_node_count_past_the_u32_index_space() {
+    let mut creature = base_creature();
+    creature.input = u32::MAX as usize;
+    let err = validate_creature_topology(&creature).expect_err("rejected");
+    let expected = u64::from(u32::MAX) + creature.neurons.len() as u64;
+    assert!(matches!(
+        err,
+        GraftError::CountNotRepresentable { field: "node", found } if found == expected
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // The shared definition of a valid creature (Issue #562) — what the helper
 // hands a consumer has to satisfy `creature_validate`, not merely compile.

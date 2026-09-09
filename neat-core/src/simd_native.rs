@@ -42,6 +42,20 @@ pub(crate) const fn assert_interleaved_tile<const R: usize>() {
     );
 }
 
+/// Whether the x86_64 AVX2 record kernels may run, given the CPU features
+/// actually detected at runtime (Issue #605).
+///
+/// `weighted_sum_simd_8records_avx2` and `weighted_sum_interleaved_avx2` issue
+/// `_mm256_fmadd_ps`, so they need **`fma`** as well as **`avx2`**: AVX2 does
+/// not imply FMA, and an `avx2`-only guard would execute an FMA instruction on
+/// a CPU (or a hypervisor masking the feature) that does not have one. Kept as
+/// a pure function of the two detected flags so the gate is testable without a
+/// CPU that has one feature and not the other.
+#[inline]
+pub const fn avx2_fma_kernels_enabled(avx2_detected: bool, fma_detected: bool) -> bool {
+    avx2_detected && fma_detected
+}
+
 #[inline]
 fn weighted_sum_simd_8records_scalar(
     synapses: &[SynapseData],
@@ -141,12 +155,15 @@ mod x86 {
     use core::arch::x86_64::*;
 
     /// # Safety
-    /// Caller must ensure AVX2 is enabled (`is_x86_feature_detected!("avx2")`).
+    /// Caller must ensure **both** AVX2 and FMA are enabled
+    /// (`is_x86_feature_detected!("avx2")` **and**
+    /// `is_x86_feature_detected!("fma")`) — the kernel issues
+    /// `_mm256_fmadd_ps`, and AVX2 does not imply FMA (Issue #605).
     /// Issue #207 - caller must also ensure every `synapse.from_index` in
     /// `start..end` is a valid index into each activation buffer; the kernel reads
     /// activations with `get_unchecked`. `CompiledNetwork::new` validates this at
     /// load time.
-    #[target_feature(enable = "avx2")]
+    #[target_feature(enable = "avx2", enable = "fma")]
     #[inline]
     pub unsafe fn weighted_sum_simd_8records_avx2(
         synapses: &[SynapseData],
@@ -180,8 +197,8 @@ mod x86 {
                 )
             };
             let ws = _mm256_set1_ps(w);
-            // `_mm256_fmadd_ps` needs `fma`, which this `avx2` fn does not enable.
-            acc = unsafe { _mm256_fmadd_ps(ws, acts, acc) };
+            // `_mm256_fmadd_ps` needs `fma`, enabled on this fn alongside `avx2`.
+            acc = _mm256_fmadd_ps(ws, acts, acc);
         }
         let mut out = [0.0_f32; 8];
         unsafe { _mm256_storeu_ps(out.as_mut_ptr(), acc) };
@@ -200,7 +217,10 @@ mod x86 {
     /// synapse array is re-read once per **tile**, not once per eight records.
     ///
     /// # Safety
-    /// Caller must ensure AVX2 is enabled (`is_x86_feature_detected!("avx2")`).
+    /// Caller must ensure **both** AVX2 and FMA are enabled
+    /// (`is_x86_feature_detected!("avx2")` **and**
+    /// `is_x86_feature_detected!("fma")`) — the kernel issues
+    /// `_mm256_fmadd_ps`, and AVX2 does not imply FMA (Issue #605).
     /// Issue #287 - `inter.len()` must be `num_neurons * R` and every
     /// `hot_from` entry in `start..end` must be `< num_neurons`, so
     /// `from_index * R + R <= inter.len()`; `CompiledNetwork::new` validates the
@@ -208,7 +228,7 @@ mod x86 {
     /// Issue #533 - `start..end` must also be in bounds for **both** hot arrays
     /// (`end <= hot_weights.len() == hot_from.len()`), which holds because both
     /// are built from `synapses` by `hot_synapse_soa` and carry its length.
-    #[target_feature(enable = "avx2")]
+    #[target_feature(enable = "avx2", enable = "fma")]
     #[inline]
     pub unsafe fn weighted_sum_interleaved_avx2<const R: usize>(
         hot_weights: &[f32],
@@ -233,8 +253,9 @@ mod x86 {
                 // validation documented above, and `o < R / 8`, so this
                 // unaligned 8-wide load is in bounds.
                 let acts = unsafe { _mm256_loadu_ps(ptr.add(base + o * 8)) };
-                // `_mm256_fmadd_ps` needs `fma` (mirrors the 8records kernel above).
-                *a = unsafe { _mm256_fmadd_ps(ws, acts, *a) };
+                // `_mm256_fmadd_ps` needs `fma`, enabled on this fn alongside `avx2`
+                // (mirrors the 8records kernel above).
+                *a = _mm256_fmadd_ps(ws, acts, *a);
             }
         }
         let mut out = [0.0_f32; R];
@@ -805,10 +826,15 @@ pub unsafe fn weighted_sum_simd_8records_unchecked(
 
     #[cfg(target_arch = "x86_64")]
     {
-        if std::arch::is_x86_feature_detected!("avx2") {
-            // SAFETY: the `is_x86_feature_detected!("avx2")` guard above proves
-            // AVX2 is available, satisfying the `#[target_feature(enable = "avx2")]`
-            // precondition documented on `weighted_sum_simd_8records_avx2`.
+        if avx2_fma_kernels_enabled(
+            std::arch::is_x86_feature_detected!("avx2"),
+            std::arch::is_x86_feature_detected!("fma"),
+        ) {
+            // SAFETY: the `is_x86_feature_detected!("avx2")` and
+            // `is_x86_feature_detected!("fma")` guards above prove both features
+            // are available, satisfying the
+            // `#[target_feature(enable = "avx2", enable = "fma")]` precondition
+            // documented on `weighted_sum_simd_8records_avx2`.
             return unsafe {
                 x86::weighted_sum_simd_8records_avx2(
                     synapses, act0, act1, act2, act3, act4, act5, act6, act7, start, end, bias,
@@ -908,10 +934,15 @@ pub unsafe fn weighted_sum_interleaved_unchecked<const R: usize>(
 
     #[cfg(target_arch = "x86_64")]
     {
-        if std::arch::is_x86_feature_detected!("avx2") {
-            // SAFETY: the `is_x86_feature_detected!("avx2")` guard proves AVX2 is
-            // available, satisfying the `#[target_feature(enable = "avx2")]`
-            // precondition on `weighted_sum_interleaved_avx2`.
+        if avx2_fma_kernels_enabled(
+            std::arch::is_x86_feature_detected!("avx2"),
+            std::arch::is_x86_feature_detected!("fma"),
+        ) {
+            // SAFETY: the `is_x86_feature_detected!("avx2")` and
+            // `is_x86_feature_detected!("fma")` guards above prove both features
+            // are available, satisfying the
+            // `#[target_feature(enable = "avx2", enable = "fma")]` precondition
+            // on `weighted_sum_interleaved_avx2`.
             return unsafe {
                 x86::weighted_sum_interleaved_avx2::<R>(
                     hot_weights,
@@ -1198,8 +1229,9 @@ pub unsafe fn weighted_sum_of_squares_simd_unchecked(
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("fma") {
-                // SAFETY: the FMA guard proves the `#[target_feature(enable = "fma")]`
-                // precondition on `weighted_sum_of_squares_fma` holds.
+                // SAFETY: the `is_x86_feature_detected!("fma")` guard above proves
+                // the `#[target_feature(enable = "fma")]` precondition on
+                // `weighted_sum_of_squares_fma` holds.
                 return unsafe {
                     x86::weighted_sum_of_squares_fma(synapses, activations, start, end)
                 };
@@ -1208,8 +1240,9 @@ pub unsafe fn weighted_sum_of_squares_simd_unchecked(
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                // SAFETY: the NEON guard proves the `#[target_feature(enable = "neon")]`
-                // precondition on `weighted_sum_of_squares_neon` holds.
+                // SAFETY: the `is_aarch64_feature_detected!("neon")` guard above
+                // proves the `#[target_feature(enable = "neon")]` precondition on
+                // `weighted_sum_of_squares_neon` holds.
                 return unsafe {
                     aarch64::weighted_sum_of_squares_neon(synapses, activations, start, end)
                 };
@@ -1259,16 +1292,18 @@ pub unsafe fn weighted_sum_no_bias_simd_unchecked(
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("fma") {
-                // SAFETY: the FMA guard proves the `#[target_feature(enable = "fma")]`
-                // precondition on `weighted_sum_fma` holds.
+                // SAFETY: the `is_x86_feature_detected!("fma")` guard above proves
+                // the `#[target_feature(enable = "fma")]` precondition on
+                // `weighted_sum_fma` holds.
                 return unsafe { x86::weighted_sum_fma(synapses, activations, start, end, 0.0) };
             }
         }
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                // SAFETY: the NEON guard proves the `#[target_feature(enable = "neon")]`
-                // precondition on `weighted_sum_neon` holds.
+                // SAFETY: the `is_aarch64_feature_detected!("neon")` guard above
+                // proves the `#[target_feature(enable = "neon")]` precondition on
+                // `weighted_sum_neon` holds.
                 return unsafe {
                     aarch64::weighted_sum_neon(synapses, activations, start, end, 0.0)
                 };
@@ -1321,8 +1356,9 @@ pub unsafe fn weighted_sum_of_squares_v2_simd_unchecked(
         #[cfg(target_arch = "x86_64")]
         {
             if std::arch::is_x86_feature_detected!("fma") {
-                // SAFETY: the FMA guard proves the `#[target_feature(enable = "fma")]`
-                // precondition on `weighted_sum_of_squares_v2_fma` holds.
+                // SAFETY: the `is_x86_feature_detected!("fma")` guard above proves
+                // the `#[target_feature(enable = "fma")]` precondition on
+                // `weighted_sum_of_squares_v2_fma` holds.
                 return unsafe {
                     x86::weighted_sum_of_squares_v2_fma(synapses, activations, start, end, bias)
                 };
@@ -1331,8 +1367,9 @@ pub unsafe fn weighted_sum_of_squares_v2_simd_unchecked(
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                // SAFETY: the NEON guard proves the `#[target_feature(enable = "neon")]`
-                // precondition on `weighted_sum_of_squares_v2_neon` holds.
+                // SAFETY: the `is_aarch64_feature_detected!("neon")` guard above
+                // proves the `#[target_feature(enable = "neon")]` precondition on
+                // `weighted_sum_of_squares_v2_neon` holds.
                 return unsafe {
                     aarch64::weighted_sum_of_squares_v2_neon(
                         synapses,

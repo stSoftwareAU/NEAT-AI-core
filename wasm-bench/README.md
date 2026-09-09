@@ -4,9 +4,15 @@ Measures a `wasm32`-only change against its control **inside a real wasm
 runtime**, which the native Criterion harness cannot do. Built for the Issue 509
 `gather4` prototype; reusable for any future wasm kernel change.
 
-Deliberately **outside** the root virtual workspace (`exclude`d there, empty
-`[workspace]` here): it is research tooling, not shipped code, so `quality.sh`,
-the version-bump job and `cargo deny` see exactly the crate set they saw before.
+Deliberately **outside** the root virtual *build* workspace (`exclude`d there,
+empty `[workspace]` here): it is research tooling, not shipped code, so the
+workspace build and the version-bump job see exactly the crate set they saw
+before.
+
+Its **supply chain is in scope** (Issue #607): the lockfile this crate resolves
+for itself is audited, denied and bumped like the root one. The per-lockfile
+wiring lives once, in
+[`SECURITY.md`](../SECURITY.md#supply-chain-audit-scope).
 
 ## Why it is shaped like this
 
@@ -35,6 +41,11 @@ flowchart LR
 #   3 = production, 4 = production_2x, 5 = production_exact
 ./run.sh 25 5 4096 5
 ```
+
+All four positionals must be non-negative integers: each is forwarded to
+`runner.mjs` and `shape-index` also builds the `results/shape<N>.csv` path, so
+`run.sh` rejects anything else with exit 2 before it touches the toolchain
+(Issue #608). `tests/scripts/wasm_bench_run.bats` is the gate.
 
 Fixtures come from `neat-core/benches/common/mod.rs` verbatim, so the creature
 and records are the ones the committed Criterion baseline uses. Three

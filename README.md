@@ -117,7 +117,7 @@ safe-fall-back invariants; see
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
 | `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). Exits non-zero only when the tree it produced must not be kept — see [Dependency updates](#dependency-updates-two-channels). |
-| `.github/dependabot.yml` | Weekly Cargo **version-updates** channel (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
+| `.github/dependabot.yml` | Weekly Cargo **version-updates** channel for both lockfiles (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
 | `deno.json` | Deno/JSR supply-chain config (Issue #603): a 24h `minimumDependencyAge` release-age quarantine for external JSR/npm specifiers (internal `@stsoftware/*` scopes excluded, they bump at 0h) and a **frozen** `deno.lock` — see [JSR (Deno) dependencies](#jsr-deno-dependencies). |
 | `deno.lock` | Committed integrity pin for every JSR dependency the `.ts` gates import. Frozen: `deno check`/`deno test` fail rather than re-resolve a floating range. |
 | `tests/scripts/` | `bats` suites for shell helpers (e.g. `bump-deps.sh`) and for the CI workflow contracts. Shared assertions live in `tests/scripts/helpers.bash` (loaded with `load helpers`, unit-tested by `helpers_shared.bats`) — put a new assertion there rather than copying it between suites (Issue #477). |
@@ -686,6 +686,13 @@ itself.
 `validate_structural_integrity` and `validate_no_duplicate_synapses` rather than
 restating their rules. The ordering gate only runs for `forwardOnly` creatures,
 because a recurrent creature legitimately carries backward edges.
+
+Those gates read `u32` widths and `u32` neuron indices, so the gate bounds the
+declared counts against that index space **first** — before the UUID map names
+one entry per declared input. An `input`, `output` or node count past
+`u32::MAX` earns `GraftError::CountNotRepresentable`; it is never narrowed
+(Issue #606, which is what a declared `output` of `4_294_967_297` read as `1`
+before).
 
 ```mermaid
 flowchart LR
@@ -1535,10 +1542,12 @@ bump:
   ```
 
 - **Dependabot version updates** — [`.github/dependabot.yml`](.github/dependabot.yml)
-  configures a Cargo **version-updates** entry: `interval: weekly`, a 7-day
-  `cooldown` (newly published crates are not proposed until they have aged),
-  and `open-pull-requests-limit: 10`. It overlaps the workflow above rather
-  than replacing it; its PRs go through the same CI gates.
+  configures one Cargo **version-updates** entry per lockfile — the workspace
+  root and the excluded `wasm-bench` harness (Issue #607) — each with
+  `interval: weekly`, a 7-day `cooldown` (newly published crates are not
+  proposed until they have aged), and `open-pull-requests-limit: 10`. They
+  overlap the workflow above rather than replacing it; their PRs go through the
+  same CI gates.
 
 Dependabot **security updates** — the advisory-triggered fast lane — are a
 repository-level setting rather than anything the committed tree configures, so
@@ -1549,7 +1558,9 @@ for what that setting does and how to enable it.
 Advisory *detection* is committed and verifiable: it lives in
 [`security.yml`](.github/workflows/security.yml) and the `ci.yml` `security`
 job (`cargo audit` / `rustsec/audit-check`), which fail the build on a
-`Cargo.lock` crate with a known advisory.
+`Cargo.lock` crate with a known advisory. Both committed lockfiles are in
+scope — the root one and `wasm-bench/Cargo.lock`; the per-lockfile wiring is
+tabulated in [`SECURITY.md`](SECURITY.md#supply-chain-audit-scope).
 
 When an actively-exploited advisory's fix is newer than the
 `VIBE_BUMP_QUARANTINE_HOURS` window, an approver can take the documented
