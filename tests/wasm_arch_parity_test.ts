@@ -7,7 +7,7 @@
 //
 // Run: deno test tests/wasm_arch_parity_test.ts
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals } from "@std/assert";
 import { compare, type Observations } from "../scripts/check_wasm_arch_parity.ts";
 import {
   bitPatterns,

@@ -9,7 +9,7 @@
 //
 // Run: deno test tests/perf/learn_flags_wiring_test.ts
 
-import { assert, assertEquals, assertGreater } from "jsr:@std/assert@^1";
+import { assert, assertEquals, assertGreater } from "@std/assert";
 import {
   EIGHT_GB_HEAP_FLOOR_MB,
   FFI_OS_HEADROOM_MB,

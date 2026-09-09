@@ -13,7 +13,7 @@
 //
 // Run: deno test tests/wasm64_bundle_gate_test.ts
 
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   assertBundleExportSurface,
   assertMemory64,
