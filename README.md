@@ -256,8 +256,13 @@ flowchart LR
 
 **Consumer break.** Reads that were `net.synapses` become `net.synapses()`, and
 writes are no longer expressible — the semver bump for this change is a
-`0.11.x → 0.12.0` minor (major-equivalent pre-1.0; see
-[`RELEASING.md`](RELEASING.md)).
+`0.11.x → 0.12.0` minor (major-equivalent pre-1.0). It reaches
+**NEAT-AI-scorer** (reads `neurons` / `synapses` / `num_neurons` / `num_inputs`
+on its GPU upload path) and **NEAT-AI-Backpropagation** (reads `activations`).
+`NetworkError` also gains an `InvalidSynapseSpan` variant and `CreatureError` an
+`InvalidNetwork` variant, which break an exhaustive `match` on either. The full
+migration is in
+[`RELEASING.md`](RELEASING.md#0120--compilednetworks-fields-are-private-issue-625).
 
 On the exact committed production topology the native lane beats the wasm32 lane
 **1.78×** per core (NEON + FMA vs `simd128` + relaxed-madd) and **4.75×** at 12

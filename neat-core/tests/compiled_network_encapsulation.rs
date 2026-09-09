@@ -9,12 +9,14 @@
 //! These are "what" tests: they build networks through the public entry points
 //! and assert on observable outcomes — the error a bad network is refused with,
 //! and the state a good one exposes. The **refusal of the safe write itself** is
-//! a compile-time outcome, so it is pinned by
-//! `tests/scripts/compiled_network_encapsulation.bats`, which asks cargo to
-//! build an out-of-crate probe performing exactly the Issue #625 mutation and
-//! requires the compiler to reject it.
+//! a compile-time outcome, so it cannot be asserted from Rust here; it is pinned
+//! by the `compile_fail` doctest pair on `CompiledNetwork`
+//! (`neat-core/src/network.rs`), which a doctest run compiles as an out-of-crate
+//! caller.
 
-use neat_core::network::{CompiledNetwork, NetworkError, NeuronData, SynapseData};
+use neat_core::network::{
+    CompiledNetwork, NetworkError, NeuronData, SynapseData, doc_fixture_bytes,
+};
 
 /// Two inputs into one identity output neuron reading both of them.
 fn valid_parts() -> (usize, Vec<NeuronData>, Vec<SynapseData>) {
@@ -124,25 +126,32 @@ fn from_parts_refuses_a_span_running_past_the_synapse_table() {
 }
 
 #[test]
-fn a_loaded_network_exposes_its_state_read_only() {
-    // The accessors that replaced the public fields hand out shared slices, and
-    // they describe the same network `new` validated — so a consumer keeps the
-    // read it had without keeping the write that broke the invariant.
-    let (num_inputs, neurons, synapses) = valid_parts();
-    let net = CompiledNetwork::from_parts(num_inputs, neurons, synapses).expect("assembles");
+fn the_deserialiser_exposes_the_loaded_values_through_the_accessors() {
+    // The accessors replaced the public fields, so they have to carry the same
+    // information a consumer used to read directly. Asserted against the values
+    // the buffer actually declares, not against whatever the network happens to
+    // hold: re-deriving the expectation from the network under test would pass
+    // for any network at all.
+    //
+    // Fixture: 1 input, 1 identity output, weight 1.0, bias 0.5.
+    let net = CompiledNetwork::new(&doc_fixture_bytes()).expect("fixture must load");
 
-    let seen: &[SynapseData] = net.synapses();
-    assert_eq!(seen.len(), net.num_synapses());
-    for (i, synapse) in seen.iter().enumerate() {
-        assert!(
-            (synapse.from_index as usize) < net.activations().len(),
-            "synapse {i} points outside the activation buffer"
-        );
-        assert_eq!(net.hot_from()[i], synapse.from_index);
-        assert_eq!(net.hot_weights()[i].to_bits(), synapse.weight.to_bits());
-    }
-    for (i, neuron) in net.neurons().iter().enumerate() {
-        let end = neuron.start_synapse as usize + neuron.num_synapses as usize;
-        assert!(end <= net.synapses().len(), "neuron {i} span overruns");
-    }
+    assert_eq!(net.num_neurons(), 2);
+    assert_eq!(net.num_inputs(), 1);
+    assert_eq!(net.num_synapses(), 1);
+
+    assert_eq!(net.neurons().len(), 1);
+    assert_eq!(net.neurons()[0].bias, 0.5);
+    assert_eq!(net.neurons()[0].start_synapse, 0);
+    assert_eq!(net.neurons()[0].num_synapses, 1);
+
+    assert_eq!(net.synapses().len(), 1);
+    assert_eq!(net.synapses()[0].from_index, 0);
+    assert_eq!(net.synapses()[0].weight, 1.0);
+
+    assert_eq!(net.hot_from(), [0u16]);
+    assert_eq!(net.hot_weights(), [1.0f32]);
+    assert_eq!(net.activations(), [0.0f32, 0.0]);
+    assert_eq!(net.hint_values(), [0.0f32]);
+    assert!(net.trace_data().is_empty());
 }

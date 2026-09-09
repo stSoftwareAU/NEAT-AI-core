@@ -239,6 +239,14 @@ pub fn build_network(spec: &NetSpec, seed: u64) -> CompiledNetwork {
         });
     }
 
+    // The spec's declared node count used to be passed to the struct literal as
+    // `num_neurons`; `from_parts` derives it from the parts instead, so assert
+    // the two still agree rather than letting a spec/builder drift go unnoticed.
+    assert_eq!(
+        num_inputs + neurons.len(),
+        spec.num_neurons,
+        "builder produced a different node count from the spec's declared one"
+    );
     CompiledNetwork::from_parts(num_inputs, neurons, synapses)
         .expect("fixture must satisfy the load-time index invariant")
 }

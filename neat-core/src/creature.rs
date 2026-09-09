@@ -368,6 +368,17 @@ pub enum CreatureError {
         /// The node count that exceeded [`crate::network::MAX_NODE_COUNT`].
         count: usize,
     },
+    /// Assembling the compiled network from the creature's topology was refused.
+    ///
+    /// Issue #625 - `compile_creature` builds every source index from
+    /// `uuid_to_index` and grows each neuron's span from the synapse table, so
+    /// this is unreachable while those two rules hold. It exists so that
+    /// **every** construction path runs the same
+    /// [`crate::network::CompiledNetwork::from_parts`] validation rather than
+    /// resting on a prose argument: if the mapping ever regresses, the caller
+    /// gets a typed error instead of a network the `simd::*_unchecked` kernels
+    /// would read out of bounds.
+    InvalidNetwork(crate::network::NetworkError),
     /// `CreatureExport::input` was below the minimum of one (Issue #550).
     ///
     /// `input` is the authoritative observation width and cannot be re-derived
@@ -438,6 +449,9 @@ impl std::fmt::Display for CreatureError {
                     crate::network::MAX_NODE_COUNT
                 )
             }
+            CreatureError::InvalidNetwork(e) => {
+                write!(f, "Creature does not assemble into a valid network: {e}")
+            }
             CreatureError::InvalidInputCount { found } => {
                 write!(f, "Must have at least one input neurons was: {found}")
             }
@@ -462,6 +476,7 @@ impl std::error::Error for CreatureError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CreatureError::Json(e) => Some(e),
+            CreatureError::InvalidNetwork(e) => Some(e),
             _ => None,
         }
     }
@@ -851,10 +866,12 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
         });
     }
 
-    // Issue #625 - every source index above came from `uuid_to_index`, so it is
-    // in `0..num_neurons` by construction, and each neuron's span was grown from
-    // the synapse table as it was built. `assemble` is the single home of the
-    // buffer-sizing and hot-view derivation rule shared with
-    // `CompiledNetwork::new` and `CompiledNetwork::from_parts`.
-    Ok(CompiledNetwork::assemble(num_inputs, neurons, synapses))
+    // Issue #625 - `from_parts` is the one validated construction path, shared
+    // with `CompiledNetwork::new`. Every source index above came from
+    // `uuid_to_index` and each neuron's span was grown from the synapse table, so
+    // the checks inside it hold by construction here; routing through them anyway
+    // is what makes "the load-time validation is the only way in" true of every
+    // path rather than of two out of three.
+    CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+        .map_err(CreatureError::InvalidNetwork)
 }

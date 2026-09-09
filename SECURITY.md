@@ -89,10 +89,18 @@ construction** rather than by prose:
   table (`NetworkError::InvalidSynapseSpan`) — the other half of the kernels'
   contract, which `new` could never violate but a caller-supplied span could.
 
-`tests/scripts/compiled_network_encapsulation.bats` is the gate: it builds an
-out-of-crate probe that performs the Issue #625 mutation and requires the
-compiler to refuse it, alongside a companion probe that compiles and runs the
-same fixture through the accessors.
+The gate is the `compile_fail` doctest pair on `CompiledNetwork`
+(`neat-core/src/network.rs`). A doctest is compiled as its own crate linking
+`neat_core`, so it is an out-of-crate safe caller — the exact threat model. One
+half performs the Issue #625 mutation and must not compile; the other reads the
+same fixture through the accessors and compiles **and runs**, so a refusal can
+never come from a broken fixture. Widening either field back to `pub` makes the
+first half fail, which is what proves the gate can fail at all.
+
+The consumers this closed API break reaches are **NEAT-AI-scorer** (reads
+`neurons` / `synapses` / `num_neurons` / `num_inputs` on its GPU upload path) and
+**NEAT-AI-Backpropagation** (reads `activations`); both move to the accessors.
+The migration is recorded in [`RELEASING.md`](RELEASING.md#0120--compilednetworks-fields-are-private).
 
 ## Dependency bump quarantine
 

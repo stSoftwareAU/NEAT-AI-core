@@ -191,6 +191,28 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
     (weights, from)
 }
 
+/// Serialise the smallest network that loads and activates: 1 input, 1 identity
+/// output, weight 1.0, bias 0.5.
+///
+/// Issue #625 - shared by the [`CompiledNetwork`] doctests that pin the field
+/// encapsulation, so the refusing and the compiling halves of that pair are
+/// driven by **one** fixture. A second copy could drift and let the
+/// `compile_fail` half start failing for the wrong reason.
+pub fn doc_fixture_bytes() -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&2u32.to_le_bytes()); // num_neurons
+    data.extend_from_slice(&1u32.to_le_bytes()); // num_inputs
+    data.extend_from_slice(&0.5_f64.to_le_bytes()); // bias
+    data.push(SquashType::Identity as u8);
+    data.push(0); // is_constant
+    data.extend_from_slice(&1u16.to_le_bytes()); // num_synapses
+    data.extend_from_slice(&0u16.to_le_bytes()); // from_index
+    data.push(0); // synapse_type
+    data.push(0); // padding
+    data.extend_from_slice(&1.0_f64.to_le_bytes()); // weight
+    data
+}
+
 /// Compiled network data structure
 ///
 /// `Clone` is supported so native tools (for example the NEAT-AI scorer) can run
@@ -231,9 +253,49 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
 /// [`Self::num_inputs`] — which hand out `&[T]`, never `&mut`. To change a
 /// network, rebuild it through `new` rather than editing one in place.
 ///
-/// `tests/scripts/compiled_network_encapsulation.bats` is the gate: it asks
-/// cargo to compile an out-of-crate probe that performs exactly the Issue #625
-/// mutation and requires the compiler to refuse it.
+/// The gate is the pair of doctests below. A doctest is compiled as its own
+/// crate linking `neat_core`, so it *is* an out-of-crate safe caller — the exact
+/// threat model. The first must not compile; the second is identical except that
+/// it reads through the accessors, and it compiles **and runs**, so a refusal
+/// can never come from a broken fixture rather than from the privacy rule
+/// (AGENTS.md oracle rule 5). They run under `cargo test --doc`, which
+/// `quality.sh` and the CI Rust job both execute.
+///
+/// The Issue #625 write is refused:
+///
+/// ```compile_fail
+/// use neat_core::network::CompiledNetwork;
+/// # fn main() {
+/// let mut net = CompiledNetwork::new(&neat_core::network::doc_fixture_bytes()).unwrap();
+/// net.synapses[0].from_index = 60_000;
+/// net.hot_from[0] = 60_000;
+/// let _ = net.activate(&[1.0], 1);
+/// # }
+/// ```
+///
+/// So is assembling the struct as a literal, which would skip validation
+/// altogether:
+///
+/// ```compile_fail
+/// use neat_core::network::CompiledNetwork;
+/// # fn main() {
+/// let net = CompiledNetwork { num_neurons: 2, num_inputs: 1, ..todo!() };
+/// # let _ = net;
+/// # }
+/// ```
+///
+/// The same fixture read through the accessors compiles and activates:
+///
+/// ```
+/// use neat_core::network::CompiledNetwork;
+/// let mut net = CompiledNetwork::new(&neat_core::network::doc_fixture_bytes()).unwrap();
+/// assert_eq!(net.synapses()[0].from_index, 0);
+/// assert_eq!(net.hot_from()[0], 0);
+/// assert_eq!(net.activations().len(), net.num_neurons());
+/// // identity(2.0 * 1.0 + 0.5)
+/// let out = net.activate(&[2.0], 1);
+/// assert!((out[0] - 2.5).abs() < 1e-5, "{out:?}");
+/// ```
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 #[derive(Clone)]
 pub struct CompiledNetwork {
@@ -591,25 +653,15 @@ impl CompiledNetwork {
             });
         }
 
-        // Issue #207 - validate every source index against the node count before the
-        // network can be activated. The forward pass reads the activation buffer (sized
-        // to num_neurons) with unchecked indexing keyed on from_index; an out-of-range
-        // index would be an out-of-bounds read (undefined behaviour). Rejecting here
-        // upholds that precondition once, keeping the hot path unchanged.
-        if let Some(bad) = synapses
-            .iter()
-            .find(|s| s.from_index as usize >= num_neurons)
-        {
-            return Err(NetworkError::InvalidSynapseIndex {
-                from_index: bad.from_index,
-                num_neurons,
-            });
-        }
-
-        // Issue #625 - `assemble` is the single home of the buffer-sizing and
-        // hot-view derivation rule; the loop above already built every index in
-        // range, and the check just above rejected any that was not.
-        Ok(Self::assemble(num_inputs, neurons, synapses))
+        // Issue #207 - every source index must be validated against the node count
+        // before the network can be activated: the forward pass reads the activation
+        // buffer (sized to num_neurons) with unchecked indexing keyed on from_index,
+        // so an out-of-range index would be an out-of-bounds read (undefined
+        // behaviour). Issue #625 - `from_parts` is the one home of that check and of
+        // the span check beside it; delegating keeps a single copy rather than
+        // re-inlining the scan here. `neurons.len()` is exactly `num_non_inputs`, so
+        // it re-derives the same `num_neurons` this loop read from the header.
+        Self::from_parts(num_inputs, neurons, synapses)
     }
 
     /// Activate the network with the given input values

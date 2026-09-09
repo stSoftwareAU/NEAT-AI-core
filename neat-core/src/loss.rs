@@ -2141,8 +2141,10 @@ mod interleaved_mse_parity {
         // rebuilt from it.
         net.synapses[0].weight = 12.5;
 
+        // Same entry point the test drove before Issue #625 moved it in-crate, so
+        // `mse_sum_batch_packed`'s own guard call stays pinned rather than only
+        // the interleaved kernel's.
         let records = build_records(8, input_size);
-        let _ =
-            mse_sum_batch_interleaved::<8>(&mut net, &records, input_size + 1, input_size, 1, 8);
+        let _ = mse_sum_batch_packed(&mut net, &records, input_size, 1, true);
     }
 }

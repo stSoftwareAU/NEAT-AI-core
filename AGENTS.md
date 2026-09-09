@@ -272,8 +272,11 @@ accessors (`synapses()`, `hot_from()`, `activations()`, …), and
 (`NetworkError::InvalidSynapseSpan`), which is the span half of the same
 contract. Never widen a field back to `pub`, and never add a `&mut` accessor for
 one: that is the hole #625 closed.
-`tests/scripts/compiled_network_encapsulation.bats` is the gate — it makes cargo
-refuse an out-of-crate probe that performs the #625 mutation.
+The gate is the `compile_fail` doctest pair on `CompiledNetwork`
+(`neat-core/src/network.rs`): a doctest compiles as its own crate linking
+`neat_core`, so it is an out-of-crate safe caller. One half must not compile; its
+companion reads the same fixture through the accessors and does compile and run,
+so the refusal cannot come from a broken fixture.
 
 The wasm `gather4` scaffold helper (`simd.rs`) rests on the same invariant
 since Issue #509 — it reads four `SynapseData` entries and four indirect
@@ -573,13 +576,18 @@ scalar/AVX2/NEON/wasm variants) take the two slices instead of
 stays on `SynapseData` for the aggregate/IF and single-record paths, which are
 untouched. Numerics are unchanged — same values, same order.
 
-The redundancy is the hazard, and the fields are public, so a caller can still
-assemble a `CompiledNetwork` literal (the test and bench fixtures do) or mutate
-`synapses` afterwards. `CompiledNetwork::debug_assert_hot_soa` is the fail-loud
-guard: every entry point into the interleaved gather calls it, so a drifted view
-panics in debug and test builds instead of silently scoring wrong numbers, and
-compiles away in release. `neat-core/tests/hot_synapse_soa.rs` pins the
-invariant across both construction paths, `Clone`, and the guard itself.
+The redundancy is the hazard. Since Issue #625 the fields are private and
+`from_parts` *derives* the hot view rather than accepting one, so no caller
+outside the crate can assemble a drifted literal or mutate `synapses` after the
+fact — but they are still two vectors, so an in-crate edit can drift them.
+`CompiledNetwork::debug_assert_hot_soa` is the fail-loud guard: every entry point
+into the interleaved gather calls it, so a drifted view panics in debug and test
+builds instead of silently scoring wrong numbers, and compiles away in release.
+`neat-core/tests/hot_synapse_soa.rs` pins the invariant across every construction
+path and `Clone`; the guard itself is pinned by
+`loss::interleaved_mse_parity::a_drifted_hot_view_fails_loud_instead_of_scoring_wrong_numbers`,
+which drifts the view in-crate — the only level at which drift is still
+expressible.
 
 `load_record` (`neat-core/src/batch_scoring.rs`) owns the loading sub-rule:
 copy `min(record.len(), num_inputs)` values and **zero** every input slot the
