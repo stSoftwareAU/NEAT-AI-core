@@ -19,7 +19,7 @@
 //! the 7/9/12 remainder counts.
 
 use neat_core::squash::SquashType;
-use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData};
 
 #[path = "../benches/common/mod.rs"]
 #[allow(dead_code)]
@@ -79,35 +79,8 @@ fn build_local_network(num_inputs: usize, squash: SquashType) -> CompiledNetwork
         is_constant: false,
     });
 
-    let num_non_inputs = neurons.len();
-    let num_neurons = num_inputs + num_non_inputs;
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-    CompiledNetwork {
-        num_neurons,
-        num_inputs,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; num_neurons],
-        hint_values_buffer: vec![0.0; num_non_inputs],
-        trace_data_buffer: Vec::new(),
-        batch_activations: [
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-        ],
-        batch_hints: [
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-        ],
-        batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-        mse_inter: vec![0.0; num_neurons * 8],
-    }
+    CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+        .expect("fixture must satisfy the load-time index invariant")
 }
 
 /// Deterministic distinct records of `width` values each, so a lane or stride

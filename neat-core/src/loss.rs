@@ -1961,35 +1961,8 @@ mod interleaved_mse_parity {
             is_constant: false,
         });
 
-        let num_non_inputs = neurons.len();
-        let num_neurons = num_inputs + num_non_inputs;
-        let (hot_weights, hot_from) = crate::network::hot_synapse_soa(&synapses);
-        CompiledNetwork {
-            num_neurons,
-            num_inputs,
-            neurons,
-            synapses,
-            hot_weights,
-            hot_from,
-            activations: vec![0.0; num_neurons],
-            hint_values_buffer: vec![0.0; num_non_inputs],
-            trace_data_buffer: Vec::new(),
-            batch_activations: [
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-            ],
-            batch_hints: [
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-            ],
-            batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-            // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-            mse_inter: vec![0.0; num_neurons * 8],
-        }
+        CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+            .expect("fixture must satisfy the load-time index invariant")
     }
 
     /// Packed `[inputs..., target]` records with distinct per-record values so a
@@ -2147,5 +2120,31 @@ mod interleaved_mse_parity {
                 );
             }
         }
+    }
+
+    /// Fail-loud guard (debug builds): a hot view that has drifted from
+    /// `synapses` must panic rather than score silently-wrong numbers.
+    ///
+    /// Issue #625 moved this test in-crate. It used to live in
+    /// `tests/hot_synapse_soa.rs` and drift the view by writing the then-public
+    /// `synapses` field from outside the crate — the write that issue closed.
+    /// Drift is now only expressible inside `neat-core`, which is exactly where
+    /// `debug_assert_hot_soa` still has to catch it.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Issue #533")]
+    fn a_drifted_hot_view_fails_loud_instead_of_scoring_wrong_numbers() {
+        let input_size = 6;
+        let mut net = build_network(input_size, SquashType::Tanh);
+
+        // The redundancy hazard: a weight is changed and the hot view is not
+        // rebuilt from it.
+        net.synapses[0].weight = 12.5;
+
+        // Same entry point the test drove before Issue #625 moved it in-crate, so
+        // `mse_sum_batch_packed`'s own guard call stays pinned rather than only
+        // the interleaved kernel's.
+        let records = build_records(8, input_size);
+        let _ = mse_sum_batch_packed(&mut net, &records, input_size, 1, true);
     }
 }

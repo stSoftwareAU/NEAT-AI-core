@@ -215,6 +215,55 @@ safe half. The pre-pass is `O(end - start)` and is not free: on the committed
 downstream consumer with its own load-time validation should call the
 `*_unchecked` form on its hot path.
 
+### `CompiledNetwork` is read-only after construction (Issue #625)
+
+The `*_unchecked` kernels above are sound in `CompiledNetwork`'s own forward and
+scoring paths because `new` validated every source index at load time. That
+discharge only holds while nothing can rewrite the validated values afterwards,
+so **every field is private** and the state is read through borrow-only
+accessors:
+
+```rust
+let net = CompiledNetwork::new(&bytes)?;
+
+net.num_neurons();   // usize            net.num_inputs();  // usize
+net.neurons();       // &[NeuronData]    net.synapses();    // &[SynapseData]
+net.hot_weights();   // &[f32]           net.hot_from();    // &[u16]
+net.activations();   // &[f32]
+net.hint_values();   // &[f32]           net.trace_data();  // &[f32]
+```
+
+To build a network from parts already in memory — rather than from a serialised
+buffer — use `CompiledNetwork::from_parts(num_inputs, neurons, synapses)`. It
+runs the same validation as `new` and additionally rejects a neuron whose
+`start_synapse + num_synapses` overruns the synapse table
+(`NetworkError::InvalidSynapseSpan`). To change a network, rebuild it; there is
+no in-place edit.
+
+```mermaid
+flowchart LR
+    B[".bin buffer"] --> N["CompiledNetwork::new"]
+    P["neurons + synapses"] --> F["CompiledNetwork::from_parts"]
+    C["CreatureExport JSON"] --> G["compile_creature"]
+    N --> V{"validate: from_index &lt; num_neurons<br/>span within synapses"}
+    F --> V
+    G --> V
+    V -- no --> E["Err(NetworkError)"]
+    V -- yes --> K["CompiledNetwork — private fields"]
+    K --> R["read-only accessors"]
+    K --> A["activate / scoring → *_unchecked kernels"]
+```
+
+**Consumer break.** Reads that were `net.synapses` become `net.synapses()`, and
+writes are no longer expressible — the semver bump for this change is a
+`0.11.x → 0.12.0` minor (major-equivalent pre-1.0). It reaches
+**NEAT-AI-scorer** (reads `neurons` / `synapses` / `num_neurons` / `num_inputs`
+on its GPU upload path) and **NEAT-AI-Backpropagation** (reads `activations`).
+`NetworkError` also gains an `InvalidSynapseSpan` variant and `CreatureError` an
+`InvalidNetwork` variant, which break an exhaustive `match` on either. The full
+migration is in
+[`RELEASING.md`](RELEASING.md#0120--compilednetworks-fields-are-private-issue-625).
+
 On the exact committed production topology the native lane beats the wasm32 lane
 **1.78×** per core (NEON + FMA vs `simd128` + relaxed-madd) and **4.75×** at 12
 cores versus a single-threaded wasm32 creature — so where the native `rust_scorer`
@@ -387,11 +436,12 @@ the aggregate/IF and single-record paths, which are unchanged. Values and
 accumulation order are identical, so every result stays bit-identical.
 
 Both views are built by `hot_synapse_soa` at every construction path
-(`CompiledNetwork::new`, `compile_creature`), and cost **+6 B per synapse per
-compiled network** — ~126 KB on the production creature, cloned once per
-directory-scoring worker. Because the fields are public they can be made to
-drift; `debug_assert_hot_soa` runs at every interleaved entry point and panics
-in debug builds if they have.
+(`CompiledNetwork::new`, `CompiledNetwork::from_parts`, `compile_creature`), and
+cost **+6 B per synapse per compiled network** — ~126 KB on the production
+creature, cloned once per directory-scoring worker. Since Issue #625 the fields
+are private, so a caller outside the crate cannot drift them at all; they are
+still two vectors, so `debug_assert_hot_soa` runs at every interleaved entry
+point and panics in debug builds if an in-crate edit has let them drift.
 
 ```mermaid
 flowchart LR

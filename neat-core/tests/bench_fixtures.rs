@@ -51,20 +51,20 @@ fn production_exact_matches_committed_grq_topology() {
 
     let net = build_network(spec, 0x5152_5354);
     assert_eq!(
-        net.neurons.len(),
+        net.neurons().len(),
         1666,
         "one NeuronData per non-input neuron"
     );
-    assert_eq!(net.num_inputs, 2461);
-    assert_eq!(net.num_neurons, 4127);
+    assert_eq!(net.num_inputs(), 2461);
+    assert_eq!(net.num_neurons(), 4127);
     assert_eq!(
-        net.synapses.len(),
+        net.synapses().len(),
         21_513,
         "production_exact must build exactly 21,513 synapses"
     );
 
     // Per-neuron `num_synapses` must sum to the flat synapse buffer length.
-    let summed: usize = net.neurons.iter().map(|n| n.num_synapses as usize).sum();
+    let summed: usize = net.neurons().iter().map(|n| n.num_synapses as usize).sum();
     assert_eq!(summed, 21_513);
 }
 
@@ -75,7 +75,7 @@ fn production_exact_fan_in_is_evenly_spread_and_varies() {
     // mean near the production ~13.
     let net = build_network(spec("production_exact"), 0x5152_5354);
     let distinct: std::collections::BTreeSet<u16> =
-        net.neurons.iter().map(|n| n.num_synapses).collect();
+        net.neurons().iter().map(|n| n.num_synapses).collect();
     assert!(
         distinct.len() > 1,
         "exact fan-in should still vary, saw only {distinct:?}"
@@ -84,7 +84,7 @@ fn production_exact_fan_in_is_evenly_spread_and_varies() {
         distinct.len() <= 2,
         "even distribution should use at most two fan-in values, saw {distinct:?}"
     );
-    let avg_fan_in = net.synapses.len() as f64 / net.neurons.len() as f64;
+    let avg_fan_in = net.synapses().len() as f64 / net.neurons().len() as f64;
     assert!(
         (12.0..=14.0).contains(&avg_fan_in),
         "average fan-in {avg_fan_in} should sit near the production ~13"
@@ -97,18 +97,18 @@ fn production_exact_build_is_deterministic() {
     // reproducible (Issue #286 acceptance).
     let a = build_network(spec("production_exact"), 0x5152_5354);
     let b = build_network(spec("production_exact"), 0x5152_5354);
-    assert_eq!(a.synapses.len(), b.synapses.len());
+    assert_eq!(a.synapses().len(), b.synapses().len());
     assert!(
-        a.synapses
+        a.synapses()
             .iter()
-            .zip(&b.synapses)
+            .zip(b.synapses())
             .all(|(x, y)| x.weight == y.weight && x.from_index == y.from_index),
         "same seed must reproduce identical synapses"
     );
     assert!(
-        a.neurons
+        a.neurons()
             .iter()
-            .zip(&b.neurons)
+            .zip(b.neurons())
             .all(|(x, y)| x.bias == y.bias && x.num_synapses == y.num_synapses),
         "same seed must reproduce identical neurons"
     );
@@ -152,12 +152,12 @@ fn build_network_matches_production_neuron_and_synapse_counts() {
     let net = build_network(prod, 0x5152_5354);
 
     // One NeuronData per non-input neuron; total count includes the input layer.
-    assert_eq!(net.neurons.len(), prod.num_non_inputs());
-    assert_eq!(net.num_neurons, prod.num_neurons);
-    assert_eq!(net.num_inputs, prod.num_inputs);
+    assert_eq!(net.neurons().len(), prod.num_non_inputs());
+    assert_eq!(net.num_neurons(), prod.num_neurons);
+    assert_eq!(net.num_inputs(), prod.num_inputs);
 
     // Sparse ~13 average fan-in ⇒ roughly 21.7k synapses for the real creature.
-    let total_synapses = net.synapses.len();
+    let total_synapses = net.synapses().len();
     let avg_fan_in = total_synapses as f64 / prod.num_non_inputs() as f64;
     assert!(
         (12.0..=14.0).contains(&avg_fan_in),
@@ -165,7 +165,7 @@ fn build_network_matches_production_neuron_and_synapse_counts() {
     );
 
     // num_synapses on each neuron must sum to the flat synapse buffer length.
-    let summed: usize = net.neurons.iter().map(|n| n.num_synapses as usize).sum();
+    let summed: usize = net.neurons().iter().map(|n| n.num_synapses as usize).sum();
     assert_eq!(summed, total_synapses);
 }
 
@@ -175,7 +175,7 @@ fn varied_fan_in_actually_varies_unlike_fixed_shapes() {
     let prod = spec("production");
     let net = build_network(prod, 0x5152_5354);
     let distinct: std::collections::BTreeSet<u16> =
-        net.neurons.iter().map(|n| n.num_synapses).collect();
+        net.neurons().iter().map(|n| n.num_synapses).collect();
     assert!(
         distinct.len() > 1,
         "production fan-in should vary, saw only {distinct:?}"
@@ -185,7 +185,7 @@ fn varied_fan_in_actually_varies_unlike_fixed_shapes() {
     let small = spec("small_50");
     if let FanIn::Fixed(f) = small.fan_in {
         let net = build_network(small, 0x5152_5354);
-        let tail = &net.neurons[small.num_inputs..];
+        let tail = &net.neurons()[small.num_inputs..];
         assert!(
             tail.iter().all(|n| n.num_synapses as usize == f),
             "fixed shapes should keep a constant fan-in past the early ramp"
@@ -205,7 +205,7 @@ fn production_fixture_squash_is_homogeneous_tanh() {
     for label in ["production", "production_2x", "production_exact"] {
         let net = build_network(spec(label), 0x5152_5354);
         assert!(
-            net.neurons
+            net.neurons()
                 .iter()
                 .all(|n| n.squash_type == SquashType::Tanh as u8),
             "{label} fixture must be homogeneous Tanh — the bench-doc caveat depends on it"
@@ -219,18 +219,18 @@ fn build_network_is_deterministic_for_a_fixed_seed() {
     let a = build_network(prod, 0x5152_5354);
     let b = build_network(prod, 0x5152_5354);
 
-    assert_eq!(a.synapses.len(), b.synapses.len());
+    assert_eq!(a.synapses().len(), b.synapses().len());
     assert!(
-        a.synapses
+        a.synapses()
             .iter()
-            .zip(&b.synapses)
+            .zip(b.synapses())
             .all(|(x, y)| x.weight == y.weight && x.from_index == y.from_index),
         "same seed must reproduce identical synapses"
     );
     assert!(
-        a.neurons
+        a.neurons()
             .iter()
-            .zip(&b.neurons)
+            .zip(b.neurons())
             .all(|(x, y)| x.bias == y.bias && x.num_synapses == y.num_synapses),
         "same seed must reproduce identical neurons"
     );
@@ -358,12 +358,12 @@ fn aggregate_rewrite_leaves_topology_and_weights_untouched() {
     let base = build_network(spec, 0x5152_5354);
     let rewritten = with_aggregates(build_network(spec, 0x5152_5354), 50);
 
-    assert_eq!(rewritten.num_neurons, base.num_neurons);
-    assert_eq!(rewritten.synapses.len(), base.synapses.len());
+    assert_eq!(rewritten.num_neurons(), base.num_neurons());
+    assert_eq!(rewritten.synapses().len(), base.synapses().len());
     for (i, (got, want)) in rewritten
-        .synapses
+        .synapses()
         .iter()
-        .zip(base.synapses.iter())
+        .zip(base.synapses().iter())
         .enumerate()
     {
         assert_eq!(got.from_index, want.from_index, "synapse {i} source moved");
@@ -374,9 +374,9 @@ fn aggregate_rewrite_leaves_topology_and_weights_untouched() {
         );
     }
     for (i, (got, want)) in rewritten
-        .neurons
+        .neurons()
         .iter()
-        .zip(base.neurons.iter())
+        .zip(base.neurons().iter())
         .enumerate()
     {
         assert_eq!(
@@ -403,14 +403,16 @@ fn rewritten_if_neurons_carry_a_condition_synapse() {
     let net = with_aggregates(build_network(spec, 0x5152_5354), 100);
     let mut checked = 0;
     for neuron in net
-        .neurons
+        .neurons()
         .iter()
         .filter(|n| SquashType::from(n.squash_type) == SquashType::If && n.num_synapses > 0)
     {
         let start = neuron.start_synapse as usize;
         let end = start + neuron.num_synapses as usize;
         assert!(
-            net.synapses[start..end].iter().any(|s| s.synapse_type == 1),
+            net.synapses()[start..end]
+                .iter()
+                .any(|s| s.synapse_type == 1),
             "If neuron at {start} has no condition synapse"
         );
         checked += 1;

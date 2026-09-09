@@ -275,8 +275,8 @@ fn valid_creature_round_trips_input_and_output_byte_identically() {
 
     let network = compile_creature(&creature).expect("valid creature must compile");
     // 2511 inputs + 1 output neuron.
-    assert_eq!(network.num_inputs, 2511);
-    assert_eq!(network.num_neurons, 2511 + 1);
+    assert_eq!(network.num_inputs(), 2511);
+    assert_eq!(network.num_neurons(), 2511 + 1);
 
     let serialised = creature_to_json(&creature).expect("valid creature must serialise");
     assert_eq!(serialised, canonical);

@@ -77,11 +77,11 @@ fn with_fixture<R>(f: impl FnOnce(&mut Fixture) -> R) -> R {
 pub extern "C" fn setup(shape: u32, records: u32) -> u32 {
     let spec = &NETWORKS[shape as usize];
     let net = build_network(spec, SEED);
-    let stride = net.num_inputs;
+    let stride = net.num_inputs();
     let records = build_records(stride, records as usize);
     let flat: Vec<f32> = records.iter().flatten().copied().collect();
     let num_outputs = spec.num_outputs;
-    let synapses = net.synapses.len() as u32;
+    let synapses = net.synapses().len() as u32;
 
     FIXTURE.with(|cell| {
         *cell.borrow_mut() = Some(Fixture {
@@ -99,7 +99,7 @@ pub extern "C" fn setup(shape: u32, records: u32) -> u32 {
 /// Total neurons in the fixture creature.
 #[unsafe(no_mangle)]
 pub extern "C" fn neuron_count() -> u32 {
-    with_fixture(|f| f.net.num_neurons as u32)
+    with_fixture(|f| f.net.num_neurons() as u32)
 }
 
 /// Input arity of the fixture creature.
@@ -139,7 +139,7 @@ pub extern "C" fn bench_kernel() -> f64 {
         let net = &f.net;
         let mut checksum = 0.0f64;
         for _ in 0..KERNEL_REPS {
-            for neuron in &net.neurons {
+            for neuron in net.neurons() {
                 let start = neuron.start_synapse as usize;
                 let end = start + neuron.num_synapses as usize;
                 // SAFETY: `net` came from `CompiledNetwork::new`, which rejects
@@ -147,8 +147,8 @@ pub extern "C" fn bench_kernel() -> f64 {
                 // `num_neurons`.
                 checksum += unsafe {
                     weighted_sum_simd_unchecked(
-                        &net.synapses,
-                        &net.activations,
+                        net.synapses(),
+                        net.activations(),
                         start,
                         end,
                         neuron.bias,

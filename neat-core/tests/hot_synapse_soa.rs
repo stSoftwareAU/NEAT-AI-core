@@ -12,9 +12,14 @@
 //!
 //! They are "what" tests — they build real networks through the public entry
 //! points and assert on observable state and on scored numbers, not on how the
-//! gather is wired. The final test pins the fail-loud guard: a network whose
-//! hot view has drifted must panic in a debug build rather than silently
-//! scoring wrong numbers.
+//! gather is wired.
+//!
+//! Issue #625 made `CompiledNetwork`'s fields private, so a caller outside the
+//! crate can no longer drift the view at all. The fail-loud guard that used to
+//! be pinned here — a drifted view must panic in a debug build rather than
+//! score silently-wrong numbers — moved to
+//! `loss::interleaved_mse_parity::a_drifted_hot_view_fails_loud_instead_of_scoring_wrong_numbers`,
+//! the level at which drift is still expressible.
 
 use neat_core::loss::mse_sum_batch_packed;
 use neat_core::{
@@ -26,25 +31,26 @@ use neat_core::{
 /// anything short of bit equality is drift.
 fn assert_hot_view_mirrors_synapses(net: &CompiledNetwork, context: &str) {
     assert_eq!(
-        net.hot_weights.len(),
-        net.synapses.len(),
+        net.hot_weights().len(),
+        net.synapses().len(),
         "{context}: hot_weights must hold one entry per synapse"
     );
     assert_eq!(
-        net.hot_from.len(),
-        net.synapses.len(),
+        net.hot_from().len(),
+        net.synapses().len(),
         "{context}: hot_from must hold one entry per synapse"
     );
-    for (i, s) in net.synapses.iter().enumerate() {
+    for (i, s) in net.synapses().iter().enumerate() {
         assert_eq!(
-            net.hot_weights[i].to_bits(),
+            net.hot_weights()[i].to_bits(),
             s.weight.to_bits(),
             "{context}: hot_weights[{i}] ({}) is not synapses[{i}].weight ({})",
-            net.hot_weights[i],
+            net.hot_weights()[i],
             s.weight
         );
         assert_eq!(
-            net.hot_from[i], s.from_index,
+            net.hot_from()[i],
+            s.from_index,
             "{context}: hot_from[{i}] is not synapses[{i}].from_index"
         );
     }
@@ -125,26 +131,26 @@ fn compile_creature_builds_a_hot_view_matching_every_synapse() {
     let creature = parse_creature_json(CREATURE_JSON).expect("creature must parse");
     let net = compile_creature(&creature).expect("creature must compile");
 
-    assert_eq!(net.synapses.len(), 7, "fixture must carry all 7 synapses");
+    assert_eq!(net.synapses().len(), 7, "fixture must carry all 7 synapses");
     assert_hot_view_mirrors_synapses(&net, "compile_creature");
 
     // Non-vacuous: the hot view must carry the fixture's actual asymmetric
     // weights and sources in declaration order, not zeros or a sorted copy.
-    assert_eq!(net.hot_from, vec![0u16, 1, 2, 0, 2, 3, 4]);
+    assert_eq!(net.hot_from(), vec![0u16, 1, 2, 0, 2, 3, 4]);
     let expected: Vec<f32> = vec![0.31, -0.62, 0.17, -0.24, 0.53, 0.72, -0.41]
         .into_iter()
         .map(|w: f64| w as f32)
         .collect();
-    assert_eq!(net.hot_weights, expected);
+    assert_eq!(net.hot_weights(), expected);
 }
 
 #[test]
 fn binary_deserialiser_builds_a_hot_view_matching_every_synapse() {
     let net = CompiledNetwork::new(&serialise_binary_network()).expect("network must load");
 
-    assert_eq!(net.synapses.len(), 7, "fixture must carry all 7 synapses");
+    assert_eq!(net.synapses().len(), 7, "fixture must carry all 7 synapses");
     assert_hot_view_mirrors_synapses(&net, "CompiledNetwork::new");
-    assert_eq!(net.hot_from, vec![0u16, 1, 2, 0, 2, 3, 4]);
+    assert_eq!(net.hot_from(), vec![0u16, 1, 2, 0, 2, 3, 4]);
 }
 
 #[test]
@@ -154,8 +160,8 @@ fn cloning_a_network_preserves_the_hot_view() {
     let net = CompiledNetwork::new(&serialise_binary_network()).expect("network must load");
     let clone = net.clone();
     assert_hot_view_mirrors_synapses(&clone, "clone");
-    assert_eq!(clone.hot_weights, net.hot_weights);
-    assert_eq!(clone.hot_from, net.hot_from);
+    assert_eq!(clone.hot_weights(), net.hot_weights());
+    assert_eq!(clone.hot_from(), net.hot_from());
 }
 
 #[test]
@@ -166,8 +172,8 @@ fn both_construction_paths_agree_on_the_hot_view() {
     let from_json = compile_creature(&creature).expect("creature must compile");
     let from_binary = CompiledNetwork::new(&serialise_binary_network()).expect("must load");
 
-    assert_eq!(from_json.hot_from, from_binary.hot_from);
-    assert_eq!(from_json.hot_weights, from_binary.hot_weights);
+    assert_eq!(from_json.hot_from(), from_binary.hot_from());
+    assert_eq!(from_json.hot_weights(), from_binary.hot_weights());
 }
 
 #[test]
@@ -230,22 +236,4 @@ fn interleaved_scoring_matches_the_single_record_reference() {
             "n={num_records}: interleaved MSE {batched} vs single-record reference {reference}"
         );
     }
-}
-
-/// Fail-loud guard (debug builds): a drifted hot view must panic rather than
-/// score silently-wrong numbers. Only meaningful where `debug_assert!` is
-/// compiled in, which is how the test suite runs.
-#[test]
-#[cfg(debug_assertions)]
-#[should_panic(expected = "Issue #533")]
-fn a_drifted_hot_view_fails_loud_instead_of_scoring_wrong_numbers() {
-    let creature = parse_creature_json(CREATURE_JSON).expect("creature must parse");
-    let mut net = compile_creature(&creature).expect("creature must compile");
-
-    // Simulate the redundancy hazard the issue calls out: a caller mutates a
-    // weight and forgets to rebuild the hot view.
-    net.synapses[0].weight = 12.5;
-
-    let records = packed_records(8, 3);
-    let _ = mse_sum_batch_packed(&mut net, &records, 3, 1, true);
 }
