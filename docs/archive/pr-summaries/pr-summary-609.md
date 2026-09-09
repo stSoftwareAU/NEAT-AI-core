@@ -16,7 +16,12 @@ gates the doc against the code so neither can drift back silently. Closes #609.
 ## Evidence
 
 Backend/docs change — no web interface to screenshot. The evidence is the bats
-gate, its mutation runs, and the doc-vs-code sweep below.
+gate, its mutation runs, and the doc-vs-code sweep below. The regression test
+that fails against the unfixed code and passes after the fix is
+`tests/scripts/unsafe_simd_invariants.bats::no tracked Markdown cites a bare
+network.rs line number` (with
+`::SECURITY.md names every unchecked-read site in neat-core/src`) — the
+before-and-after run output is in the Test Plan.
 
 ```mermaid
 flowchart LR
@@ -121,6 +126,22 @@ list, so a new file is caught the same way an existing one is.
 - **clean** — Australian English throughout the additions; no hidden or secret paths staged; tests assert doc-vs-code agreement rather than bare source greps; quoted heredocs with `sys.argv`, no shell interpolation; behaviour-named `@test` blocks matching the file's existing style; `markdownlint-cli2` clean
 
 ## Test Plan
+
+**Regression test, and its linkage to the fix.** Added
+`tests/scripts/unsafe_simd_invariants.bats::no tracked Markdown cites a bare
+network.rs line number` and
+`tests/scripts/unsafe_simd_invariants.bats::SECURITY.md names every
+unchecked-read site in neat-core/src`, which reproduce the flaw: run against the
+unfixed code (this branch's docs at `dbd787e^`, with the new bats file copied
+in) they **fail** — `not ok 14` naming `AGENTS.md:258` and `SECURITY.md:39`
+citing `neat-core/src/network.rs:326`, and `not ok 16` reporting
+`undocumented sites: ['neat-core/src/simd.rs', 'neat-core/src/simd/scalar.rs',
+'neat-core/src/simd_native.rs']`. Against the fixed tree they **pass** (16/16
+ok). The third assertion,
+`tests/scripts/unsafe_simd_invariants.bats::the symbols the soundness docs cite
+still exist in network.rs`, is the forward guard: it passes both before and
+after, and goes red under the symbol-rename and guard-move mutations in the
+table above, so the corrected symbol citation cannot rot back.
 
 Added to `tests/scripts/unsafe_simd_invariants.bats` (run by `./quality.sh` and
 the CI bats step):
