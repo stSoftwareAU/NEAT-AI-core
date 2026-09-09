@@ -340,6 +340,12 @@ struct CeilingSite {
 /// Every route that accepts or emits a creature and then indexes it by the
 /// declared width — the four call sites of `validate_creature_width` named in
 /// AGENTS.md, plus the two the graft and prune boundaries add.
+///
+/// `creature_validate` and its standalone synapse half carry the same ceiling
+/// but answer with a `ValidationFailure` rather than a typed `CreatureError`,
+/// so they cannot be driven from this table's `fn(usize) -> Option<usize>`;
+/// they are pinned in the last section of this file instead (Issue #639). A
+/// new entry point belongs in one of the two, never in neither.
 const CEILING_SITES: &[CeilingSite] = &[
     CeilingSite {
         name: "parse_creature_json_refuses_a_declared_input_past_the_node_ceiling",
@@ -494,9 +500,10 @@ fn a_declared_input_at_the_node_ceiling_is_still_accepted() {
 // creature_validate — the same ceiling in NEAT-AI's own vocabulary (Issue #639)
 // ---------------------------------------------------------------------------
 
-/// The oversized wording, derived from the single home of the ceiling rather
-/// than copied: `oversized_detail` is what every boundary already reports, and
-/// `creature_validate` now reports it too.
+/// The oversized wording, written out here rather than read from
+/// `oversized_detail`, so this file is an **independent** oracle: a mutation
+/// that rewrote the message at its single home would go unnoticed by an
+/// expectation that asked that home what to expect.
 fn oversized_message(declared: usize) -> String {
     format!("creature declares {declared} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}")
 }
@@ -537,20 +544,51 @@ fn the_synapse_half_refuses_a_declared_input_past_the_node_ceiling() {
 }
 
 #[test]
-fn creature_validate_reports_the_missing_input_floor_before_the_ceiling() {
-    // Rules 2 and 3 are allocation-free and are the ported TypeScript's first
-    // word on a width, so they keep speaking first: a creature that declares
-    // no inputs hears about that, not about a node count.
-    let mut creature = creature_with_widths(0, 1);
-    creature.neurons.clear();
-    creature.synapses.clear();
+fn creature_validate_reports_the_allocation_free_rules_before_the_ceiling() {
+    // Rules 1–3 allocate nothing and are the ported TypeScript's first word on
+    // a declared width, so they keep speaking first and the ceiling slots in
+    // behind them. A creature that declares no inputs hears about that, not
+    // about a node count.
+    let mut floorless = creature_with_widths(0, 1);
+    floorless.neurons.clear();
+    floorless.synapses.clear();
 
-    let failure = creature_validate(&creature, &ValidateOptions::default())
+    let failure = creature_validate(&floorless, &ValidateOptions::default())
         .expect_err("input: 0 is not a creature");
     assert_eq!(
         failure.message,
         "Must have at least one input neurons was: 0"
     );
+
+    // Rule 1 likewise: an over-wide creature whose caller also miscounted its
+    // neurons is told about the count it asked to have checked. That rule
+    // compares the declared node count and derives nothing, so answering it
+    // first costs nothing the ceiling was protecting.
+    let miscounted = ValidateOptions {
+        neurons: Some(7),
+        ..ValidateOptions::default()
+    };
+    let failure = creature_validate(&creature_with_widths(100_000_000, 1), &miscounted)
+        .expect_err("a neuron count of 7 is not 100000001");
+    assert_eq!(
+        failure.message,
+        format!("Neurons length: {HUGE_NODE_COUNT} expected: 7")
+    );
+}
+
+#[test]
+fn creature_validate_refuses_a_declared_width_that_would_overflow_the_node_count() {
+    // The declared width is untrusted and backs no data, so the node count is
+    // summed saturating: a width at the top of the address space is refused
+    // rather than wrapping back around to a count the ceiling accepts — and
+    // rather than panicking on the overflow in a debug build.
+    let failure = creature_validate(
+        &creature_with_widths(usize::MAX, 1),
+        &ValidateOptions::default(),
+    )
+    .expect_err("a declared input of usize::MAX must be refused");
+
+    assert_eq!(failure.message, oversized_message(usize::MAX));
 }
 
 #[test]

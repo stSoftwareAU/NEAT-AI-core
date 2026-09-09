@@ -85,9 +85,10 @@
 //! [`MAX_REQUEST_NEURONS`](crate::MAX_REQUEST_NEURONS) is turned away between
 //! rule 3 and rule 4 (Issue #639). Rules 1–3 allocate nothing and are the
 //! ported TypeScript's first word on a width, so they keep speaking first;
-//! everything after rule 3 reads a [`NeuronView`] per declared input, which is
-//! memory a 40-byte creature must not be able to buy. See
-//! [`refuse_oversized_declared_width`].
+//! everything after rule 3 derives one view per declared input, which is memory
+//! a 40-byte creature must not be able to buy — so the ceiling is read from
+//! [`crate::creature_validate_json::oversized_detail`], the one home it already
+//! has, rather than restated here.
 //!
 //! Rule 26 is the same notion of "duplicate" as
 //! [`crate::creature::validate_no_duplicate_synapses`] (Issues #556, #577) —
@@ -274,7 +275,8 @@ use std::fmt;
 
 use crate::creature::{
     CreatureExport, MemeticExport, MemeticWeightExport, MemeticWeightRowExport, MemeticWeights,
-    is_if_squash, parse_squash_name, parse_synapse_type, synapse_type_name_from,
+    declared_node_count, is_if_squash, parse_squash_name, parse_synapse_type,
+    synapse_type_name_from,
 };
 use crate::creature_validate_json::oversized_detail;
 use crate::synapse_type::SynapseType;
@@ -702,9 +704,7 @@ pub fn creature_validate(
     options: &ValidateOptions,
 ) -> Result<ValidationStats, ValidationFailure> {
     validate_declared_widths(
-        // Saturating because the declaration is untrusted and the sum is not
-        // what is being bounded — `refuse_oversized_declared_width` is.
-        creature.input.saturating_add(creature.neurons.len()),
+        declared_node_count(creature),
         creature.input as f64,
         creature.output as f64,
         options,
@@ -814,10 +814,7 @@ pub(crate) fn validate_declared_widths(
 /// Returns the [`ValidationFailure`] naming the declared node count when it is
 /// past [`MAX_REQUEST_NEURONS`](crate::MAX_REQUEST_NEURONS).
 fn refuse_oversized_declared_width(creature: &CreatureExport) -> Result<(), ValidationFailure> {
-    // Saturating: the declared width is untrusted, and it is the ceiling that
-    // is being decided here, not the exact sum.
-    let declared = creature.input.saturating_add(creature.neurons.len());
-    match oversized_detail(declared) {
+    match oversized_detail(declared_node_count(creature)) {
         Some(detail) => Err(ValidationFailure::validation(reason::OTHER, detail)),
         None => Ok(()),
     }
@@ -839,7 +836,7 @@ fn validate_neuron_rules(
     creature: &CreatureExport,
     options: &ValidateOptions,
 ) -> Result<ValidationStats, ValidationFailure> {
-    let total_neurons = creature.input + creature.neurons.len();
+    let total_neurons = declared_node_count(creature);
 
     // Rules 1–3. `input` / `output` are `usize` here, so the TypeScript
     // `Number.isInteger` half of rules 2 and 3 is unrepresentable in this
@@ -1029,8 +1026,21 @@ fn derived_neuron_id(uuid: &str) -> Option<i64> {
 /// assigns them *before* `creatureValidate` ever runs: an input is its own
 /// index, an output is `-(outputIndex + 1)` whatever the file says, and
 /// everything else keeps its exported id or takes [`derived_neuron_id`].
+///
+/// **Precondition: the declared width has already passed
+/// [`refuse_oversized_declared_width`]** (Issues #622, #639). `creature.input`
+/// is a declared count with no backing data, and this walk turns it into one
+/// [`NeuronView`] per declared input — so an unbounded width sets the memory
+/// spent here from a payload under 100 bytes. [`creature_validate`] and
+/// [`validate_synapse_and_memetic_rules`] call that check first.
+/// [`MemeticExport::prune_to`] — and so [`CreatureExport::prune_memetic`] —
+/// does **not**, and is the residual this crate still owes a bound (Issue
+/// #650): it answers with `()`, so it cannot report the refusal without a
+/// public signature change, and every route reaching it inside this crate
+/// comes through a boundary that bounded the width first. A new caller owes
+/// the same check.
 fn neuron_views(creature: &CreatureExport) -> Vec<NeuronView<'_>> {
-    let mut views = Vec::with_capacity(creature.input + creature.neurons.len());
+    let mut views = Vec::with_capacity(declared_node_count(creature));
 
     for index in 0..creature.input {
         views.push(NeuronView {

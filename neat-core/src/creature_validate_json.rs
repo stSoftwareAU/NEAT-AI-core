@@ -89,7 +89,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::creature::CreatureExport;
+use crate::creature::{CreatureExport, declared_node_count};
 use crate::creature_validate::{
     ValidateOptions, ValidationFailure, ValidationStats, creature_validate,
 };
@@ -294,8 +294,7 @@ fn validate_request(request: &str) -> ValidateResponse {
     let options = request.options.into();
     let outcome = match (&request.creature, &request.runtime_creature) {
         (Some(creature), None) => {
-            let declared = creature.input.saturating_add(creature.neurons.len());
-            if let Some(refusal) = refuse_oversized(declared) {
+            if let Some(refusal) = refuse_oversized(declared_node_count(creature)) {
                 return refusal;
             }
             creature_validate(creature, &options)

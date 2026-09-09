@@ -517,7 +517,9 @@ straight to `creature_validate`, or to its standalone synapse half
 `ValidationError` / `OTHER` carrying that boundary's wording, instead of buying
 one `NeuronView` per declared input. The JSON boundaries still refuse the same
 creature first, as a *malformed request* rather than a verdict — see the
-boundary table in `creature_validate_json`.
+boundary table in `creature_validate_json`. `MemeticExport::prune_to` walks the
+same width and is the one route still unbounded (Issue #650): it answers with
+`()`, so refusing needs a public signature change rather than a guard.
 
 The Display text (`Must have at least one input neurons was: 0`) mirrors
 NEAT-AI `src/architecture/CreatureValidate.ts` so logs line up across the TS

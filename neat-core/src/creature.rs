@@ -632,6 +632,23 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
     }
 }
 
+/// The node count a creature **declares**: its observation width plus the
+/// neurons it lists.
+///
+/// The one derivation every ceiling reads, so `TooManyNodes`
+/// ([`validate_creature_width`]), the JSON boundaries
+/// ([`crate::creature_validate_json::oversized_detail`]) and
+/// [`crate::creature_validate`]'s own rule all mean the same number by it.
+///
+/// Saturating on purpose: `input` is untrusted and backs no data, so the sum
+/// must not be able to wrap a hundred million inputs back around to a count
+/// the ceiling accepts (Issues #622, #639). Counting the listed neurons costs
+/// nothing — they are a real vector, already in memory.
+#[must_use]
+pub(crate) fn declared_node_count(creature: &CreatureExport) -> usize {
+    creature.input.saturating_add(creature.neurons.len())
+}
+
 /// Enforce the observation-width contract: `1 <= input <= MAX_NODE_COUNT` and
 /// `output >= 1`.
 ///
@@ -688,7 +705,7 @@ pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), Creature
         // same thing here as it does after compilation. Saturating because the
         // declaration is untrusted and the sum is not what is being bounded.
         return Err(CreatureError::TooManyNodes {
-            count: creature.input.saturating_add(creature.neurons.len()),
+            count: declared_node_count(creature),
         });
     }
     if creature.output < 1 {

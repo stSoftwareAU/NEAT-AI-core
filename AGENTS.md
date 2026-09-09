@@ -505,8 +505,10 @@ NEAT-AI's rule wording, not a typed width error — so it enforces the same
 ceiling itself, ahead of its own walk, reading `oversized_detail` /
 `MAX_REQUEST_NEURONS` rather than restating the comparison (Issue #639); its
 standalone synapse half `validate_synapse_and_memetic_rules` does the same.
-Adding a *new* caller of `validate_creature_width` inherits the ceiling; adding
-a new width walk that bypasses it needs its own.
+`MemeticExport::prune_to` is the residual — it answers with `()` and cannot
+report a refusal without a public signature change (Issue #650). Adding a *new*
+caller of `validate_creature_width` inherits the ceiling; adding a new width
+walk that bypasses it needs its own.
 `neat-core/tests/creature_width_allocations.rs` is the oracle: a counting global
 allocator asserts a refusal costs O(1) bytes, so re-ordering the check back
 behind the walk fails even though the returned error would be unchanged.
