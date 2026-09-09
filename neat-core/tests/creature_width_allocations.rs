@@ -15,6 +15,15 @@
 //! bounded first does not move at all. Comparing the two readings is what makes
 //! the assertion hold on any machine — an absolute byte figure would not.
 //!
+//! `creature_validate` and its standalone synapse half walk the same declared
+//! width and were left out of that fix (Issue #639). They owe NEAT-AI's own
+//! rule wording rather than a typed `CreatureError`, so they carry the ceiling
+//! as a rule of their own; the cost of the refusal is measured here exactly as
+//! it is for the two above. `MemeticExport::prune_to` walks it too and is not
+//! measured here: it answers with `()` and cannot report a refusal without a
+//! public signature change, so it is tracked as a residual (Issue #650) rather
+//! than fixed alongside these.
+//!
 //! Modelled on `tests/topology_ops_allocations.rs`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -22,7 +31,10 @@ use std::cell::Cell;
 
 use neat_core::if_graft::{GraftError, validate_creature_topology};
 use neat_core::network::MAX_NODE_COUNT;
-use neat_core::{CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature};
+use neat_core::{
+    CreatureError, CreatureExport, NeuronExport, SynapseExport, ValidateOptions, ValidationFailure,
+    ValidationStats, compile_creature, creature_validate, validate_synapse_and_memetic_rules,
+};
 
 thread_local! {
     /// Bytes handed to **this thread** since it last zeroed the counter.
@@ -198,5 +210,44 @@ fn topology_validation_refuses_an_oversized_declared_input_without_paying_for_it
             validate_creature_topology(creature),
             Err(GraftError::Creature(CreatureError::TooManyNodes { .. }))
         )
+    });
+}
+
+/// Whether a validator answered with the ceiling refusal (Issue #639).
+///
+/// Any *other* answer fails loud naming what came back, rather than returning
+/// `false` and leaving the caller's "must be refused" assertion to guess: a
+/// verdict on a creature this wide is a different fault from refusing it for
+/// the wrong reason, and the two must not read alike.
+fn refused_for_being_oversized<T: std::fmt::Debug>(answer: Result<T, ValidationFailure>) -> bool {
+    match answer {
+        Err(failure) if failure.message.contains("exceeding the maximum") => true,
+        Err(failure) => panic!("refused, but not for its declared width: {failure}"),
+        Ok(accepted) => panic!("a declared width past the ceiling was accepted: {accepted:?}"),
+    }
+}
+
+#[test]
+fn creature_validate_refuses_an_oversized_declared_input_without_paying_for_it() {
+    // Issue #639 — the third entry point that walks the declared width. It
+    // owes NEAT-AI's own rule wording rather than a typed `CreatureError`, so
+    // the refusal is a `ValidationFailure`; what is measured here is the same
+    // thing as above, that the refusal is decided before the walk pays for it.
+    assert_width_is_not_walked("creature_validate", |creature| {
+        refused_for_being_oversized(creature_validate(creature, &ValidateOptions::default()))
+    });
+}
+
+#[test]
+fn the_synapse_half_refuses_an_oversized_declared_input_without_paying_for_it() {
+    // Rules 23–31 are callable on their own and derive the same views from the
+    // same declared width, so the ceiling is theirs too (Issue #639).
+    assert_width_is_not_walked("validate_synapse_and_memetic_rules", |creature| {
+        let mut stats = ValidationStats::default();
+        refused_for_being_oversized(validate_synapse_and_memetic_rules(
+            creature,
+            &ValidateOptions::default(),
+            &mut stats,
+        ))
     });
 }

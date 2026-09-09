@@ -99,7 +99,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::creature::{CreatureExport, synapse_type_name_from};
+use crate::creature::{CreatureExport, declared_node_count, synapse_type_name_from};
 use crate::creature_validate_json::{MALFORMED_REQUEST, oversized_detail};
 use crate::prune_cleanup::{StaticIfRewrite, SynapseKey};
 use crate::prune_neuron::{
@@ -539,8 +539,7 @@ fn write(response: &PruneResponse) -> String {
 /// [`crate::creature_validate_json::oversized_detail`]; this boundary asks
 /// there rather than re-inlining the comparison.
 fn refuse_oversized(creature: &CreatureExport) -> Option<PruneResponse> {
-    oversized_detail(creature.input.saturating_add(creature.neurons.len()))
-        .map(PruneResponse::malformed)
+    oversized_detail(declared_node_count(creature)).map(PruneResponse::malformed)
 }
 
 /// Remove one hidden neuron, described by a JSON request, answering with JSON.
