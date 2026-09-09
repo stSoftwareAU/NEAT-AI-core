@@ -1118,8 +1118,16 @@ impl NeuronIdIndex {
     fn build(creature: &CreatureExport) -> Self {
         let mut listed: HashMap<i64, u32> = HashMap::with_capacity(creature.neurons.len());
         for (i, id) in listed_neuron_ids(creature).enumerate() {
-            if let Some(id) = id {
-                listed.insert(id, (creature.input + i) as u32);
+            // A walk index past `u32::MAX` names no neuron this vocabulary can
+            // address, so it is stored under no id rather than truncated into
+            // an index that aliases another neuron. Unreachable in practice —
+            // every bounded route stops at `MAX_NODE_COUNT` — but the
+            // declaration is untrusted and this one is not bounded, hence the
+            // saturating sum too.
+            if let Some(id) = id
+                && let Ok(index) = u32::try_from(creature.input.saturating_add(i))
+            {
+                listed.insert(id, index);
             }
         }
 
