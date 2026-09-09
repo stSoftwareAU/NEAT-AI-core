@@ -130,3 +130,20 @@ EOF
   [[ "$output" != *"cargo not available"* ]]
   [[ "$output" == *"external=no updates"* ]]
 }
+
+# Issue #608 — --repo reached `cd "$REPO_DIR"` unvalidated, so a `-`-prefixed
+# value was parsed as a cd option (`cd -P` takes no operand and lands in $HOME),
+# running the cargo passes outside the repository and reporting nothing to bump.
+
+@test "rejects an option-shaped --repo instead of running outside the repository" {
+  run "$SCRIPT_UNDER_TEST" --skip-audit --skip-build --repo "-P"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--repo must be an existing directory"* ]]
+  [[ "$output" != *"external="* ]]
+}
+
+@test "rejects a --repo that does not exist" {
+  run "$SCRIPT_UNDER_TEST" --skip-audit --skip-build --repo "${TMP_REPO}/absent"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--repo must be an existing directory"* ]]
+}
