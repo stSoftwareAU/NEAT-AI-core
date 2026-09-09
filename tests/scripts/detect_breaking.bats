@@ -55,14 +55,39 @@ teardown() {
 @test "an option-shaped range is rejected and writes no file" {
   local leak="${WORK}/leak.txt"
   run "$SCRIPT" "--output=${leak}"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"must not start with '-'"* ]]
+  # `git log --format=%s --output=<path>` really does create and fill the file,
+  # so this fires against the unguarded script rather than passing vacuously.
   [ ! -e "$leak" ]
 }
 
 @test "an option-shaped range cannot widen the scan to the whole history" {
-  # A breaking commit outside any range a caller would ask about.
-  git commit -q --allow-empty -m "feat!: unrelated breaking change"
+  # A breaking commit on a side branch, unreachable from HEAD — so it is outside
+  # the range a caller asks about, but inside what `--all` would scan. Without
+  # the fixture on its own ref the two scans are identical and this test cannot
+  # tell widening from a default HEAD scan.
+  git checkout -q -b side
+  git commit -q --allow-empty -m "feat!: breaking on a side branch"
+  git checkout -q -
+
+  # The range the caller actually asks about does not contain it.
+  run "$SCRIPT" "${BASE}..HEAD"
+  [ "$status" -eq 0 ]
+  [ "$output" = "false" ]
+
+  # `--all` would reach it, so the answer would flip to true. It must not run.
   run "$SCRIPT" "--all"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"must not start with '-'"* ]]
+}
+
+@test "git refuses an option after --end-of-options, as the second layer assumes" {
+  # The `-*` guard makes `--end-of-options` unreachable through the CLI, so the
+  # assumption it rests on is exercised directly instead (AGENTS.md oracle rule
+  # 5): a git too old to honour the flag would silently lose that layer.
+  local leak="${WORK}/eoo.txt"
+  run git log --format='%s' --end-of-options "--output=${leak}"
   [ "$status" -ne 0 ]
-  [ "$output" != "true" ]
+  [ ! -e "$leak" ]
 }
