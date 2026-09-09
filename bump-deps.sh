@@ -367,7 +367,7 @@ BUMP_DEFER_REASON=()
 # unverified (Issue #627). An age the run could not establish counts as a
 # breach: refusing the update beats keeping a version nobody vouched for.
 quarantine_breach() {
-  local before="$1" after i name version clean line crate published_at approved
+  local before="$1" after i name version clean line crate published_at
   after="$(lock_snapshot)"
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
@@ -397,20 +397,22 @@ quarantine_breach() {
     printf 'moved %s off its approved target %s\n' "$name" "${BUMP_TARGETS[i]}"
     return 0
   done
-  # Everything else the update left in the lock. Two exemptions, both by exact
-  # "<name> <version>" rather than by crate name — a name-wide exemption would
-  # wave through a second major of a planned or deferred crate that nothing
-  # else has age-checked:
-  #   * a version the lock already held before this update, and
-  #   * a planned crate on its approved target, age-checked when the plan was
-  #     read (the loop above has already rejected it anywhere else).
-  local approved=""
+  # Everything else the update left in the lock: the "<name> <version>" lines
+  # present after it and absent before it. Both snapshots come out of
+  # lock_snapshot already `LC_ALL=C sort`ed, so one comm names the movement
+  # rather than a grep per package — a real Cargo.lock carries hundreds.
+  local approved="" moved
   for i in ${BUMP_NAMES[@]+"${!BUMP_NAMES[@]}"}; do
     approved+="${BUMP_NAMES[i]} ${BUMP_TARGETS[i]}"$'\n'
   done
+  moved="$(LC_ALL=C comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
+  # The one exemption, by exact "<name> <version>" rather than by crate name:
+  # a planned crate on its approved target, age-checked when the plan was read
+  # (the loop above has already rejected it anywhere else). Exempting the name
+  # instead would wave through a second major of a planned or deferred crate
+  # that nothing has age-checked.
   while read -r crate version; do
     [[ -n "$crate" ]] || continue
-    if grep -qxF "$crate $version" <<<"$before"; then continue; fi
     if grep -qxF "$crate $version" <<<"$approved"; then continue; fi
     if ! published_at="$(crate_published_at_cached "$crate" "$version")"; then
       printf 'moved out-of-plan %s to %s (release age unknown)\n' "$crate" "$version"
@@ -421,7 +423,7 @@ quarantine_breach() {
         "$crate" "$version" "$QUARANTINE_HOURS" "$published_at"
       return 0
     fi
-  done <<<"$after"
+  done <<<"$moved"
   # A clean lock: no breach named, and never a non-zero status the callers'
   # `breach="$(quarantine_breach …)"` assignment would trip `set -e` on.
   return 0
