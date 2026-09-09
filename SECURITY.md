@@ -27,16 +27,26 @@ disclosure timeline with the reporter.
 ## Memory safety of compiled-network loading
 
 Untrusted compiled-network input (a `.bin` buffer) is made safe for the native
-SIMD forward pass by a single load-time validation. The SIMD kernels in
-`neat-core/src/simd_native.rs` index the activation buffer — sized to exactly
-`num_neurons` — with **unchecked** indexing (`get_unchecked(from_index)`) for
-speed. A synapse whose `from_index >= num_neurons` would therefore be an
-out-of-bounds read (undefined behaviour: heap information disclosure or a fault)
-on every `activate()`.
+and wasm SIMD forward passes by a single load-time validation. The SIMD
+kernels index the activation buffer — sized to exactly `num_neurons` — with
+**unchecked** indexing (`get_unchecked(from_index)`) for speed, at three
+sites:
+
+- `neat-core/src/simd_native.rs` — the native SSE2/AVX2/NEON kernels;
+- `neat-core/src/simd.rs` — the wasm `gather4` scaffold helper, which reads
+  four synapses and four indirect activations unchecked in the default build
+  (the `checked-gather4` feature restores the bounds-checked control, Issue
+  #509);
+- `neat-core/src/simd/scalar.rs` — the `tail_*` helpers both kernel families
+  delegate their 0..3 remainder to.
+
+A synapse whose `from_index >= num_neurons` would therefore be an out-of-bounds
+read (undefined behaviour: heap information disclosure or a fault) on every
+`activate()`.
 
 `CompiledNetwork::new` upholds the precondition once, at deserialisation time:
 it rejects any synapse referencing an index outside `0..num_neurons` with
-`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs:326`, Issue #207).
+`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs`, Issue #207).
 A network that loads successfully is guaranteed to have every `from_index` in
 range, which is what makes the downstream `get_unchecked` calls sound.
 
@@ -45,6 +55,15 @@ It is the whole memory-safety guarantee for the SIMD hot path — deleting it as
 "redundant" reintroduces the out-of-bounds read. See the engineering-facing
 statement of this invariant in
 [`AGENTS.md`](AGENTS.md#unsafe--simd-invariants).
+
+Claims here name **symbols**, never line numbers, which rot as the file moves.
+`tests/scripts/unsafe_simd_invariants.bats` enforces that: no tracked Markdown
+outside `docs/archive/` (historical, never rewritten) may cite
+`network.rs:<line>`, the cited `CompiledNetwork::new` /
+`NetworkError::InvalidSynapseIndex` symbols must still exist in
+`neat-core/src/network.rs`, and the bullet list above must name exactly the
+files under `neat-core/src` that read unchecked — so a new unchecked-read site
+in the crate's sources fails the gate until it is documented here.
 
 ## Dependency bump quarantine
 
