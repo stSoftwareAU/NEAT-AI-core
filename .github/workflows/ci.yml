@@ -448,6 +448,50 @@ jobs:
       - name: Lint gate (cargo clippy)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  # Issue #644 — every registered downstream consumer must still compile
+  # against the candidate core. #633 (private CompiledNetwork fields) was
+  # signalled correctly and merged with no consumer migrated; the production
+  # fleet builds the Rust consumers from this repo's Develop at head, so
+  # rust_scorer stopped compiling on every host within minutes. The registry in
+  # scripts/downstream-consumers.txt is the machine-checked consumer list and
+  # RELEASING.md's three-phase flow is the rule this job enforces. It runs on
+  # every pull request with no `if:` (the repo-owned, unconditional gate rule)
+  # and is a required check in .github/rulesets/develop.json.
+  downstream-consumers:
+    name: Downstream consumers
+    runs-on: ubuntu-latest
+    timeout-minutes: 60 # six consumer workspaces, cargo check in each
+    needs: [version-increment]
+    # Least privilege: reads this repo; the consumers it clones are public.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        # actions/checkout@v6.0.2 — persist-credentials: false as in rust-gates;
+        # this job compiles and never pushes.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        # dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+
+      - name: Rust cache
+        # Swatinem/rust-cache@v2.9.1 — registry and git sources only; the
+        # consumer target directories live in a temporary workspace outside
+        # this checkout, so there is nothing of theirs to cache here.
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          cache-targets: "false"
+
+      - name: Compile every registered downstream against this core
+        run: |
+          set -euo pipefail
+          chmod +x scripts/check-downstream-consumers.sh
+          scripts/check-downstream-consumers.sh
+
   # Issue #307 — TypeScript basic-validity gate. Carries no event guard, so it
   # runs on every pull request (and on a manual dispatch), and a syntax or type
   # error in the committed .ts helpers cannot land unnoticed. Basic validity

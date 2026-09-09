@@ -126,7 +126,7 @@ resolves_in_src() {
 # --- The three-phase removal flow is documented here ------------------------
 
 @test "RELEASING.md documents the deprecate-migrate-delete flow" {
-  run grep -qiE '^## Removing public API' "$RELEASING"
+  run grep -qiE '^## Changing or removing public API' "$RELEASING"
   [ "$status" -eq 0 ]
 }
 

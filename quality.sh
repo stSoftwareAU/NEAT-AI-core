@@ -47,6 +47,18 @@ else
     echo "   Install with: brew install bats-core  (or your package manager)"
 fi
 
+# Downstream consumers gate (Issue #644) — mirrors the CI downstream-consumers
+# job: every repository in scripts/downstream-consumers.txt must still compile
+# against this core. Locally it compiles the sibling checkouts beside this repo,
+# which is minutes of cargo work and needs them cloned, so it is opt-in here;
+# CI runs it on every pull request regardless.
+if [[ "${QUALITY_DOWNSTREAM:-0}" == "1" ]]; then
+    echo "🧩 Compiling registered downstream consumers against this core..."
+    ./scripts/check-downstream-consumers.sh --workspace ..
+else
+    echo "ℹ️  Downstream consumers gate skipped locally (QUALITY_DOWNSTREAM=1 to run; CI always runs it)"
+fi
+
 # TypeScript basic-validity gate (Issue #307) — mirrors the CI typescript-gate job.
 echo "🧾 Checking TypeScript sources (deno check)..."
 ./scripts/typescript-check.sh </dev/null
