@@ -1416,12 +1416,18 @@ bump:
   bumped **safely** — rejected by `cargo update`, still inside the quarantine
   window, or of a release age the registry would not name — is reported as a
   **deferral**, left on the version it is already on, and the run carries on.
+  A release age nobody could establish is counted apart from a quarantine wait
+  (`… , N release age unknown`), because that is a host or registry fault
+  rather than a routine hold — a run where every crate lands there has quietly
+  stopped bumping anything, and the summary has to say so.
   Non-zero is reserved for a tree that must not be kept: `cargo` missing, an
   advisory found, a build failure, or a `Cargo.lock` that could not be
   restored. With **no** advisory scanner installed the scan cannot vouch for
-  the bump, so the run warns, drops the bumps it applied and reports the
-  resulting no-op — nothing lands unscanned, and a missing tool never fails
-  the run:
+  the bump, so the run warns, restores the `Cargo.lock` it started with and
+  reports the resulting no-op. The restore is driven by comparing the file
+  against a pre-run snapshot rather than by the bump counter, so a transitive
+  entry `cargo update` rewrote on its own way past the plan is dropped too —
+  nothing lands unscanned, and a missing tool never fails the run:
 
   ```mermaid
   flowchart TD

@@ -139,6 +139,11 @@ if [[ "$MODE" == "check-published" ]]; then
   exit "$rc"
 fi
 
+if [[ ! -d "$REPO_DIR" ]]; then
+  echo "Usage error: --repo '$REPO_DIR' is not a directory" >&2
+  exit 2
+fi
+
 if ! [[ "$QUARANTINE_HOURS" =~ ^[0-9]+$ ]]; then
   echo "Usage error: --quarantine-hours must be a non-negative integer (got '$QUARANTINE_HOURS')" >&2
   exit 2
@@ -169,7 +174,7 @@ crate_published_at() {
     # hang an unattended run (Issue #621).
     if ! payload=$(curl -fsSL --user-agent "neat-ai-core-bump-deps" \
       --connect-timeout 10 --max-time 30 \
-      --retry 2 --retry-delay 1 --retry-connrefused \
+      --retry 2 --retry-delay 1 \
       "${base}/crates/${crate}/versions" 2>/dev/null); then
       echo "Error: crates.io request for ${crate} failed" >&2
       return 1
@@ -247,23 +252,27 @@ crate_pkg_spec() {
 # bump instead of failing the whole run.
 RUN_LOCK_BACKUP=""
 
-# Restore the lockfile to the state the run started in, when the run has
-# already applied bumps a later stage cannot vouch for. $1 says why. Returns 1
-# — fatal, the one "lockfile left in a broken state" case — when the restore
-# itself cannot be done.
+# Restore the lockfile to the state the run started in, when a later stage
+# cannot vouch for what the run changed. $1 says why. Returns 1 — fatal, the
+# one "lockfile left in a broken state" case — when the restore cannot be done.
+#
+# The trigger is the lockfile itself, not the bump counter: `cargo update` also
+# rewrites out-of-plan transitive entries, which the quarantine check allows
+# and which leave `external_changed` at 0. Comparing against the snapshot is
+# what makes "nothing lands unscanned" true of every byte of the file, not
+# just of the crates the plan named. A run that found no lockfile cannot have
+# changed one — every update pass refuses to run without it.
 revert_run_bumps() {
   local reason="$1"
-  [[ "$external_changed" -eq 1 ]] || return 0
-  if [[ -z "$RUN_LOCK_BACKUP" || ! -f "$RUN_LOCK_BACKUP" ]]; then
-    echo "Error: bumps were applied but no pre-run ${LOCK_FILE} snapshot exists to restore" >&2
-    return 1
-  fi
+  [[ -n "$RUN_LOCK_BACKUP" && -f "$RUN_LOCK_BACKUP" ]] || return 0
+  cmp -s "$RUN_LOCK_BACKUP" "$LOCK_FILE" && return 0
   if ! cp "$RUN_LOCK_BACKUP" "$LOCK_FILE"; then
     echo "Error: could not restore ${LOCK_FILE} — the lockfile may be inconsistent" >&2
     return 1
   fi
   external_changed=0
-  external_msg="${external_msg} (reverted — ${reason})"
+  # Restate the counts: a run whose lockfile went back bumped nothing.
+  external_msg="0 bumped, ${EXTERNAL_DEFERRED} deferred${EXTERNAL_UNKNOWN_MSG} (lockfile restored — ${reason})"
   echo "external: reverted — ${reason}"
 }
 
@@ -271,6 +280,10 @@ revert_run_bumps() {
 
 external_changed=0
 external_msg="skipped"
+EXTERNAL_UNKNOWN_MSG=""
+# The counts behind external_msg, so a revert can restate them rather than
+# leaving a summary that still claims bumps the run then dropped.
+EXTERNAL_DEFERRED=0
 audit_msg="skipped"
 build_msg="skipped"
 
@@ -405,7 +418,7 @@ bump_external() {
   BUMP_TARGETS=()
   BUMP_DEFERRED_LOCK=""
   BUMP_DEFER_REASON=()
-  local applied=0 deferred=0
+  local applied=0 deferred=0 unknown=0
   local line crate from_v new_v published_at
   # Pass 0 — read the plan and split it into quarantine-approved and deferred.
   while IFS= read -r line; do
@@ -420,7 +433,11 @@ bump_external() {
         # Unknown release age is treated exactly like an unexpired one: the
         # crate is held at the version it is on, and every update in this run
         # is checked against that hold.
-        deferred=$((deferred + 1))
+        # Counted apart from a quarantine hold: waiting out the release-age
+        # window is routine, but a lookup nobody could answer is a host or
+        # registry fault, and a run where every crate lands here has silently
+        # stopped bumping anything.
+        unknown=$((unknown + 1))
         BUMP_DEFERRED_LOCK+="$crate $from_v"$'\n'
         echo "  defer: $crate $new_v (publish time lookup failed)"
         continue
@@ -503,10 +520,15 @@ bump_external() {
   if [[ "$applied" -gt 0 ]]; then
     external_changed=1
   fi
-  if [[ "$applied" -eq 0 && "$deferred" -eq 0 ]]; then
+  EXTERNAL_DEFERRED="$deferred"
+  EXTERNAL_UNKNOWN_MSG=""
+  if [[ "$unknown" -gt 0 ]]; then
+    EXTERNAL_UNKNOWN_MSG=", ${unknown} release age unknown"
+  fi
+  if [[ "$applied" -eq 0 && "$deferred" -eq 0 && "$unknown" -eq 0 ]]; then
     external_msg="no updates"
   else
-    external_msg="${applied} bumped, ${deferred} deferred"
+    external_msg="${applied} bumped, ${deferred} deferred${EXTERNAL_UNKNOWN_MSG}"
   fi
   echo "external: $external_msg"
 }

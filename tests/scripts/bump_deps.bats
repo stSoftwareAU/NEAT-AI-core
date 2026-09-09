@@ -152,6 +152,10 @@ setup_stub_cargo() {
   STUB_DRAG="$TMP_REPO/drag.txt"
   STUB_AUDIT_OUT="$TMP_REPO/audit-output.txt"
   STUB_AUDIT_STATUS="$TMP_REPO/audit-status.txt"
+  STUB_LOCK_READONLY="$TMP_REPO/lock-readonly.txt"
+  CURL_LOG="$TMP_REPO/curl-argv.log"
+  STUB_CURL_OUT="$TMP_REPO/curl-output.txt"
+  STUB_CURL_STATUS="$TMP_REPO/curl-status.txt"
   : >"$STUB_LOG"
   : >"$STUB_DRY_RUN"
   echo 0 >"$STUB_DRY_RUN_STATUS"
@@ -160,8 +164,13 @@ setup_stub_cargo() {
   : >"$STUB_DRAG"
   : >"$STUB_AUDIT_OUT"
   echo 0 >"$STUB_AUDIT_STATUS"
+  : >"$STUB_LOCK_READONLY"
+  : >"$CURL_LOG"
+  : >"$STUB_CURL_OUT"
+  echo 0 >"$STUB_CURL_STATUS"
   export STUB_LOG STUB_DRY_RUN STUB_DRY_RUN_STATUS STUB_TARGETS STUB_REJECT \
-    STUB_DRAG STUB_AUDIT_OUT STUB_AUDIT_STATUS
+    STUB_DRAG STUB_AUDIT_OUT STUB_AUDIT_STATUS STUB_LOCK_READONLY \
+    CURL_LOG STUB_CURL_OUT STUB_CURL_STATUS
 
   cat >"$STUB_BIN/cargo" <<'STUB'
 #!/usr/bin/env bash
@@ -242,9 +251,22 @@ while read -r dname dfrom dto; do
   [ -n "${dname:-}" ] || continue
   apply_version "$dname" "$dfrom" "$dto"
 done <"$STUB_DRAG"
+# Models a lockfile the script can no longer write back: the file is left
+# read-only, so a later restore of the pre-run snapshot cannot land.
+[ -s "$STUB_LOCK_READONLY" ] && chmod 0444 Cargo.lock
 exit 0
 STUB
   chmod +x "$STUB_BIN/cargo"
+
+  cat >"$STUB_BIN/curl" <<'STUB'
+#!/usr/bin/env bash
+# Stub curl: records its argv and replays a canned status and payload, so the
+# crates.io lookup is exercised without reaching the network.
+printf '%s\n' "$*" >>"$CURL_LOG"
+cat "$STUB_CURL_OUT"
+exit "$(cat "$STUB_CURL_STATUS")"
+STUB
+  chmod +x "$STUB_BIN/curl"
 }
 
 # Write a minimal Cargo.lock holding the given "<name> <version>" pairs.
@@ -269,12 +291,15 @@ run_stubbed() {
   run env -i \
     HOME="$TMP_REPO/home" \
     PATH="$STUB_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
-    BUMP_DEPS_PUBLISH_FIXTURE="$TMP_REPO/publish" \
+    BUMP_DEPS_PUBLISH_FIXTURE="${STUB_FIXTURE_DIR-$TMP_REPO/publish}" \
     STUB_LOG="$STUB_LOG" STUB_DRY_RUN="$STUB_DRY_RUN" \
     STUB_DRY_RUN_STATUS="$STUB_DRY_RUN_STATUS" \
     STUB_TARGETS="$STUB_TARGETS" STUB_REJECT="$STUB_REJECT" \
     STUB_DRAG="$STUB_DRAG" \
     STUB_AUDIT_OUT="$STUB_AUDIT_OUT" STUB_AUDIT_STATUS="$STUB_AUDIT_STATUS" \
+    STUB_LOCK_READONLY="$STUB_LOCK_READONLY" \
+    CURL_LOG="$CURL_LOG" STUB_CURL_OUT="$STUB_CURL_OUT" \
+    STUB_CURL_STATUS="$STUB_CURL_STATUS" \
     bash "$SCRIPT_UNDER_TEST" --repo "$TMP_REPO" "$@"
 }
 
@@ -323,7 +348,9 @@ TXT
   [ "$status" -eq 0 ]
   [[ "$output" == *"bump: cc -> 1.4.5"* ]]
   [[ "$output" == *"audit: SKIPPED"* ]]
-  [[ "$output" == *"reverted"* ]]
+  [[ "$output" == *"external: reverted — no advisory scanner to verify them"* ]]
+  # The summary must not still claim the bump the run dropped.
+  [[ "$output" == *"external=0 bumped, 0 deferred (lockfile restored"* ]]
   grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
   ! grep -q '1.4.5' "$TMP_REPO/Cargo.lock"
 }
@@ -682,24 +709,20 @@ TXT
   cat >"$STUB_DRY_RUN" <<'TXT'
     Updating cc v1.4.2 -> v1.4.5
 TXT
-  # No publish fixture and an unreachable crates.io: the release age cannot be
-  # established, so the crate must be left alone rather than bumped blind or
-  # counted a failure.
-  run env -i \
-    HOME="$TMP_REPO/home" \
-    PATH="$STUB_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
-    BUMP_DEPS_CRATES_IO_URL="http://127.0.0.1:9/api/v1" \
-    STUB_LOG="$STUB_LOG" STUB_DRY_RUN="$STUB_DRY_RUN" \
-    STUB_DRY_RUN_STATUS="$STUB_DRY_RUN_STATUS" \
-    STUB_TARGETS="$STUB_TARGETS" STUB_REJECT="$STUB_REJECT" \
-    STUB_DRAG="$STUB_DRAG" \
-    STUB_AUDIT_OUT="$STUB_AUDIT_OUT" STUB_AUDIT_STATUS="$STUB_AUDIT_STATUS" \
-    bash "$SCRIPT_UNDER_TEST" --repo "$TMP_REPO" --skip-audit --skip-build
+  # No fixture, so the real crates.io code path runs — against a stub curl that
+  # cannot connect (exit 7). An unknown release age is not an ancient one: the
+  # crate is held, counted apart from a quarantine wait, and never bumped.
+  echo 7 >"$STUB_CURL_STATUS"
+  STUB_FIXTURE_DIR="" run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"defer: cc 1.4.5 (publish time lookup failed)"* ]]
-  [[ "$output" == *"external: 0 bumped, 1 deferred"* ]]
+  [[ "$output" == *"external: 0 bumped, 0 deferred, 1 release age unknown"* ]]
   ! grep -qF -- "-p cc" "$STUB_LOG"
   grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+  # The lookup is bounded: it cannot hang the run, and one blip is retried.
+  grep -qF -- "--connect-timeout 10" "$CURL_LOG"
+  grep -qF -- "--max-time 30" "$CURL_LOG"
+  grep -qF -- "--retry 2" "$CURL_LOG"
 }
 
 @test "external: a failed cargo update --dry-run is reported, not passed off as no updates" {
@@ -729,4 +752,61 @@ TXT
   [[ "$output" == *"defer: cc 1.4.5 (publish time lookup failed)"* ]]
   ! grep -qF -- "-p cc" "$STUB_LOG"
   grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+}
+
+# --- Issue #621: the two states that must still fail the run -----------------
+
+@test "a missing cargo fails the run loud" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2"
+  # No cargo anywhere: nothing can be done safely, so the run must not pretend
+  # otherwise. This is one of the two exits the contract still reserves.
+  rm -f "$STUB_BIN/cargo"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cargo not available"* ]]
+}
+
+@test "a Cargo.lock that cannot be restored fails the run loud" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # The bump lands, no scanner can vouch for it, and the lockfile has been left
+  # unwritable — the revert cannot complete, which is the "lockfile left in a
+  # broken state" case the contract still exits non-zero for.
+  echo 1 >"$STUB_LOCK_READONLY"
+  run_stubbed --skip-build
+  chmod 0644 "$TMP_REPO/Cargo.lock"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"could not restore"* ]]
+}
+
+@test "audit: no scanner reverts a lockfile the run changed even with no crate landed" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "transitive 9.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # cc never lands, so the bump counter stays 0 — but the grouped retry moves
+  # an out-of-plan transitive crate, which the quarantine check allows. With no
+  # scanner to vouch for it, that change must not survive either.
+  printf 'cc\n' >"$STUB_REJECT"
+  printf 'transitive 9.0.0 9.9.9\n' >"$STUB_DRAG"
+  run_stubbed --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"audit: SKIPPED"* ]]
+  [[ "$output" == *"external: reverted — no advisory scanner to verify them"* ]]
+  grep -qx 'version = "9.0.0"' "$TMP_REPO/Cargo.lock"
+  ! grep -q '9.9.9' "$TMP_REPO/Cargo.lock"
+}
+
+@test "rejects a --repo that is not a directory" {
+  # A misconfigured repo path is a usage error; it must not be reported as a
+  # cargo failure and pass as a green no-op.
+  run "$SCRIPT_UNDER_TEST" --repo "$TMP_REPO/does-not-exist" \
+    --skip-external --skip-audit --skip-build
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is not a directory"* ]]
 }
