@@ -12,7 +12,7 @@
 //
 // Run: deno test tests/wasm64_memory64_smoke_test.ts
 
-import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   buildMemory64Module,
   instantiateMemory64,
@@ -39,7 +39,10 @@ Deno.test("unsignedLeb128 encodes multi-byte page counts correctly", () => {
 
 Deno.test("minimal (memory i64 ...) module validates and marks the i64 index type", () => {
   const bytes = buildMemory64Module(MAX_PAGES);
-  assert(WebAssembly.validate(bytes), "Memory64 module must validate in this V8");
+  assert(
+    WebAssembly.validate(bytes),
+    "Memory64 module must validate in this V8",
+  );
   const limits = parseMemoryLimits(bytes);
   assertEquals(limits.count, 1);
   assert(
@@ -73,7 +76,9 @@ Deno.test("grow on an i64 memory requires and returns a BigInt (64-bit index)", 
 });
 
 Deno.test("round-trips a BigInt offset above 4 GiB across the JS↔WASM boundary", () => {
-  const { memory, store, load } = instantiateMemory64(buildMemory64Module(MAX_PAGES));
+  const { memory, store, load } = instantiateMemory64(
+    buildMemory64Module(MAX_PAGES),
+  );
   memory.grow(BigInt(MAX_PAGES - 1) as unknown as number);
 
   // Address strictly above the wasm32 4 GiB ceiling — unreachable on wasm32.

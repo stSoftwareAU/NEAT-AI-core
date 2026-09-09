@@ -61,9 +61,18 @@ async function observe(pkgDir: string): Promise<Observations> {
 
   for (let r = 0; r < NUM_RECORDS; r++) {
     const input = buildParityInput(r);
-    out.set(`activate[${r}]`, bitPatterns(network.activate(input, NUM_OUTPUTS)));
-    out.set(`activate_view[${r}]`, bitPatterns(network.activate_view(input, NUM_OUTPUTS)));
-    out.set(`activate_and_trace[${r}]`, bitPatterns(network.activate_and_trace(input, NUM_OUTPUTS)));
+    out.set(
+      `activate[${r}]`,
+      bitPatterns(network.activate(input, NUM_OUTPUTS)),
+    );
+    out.set(
+      `activate_view[${r}]`,
+      bitPatterns(network.activate_view(input, NUM_OUTPUTS)),
+    );
+    out.set(
+      `activate_and_trace[${r}]`,
+      bitPatterns(network.activate_and_trace(input, NUM_OUTPUTS)),
+    );
   }
 
   const records = buildParityRecords();
@@ -114,7 +123,9 @@ export function compare(left: Observations, right: Observations): string[] {
 async function main(): Promise<void> {
   const [pkg32, pkg64] = Deno.args;
   if (!pkg32 || !pkg64) {
-    throw new Error("usage: check_wasm_arch_parity.ts <wasm32-pkg> <wasm64-pkg>");
+    throw new Error(
+      "usage: check_wasm_arch_parity.ts <wasm32-pkg> <wasm64-pkg>",
+    );
   }
 
   const left = await observe(pkg32);
@@ -136,7 +147,9 @@ if (import.meta.main) {
     await main();
   } catch (error) {
     console.error(
-      `check_wasm_arch_parity: ${error instanceof Error ? error.message : error}`,
+      `check_wasm_arch_parity: ${
+        error instanceof Error ? error.message : error
+      }`,
     );
     Deno.exit(1);
   }

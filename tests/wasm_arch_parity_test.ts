@@ -7,8 +7,11 @@
 //
 // Run: deno test tests/wasm_arch_parity_test.ts
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
-import { compare, type Observations } from "../scripts/check_wasm_arch_parity.ts";
+import { assert, assertEquals } from "@std/assert";
+import {
+  compare,
+  type Observations,
+} from "../scripts/check_wasm_arch_parity.ts";
 import {
   bitPatterns,
   buildParityInput,
@@ -27,8 +30,11 @@ function decodeNetwork(bytes: Uint8Array) {
   const numNeurons = view.getUint32(0, true);
   const numInputs = view.getUint32(4, true);
   let o = 8;
-  const neurons: { bias: number; squash: number; synapses: { from: number; weight: number }[] }[] =
-    [];
+  const neurons: {
+    bias: number;
+    squash: number;
+    synapses: { from: number; weight: number }[];
+  }[] = [];
   for (let n = numInputs; n < numNeurons; n++) {
     const bias = view.getFloat64(o, true);
     const squash = view.getUint8(o + 8);
@@ -36,7 +42,10 @@ function decodeNetwork(bytes: Uint8Array) {
     o += 12;
     const synapses = [];
     for (let s = 0; s < count; s++) {
-      synapses.push({ from: view.getUint16(o, true), weight: view.getFloat64(o + 4, true) });
+      synapses.push({
+        from: view.getUint16(o, true),
+        weight: view.getFloat64(o + 4, true),
+      });
       o += 12;
     }
     neurons.push({ bias, squash, synapses });
@@ -67,20 +76,48 @@ Deno.test("every source index in the fixture is in range for the unchecked gathe
 });
 
 Deno.test("the fixture reaches the full chunk-walk: 8-chunk, remainder and below-threshold spans", () => {
-  const counts = decodeNetwork(buildParityNetwork()).neurons.map((n) => n.synapses.length);
-  assert(counts.some((c) => c >= 8), `no span reaches the 8-chunk walk: ${counts}`);
-  assert(counts.some((c) => c % 4 !== 0), `no span leaves a 0..3 remainder: ${counts}`);
-  assert(counts.some((c) => c >= 4 && c < 8), `no span sits in the single-chunk tier: ${counts}`);
+  const counts = decodeNetwork(buildParityNetwork()).neurons.map((n) =>
+    n.synapses.length
+  );
+  assert(
+    counts.some((c) => c >= 8),
+    `no span reaches the 8-chunk walk: ${counts}`,
+  );
+  assert(
+    counts.some((c) => c % 4 !== 0),
+    `no span leaves a 0..3 remainder: ${counts}`,
+  );
+  assert(
+    counts.some((c) => c >= 4 && c < 8),
+    `no span sits in the single-chunk tier: ${counts}`,
+  );
 });
 
 Deno.test("the fixture exercises both inline-squash tiers and the aggregate set", () => {
-  const squashes = new Set(decodeNetwork(buildParityNetwork()).neurons.map((n) => n.squash));
-  for (const inline of [SQUASH.IDENTITY, SQUASH.RELU, SQUASH.LOGISTIC, SQUASH.TANH]) {
-    assert(squashes.has(inline), `inline squash ${inline} missing from the fixture`);
+  const squashes = new Set(
+    decodeNetwork(buildParityNetwork()).neurons.map((n) => n.squash),
+  );
+  for (
+    const inline of [SQUASH.IDENTITY, SQUASH.RELU, SQUASH.LOGISTIC, SQUASH.TANH]
+  ) {
+    assert(
+      squashes.has(inline),
+      `inline squash ${inline} missing from the fixture`,
+    );
   }
   assert(squashes.has(SQUASH.GELU), "no squash outside the inline set");
-  for (const aggregate of [SQUASH.MINIMUM, SQUASH.MAXIMUM, SQUASH.HYPOTENUSE, SQUASH.MEAN]) {
-    assert(squashes.has(aggregate), `aggregate squash ${aggregate} missing from the fixture`);
+  for (
+    const aggregate of [
+      SQUASH.MINIMUM,
+      SQUASH.MAXIMUM,
+      SQUASH.HYPOTENUSE,
+      SQUASH.MEAN,
+    ]
+  ) {
+    assert(
+      squashes.has(aggregate),
+      `aggregate squash ${aggregate} missing from the fixture`,
+    );
   }
 });
 
@@ -91,7 +128,10 @@ Deno.test("fixture weights are non-degenerate and mixed-sign", () => {
   assert(weights.some((w) => w > 0), "no positive weight");
   assert(weights.some((w) => w < 0), "no negative weight");
   // A constant-weight fixture would let a lane swap cancel; require spread.
-  assert(new Set(weights).size > weights.length / 2, "weights are too repetitive to catch a slip");
+  assert(
+    new Set(weights).size > weights.length / 2,
+    "weights are too repetitive to catch a slip",
+  );
 });
 
 Deno.test("packed records carry the declared stride and record count", () => {
@@ -100,7 +140,10 @@ Deno.test("packed records carry the declared stride and record count", () => {
   assertEquals(records.length, NUM_RECORDS * stride);
   // Records above 8 with an odd count means the 8-group, the 4-group and the
   // scalar tail all run in one call.
-  assert(NUM_RECORDS > 8 && NUM_RECORDS % 8 !== 0, `NUM_RECORDS ${NUM_RECORDS} skips a tier`);
+  assert(
+    NUM_RECORDS > 8 && NUM_RECORDS % 8 !== 0,
+    `NUM_RECORDS ${NUM_RECORDS} skips a tier`,
+  );
   for (let r = 0; r < NUM_RECORDS; r++) {
     const inputs = records.subarray(r * stride, r * stride + NUM_INPUTS);
     assertEquals([...inputs], [...buildParityInput(r)]);
@@ -109,7 +152,10 @@ Deno.test("packed records carry the declared stride and record count", () => {
 
 Deno.test("each record has a distinct input vector", () => {
   const seen = new Set(
-    Array.from({ length: NUM_RECORDS }, (_, r) => bitPatterns(buildParityInput(r)).join(",")),
+    Array.from(
+      { length: NUM_RECORDS },
+      (_, r) => bitPatterns(buildParityInput(r)).join(","),
+    ),
   );
   assertEquals(seen.size, NUM_RECORDS);
 });
@@ -130,29 +176,49 @@ Deno.test("scalarBitPattern distinguishes a last-ulp f64 difference", () => {
 });
 
 Deno.test("compare reports nothing when both arches agree", () => {
-  const left: Observations = new Map([["activate[0]", ["3f800000", "bf000000"]]]);
-  const right: Observations = new Map([["activate[0]", ["3f800000", "bf000000"]]]);
+  const left: Observations = new Map([["activate[0]", [
+    "3f800000",
+    "bf000000",
+  ]]]);
+  const right: Observations = new Map([["activate[0]", [
+    "3f800000",
+    "bf000000",
+  ]]]);
   assertEquals(compare(left, right), []);
 });
 
 Deno.test("compare names the observation and index of a single differing bit pattern", () => {
-  const left: Observations = new Map([["activate[3]", ["3f800000", "bf000000"]]]);
-  const right: Observations = new Map([["activate[3]", ["3f800000", "bf000001"]]]);
+  const left: Observations = new Map([["activate[3]", [
+    "3f800000",
+    "bf000000",
+  ]]]);
+  const right: Observations = new Map([["activate[3]", [
+    "3f800000",
+    "bf000001",
+  ]]]);
   const failures = compare(left, right);
   assertEquals(failures.length, 1);
   assert(failures[0].includes("activate[3][1]"), failures[0]);
-  assert(failures[0].includes("bf000000") && failures[0].includes("bf000001"), failures[0]);
+  assert(
+    failures[0].includes("bf000000") && failures[0].includes("bf000001"),
+    failures[0],
+  );
 });
 
 Deno.test("compare fails when an observation exists on only one arch", () => {
-  const left: Observations = new Map([["mse_sum_batch_packed", ["3ff0000000000000"]]]);
+  const left: Observations = new Map([["mse_sum_batch_packed", [
+    "3ff0000000000000",
+  ]]]);
   const failures = compare(left, new Map());
   assertEquals(failures.length, 1);
   assert(failures[0].includes("mse_sum_batch_packed"), failures[0]);
 });
 
 Deno.test("compare fails on a length mismatch instead of comparing the shared prefix", () => {
-  const left: Observations = new Map([["activate[0]", ["3f800000", "bf000000"]]]);
+  const left: Observations = new Map([["activate[0]", [
+    "3f800000",
+    "bf000000",
+  ]]]);
   const right: Observations = new Map([["activate[0]", ["3f800000"]]]);
   const failures = compare(left, right);
   assertEquals(failures.length, 1);

@@ -13,7 +13,14 @@
 
 import { readFile } from "node:fs/promises";
 
-const [controlPath, uncheckedPath, samplesArg, shapeArg, recordsArg, sessionArg] = process.argv
+const [
+  controlPath,
+  uncheckedPath,
+  samplesArg,
+  shapeArg,
+  recordsArg,
+  sessionArg,
+] = process.argv
   .slice(2);
 if (!controlPath || !uncheckedPath) {
   console.error(
@@ -69,7 +76,9 @@ const call = (exports, bench) => {
     return [process.hrtime.bigint() - t, checksum];
   }
   const t = process.hrtime.bigint();
-  const checksum = bench === "activate" ? exports.bench_activate() : exports.bench_score();
+  const checksum = bench === "activate"
+    ? exports.bench_activate()
+    : exports.bench_score();
   return [process.hrtime.bigint() - t, checksum];
 };
 
@@ -90,11 +99,15 @@ for (let w = 0; w < 3; w++) {
 const rows = [];
 for (let sample = 0; sample < SAMPLES; sample++) {
   // Flip the order every sample so neither variant is systematically first.
-  const order = sample % 2 === 0 ? ["control", "unchecked"] : ["unchecked", "control"];
+  const order = sample % 2 === 0
+    ? ["control", "unchecked"]
+    : ["unchecked", "control"];
   for (const bench of BENCHES) {
     for (const label of order) {
       const [nanos, checksum] = call(variants[label], bench);
-      rows.push(`${label},${bench},${sample},${nanos},${bits(checksum)},${SESSION}`);
+      rows.push(
+        `${label},${bench},${sample},${nanos},${bits(checksum)},${SESSION}`,
+      );
     }
   }
 }

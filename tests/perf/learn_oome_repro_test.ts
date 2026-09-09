@@ -4,7 +4,7 @@
 //
 // Run: deno test --allow-env tests/perf/learn_oome_repro_test.ts
 
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals } from "@std/assert";
 import {
   attributePeak,
   classifyCrashSignature,

@@ -7,13 +7,13 @@
 //
 // Run: deno test --allow-read tests/wasm_prune_parity_test.ts
 
-import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import {
   checkAnswers,
   compareAnswer,
   FLOAT_TOLERANCE,
-  type GoldenCase,
   GOLDEN_PATH,
+  type GoldenCase,
   loadGolden,
   parseGolden,
 } from "../scripts/check_wasm_prune_parity.ts";
@@ -29,22 +29,40 @@ Deno.test("the golden record carries a request and a native answer for every cas
       testCase.op === "neuron" || testCase.op === "synapse",
       `${testCase.name}: op must name an entry point, got ${testCase.op}`,
     );
-    assert(typeof testCase.request === "object", `${testCase.name}: the request is an object`);
+    assert(
+      typeof testCase.request === "object",
+      `${testCase.name}: the request is an object`,
+    );
     assert(
       typeof testCase.response === "object" && testCase.response !== null,
       `${testCase.name}: the recorded native answer is an object`,
     );
-    assert("ok" in testCase.response, `${testCase.name}: an answer always says ok`);
+    assert(
+      "ok" in testCase.response,
+      `${testCase.name}: an answer always says ok`,
+    );
   }
 });
 
 Deno.test("the golden record reaches both entry points and both answer shapes", () => {
   assert(golden.some((c) => c.op === "neuron"), "no neuron removal recorded");
   assert(golden.some((c) => c.op === "synapse"), "no synapse removal recorded");
-  assert(golden.some((c) => c.response.ok === true), "no successful rewrite recorded");
-  assert(golden.some((c) => c.response.failure?.malformed === false), "no refusal recorded");
-  assert(golden.some((c) => c.response.failure?.malformed === true), "no boundary fault recorded");
-  assert(golden.some((c) => c.response.transform === "exact"), "no exact transform recorded");
+  assert(
+    golden.some((c) => c.response.ok === true),
+    "no successful rewrite recorded",
+  );
+  assert(
+    golden.some((c) => c.response.failure?.malformed === false),
+    "no refusal recorded",
+  );
+  assert(
+    golden.some((c) => c.response.failure?.malformed === true),
+    "no boundary fault recorded",
+  );
+  assert(
+    golden.some((c) => c.response.transform === "exact"),
+    "no exact transform recorded",
+  );
   assert(
     golden.some((c) => c.response.transform === "approximate"),
     "no approximate transform recorded",
@@ -53,7 +71,8 @@ Deno.test("the golden record reaches both entry points and both answer shapes", 
   // IF and compensation arrays were all empty would grade neither.
   assert(
     golden.some((c) =>
-      (c.response.staticIfNeurons?.length ?? 0) + (c.response.downgradedIfNeurons?.length ?? 0) > 0
+      (c.response.staticIfNeurons?.length ?? 0) +
+          (c.response.downgradedIfNeurons?.length ?? 0) > 0
     ),
     "no IF rewrite recorded — the typed edge cases would go ungraded",
   );
@@ -77,8 +96,14 @@ Deno.test("the golden record reaches both entry points and both answer shapes", 
 
 Deno.test("every successful answer carries the creature and the transform label", () => {
   for (const testCase of golden.filter((c) => c.response.ok === true)) {
-    assert(testCase.response.creature, `${testCase.name}: an ok answer carries a creature`);
-    assert(testCase.response.transform, `${testCase.name}: an ok answer carries a transform`);
+    assert(
+      testCase.response.creature,
+      `${testCase.name}: an ok answer carries a creature`,
+    );
+    assert(
+      testCase.response.transform,
+      `${testCase.name}: an ok answer carries a transform`,
+    );
     assert(
       Array.isArray(testCase.response.creature.neurons),
       `${testCase.name}: the creature is the CreatureExport wire shape`,
@@ -93,10 +118,15 @@ Deno.test("every refused answer carries a reason and no creature", () => {
       undefined,
       `${testCase.name}: a refusal must return no creature`,
     );
-    assert(testCase.response.failure?.reason, `${testCase.name}: a refusal names its reason`);
+    assert(
+      testCase.response.failure?.reason,
+      `${testCase.name}: a refusal names its reason`,
+    );
     if (testCase.response.failure.malformed) {
       assert(
-        String(testCase.response.failure.message).startsWith("MALFORMED_REQUEST:"),
+        String(testCase.response.failure.message).startsWith(
+          "MALFORMED_REQUEST:",
+        ),
         `${testCase.name}: a boundary fault leads with MALFORMED_REQUEST:`,
       );
     }
@@ -109,12 +139,17 @@ Deno.test("the comparator reports agreement only when the answers agree", () => 
 });
 
 Deno.test("the comparator catches a changed uuid, role, reason and array length", () => {
-  const base = { ok: true, creature: { neurons: [{ uuid: "h-1", type: "hidden" }] } };
+  const base = {
+    ok: true,
+    creature: { neurons: [{ uuid: "h-1", type: "hidden" }] },
+  };
 
   const renamed = structuredClone(base);
   renamed.creature.neurons[0].uuid = "h-2";
   assertEquals(compareAnswer(base, renamed).length, 1);
-  assert(compareAnswer(base, renamed)[0].includes("$.creature.neurons[0].uuid"));
+  assert(
+    compareAnswer(base, renamed)[0].includes("$.creature.neurons[0].uuid"),
+  );
 
   const shortened = { ok: true, creature: { neurons: [] } };
   assert(compareAnswer(base, shortened)[0].includes("1 entries"));
@@ -135,7 +170,10 @@ Deno.test("the comparator allows a last-ulp float difference and nothing wider",
   const bias = 0.5744425168116591;
   assertEquals(compareAnswer({ bias }, { bias }), []);
   // One ulp of an f64 near 0.57 is ~1e-16 — inside the tolerance.
-  assertEquals(compareAnswer({ bias }, { bias: bias + Number.EPSILON * bias }), []);
+  assertEquals(
+    compareAnswer({ bias }, { bias: bias + Number.EPSILON * bias }),
+    [],
+  );
   // A changed weight is not.
   assertEquals(compareAnswer({ bias }, { bias: bias + 1e-6 }).length, 1);
   // The tolerance is relative, so a large value keeps proportional slack…
@@ -167,21 +205,36 @@ function stub(answer: (request: string) => string) {
 }
 
 Deno.test("the driver reports no difference when the surface answers the record", () => {
-  const answers = new Map(golden.map((c) => [JSON.stringify(c.request), c.response]));
+  const answers = new Map(
+    golden.map((c) => [JSON.stringify(c.request), c.response]),
+  );
   assertEquals(
-    checkAnswers(stub((request) => JSON.stringify(answers.get(request))), golden),
+    checkAnswers(
+      stub((request) => JSON.stringify(answers.get(request))),
+      golden,
+    ),
     [],
   );
 });
 
 Deno.test("the driver reports a difference when the surface answers something else", () => {
-  const failures = checkAnswers(stub(() => JSON.stringify({ ok: false })), golden);
-  assert(failures.length > 0, "a surface answering nothing like the record must fail the gate");
+  const failures = checkAnswers(
+    stub(() => JSON.stringify({ ok: false })),
+    golden,
+  );
+  assert(
+    failures.length > 0,
+    "a surface answering nothing like the record must fail the gate",
+  );
   assert(failures.some((f) => f.includes("$.ok")), failures.join("\n"));
 });
 
 Deno.test("the driver fails loudly when the surface carries no pruning exports", () => {
-  assertThrows(() => checkAnswers({}, golden), Error, "exports no prune_neuron()");
+  assertThrows(
+    () => checkAnswers({}, golden),
+    Error,
+    "exports no prune_neuron()",
+  );
   assertThrows(
     () => checkAnswers({ prune_neuron: () => "{}" }, golden),
     Error,

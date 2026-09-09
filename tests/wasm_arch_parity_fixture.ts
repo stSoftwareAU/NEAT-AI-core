@@ -163,7 +163,8 @@ export function buildParityRecords(): Float32Array {
   for (let r = 0; r < NUM_RECORDS; r++) {
     records.set(buildParityInput(r), r * stride);
     for (let t = 0; t < NUM_OUTPUTS; t++) {
-      records[r * stride + NUM_INPUTS + t] = ((t % 2 === 0) ? 0.75 : -0.25) + r * 0.03125;
+      records[r * stride + NUM_INPUTS + t] = ((t % 2 === 0) ? 0.75 : -0.25) +
+        r * 0.03125;
     }
   }
   return records;
@@ -171,7 +172,11 @@ export function buildParityRecords(): Float32Array {
 
 /** The raw IEEE-754 bit patterns behind a float array, as hex words. */
 export function bitPatterns(values: Float32Array | Float64Array): string[] {
-  const view = new DataView(values.buffer, values.byteOffset, values.byteLength);
+  const view = new DataView(
+    values.buffer,
+    values.byteOffset,
+    values.byteLength,
+  );
   const out: string[] = [];
   if (values instanceof Float32Array) {
     for (let i = 0; i < values.length; i++) {

@@ -14,7 +14,7 @@
 //
 // Run: deno test --allow-read --allow-write --allow-run=deno tests/deno_supply_chain_test.ts
 
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
 const DENO_JSON = new URL("../deno.json", import.meta.url);
 const DENO_LOCK = new URL("../deno.lock", import.meta.url);
@@ -85,7 +85,7 @@ async function fixtureWorkspace(): Promise<string> {
   await Deno.copyFile(DENO_LOCK, `${dir}/deno.lock`);
   await Deno.writeTextFile(
     `${dir}/mod.ts`,
-    'import { assertEquals } from "jsr:@std/assert@1";\nassertEquals(1, 1);\n',
+    'import { assertEquals } from "@std/assert";\nassertEquals(1, 1);\n',
   );
   return dir;
 }

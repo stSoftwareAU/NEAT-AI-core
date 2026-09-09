@@ -32,7 +32,9 @@ import {
 /** Unsigned LEB128 encoding of a non-negative integer. */
 export function unsignedLeb128(value: number): number[] {
   if (!Number.isInteger(value) || value < 0) {
-    throw new RangeError(`unsignedLeb128 expects a non-negative integer, got ${value}`);
+    throw new RangeError(
+      `unsignedLeb128 expects a non-negative integer, got ${value}`,
+    );
   }
   const out: number[] = [];
   let n = value;
@@ -68,8 +70,16 @@ export function buildMemory64Module(maxPages: number): Uint8Array<ArrayBuffer> {
   // Type section: (i64,i32)->()  and  (i64)->(i32)
   const types = section(0x01, [
     0x02,
-    0x60, 0x02, 0x7e, 0x7f, 0x00, // store: (i64 addr, i32 val) -> ()
-    0x60, 0x01, 0x7e, 0x01, 0x7f, // load:  (i64 addr) -> i32
+    0x60,
+    0x02,
+    0x7e,
+    0x7f,
+    0x00, // store: (i64 addr, i32 val) -> ()
+    0x60,
+    0x01,
+    0x7e,
+    0x01,
+    0x7f, // load:  (i64 addr) -> i32
   ]);
   // Function section: func0 uses type0 (store), func1 uses type1 (load)
   const funcs = section(0x03, [0x02, 0x00, 0x01]);
@@ -84,9 +94,15 @@ export function buildMemory64Module(maxPages: number): Uint8Array<ArrayBuffer> {
   // Export section: memory, store, load
   const exportSec = section(0x07, [
     0x03,
-    ...nameBytes("mem"), 0x02, 0x00,
-    ...nameBytes("store"), 0x00, 0x00,
-    ...nameBytes("load"), 0x00, 0x01,
+    ...nameBytes("mem"),
+    0x02,
+    0x00,
+    ...nameBytes("store"),
+    0x00,
+    0x00,
+    ...nameBytes("load"),
+    0x00,
+    0x01,
   ]);
   // Code section. i32.store/i32.load take the address from the stack as i64
   // when the memory is 64-bit; memarg is (align=2, offset=0).
@@ -94,11 +110,20 @@ export function buildMemory64Module(maxPages: number): Uint8Array<ArrayBuffer> {
   const loadBody = [0x00, 0x20, 0x00, 0x28, 0x02, 0x00, 0x0b];
   const code = section(0x0a, [
     0x02,
-    ...unsignedLeb128(storeBody.length), ...storeBody,
-    ...unsignedLeb128(loadBody.length), ...loadBody,
+    ...unsignedLeb128(storeBody.length),
+    ...storeBody,
+    ...unsignedLeb128(loadBody.length),
+    ...loadBody,
   ]);
   const parts = [
-    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00, // magic + version
     ...types,
     ...funcs,
     ...mem,
@@ -120,7 +145,9 @@ export interface Memory64Instance {
 }
 
 /** Instantiate a Memory64 store/load module built by {@link buildMemory64Module}. */
-export function instantiateMemory64(bytes: Uint8Array<ArrayBuffer>): Memory64Instance {
+export function instantiateMemory64(
+  bytes: Uint8Array<ArrayBuffer>,
+): Memory64Instance {
   const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes));
   return {
     memory: inst.exports.mem as WebAssembly.Memory,
@@ -137,7 +164,10 @@ export function instantiateMemory64(bytes: Uint8Array<ArrayBuffer>): Memory64Ins
  * Pages are reserved lazily by V8, so growing past 4 GiB reserves address space
  * without committing physical RAM — only pages actually written are committed.
  */
-export function growToPages(memory: WebAssembly.Memory, targetPages: number): number {
+export function growToPages(
+  memory: WebAssembly.Memory,
+  targetPages: number,
+): number {
   const currentPages = memory.buffer.byteLength / WASM_PAGE_BYTES;
   const delta = targetPages - currentPages;
   if (delta > 0) {

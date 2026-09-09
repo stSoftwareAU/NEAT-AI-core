@@ -76,6 +76,16 @@ fi
 echo "🧾 Checking TypeScript sources (deno check)..."
 ./scripts/typescript-check.sh </dev/null
 
+# TypeScript style gate (Issue #647) — mirrors the CI typescript-gate job.
+# `deno check` above proves the helpers compile; these prove they are linted and
+# formatted. `fmt.include` in deno.json scopes the formatter to .ts/.mjs so
+# Markdown keeps its single owner in markdownlint-cli2; deno lint reads
+# JavaScript/TypeScript only and needs no such fence.
+echo "🧹 Linting TypeScript sources (deno lint)..."
+deno lint </dev/null
+echo "🎨 Checking TypeScript formatting (deno fmt --check)..."
+deno fmt --check </dev/null
+
 # Mermaid gate (Issue #379) — repo-owned, always-on; mirrors the CI
 # markdown-lint job. Fails loud: a missing deno exits non-zero under `set -e`.
 echo "🧜 Validating Mermaid blocks..."

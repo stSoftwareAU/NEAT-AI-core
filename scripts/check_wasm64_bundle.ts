@@ -45,7 +45,9 @@ function parseArgs(argv: string[]): Args {
     if (argv[i] === "--arch") {
       const value = argv[++i];
       if (value !== "wasm32" && value !== "wasm64") {
-        throw new Error(`--arch must be wasm32 or wasm64 (got ${value ?? "nothing"})`);
+        throw new Error(
+          `--arch must be wasm32 or wasm64 (got ${value ?? "nothing"})`,
+        );
       }
       arch = value;
     } else if (argv[i].startsWith("-")) {
@@ -56,7 +58,11 @@ function parseArgs(argv: string[]): Args {
       throw new Error(`unexpected extra argument: ${argv[i]}`);
     }
   }
-  if (pkgDir === "") throw new Error("usage: check_wasm64_bundle.ts <pkg-dir> --arch <wasm32|wasm64>");
+  if (pkgDir === "") {
+    throw new Error(
+      "usage: check_wasm64_bundle.ts <pkg-dir> --arch <wasm32|wasm64>",
+    );
+  }
   if (arch === "") throw new Error("--arch <wasm32|wasm64> is required");
   return { pkgDir, arch };
 }
@@ -65,8 +71,13 @@ function parseArgs(argv: string[]): Args {
  * Grow the artefact's own linear memory one page past the wasm32 ceiling.
  * V8 reserves pages lazily, so this costs address space, not RAM.
  */
-async function assertGrowsPastWasm32Ceiling(pkgDir: string, wasmBytes: Uint8Array): Promise<void> {
-  const glueUrl = new URL(`file://${await Deno.realPath(`${pkgDir}/wasm_activation.js`)}`);
+async function assertGrowsPastWasm32Ceiling(
+  pkgDir: string,
+  wasmBytes: Uint8Array,
+): Promise<void> {
+  const glueUrl = new URL(
+    `file://${await Deno.realPath(`${pkgDir}/wasm_activation.js`)}`,
+  );
   const mod = await import(glueUrl.href);
   const exports = await mod.default({ module_or_path: wasmBytes });
   const memory: WebAssembly.Memory = exports.memory ?? mod.memory;
@@ -92,7 +103,9 @@ async function assertGrowsPastWasm32Ceiling(pkgDir: string, wasmBytes: Uint8Arra
         `ceiling of ${WASM32_MAX_PAGES} pages (4 GiB)`,
     );
   }
-  console.log(`✅ grew linear memory to ${pagesNow} pages (> ${WASM32_MAX_PAGES} = 4 GiB)`);
+  console.log(
+    `✅ grew linear memory to ${pagesNow} pages (> ${WASM32_MAX_PAGES} = 4 GiB)`,
+  );
 }
 
 async function main(): Promise<void> {
@@ -116,15 +129,21 @@ async function main(): Promise<void> {
     if (limits.isMemory64) {
       throw new Error(
         `${wasmPath}: --arch wasm32 was requested but the module declares a ` +
-          `64-bit memory (flags 0x${limits.flags.toString(16)}); the dual-ship ` +
+          `64-bit memory (flags 0x${
+            limits.flags.toString(16)
+          }); the dual-ship ` +
           `rollback asset must stay wasm32`,
       );
     }
-    console.log("✅ linear memory declares the i32 index type (wasm32 rollback asset)");
+    console.log(
+      "✅ linear memory declares the i32 index type (wasm32 rollback asset)",
+    );
   }
 
   assertBundleExportSurface(wasmBytes, glueSource);
-  console.log("✅ activation/backprop export surface present in module and glue");
+  console.log(
+    "✅ activation/backprop export surface present in module and glue",
+  );
 
   if (arch === "wasm64") await assertGrowsPastWasm32Ceiling(pkgDir, wasmBytes);
 
@@ -135,7 +154,9 @@ if (import.meta.main) {
   try {
     await main();
   } catch (error) {
-    console.error(`check_wasm64_bundle: ${error instanceof Error ? error.message : error}`);
+    console.error(
+      `check_wasm64_bundle: ${error instanceof Error ? error.message : error}`,
+    );
     Deno.exit(1);
   }
 }

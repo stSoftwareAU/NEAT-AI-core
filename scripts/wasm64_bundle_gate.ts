@@ -86,7 +86,9 @@ function readLeb(bytes: Uint8Array, cursor: { p: number }): number {
   let byte: number;
   do {
     byte = bytes[cursor.p++];
-    if (byte === undefined) throw new Error("truncated LEB128: ran off the end of the module");
+    if (byte === undefined) {
+      throw new Error("truncated LEB128: ran off the end of the module");
+    }
     result |= (byte & 0x7f) << shift;
     shift += 7;
   } while (byte & 0x80);
@@ -155,7 +157,8 @@ export function wasmExportNames(bytes: Uint8Array): string[] {
  */
 export function glueExportNames(source: string): string[] {
   const names: string[] = [];
-  const pattern = /^export\s+(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)/gm;
+  const pattern =
+    /^export\s+(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)/gm;
   for (const match of source.matchAll(pattern)) names.push(match[1]);
   return names;
 }
@@ -169,13 +172,18 @@ export function glueExportNames(source: string): string[] {
  *   exists to prevent, and one that is otherwise invisible (an i32 bundle
  *   validates, instantiates and scores correctly right up to 4 GiB).
  */
-export function assertMemory64(bytes: Uint8Array, artefact: string): MemoryLimits {
+export function assertMemory64(
+  bytes: Uint8Array,
+  artefact: string,
+): MemoryLimits {
   const limits = parseMemoryLimits(bytes);
   if (!limits.isMemory64) {
     throw new Error(
       `${artefact}: linear memory declares a 32-bit (i32) index type ` +
         `(flags 0x${limits.flags.toString(16).padStart(2, "0")}); ` +
-        `a Memory64 bundle must set the i64 bit 0x${MEMORY64_INDEX_FLAG.toString(16)} ` +
+        `a Memory64 bundle must set the i64 bit 0x${
+          MEMORY64_INDEX_FLAG.toString(16)
+        } ` +
         `and is capped at ${WASM32_MAX_PAGES} pages (4 GiB) without it`,
     );
   }
@@ -207,10 +215,14 @@ export function assertBundleExportSurface(
       parts.push(`wasm module is missing exports: ${missingWasm.join(", ")}`);
     }
     if (missingGlue.length > 0) {
-      parts.push(`generated glue is missing bindings: ${missingGlue.join(", ")}`);
+      parts.push(
+        `generated glue is missing bindings: ${missingGlue.join(", ")}`,
+      );
     }
     throw new Error(
-      `wasm_activation bundle export surface incomplete — ${parts.join("; ")}. ` +
+      `wasm_activation bundle export surface incomplete — ${
+        parts.join("; ")
+      }. ` +
         `A CLI that exits 0 while stripping bindings is a silent failure, not a pass.`,
     );
   }

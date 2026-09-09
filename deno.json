@@ -3,6 +3,15 @@
     "path": "deno.lock",
     "frozen": true
   },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1"
+  },
+  "fmt": {
+    "include": [
+      "**/*.ts",
+      "**/*.mjs"
+    ]
+  },
   "minimumDependencyAge": {
     "age": "P1D",
     "exclude": [
