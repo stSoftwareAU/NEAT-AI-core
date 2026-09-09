@@ -136,21 +136,32 @@ fn read_f64_le(buf: &[u8], offset: usize) -> f64 {
     ])
 }
 
-/// Compute the total expected buffer size for the given counts.
-fn expected_size(
-    neuron_count: usize,
-    synapse_count: usize,
-    total_inward: usize,
-    order_length: usize,
-    output_count: usize,
-) -> usize {
-    HEADER_BYTES
-        + neuron_count * NEURON_RECORD_BYTES
-        + synapse_count * SYNAPSE_RECORD_BYTES
-        + neuron_count * INWARD_MAP_STRIDE
-        + total_inward * 4
-        + order_length * 4
-        + output_count * 4
+/// Total buffer size the declared counts require, in a width no target can
+/// overflow.
+///
+/// The five counts come straight out of an untrusted header, so they can
+/// demand far more bytes than a 32-bit `usize` can express. Summed in `usize`
+/// on the shipped `wasm32-unknown-unknown` target the total wraps silently
+/// (the release profile carries no `overflow-checks`), agrees with a buffer
+/// nowhere near long enough, and sends the per-record reads below off the end
+/// of it — and a panic here aborts the module. Sixty-four bits hold the
+/// largest total the counts can express (256 GiB) with room to spare, so
+/// the comparison against `data.len()` is decided before any `usize` offset is
+/// built. Mirrors `packed_request_len_wide` in `creature_validate_packed`.
+fn expected_size_wide(
+    neuron_count: u32,
+    synapse_count: u32,
+    total_inward: u32,
+    order_length: u32,
+    output_count: u32,
+) -> u64 {
+    HEADER_BYTES as u64
+        + u64::from(neuron_count) * NEURON_RECORD_BYTES as u64
+        + u64::from(synapse_count) * SYNAPSE_RECORD_BYTES as u64
+        + u64::from(neuron_count) * INWARD_MAP_STRIDE as u64
+        + u64::from(total_inward) * 4
+        + u64::from(order_length) * 4
+        + u64::from(output_count) * 4
 }
 
 /// Decode the byte-packed buffer into owned vectors. Returns
@@ -162,26 +173,35 @@ pub fn decode_propagate_buffer(data: &[u8]) -> Result<DecodedPropagate, DecodeEr
         return Err(DecodeError::HeaderTooShort);
     }
 
-    // Header.
-    let neuron_count = read_u32_le(data, 0) as usize;
+    // Header — kept as the raw `u32`s the contract declares so the length
+    // gate below is decided before anything is narrowed to `usize`.
+    let declared_neurons = read_u32_le(data, 0);
     let input_count = read_u32_le(data, 4);
     let output_count = read_u32_le(data, 8);
-    let synapse_count = read_u32_le(data, 12) as usize;
-    let order_length = read_u32_le(data, 16) as usize;
-    let total_inward_entries = read_u32_le(data, 20) as usize;
+    let declared_synapses = read_u32_le(data, 12);
+    let declared_order = read_u32_le(data, 16);
+    let declared_inward = read_u32_le(data, 20);
     let plank_constant = read_f64_le(data, 24) as f32;
     let normalise_gradients = data[32] != 0;
 
-    let needed = expected_size(
-        neuron_count,
-        synapse_count,
-        total_inward_entries,
-        order_length,
-        output_count as usize,
+    let needed = expected_size_wide(
+        declared_neurons,
+        declared_synapses,
+        declared_inward,
+        declared_order,
+        output_count,
     );
-    if data.len() < needed {
+    if (data.len() as u64) < needed {
         return Err(DecodeError::BufferTruncated);
     }
+
+    // Narrowing is safe only now: the wide comparison proved a buffer this
+    // host is holding covers every declared section, so each count — and every
+    // offset derived from it below — fits `usize` on any target width.
+    let neuron_count = declared_neurons as usize;
+    let synapse_count = declared_synapses as usize;
+    let order_length = declared_order as usize;
+    let total_inward_entries = declared_inward as usize;
 
     let mut offset = HEADER_BYTES;
 
@@ -396,6 +416,96 @@ mod tests {
         assert_eq!(b.bytes.len(), HEADER_BYTES);
 
         match decode_propagate_buffer(&b.bytes) {
+            Err(DecodeError::BufferTruncated) => {}
+            other => panic!("expected BufferTruncated, got {:?}", other.err()),
+        }
+    }
+
+    /// A header carrying nothing but the six counts, `plank_constant` and
+    /// the `normalise_gradients` flag — exactly [`HEADER_BYTES`] long, and so
+    /// far too short for any of the counts below.
+    fn header_only(neuron_count: u32, synapse_count: u32) -> Vec<u8> {
+        let mut b = Builder::new();
+        b.push_u32(neuron_count);
+        b.push_u32(0); // input_count
+        b.push_u32(0); // output_count
+        b.push_u32(synapse_count);
+        b.push_u32(0); // order_length
+        b.push_u32(0); // total_inward_entries
+        b.push_f64(1e-7); // plank_constant
+        b.push_u8(0); // normalise_gradients
+        b.push_u8(0);
+        b.push_u8(0);
+        b.push_u8(0);
+        assert_eq!(b.bytes.len(), HEADER_BYTES);
+        b.bytes
+    }
+
+    /// Independent oracle: the size sum as a 32-bit host evaluates it, with
+    /// the wraparound spelled out. Deliberately shares no code with the
+    /// decoder — it models the shipped `wasm32-unknown-unknown` `usize` width
+    /// that the native test host does not have.
+    fn wasm32_size_oracle(
+        neuron_count: u32,
+        synapse_count: u32,
+        total_inward: u32,
+        order_length: u32,
+        output_count: u32,
+    ) -> u32 {
+        (HEADER_BYTES as u32)
+            .wrapping_add(neuron_count.wrapping_mul(NEURON_RECORD_BYTES as u32))
+            .wrapping_add(synapse_count.wrapping_mul(SYNAPSE_RECORD_BYTES as u32))
+            .wrapping_add(neuron_count.wrapping_mul(INWARD_MAP_STRIDE as u32))
+            .wrapping_add(total_inward.wrapping_mul(4))
+            .wrapping_add(order_length.wrapping_mul(4))
+            .wrapping_add(output_count.wrapping_mul(4))
+    }
+
+    /// Issue #602 — a `neuron_count` whose section sizes wrap a 32-bit
+    /// `usize`. `2^27 × (24 + 8)` is exactly `2^32`, so the pre-fix sum came
+    /// back as the bare header size and a header-only buffer passed the gate,
+    /// after which the per-neuron loop indexed `2^27` records off the end of
+    /// it — a panic that aborts the whole wasm module.
+    #[test]
+    fn a_neuron_count_whose_size_wraps_a_32_bit_usize_is_refused() {
+        let neuron_count: u32 = 1 << 27;
+
+        let wrapped = wasm32_size_oracle(neuron_count, 0, 0, 0, 0);
+        assert_eq!(
+            wrapped, HEADER_BYTES as u32,
+            "oracle: on a 32-bit host the pre-fix sum wraps to the header size"
+        );
+
+        // The honest length, in a width no 32-bit host can hold.
+        let needed = expected_size_wide(neuron_count, 0, 0, 0, 0);
+        assert_eq!(needed, HEADER_BYTES as u64 + (1u64 << 32));
+        assert!(needed > u64::from(u32::MAX));
+        assert!(needed > u64::from(wrapped));
+
+        let buffer = header_only(neuron_count, 0);
+        match decode_propagate_buffer(&buffer) {
+            Err(DecodeError::BufferTruncated) => {}
+            other => panic!("expected BufferTruncated, got {:?}", other.err()),
+        }
+    }
+
+    /// Issue #602 — the same wraparound reached through `synapse_count`.
+    /// `u32::MAX × 20` wraps *below* the header size, so the pre-fix gate on
+    /// wasm32 was satisfied by a buffer of any length at all.
+    #[test]
+    fn a_synapse_count_no_buffer_could_hold_is_refused() {
+        let wrapped = wasm32_size_oracle(0, u32::MAX, 0, 0, 0);
+        assert!(
+            u64::from(wrapped) < HEADER_BYTES as u64,
+            "oracle: on a 32-bit host the pre-fix sum wraps below the header ({wrapped})"
+        );
+
+        let needed = expected_size_wide(0, u32::MAX, 0, 0, 0);
+        assert_eq!(needed, 85_899_345_936);
+        assert!(needed > u64::from(u32::MAX));
+
+        let buffer = header_only(0, u32::MAX);
+        match decode_propagate_buffer(&buffer) {
             Err(DecodeError::BufferTruncated) => {}
             other => panic!("expected BufferTruncated, got {:?}", other.err()),
         }
