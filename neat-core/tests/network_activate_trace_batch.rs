@@ -5,7 +5,7 @@
 //! batch-parity cases belong here, exercised through the public API, so the trace
 //! header layout only ever has to be updated in one place.
 
-use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData};
 
 /// Records per `activate_and_trace_batch_4way` call — also the header length.
 const BATCH_RECORDS: usize = 4;
@@ -19,42 +19,8 @@ fn make_network(
     neurons: Vec<NeuronData>,
     synapses: Vec<SynapseData>,
 ) -> CompiledNetwork {
-    let num_neurons = num_inputs + neurons.len();
-    let num_non_inputs = neurons.len();
-    let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-    CompiledNetwork {
-        num_neurons,
-        num_inputs,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; num_neurons],
-        hint_values_buffer: vec![0.0; num_non_inputs],
-        trace_data_buffer: Vec::with_capacity(estimated_trace_size),
-        // Issue #155 - 4-way batch scratch buffers
-        batch_activations: [
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-        ],
-        batch_hints: [
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-        ],
-        batch_traces: [
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-        ],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-        mse_inter: vec![0.0; num_neurons * 8],
-    }
+    CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+        .expect("fixture must satisfy the load-time index invariant")
 }
 
 fn make_synapse(from_index: u16, weight: f32) -> SynapseData {

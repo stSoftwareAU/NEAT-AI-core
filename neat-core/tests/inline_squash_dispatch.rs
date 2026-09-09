@@ -22,7 +22,7 @@ use neat_core::loss::{
 use neat_core::range::apply_limit_range;
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::SQUASH_SIMD_MAX_ABS_ERR;
-use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData};
 
 /// Every standard (non-aggregate) squash type. Aggregates 32–37 are activated
 /// by a different rule and are covered by `aggregate_squash_tail_parity.rs`.
@@ -94,23 +94,8 @@ fn unit_network(squash: SquashType) -> CompiledNetwork {
         is_constant: false,
     }];
 
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-    CompiledNetwork {
-        num_neurons: 2,
-        num_inputs: 1,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; 2],
-        hint_values_buffer: vec![0.0; 1],
-        trace_data_buffer: Vec::new(),
-        batch_activations: [vec![0.0; 2], vec![0.0; 2], vec![0.0; 2], vec![0.0; 2]],
-        batch_hints: [vec![0.0; 1], vec![0.0; 1], vec![0.0; 1], vec![0.0; 1]],
-        batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-        mse_inter: vec![0.0; 2 * 8],
-    }
+    CompiledNetwork::from_parts(1, neurons, synapses)
+        .expect("fixture must satisfy the load-time index invariant")
 }
 
 /// The rule stated once: squash the sum, then clamp to the type's range.
@@ -270,23 +255,8 @@ fn mixed_aggregate_network(squash: SquashType) -> CompiledNetwork {
         },
     ];
 
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-    CompiledNetwork {
-        num_neurons: 4,
-        num_inputs: 2,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; 4],
-        hint_values_buffer: vec![0.0; 2],
-        trace_data_buffer: Vec::new(),
-        batch_activations: [vec![0.0; 4], vec![0.0; 4], vec![0.0; 4], vec![0.0; 4]],
-        batch_hints: [vec![0.0; 2], vec![0.0; 2], vec![0.0; 2], vec![0.0; 2]],
-        batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-        mse_inter: vec![0.0; 4 * 8],
-    }
+    CompiledNetwork::from_parts(2, neurons, synapses)
+        .expect("fixture must satisfy the load-time index invariant")
 }
 
 /// Packed `[in0, in1, target]` records with alternating input signs.

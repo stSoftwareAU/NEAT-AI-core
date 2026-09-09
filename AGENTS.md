@@ -255,11 +255,25 @@ with **unchecked** indexing, `get_unchecked(from_index)`. A compiled network
 declaring a synapse with `from_index >= num_neurons` would be an out-of-bounds
 read — **undefined behaviour** on every `activate()`. This is guarded **once, at
 load time**: `CompiledNetwork::new` rejects any out-of-range `from_index` with
-`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs:326`). A network
+`NetworkError::InvalidSynapseIndex`. A network
 that loads successfully is guaranteed in-range, so the `get_unchecked` calls are
 sound and the hot path stays branch-free. **Never remove or bypass that check as
 "redundant" — doing so reintroduces UB behind `get_unchecked`.** (See also the
 memory-safety note in [`SECURITY.md`](SECURITY.md#memory-safety-of-compiled-network-loading).)
+
+Since Issue #625 the check is the **only** way in, and it cannot be outrun after
+the fact: every `CompiledNetwork` field is private, so safe code outside the
+crate can neither rewrite a validated `synapses` / `hot_from` / `activations` nor
+assemble the struct as a literal. Consumers read the state through borrow-only
+accessors (`synapses()`, `hot_from()`, `activations()`, …), and
+`CompiledNetwork::from_parts` is the one entry point for parts already in memory
+— it re-runs the index check and also rejects a neuron whose
+`start_synapse + num_synapses` overruns the synapse table
+(`NetworkError::InvalidSynapseSpan`), which is the span half of the same
+contract. Never widen a field back to `pub`, and never add a `&mut` accessor for
+one: that is the hole #625 closed.
+`tests/scripts/compiled_network_encapsulation.bats` is the gate — it makes cargo
+refuse an out-of-crate probe that performs the #625 mutation.
 
 The wasm `gather4` scaffold helper (`simd.rs`) rests on the same invariant
 since Issue #509 — it reads four `SynapseData` entries and four indirect

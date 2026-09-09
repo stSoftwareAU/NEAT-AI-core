@@ -41,20 +41,31 @@ fn compiled_network_constructor_succeeds() {
 }
 
 #[test]
-fn compiled_network_public_fields_remain_accessible() {
-    // Native consumers (e.g. NEAT-AI-scorer) read public fields directly.
-    // The `#[wasm_bindgen(skip)]` annotations must not turn them private.
+fn compiled_network_state_remains_readable_by_native_consumers() {
+    // Native consumers (e.g. NEAT-AI-scorer) read the compiled network's state
+    // directly. Issue #625 made the fields private and moved that read to
+    // borrow-only accessors — the wasm-bindgen impl must not narrow them
+    // further, and each must still return the loaded network's own data.
+    //
+    // Business-logic change (Issue #625): this test previously read the `pub`
+    // fields, which is the write path the issue closed. It now pins the same
+    // data through the accessors that replaced them.
     let bytes = minimal_network_bytes();
     let net = CompiledNetwork::new(&bytes).expect("parse");
 
-    // Reading these compiles only when the fields are still `pub`.
-    let _: usize = net.num_neurons;
-    let _: usize = net.num_inputs;
-    let _: &Vec<_> = &net.neurons;
-    let _: &Vec<_> = &net.synapses;
-    let _: &Vec<f32> = &net.activations;
-    let _: &Vec<f32> = &net.hint_values_buffer;
-    let _: &Vec<f32> = &net.trace_data_buffer;
+    assert_eq!(net.num_neurons(), 2);
+    assert_eq!(net.num_inputs(), 1);
+    assert_eq!(net.neurons().len(), 1, "one non-input neuron");
+    assert_eq!(net.synapses().len(), 1);
+    assert_eq!(net.synapses()[0].from_index, 0);
+    assert_eq!(net.hot_weights().len(), net.synapses().len());
+    assert_eq!(net.hot_from().len(), net.synapses().len());
+    assert_eq!(net.activations().len(), net.num_neurons());
+    assert_eq!(net.hint_values().len(), 1, "one per non-input neuron");
+    assert!(
+        net.trace_data().is_empty(),
+        "no aggregate trace recorded yet"
+    );
 }
 
 #[test]
@@ -109,7 +120,7 @@ fn reset_state_clears_non_input_activations() {
     let mut net = CompiledNetwork::new(&bytes).expect("parse");
     let _ = net.activate(&[1.0], 1);
     // Output activation should now be non-zero.
-    assert!(net.activations[1].abs() > 0.0);
+    assert!(net.activations()[1].abs() > 0.0);
     net.reset_state();
-    assert_eq!(net.activations[1], 0.0);
+    assert_eq!(net.activations()[1], 0.0);
 }

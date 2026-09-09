@@ -7,7 +7,7 @@
 //! a single source of truth that is exercised by a real `cargo test` run rather
 //! than only compiled inside the `harness = false` bench.
 
-use neat_core::network::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
+use neat_core::network::{CompiledNetwork, NeuronData, SynapseData};
 use neat_core::squash::SquashType;
 use neat_core::topological_backprop::{
     NEURON_TYPE_HIDDEN, NEURON_TYPE_INPUT, NEURON_TYPE_OUTPUT, NeuronInput, SynapseInput,
@@ -203,7 +203,6 @@ pub const NETWORKS: [NetSpec; 6] = [
 /// fan-in incoming connections from strictly earlier neurons, giving a realistic
 /// synapse density without recurrent edges.
 pub fn build_network(spec: &NetSpec, seed: u64) -> CompiledNetwork {
-    let num_neurons = spec.num_neurons;
     let num_inputs = spec.num_inputs;
     let mut rng = Lcg::new(seed);
     let num_non_inputs = spec.num_non_inputs();
@@ -240,40 +239,8 @@ pub fn build_network(spec: &NetSpec, seed: u64) -> CompiledNetwork {
         });
     }
 
-    let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-    CompiledNetwork {
-        num_neurons,
-        num_inputs,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; num_neurons],
-        hint_values_buffer: vec![0.0; num_non_inputs],
-        trace_data_buffer: Vec::with_capacity(estimated_trace_size),
-        // Issue #155 - 4-way batch scratch buffers
-        batch_activations: [
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-        ],
-        batch_hints: [
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-        ],
-        batch_traces: [
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-        ],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-        mse_inter: vec![0.0; num_neurons * 8],
-    }
+    CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+        .expect("fixture must satisfy the load-time index invariant")
 }
 
 /// Deterministic input vector of length `n`.
@@ -434,25 +401,31 @@ pub const AGGREGATES: [SquashType; 3] = [SquashType::Minimum, SquashType::Maximu
 /// production sparsity so aggregate **frequency** is the only swept variable.
 /// The committed `production*` fixtures are homogeneous `Tanh`, so this is the
 /// only way to put aggregate neurons in a production-sized creature.
-pub fn with_aggregates(mut net: CompiledNetwork, percent: usize) -> CompiledNetwork {
+///
+/// Issue #625 - `CompiledNetwork`'s fields are private, so the rewrite happens
+/// on copies of the neuron and synapse tables and the result is rebuilt through
+/// `from_parts`, which re-runs the load-time index validation.
+pub fn with_aggregates(net: CompiledNetwork, percent: usize) -> CompiledNetwork {
     if percent == 0 {
         return net;
     }
-    let num_non_inputs = net.neurons.len();
+    let num_non_inputs = net.neurons().len();
     let target = num_non_inputs * percent / 100;
     if target == 0 {
         return net;
     }
     let stride = (num_non_inputs / target).max(1);
 
+    let mut neurons = net.neurons().to_vec();
+    let mut synapses = net.synapses().to_vec();
     for n in (0..num_non_inputs).step_by(stride) {
         let squash = AGGREGATES[(n / stride) % AGGREGATES.len()];
-        net.neurons[n].squash_type = squash as u8;
+        neurons[n].squash_type = squash as u8;
 
         if squash == SquashType::If {
-            let start = net.neurons[n].start_synapse as usize;
-            let end = start + net.neurons[n].num_synapses as usize;
-            for (k, synapse) in net.synapses[start..end].iter_mut().enumerate() {
+            let start = neurons[n].start_synapse as usize;
+            let end = start + neurons[n].num_synapses as usize;
+            for (k, synapse) in synapses[start..end].iter_mut().enumerate() {
                 // First synapse is the condition; the rest alternate the
                 // positive and negative branches.
                 synapse.synapse_type = match k {
@@ -463,12 +436,13 @@ pub fn with_aggregates(mut net: CompiledNetwork, percent: usize) -> CompiledNetw
             }
         }
     }
-    net
+    CompiledNetwork::from_parts(net.num_inputs(), neurons, synapses)
+        .expect("rewriting squash types cannot break the index invariant")
 }
 
 /// Count of non-constant neurons using an aggregate squash.
 pub fn aggregate_count(net: &CompiledNetwork) -> usize {
-    net.neurons
+    net.neurons()
         .iter()
         .filter(|n| !n.is_constant && SquashType::from(n.squash_type).is_aggregate())
         .count()

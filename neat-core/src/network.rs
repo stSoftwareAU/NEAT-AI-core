@@ -59,6 +59,23 @@ pub enum NetworkError {
         /// The network's node count; valid indices are `0..num_neurons`.
         num_neurons: usize,
     },
+    /// A neuron declares a synapse span that runs past the end of the synapse
+    /// table (`start_synapse + num_synapses > synapses.len()`).
+    ///
+    /// Issue #625 - the forward pass hands `start..end` to the
+    /// `simd::*_unchecked` kernels, which walk that range with `get_unchecked`.
+    /// [`CompiledNetwork::new`] cannot produce an overrunning span (it grows the
+    /// table as it reads), but [`CompiledNetwork::from_parts`] takes both halves
+    /// from the caller, so it rejects one here rather than reading past the
+    /// slice during activation.
+    InvalidSynapseSpan {
+        /// Index of the offending neuron within the non-input neuron list.
+        neuron: usize,
+        /// The one-past-the-end synapse index the neuron declared.
+        end: usize,
+        /// Number of synapses actually present.
+        len: usize,
+    },
 }
 
 impl std::fmt::Display for NetworkError {
@@ -82,6 +99,13 @@ impl std::fmt::Display for NetworkError {
                     f,
                     "Synapse source index {from_index} is out of bounds for a network \
                      with {num_neurons} nodes (valid indices are 0..{num_neurons})"
+                )
+            }
+            NetworkError::InvalidSynapseSpan { neuron, end, len } => {
+                write!(
+                    f,
+                    "Neuron {neuron} declares synapses up to index {end}, past the \
+                     {len} synapses present"
                 )
             }
         }
@@ -193,87 +217,243 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
 /// ([`NetworkError::InvalidSynapseIndex`]), and every activation buffer is sized
 /// to `num_neurons`. The forward and batched-scoring paths discharge the
 /// `simd::*_unchecked` index contract (Issue #613) from exactly that check, so
-/// **the invariant is a property of the values, not of the type**: these fields
-/// are `pub`, so writing `synapses`, `hot_weights`, `hot_from`, `activations` or
-/// `num_neurons` after construction — or assembling the struct as a literal —
-/// can break it, and a subsequent `activate*` / scoring call is then an
-/// out-of-bounds read. Treat the fields as read-only once `new` has returned;
-/// rebuild through `new` rather than editing in place. Closing this by
-/// construction (private fields plus accessors, or `#[non_exhaustive]`) is an
-/// API break for downstream consumers and is tracked by Issue #625.
+/// the invariant has to survive for as long as the value does.
+///
+/// Issue #625 makes it survive **by construction**: every field is private, so
+/// the crate's own construction paths ([`Self::new`] and
+/// [`crate::creature::compile_creature`]) are the only way to set one and safe
+/// code outside the crate cannot write `synapses`, `hot_from`, `neurons`,
+/// `activations` or `num_neurons` after validation, nor assemble the struct as
+/// a literal that skips it. Consumers read the same data through the
+/// borrow-only accessors — [`Self::neurons`], [`Self::synapses`],
+/// [`Self::hot_weights`], [`Self::hot_from`], [`Self::activations`],
+/// [`Self::hint_values`], [`Self::trace_data`], [`Self::num_neurons`],
+/// [`Self::num_inputs`] — which hand out `&[T]`, never `&mut`. To change a
+/// network, rebuild it through `new` rather than editing one in place.
+///
+/// `tests/scripts/compiled_network_encapsulation.bats` is the gate: it asks
+/// cargo to compile an out-of-crate probe that performs exactly the Issue #625
+/// mutation and requires the compiler to refuse it.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 #[derive(Clone)]
 pub struct CompiledNetwork {
     /// Total number of neurons (including input)
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub num_neurons: usize,
+    pub(crate) num_neurons: usize,
     /// Number of input neurons
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub num_inputs: usize,
+    pub(crate) num_inputs: usize,
     /// Neuron metadata using typed struct for cache efficiency
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub neurons: Vec<NeuronData>,
+    pub(crate) neurons: Vec<NeuronData>,
     /// Synapse data using typed struct for cache efficiency
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub synapses: Vec<SynapseData>,
+    pub(crate) synapses: Vec<SynapseData>,
     /// Hot-path weights, struct-of-arrays view of `synapses[i].weight`
     /// (Issue #533). Built by [`hot_synapse_soa`] at every construction path;
     /// read only by the record-interleaved gather.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub hot_weights: Vec<f32>,
+    pub(crate) hot_weights: Vec<f32>,
     /// Hot-path source indices, struct-of-arrays view of
     /// `synapses[i].from_index` (Issue #533). Same order and length as
     /// [`Self::synapses`] and [`Self::hot_weights`].
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub hot_from: Vec<u16>,
+    pub(crate) hot_from: Vec<u16>,
     /// Activation buffer - reused across calls
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub activations: Vec<f32>,
+    pub(crate) activations: Vec<f32>,
     /// Pre-allocated buffer for hint values in activate_and_trace
     /// Issue #1173 - Pre-allocate `Vec<f32>` buffers in CompiledNetwork struct
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub hint_values_buffer: Vec<f32>,
+    pub(crate) hint_values_buffer: Vec<f32>,
     /// Pre-allocated buffer for trace data in activate_and_trace
     /// Issue #1173 - Eliminates heap allocation per call
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub trace_data_buffer: Vec<f32>,
+    pub(crate) trace_data_buffer: Vec<f32>,
     /// Pre-allocated per-record activation buffers for the 4-way batch path.
     /// Issue #155 - Extends the #1173 buffer-reuse precedent to
     /// `activate_and_trace_batch_4way` so the 4 activation buffers are reused
     /// across calls instead of re-allocated each invocation.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub batch_activations: [Vec<f32>; 4],
+    pub(crate) batch_activations: [Vec<f32>; 4],
     /// Pre-allocated per-record hint-value buffers for the 4-way batch path.
     /// Issue #155 - Reused across calls (zeroed per call), mirroring
     /// `hint_values_buffer`.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub batch_hints: [Vec<f32>; 4],
+    pub(crate) batch_hints: [Vec<f32>; 4],
     /// Pre-allocated per-record trace-data buffers for the 4-way batch path.
     /// Issue #155 - Reused across calls (cleared per call), mirroring
     /// `trace_data_buffer`.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub batch_traces: [Vec<f32>; 4],
+    pub(crate) batch_traces: [Vec<f32>; 4],
     /// Record-interleaved scratch for the fused MSE path
     /// (`inter[n * MSE_TILE_LANES + l]`). Sized
     /// `num_neurons * `[`crate::loss::MSE_TILE_LANES`] and reused across
     /// `mse_sum_batch_packed` calls instead of allocating per chunk
     /// (NEAT-AI-scorer#531). The 4-way remainder of that path reuses
     /// [`Self::batch_activations`].
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub mse_inter: Vec<f32>,
+    pub(crate) mse_inter: Vec<f32>,
 }
 
 impl CompiledNetwork {
+    /// Assemble a network from typed parts, deriving every hot view and scratch
+    /// buffer, and validating the index invariant the SIMD kernels rest on.
+    ///
+    /// Issue #625 - [`Self::new`] deserialises bytes; this is the one way to
+    /// build a `CompiledNetwork` from parts already in memory, now that the
+    /// fields are private and a struct literal is no longer expressible outside
+    /// the crate. `neurons` holds one entry per **non-input** neuron in
+    /// evaluation order, so the node count is `num_inputs + neurons.len()`.
+    ///
+    /// Both halves of the `simd::*_unchecked` contract are checked here, and a
+    /// value that fails either is not produced:
+    ///
+    /// - every `from_index` is in `0..num_neurons`
+    ///   ([`NetworkError::InvalidSynapseIndex`]), so the activation gather is in
+    ///   bounds; and
+    /// - every neuron's `start_synapse + num_synapses` is within the synapse
+    ///   table ([`NetworkError::InvalidSynapseSpan`]), so the span walk is.
+    ///
+    /// A node count past [`MAX_NODE_COUNT`] is rejected with
+    /// [`NetworkError::TooManyNodes`], as in [`Self::new`].
+    pub fn from_parts(
+        num_inputs: usize,
+        neurons: Vec<NeuronData>,
+        synapses: Vec<SynapseData>,
+    ) -> Result<Self, NetworkError> {
+        let num_neurons = num_inputs + neurons.len();
+        if num_neurons > MAX_NODE_COUNT {
+            return Err(NetworkError::TooManyNodes { count: num_neurons });
+        }
+        if let Some(bad) = synapses
+            .iter()
+            .find(|s| s.from_index as usize >= num_neurons)
+        {
+            return Err(NetworkError::InvalidSynapseIndex {
+                from_index: bad.from_index,
+                num_neurons,
+            });
+        }
+        for (neuron, data) in neurons.iter().enumerate() {
+            let end = data.start_synapse as usize + data.num_synapses as usize;
+            if end > synapses.len() {
+                return Err(NetworkError::InvalidSynapseSpan {
+                    neuron,
+                    end,
+                    len: synapses.len(),
+                });
+            }
+        }
+        Ok(Self::assemble(num_inputs, neurons, synapses))
+    }
+
+    /// Derive the hot views and reusable scratch buffers around already-valid
+    /// parts.
+    ///
+    /// Crate-internal and infallible: the single home of the buffer-sizing rule
+    /// shared by [`Self::new`], [`Self::from_parts`] and
+    /// [`crate::creature::compile_creature`]. Callers must have established the
+    /// index invariant already — [`Self::from_parts`] validates it, while `new`
+    /// and `compile_creature` build in-range indices as they read.
+    pub(crate) fn assemble(
+        num_inputs: usize,
+        neurons: Vec<NeuronData>,
+        synapses: Vec<SynapseData>,
+    ) -> Self {
+        let num_non_inputs = neurons.len();
+        let num_neurons = num_inputs + num_non_inputs;
+
+        // Issue #1173 - Pre-allocate trace data buffer with estimated capacity.
+        // Estimate ~10% of neurons have aggregate functions (MINIMUM, MAXIMUM, IF);
+        // each records 2 floats (neuron_idx, trace_info), plus a -1.0 terminator.
+        let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
+
+        // Issue #533 - struct-of-arrays view of the two fields the interleaved
+        // gather reads, built from the same vector so it cannot drift.
+        let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
+
+        CompiledNetwork {
+            num_neurons,
+            num_inputs,
+            neurons,
+            synapses,
+            hot_weights,
+            hot_from,
+            activations: vec![0.0; num_neurons],
+            hint_values_buffer: vec![0.0; num_non_inputs],
+            trace_data_buffer: Vec::with_capacity(estimated_trace_size),
+            // Issue #155 - Pre-allocate the 4-way batch scratch buffers
+            batch_activations: [
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+            ],
+            batch_hints: [
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+            ],
+            batch_traces: [
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+            ],
+            // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
+            mse_inter: vec![0.0; num_neurons * MSE_TILE_LANES],
+        }
+    }
+
+    /// Borrow the neuron metadata in evaluation order (non-input neurons only).
+    ///
+    /// Issue #625 - the fields carrying the `simd::*_unchecked` index invariant
+    /// are private, so consumers read them through these borrow-only accessors.
+    /// Each hands out a shared slice, never `&mut`, so a validated network
+    /// cannot be edited into an out-of-bounds state after [`Self::new`].
+    #[inline]
+    pub fn neurons(&self) -> &[NeuronData] {
+        &self.neurons
+    }
+
+    /// Borrow the synapse table, indexed by
+    /// [`NeuronData::start_synapse`]`..start_synapse + `[`NeuronData::num_synapses`].
+    #[inline]
+    pub fn synapses(&self) -> &[SynapseData] {
+        &self.synapses
+    }
+
+    /// Borrow the struct-of-arrays weight view of [`Self::synapses`] (Issue #533).
+    #[inline]
+    pub fn hot_weights(&self) -> &[f32] {
+        &self.hot_weights
+    }
+
+    /// Borrow the struct-of-arrays source-index view of [`Self::synapses`] (Issue #533).
+    #[inline]
+    pub fn hot_from(&self) -> &[u16] {
+        &self.hot_from
+    }
+
+    /// Borrow the activation buffer, which is always `num_neurons` long.
+    #[inline]
+    pub fn activations(&self) -> &[f32] {
+        &self.activations
+    }
+
+    /// Borrow the pre-squash hint values recorded by the last
+    /// `activate_and_trace*` call (one per non-input neuron).
+    #[inline]
+    pub fn hint_values(&self) -> &[f32] {
+        &self.hint_values_buffer
+    }
+
+    /// Borrow the aggregate-function trace recorded by the last
+    /// `activate_and_trace*` call.
+    #[inline]
+    pub fn trace_data(&self) -> &[f32] {
+        &self.trace_data_buffer
+    }
+
     /// Debug-only guard that the Issue #533 struct-of-arrays hot view still
     /// mirrors [`Self::synapses`] element-for-element.
     ///
     /// The two views are redundant by construction — [`hot_synapse_soa`] builds
-    /// them from the same vector at every construction path — but the fields are
-    /// public, so a caller assembling a [`CompiledNetwork`] literal (or mutating
-    /// `synapses` afterwards) could let them drift. Every entry point into the
-    /// record-interleaved gather calls this first, so a drifted network fails
-    /// loudly in debug and test builds rather than silently scoring wrong
-    /// numbers. Compiles away entirely in release.
+    /// them from the same vector at every construction path — but they are two
+    /// vectors, so an in-crate edit that touches one and not the other could let
+    /// them drift (Issue #625 closed the out-of-crate half by making the fields
+    /// private). Every entry point into the record-interleaved gather calls this
+    /// first, so a drifted network fails loudly in debug and test builds rather
+    /// than silently scoring wrong numbers. Compiles away entirely in release.
     #[inline]
     pub(crate) fn debug_assert_hot_soa(&self) {
         debug_assert_eq!(
@@ -426,49 +606,10 @@ impl CompiledNetwork {
             });
         }
 
-        // Issue #1173 - Pre-allocate trace data buffer with estimated capacity
-        // Estimate ~10% of neurons have aggregate functions (MINIMUM, MAXIMUM, IF)
-        // Each aggregate records 2 floats (neuron_idx, trace_info), plus -1.0 terminator
-        let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
-
-        // Issue #533 - struct-of-arrays view of the two fields the interleaved
-        // gather reads, built from the same vector so it cannot drift.
-        let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-
-        Ok(CompiledNetwork {
-            num_neurons,
-            num_inputs,
-            neurons,
-            synapses,
-            hot_weights,
-            hot_from,
-            activations: vec![0.0; num_neurons],
-            // Issue #1173 - Pre-allocate hint values buffer
-            hint_values_buffer: vec![0.0; num_non_inputs],
-            // Issue #1173 - Pre-allocate trace data buffer
-            trace_data_buffer: Vec::with_capacity(estimated_trace_size),
-            // Issue #155 - Pre-allocate the 4-way batch scratch buffers
-            batch_activations: [
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-            ],
-            batch_hints: [
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-            ],
-            batch_traces: [
-                Vec::with_capacity(estimated_trace_size),
-                Vec::with_capacity(estimated_trace_size),
-                Vec::with_capacity(estimated_trace_size),
-                Vec::with_capacity(estimated_trace_size),
-            ],
-            // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
-            mse_inter: vec![0.0; num_neurons * MSE_TILE_LANES],
-        })
+        // Issue #625 - `assemble` is the single home of the buffer-sizing and
+        // hot-view derivation rule; the loop above already built every index in
+        // range, and the check just above rejected any that was not.
+        Ok(Self::assemble(num_inputs, neurons, synapses))
     }
 
     /// Activate the network with the given input values

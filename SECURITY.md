@@ -69,13 +69,30 @@ the activation buffer, an over-long `end` is refused rather than truncated, and
 each safe entry point is asserted bit-identical to its `*_unchecked` twin on
 spans that do satisfy the precondition.
 
-One residual path is **not** closed by that split and is tracked by Issue #625:
-`CompiledNetwork`'s fields are `pub`, so safe code can write `synapses` /
-`hot_from` / `activations` after `new` has validated them and then call
-`activate*`, which reaches the `*_unchecked` kernels on the strength of that
-now-stale check. Until the fields are closed by construction, treat a
-`CompiledNetwork` as read-only once `new` has returned — the invariant is stated
-on the struct itself in `neat-core/src/network.rs`.
+### The struct itself holds the invariant (Issue #625)
+
+That split left one residual path: `CompiledNetwork`'s fields were `pub`, so
+safe code could write `synapses` / `hot_from` / `activations` after `new` had
+validated them and then call `activate*`, which reaches the `*_unchecked`
+kernels on the strength of the now-stale check. Issue #625 closed it **by
+construction** rather than by prose:
+
+- Every field is private, so no safe caller outside the crate can write one, and
+  no struct literal can skip the validation.
+- Consumers read the same state through borrow-only accessors
+  (`neurons()`, `synapses()`, `hot_weights()`, `hot_from()`, `activations()`,
+  `hint_values()`, `trace_data()`, `num_neurons()`, `num_inputs()`), which hand
+  out `&[T]` and never `&mut`.
+- `CompiledNetwork::from_parts` is the one way to build a network from parts
+  already in memory. It re-runs the `from_index < num_neurons` check and also
+  rejects a neuron whose `start_synapse + num_synapses` runs past the synapse
+  table (`NetworkError::InvalidSynapseSpan`) — the other half of the kernels'
+  contract, which `new` could never violate but a caller-supplied span could.
+
+`tests/scripts/compiled_network_encapsulation.bats` is the gate: it builds an
+out-of-crate probe that performs the Issue #625 mutation and requires the
+compiler to refuse it, alongside a companion probe that compiles and runs the
+same fixture through the accessors.
 
 ## Dependency bump quarantine
 
