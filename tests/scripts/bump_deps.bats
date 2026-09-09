@@ -130,3 +130,49 @@ EOF
   [[ "$output" != *"cargo not available"* ]]
   [[ "$output" == *"external=no updates"* ]]
 }
+
+# Issue #608 — --repo reached `cd "$REPO_DIR"` unvalidated, so a `-`-prefixed
+# value was parsed as a cd option (`cd -P` takes no operand and lands in $HOME),
+# running the cargo passes outside the repository and reporting nothing to bump.
+
+@test "rejects a --repo that does not exist, whatever its shape" {
+  # Both shapes take the same branch, so they are one test rather than two.
+  # --skip-external keeps an unguarded script (during a mutation run) from
+  # launching cargo outside its temp dir, matching the neighbours above.
+  local value
+  for value in "-P" "${TMP_REPO}/absent"; do
+    run "$SCRIPT_UNDER_TEST" --skip-external --skip-audit --skip-build --repo "$value"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--repo must be an existing directory (got '${value}')"* ]]
+  done
+}
+
+@test "an option-shaped --repo that does exist is still handed to cd as a path" {
+  # The existence test above is defeated by a directory literally named `-P`:
+  # `[[ -d "-P" ]]` is true, and a bare `cd "-P"` then consumes it as a cd
+  # option and lands in $HOME. So assert where cargo actually ran, not just the
+  # exit status — a stub records its own $PWD on every call.
+  local work="${BATS_TEST_TMPDIR}/optdir"
+  local log="${BATS_TEST_TMPDIR}/cargo-cwd.log"
+  local fake_home="${BATS_TEST_TMPDIR}/opthome"
+  mkdir -p "$work/-P" "$work/bin" "$fake_home"
+  cat >"$work/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf '%s
+' "$PWD" >>"$CARGO_CWD_LOG"
+exit 0
+EOF
+  chmod +x "$work/bin/cargo"
+  : >"$log"
+
+  run env HOME="$fake_home" CARGO_CWD_LOG="$log" PATH="$work/bin:/usr/bin:/bin" \
+    bash -c "cd '$work' && '$SCRIPT_UNDER_TEST' --skip-audit --skip-build --repo -P"
+  [ "$status" -eq 0 ]
+
+  # cargo ran at least once, and every invocation was inside the -P directory.
+  [ -s "$log" ]
+  local dir
+  while IFS= read -r dir; do
+    [ "$dir" = "$work/-P" ]
+  done <"$log"
+}

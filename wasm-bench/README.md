@@ -42,6 +42,11 @@ flowchart LR
 ./run.sh 25 5 4096 5
 ```
 
+All four positionals must be non-negative integers: each is forwarded to
+`runner.mjs` and `shape-index` also builds the `results/shape<N>.csv` path, so
+`run.sh` rejects anything else with exit 2 before it touches the toolchain
+(Issue #608). `tests/scripts/wasm_bench_run.bats` is the gate.
+
 Fixtures come from `neat-core/benches/common/mod.rs` verbatim, so the creature
 and records are the ones the committed Criterion baseline uses. Three
 benchmarks: `kernel` (isolated `weighted_sum_simd`), `activate` (end-to-end
