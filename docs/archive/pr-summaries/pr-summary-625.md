@@ -104,10 +104,34 @@ for the host target instead.
   `simd_native.rs:615` — same safe-write→unchecked-read path, a different kernel
   on this aarch64 host). The same probe no longer compiles against this branch,
   and the regression gate was observed failing before the fix and passing after
-- **regression test** — `neat-core/src/network.rs::CompiledNetwork` `compile_fail`
-  doctest (the write probe), with
-  `neat-core/tests/compiled_network_encapsulation.rs::from_parts_refuses_a_source_index_past_the_last_neuron`
-  covering the same attack value on the one remaining construction path
+- **regression test** — `neat-core/tests/compiled_network_encapsulation.rs::from_parts_refuses_a_source_index_past_the_last_neuron`,
+  which drives the issue's own `from_index = 60_000` through the one remaining
+  construction path and asserts it comes back as
+  `NetworkError::InvalidSynapseIndex`, paired with the
+  `neat-core/src/network.rs::CompiledNetwork` `compile_fail` doctest (the write
+  probe) that pins the field write itself as a compile error
+- **original trigger closed, no trivial bypass** — the trigger was the safe write
+  `net.synapses[0].from_index = 60_000` on an already-validated network. That
+  write no longer compiles: `synapses` is `pub(crate)`, and the only accessor is
+  `synapses() -> &[SynapseData]`, so an out-of-crate caller has no `&mut` path to
+  the table at all. Statically, the mutation is unreachable and every other route
+  to the same state is checked rather than merely absent:
+  - **the other fields** — `neurons`, `hot_from`, `hot_weights` and the
+    activation/scratch buffers are `pub(crate)` on the same rule and expose only
+    `&[T]` accessors, so the sibling writes (`hot_from[0] = 60_000`,
+    resizing `activations`) that would reach the same `*_unchecked` kernels are
+    equally uncompilable
+  - **construction** — struct-literal construction is gone with the `pub` fields
+    (its own `compile_fail` doctest), so the three surviving entry points are
+    `new`, `from_parts` and `compile_creature`, and the latter two both funnel
+    into `from_parts`, which re-runs the index scan *and* the
+    `start_synapse + num_synapses` span check before `assemble` sees the parts
+  - **serde** — `CompiledNetwork` has no `Deserialize` impl, so a deserialiser
+    cannot reconstruct one field-by-field around the constructor
+  - **remaining `unsafe`** — the `*_unchecked` kernels are reached only from
+    `&self` methods on a value that `from_parts` returned `Ok` for, and no
+    accessor hands out an interior-mutable or raw view that could invalidate the
+    invariant between validation and use
 
 ## Acceptance Criteria
 
