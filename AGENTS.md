@@ -255,7 +255,7 @@ with **unchecked** indexing, `get_unchecked(from_index)`. A compiled network
 declaring a synapse with `from_index >= num_neurons` would be an out-of-bounds
 read — **undefined behaviour** on every `activate()`. This is guarded **once, at
 load time**: `CompiledNetwork::new` rejects any out-of-range `from_index` with
-`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs:326`). A network
+`NetworkError::InvalidSynapseIndex` (`neat-core/src/network.rs`). A network
 that loads successfully is guaranteed in-range, so the `get_unchecked` calls are
 sound and the hot path stays branch-free. **Never remove or bypass that check as
 "redundant" — doing so reintroduces UB behind `get_unchecked`.** (See also the
