@@ -35,14 +35,13 @@ run_toolchainless() {
 @test "a non-integer samples argument is rejected without cargo or node" {
   run_toolchainless "not-a-number"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"samples"* ]]
-  [[ "$output" == *"non-negative integer"* ]]
+  [[ "$output" == *"samples must be a non-negative integer (got 'not-a-number')"* ]]
 }
 
 @test "an option-shaped samples argument is rejected" {
   run_toolchainless "--help"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"non-negative integer"* ]]
+  [[ "$output" == *"samples must be a non-negative integer (got '--help')"* ]]
 }
 
 @test "a path-bearing shape index is rejected before it can build a CSV path" {
@@ -55,13 +54,13 @@ run_toolchainless() {
 @test "a non-integer records argument is rejected" {
   run_toolchainless 1 5 "4096; rm -rf /" 1
   [ "$status" -eq 2 ]
-  [[ "$output" == *"records"* ]]
+  [[ "$output" == *"records must be a non-negative integer (got '4096; rm -rf /')"* ]]
 }
 
 @test "a non-integer sessions argument is rejected" {
   run_toolchainless 1 5 8 "3.5"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"sessions"* ]]
+  [[ "$output" == *"sessions must be a non-negative integer (got '3.5')"* ]]
 }
 
 @test "valid integer arguments are accepted on a host without cargo" {

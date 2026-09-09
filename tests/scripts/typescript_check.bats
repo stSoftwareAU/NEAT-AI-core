@@ -89,3 +89,27 @@ TS
   run "$SCRIPT" "$REPO_ROOT"
   [ "$status" -eq 0 ]
 }
+
+# Issue #608 — `find "$root"` parses a `-`-prefixed root as find's own option.
+# `[ -d "-P" ]` is true whenever a directory named `-P` exists in the cwd, so the
+# existence test alone let such a value through and find walked the cwd instead
+# of the named tree — silently checking the wrong files.
+
+@test "an option-shaped root directory checks the named tree, not the cwd" {
+  require_deno
+  # A broken file in the cwd, which find would reach if the root were optioned
+  # away, and a clean tree in the directory actually named on the command line.
+  mkdir -p -- "-P"
+  printf 'const x: number = "not a number";\n' >broken.ts
+  printf 'export const ok: number = 1;\n' >"./-P/good.ts"
+
+  run "$SCRIPT" "-P"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"checking 1 TypeScript file"* ]]
+}
+
+@test "an option-shaped root directory that does not exist is rejected" {
+  run "$SCRIPT" "-P"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not a directory"* ]]
+}

@@ -25,6 +25,13 @@ if [ ! -d "$root" ]; then
   exit 2
 fi
 
+# The test above is not sufficient on its own: `[ -d "-P" ]` is true whenever a
+# directory named `-P` exists in the cwd, and `find "-P"` would then parse it as
+# find's own `-P` option and walk the cwd instead of the named tree. Resolve to
+# an absolute path once, through a `cd --` that cannot be optioned — the same
+# shape the default above already has (Issue #608).
+root="$(cd -- "$root" && pwd)"
+
 files=()
 while IFS= read -r file; do
   files+=("$file")

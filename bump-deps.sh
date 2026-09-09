@@ -133,12 +133,19 @@ fi
 
 # --repo reaches `cd "$REPO_DIR"` below, where a `-`-prefixed value is parsed as
 # a cd option: `cd -P` takes no operand and lands in $HOME, so the cargo passes
-# would run outside the repository and find nothing to bump (Issue #608).
-# Mirrors the `-d` guard in scripts/typescript-check.sh.
+# would run outside the repository and find nothing to bump — and because the
+# dry-run capture is wrapped in `|| true`, that was reported as "no updates"
+# rather than surfacing (Issue #608).
+#
+# An existence test alone does NOT close this: `[[ -d "-P" ]]` is true whenever a
+# directory named `-P` exists in the cwd, and `cd "-P"` still consumes it as an
+# option. So resolve the value to an absolute path once, through a `cd --` that
+# cannot be optioned, and let every later `cd "$REPO_DIR"` inherit the result.
 if [[ ! -d "$REPO_DIR" ]]; then
   echo "Usage error: --repo must be an existing directory (got '$REPO_DIR')" >&2
   exit 2
 fi
+REPO_DIR="$(cd -- "$REPO_DIR" && pwd)"
 
 # Look up the published-at timestamp for a specific crates.io version.
 # Honours $BUMP_DEPS_PUBLISH_FIXTURE (a directory of <crate>-<version>.iso
