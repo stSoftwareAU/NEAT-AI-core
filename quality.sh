@@ -37,9 +37,10 @@ fi
 echo "shellcheck: all scripts passed"
 
 # Bash helper tests (bats) — covers bump-deps.sh and any future shell helpers.
-# Fail loud (Issue #631): this is the only gate over the repository's shell
-# scripts, so a missing binary or a missing/empty suite must fail rather than
-# warn and let the run reach "All quality checks passed!".
+# Fail loud (Issue #631): `bash -n` and shellcheck above read the shell scripts
+# without running them, so this is the only gate over their behaviour — a
+# missing binary or a missing/empty suite must fail rather than warn and let the
+# run reach "All quality checks passed!".
 # The block between the markers below is extracted and executed verbatim by
 # tests/scripts/quality_bats_gate.bats — keep it self-contained.
 # >>> bats-gate
