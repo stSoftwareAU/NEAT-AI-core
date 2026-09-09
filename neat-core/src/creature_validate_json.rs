@@ -79,6 +79,12 @@
 //! | the payload is not a request | serde reports it; the message names what it read |
 //! | the creature declares more than [`MAX_REQUEST_NEURONS`] neurons | the walk allocates one entry per neuron *before* the first rule, so a declared `"input": 17179869180` would abort on the allocation |
 //!
+//! The second is refused here as a *boundary* fault so the host is told its
+//! request never reached a rule. [`creature_validate`] enforces the same
+//! ceiling itself, in its own vocabulary, for native callers that never passed
+//! a JSON boundary (Issue #639) — one comparison, in [`oversized_detail`],
+//! read by both.
+//!
 //! [`MALFORMED_BUFFER`]: crate::topology_ops::MALFORMED_BUFFER
 
 use serde::{Deserialize, Serialize};

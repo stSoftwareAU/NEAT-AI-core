@@ -11,14 +11,21 @@
 //! with no backing data, so a width past `MAX_NODE_COUNT` — a creature that
 //! could never be addressed by the `u16` source index — is refused here, before
 //! any entry point allocates one map entry per declared input.
+//!
+//! `creature_validate` and its standalone synapse half enforce the same ceiling
+//! in NEAT-AI's own failure vocabulary rather than as a typed `CreatureError`
+//! (Issue #639) — pinned in the last section of this file.
 
 use std::error::Error;
 
+use neat_core::creature_validate::{FailureClass, reason};
+use neat_core::creature_validate_json::MAX_REQUEST_NEURONS;
 use neat_core::if_graft::{GraftError, validate_creature_topology};
 use neat_core::network::MAX_NODE_COUNT;
 use neat_core::{
-    CleanupError, CreatureError, CreatureExport, NeuronExport, SynapseExport, cleanup_creature,
-    compile_creature, creature_to_json, creature_to_json_pretty, parse_creature_json,
+    CleanupError, CreatureError, CreatureExport, NeuronExport, SynapseExport, ValidateOptions,
+    ValidationStats, cleanup_creature, compile_creature, creature_to_json, creature_to_json_pretty,
+    creature_validate, parse_creature_json, validate_synapse_and_memetic_rules,
 };
 
 /// Zero-input creature JSON exactly as written in the issue's acceptance
@@ -481,4 +488,82 @@ fn a_declared_input_at_the_node_ceiling_is_still_accepted() {
     );
     let creature = parse_creature_json(&json).expect("the ceiling itself must parse");
     assert_eq!(creature.input, MAX_NODE_COUNT);
+}
+
+// ---------------------------------------------------------------------------
+// creature_validate — the same ceiling in NEAT-AI's own vocabulary (Issue #639)
+// ---------------------------------------------------------------------------
+
+/// The oversized wording, derived from the single home of the ceiling rather
+/// than copied: `oversized_detail` is what every boundary already reports, and
+/// `creature_validate` now reports it too.
+fn oversized_message(declared: usize) -> String {
+    format!("creature declares {declared} neurons, exceeding the maximum of {MAX_REQUEST_NEURONS}")
+}
+
+#[test]
+fn creature_validate_refuses_a_declared_input_past_the_node_ceiling() {
+    // `creature_validate` is not a caller of `validate_creature_width` — it
+    // owes a `ValidationFailure` in NEAT-AI's wording, not a typed
+    // `CreatureError` — so the ceiling reaches it as a rule of its own, ahead
+    // of the walk that would otherwise derive one view per declared input.
+    let failure = creature_validate(
+        &creature_with_widths(100_000_000, 1),
+        &ValidateOptions::default(),
+    )
+    .expect_err("a declared input of 100000000 must be refused");
+
+    assert_eq!(failure.class, FailureClass::Validation);
+    assert_eq!(failure.reason, reason::OTHER);
+    assert_eq!(failure.message, oversized_message(HUGE_NODE_COUNT));
+    assert_eq!(failure.neuron_index, None);
+    assert_eq!(failure.synapse_index, None);
+}
+
+#[test]
+fn the_synapse_half_refuses_a_declared_input_past_the_node_ceiling() {
+    // Rules 23–31 are a public entry point in their own right and derive the
+    // same views from the same declared width, so they carry the same ceiling.
+    let mut stats = ValidationStats::default();
+    let failure = validate_synapse_and_memetic_rules(
+        &creature_with_widths(100_000_000, 1),
+        &ValidateOptions::default(),
+        &mut stats,
+    )
+    .expect_err("a declared input of 100000000 must be refused");
+
+    assert_eq!(failure.reason, reason::OTHER);
+    assert_eq!(failure.message, oversized_message(HUGE_NODE_COUNT));
+}
+
+#[test]
+fn creature_validate_reports_the_missing_input_floor_before_the_ceiling() {
+    // Rules 2 and 3 are allocation-free and are the ported TypeScript's first
+    // word on a width, so they keep speaking first: a creature that declares
+    // no inputs hears about that, not about a node count.
+    let mut creature = creature_with_widths(0, 1);
+    creature.neurons.clear();
+    creature.synapses.clear();
+
+    let failure = creature_validate(&creature, &ValidateOptions::default())
+        .expect_err("input: 0 is not a creature");
+    assert_eq!(
+        failure.message,
+        "Must have at least one input neurons was: 0"
+    );
+}
+
+#[test]
+fn creature_validate_accepts_the_widest_addressable_declaration() {
+    // The accepting edge of the same comparison. The ceiling counts *nodes*,
+    // so `MAX_NODE_COUNT - 1` declared inputs beside the one listed output
+    // neuron is exactly `MAX_NODE_COUNT` — the widest creature a `u16` source
+    // index can address, which must still validate.
+    let creature = creature_with_widths(MAX_NODE_COUNT - 1, 1);
+
+    let stats = creature_validate(&creature, &ValidateOptions::default())
+        .expect("the widest addressable creature must validate");
+    assert_eq!(stats.input as usize, MAX_NODE_COUNT - 1);
+    assert_eq!(stats.output, 1);
+    assert_eq!(stats.neurons() as usize, MAX_NODE_COUNT);
 }

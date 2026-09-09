@@ -661,9 +661,11 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
 ///
 /// [`crate::creature_validate()`] walks the declared width the same way and is
 /// deliberately **not** a caller — it must report the rule violations in
-/// NEAT-AI's wording rather than a typed width error, so its ceiling lives at
-/// its own JSON boundary instead
-/// ([`crate::creature_validate_json::oversized_detail`]).
+/// NEAT-AI's wording rather than a typed width error — so it carries the same
+/// ceiling as a rule of its own, read from
+/// [`crate::creature_validate_json::oversized_detail`] rather than restated
+/// (Issue #639). Native Rust callers reach it there whether or not they came
+/// through a JSON boundary.
 ///
 /// The ceiling is [`crate::network::MAX_NODE_COUNT`] — inclusive, since that is
 /// the widest network the `u16` source index can address — and a width past it

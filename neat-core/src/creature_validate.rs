@@ -80,6 +80,15 @@
 //! | 30 | forward-only structural integrity | `Validation` / `OTHER` |
 //! | 31 | memetic biases / weights resolve to real neurons and synapses | `Validation` / `MEMETIC` |
 //!
+//! One refusal has no rule number because the TypeScript has no counterpart
+//! for it: a declared observation width past
+//! [`MAX_REQUEST_NEURONS`](crate::MAX_REQUEST_NEURONS) is turned away between
+//! rule 3 and rule 4 (Issue #639). Rules 1–3 allocate nothing and are the
+//! ported TypeScript's first word on a width, so they keep speaking first;
+//! everything after rule 3 reads a [`NeuronView`] per declared input, which is
+//! memory a 40-byte creature must not be able to buy. See
+//! [`refuse_oversized_declared_width`].
+//!
 //! Rule 26 is the same notion of "duplicate" as
 //! [`crate::creature::validate_no_duplicate_synapses`] (Issues #556, #577) —
 //! one ordered `(from, to, type)` triple, at most once — reported here under
@@ -267,6 +276,7 @@ use crate::creature::{
     CreatureExport, MemeticExport, MemeticWeightExport, MemeticWeightRowExport, MemeticWeights,
     is_if_squash, parse_squash_name, parse_synapse_type, synapse_type_name_from,
 };
+use crate::creature_validate_json::oversized_detail;
 use crate::synapse_type::SynapseType;
 use crate::topology_invariants::{
     ConnectionIndex, IfFault, IfRoles, WiringFault, hidden_wiring_fault, if_neuron_fault,
@@ -692,11 +702,14 @@ pub fn creature_validate(
     options: &ValidateOptions,
 ) -> Result<ValidationStats, ValidationFailure> {
     validate_declared_widths(
-        creature.input + creature.neurons.len(),
+        // Saturating because the declaration is untrusted and the sum is not
+        // what is being bounded — `refuse_oversized_declared_width` is.
+        creature.input.saturating_add(creature.neurons.len()),
         creature.input as f64,
         creature.output as f64,
         options,
     )?;
+    refuse_oversized_declared_width(creature)?;
 
     let views = neuron_views(creature);
     let wire = WireIndex::build(creature);
@@ -764,6 +777,50 @@ pub(crate) fn validate_declared_widths(
     }
 
     Ok(())
+}
+
+/// Refuse a declared observation width the export walk would allocate for
+/// before the first rule reads it (Issue #639).
+///
+/// `CreatureExport::input` is a **declared** count with no backing data —
+/// input neurons are not listed in `neurons` — so a payload under 100 bytes
+/// can say `"input": 100000000`, and [`neuron_views`] derives one
+/// [`NeuronView`] per declared input before any rule runs. Bounding the width
+/// afterwards means the declaration, not the payload, decides the memory
+/// spent, and a large enough literal aborts the process on the allocation
+/// instead of returning ([`crate::creature::validate_creature_width`] is the
+/// same argument for the entry points that take a typed
+/// [`CreatureError`](crate::CreatureError)).
+///
+/// [`creature_validate`] cannot call that helper: it owes NEAT-AI's own rule
+/// wording rather than a typed width error, so the ceiling reaches it as a
+/// rule of its own — and reads that ceiling from the single home it already
+/// has, [`oversized_detail`], rather than restating the comparison. The
+/// runtime and packed shapes need no such rule: both size their walk from
+/// neurons the payload actually carries.
+///
+/// The refusal is deliberately **not** a boundary fault: a caller here asked
+/// for a verdict on a creature, so it gets a `ValidationError` / `OTHER`
+/// failure carrying `oversized_detail`'s wording — the same sentence the JSON
+/// boundary leads with [`MALFORMED_REQUEST`](crate::MALFORMED_REQUEST) when it
+/// refuses the same creature before a rule can see it.
+///
+/// Runs *after* rules 1–3, which allocate nothing and are the ported
+/// TypeScript's first word on a declared width, so the rule order those three
+/// share with NEAT-AI is unchanged.
+///
+/// # Errors
+///
+/// Returns the [`ValidationFailure`] naming the declared node count when it is
+/// past [`MAX_REQUEST_NEURONS`](crate::MAX_REQUEST_NEURONS).
+fn refuse_oversized_declared_width(creature: &CreatureExport) -> Result<(), ValidationFailure> {
+    // Saturating: the declared width is untrusted, and it is the ceiling that
+    // is being decided here, not the exact sum.
+    let declared = creature.input.saturating_add(creature.neurons.len());
+    match oversized_detail(declared) {
+        Some(detail) => Err(ValidationFailure::validation(reason::OTHER, detail)),
+        None => Ok(()),
+    }
 }
 
 /// `Number.isInteger(value)` — finite, and with nothing after the point.
@@ -2019,6 +2076,8 @@ pub fn validate_synapse_and_memetic_rules(
     options: &ValidateOptions,
     stats: &mut ValidationStats,
 ) -> Result<(), ValidationFailure> {
+    refuse_oversized_declared_width(creature)?;
+
     let views = neuron_views(creature);
     let wire = WireIndex::build(creature);
     let (from_indices, to_indices, synapse_types) = resolve_synapse_endpoints(creature, &wire)?;
