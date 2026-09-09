@@ -24,6 +24,7 @@ setup() {
 # all. quality (#309), rust-gates (#310), scripts-and-spelling (#311),
 # validation (#313), wasm64-memory64-smoke (#331).
 READ_ONLY_JOBS=(
+  downstream-consumers
   quality
   rust-gates
   scripts-and-spelling

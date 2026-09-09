@@ -47,7 +47,8 @@
           { "context": "Scripts & spelling", "integration_id": 15368 },
           { "context": "security / security", "integration_id": 15368 },
           { "context": "semgrep", "integration_id": 15368 },
-          { "context": "actionlint", "integration_id": 15368 }
+          { "context": "actionlint", "integration_id": 15368 },
+          { "context": "Downstream consumers", "integration_id": 15368 }
         ]
       }
     }

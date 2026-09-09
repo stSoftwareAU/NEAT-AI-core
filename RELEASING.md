@@ -116,26 +116,69 @@ idempotent and **decoupled from the per-commit `wasm-bundle-<sha>` artifacts**:
 - `v<version>` releases address **versions** so consumers can pin and compare
   semver and react to breaking bumps.
 
-## Removing public API: the three-phase flow
+## Changing or removing public API: the three-phase flow
 
-A public item is removed in three phases — **deprecate → migrate → delete** —
-staged across separate releases and separate PRs, as #386 → #408 → #409 did for
-the per-record scoring wrappers. Four properties of this repo shape the flow:
+This is a working system. **A change to core that breaks a registered
+downstream consumer does not merge until that consumer is fixed** — however
+good the idea (Issue #644). That covers every shape of break in
+[What counts as breaking](#what-counts-as-breaking): removing or renaming a
+public item, making a field or function private, narrowing a type, changing a
+signature or documented behaviour. The rule is the same for all of them —
+**add the alternative → migrate every consumer → remove the old surface** — as
+three separate PRs, in that order, as #386 → #408 → #409 did for the
+per-record scoring wrappers.
+
+| Phase | What lands | Bump | Proof |
+|-------|------------|------|-------|
+| 1 — add | The replacement in core (an accessor, a new signature, a new module). The old surface keeps working; where the language allows, it carries `#[deprecated]` naming the deletion issue. | patch | `downstream-consumers` stays green — nothing broke |
+| 2 — migrate | One PR per registered consumer moving it onto the replacement; each merges and moves its `neat-core.expected-version` if it needs to. | consumer's own | each consumer's own CI |
+| 3 — remove | Delete the old surface or make the field private, with the breaking signal, the minor bump and a [breaking-change log](#breaking-change-log) entry. | minor (major-equivalent) | `downstream-consumers` is green **because** phase 2 is complete |
+
+**The consumer list is a registry, not prose.**
+[`scripts/downstream-consumers.txt`](scripts/downstream-consumers.txt) names
+every repository that takes the `../../NEAT-AI-core/neat-core` path
+dependency.
+[`scripts/check-downstream-consumers.sh`](scripts/check-downstream-consumers.sh)
+clones each of them at `Develop` beside the candidate core and runs
+`cargo check --workspace --all-targets`; the `downstream-consumers` job in
+`ci.yml` runs it on every pull request and is a required check on `Develop`,
+and `tests/scripts/check_downstream_consumers.bats` pins the gate's own
+behaviour. A consumer that no longer compiles fails the core PR by name. A
+repository is added to the registry in the same PR that gives it the path
+dependency — an unlisted consumer is an unprotected one. Locally,
+`scripts/check-downstream-consumers.sh --workspace ..` compiles the sibling
+checkouts you already have against the core you are editing.
+
+Why the order matters: `0.12.0` (#633) shipped phase 3 with phase 1 folded into
+the same PR and no phase 2 at all. It was signalled correctly and `version-gate`
+passed — until Issue #644 the policy only checked *how* a break was labelled,
+never *whether anyone still depended on the old surface*. The production fleet
+builds the Rust consumers from this repository's `Develop` at head, so
+`rust_scorer` stopped compiling on every host within minutes of the merge, and
+the prose consumer list this section used to carry named two of the six
+repositories that broke.
+
+Four properties of this repo shape the flow:
 
 - **`#[deprecated]` is a hard error in-repo.** CI builds with
   `RUSTFLAGS="-D warnings"`, so the deprecating PR must migrate **every in-repo
   caller in the same PR** — a missed one fails the build rather than warning.
   A test that must keep calling the old API (a parity oracle, typically) carries
   an explicit `#[allow(deprecated)]` whose comment **names the deletion issue**.
+  The downstream gate deliberately compiles consumers **without** `-D warnings`:
+  a phase-1 deprecation must warn them, not break them.
 - **There is no `CHANGELOG.md`.** The `v<version>` GitHub release cut by
   `release.yml` is the release note, so a deprecation is recorded by the version
-  bump plus a note in `README.md` and the module docs. Deprecating is additive,
-  so it ships on a **patch**; only the delete is breaking.
-- **Deletion preconditions**, all verified before the delete PR (as #409 did):
-  the item carried `#[deprecated]` in a **prior released version**, at most one
-  in-repo caller remains, and a `gh` **code search across the consumer repos**
-  (NEAT-AI, NEAT-AI-Discovery, NEAT-AI-scorer, NEAT-AI-Examples, NEAT-AI-Explore)
-  returns **zero source hits** — markdown hits do not count as callers.
+  bump plus a note in `README.md` and the module docs. Adding the alternative is
+  additive, so it ships on a **patch**; only the removal is breaking.
+- **Removal preconditions**, all verified before the phase-3 PR (as #409 did):
+  the replacement shipped in a **prior released version** and, where it could
+  be expressed, the old item carried `#[deprecated]` there (a field going
+  private cannot be deprecated — its phase 1 is the accessor, and its phase 2
+  is every consumer reading through it); at most one in-repo caller remains;
+  and `downstream-consumers` is green with every registered consumer already
+  on the replacement. A `gh` code search across the consumer repos in the
+  registry is a useful preview of phase 2; the gate is the proof.
 - **Sibling removals take successive minors.** Several breaking removals on one
   milestone branch must be **rebased in sequence** so each takes the next
   major-equivalent slot (`0.6.0` → `0.7.0` → `0.8.0`) instead of colliding on a
@@ -144,18 +187,19 @@ the per-record scoring wrappers. Four properties of this repo shape the flow:
 
 ```mermaid
 flowchart LR
-    A["Phase 1 — deprecate<br/>#deprecated + migrate in-repo callers<br/>patch bump"]
-    B["Phase 2 — release<br/>v&lt;version&gt; carries the deprecation"]
-    C{"preconditions met?<br/>prior release + no in-repo caller<br/>+ zero consumer source hits"}
-    D["Phase 3 — delete<br/>breaking signal, minor bump<br/>+ breaking-change log entry"]
-    E["wait — migrate the caller first"]
+    A["Phase 1 — add the alternative<br/>#deprecated where possible<br/>migrate in-repo callers, patch bump"]
+    B["Phase 2 — migrate every registered consumer<br/>one PR per consumer repo"]
+    C{"downstream-consumers green<br/>+ prior release carries phase 1<br/>+ no in-repo caller?"}
+    D["Phase 3 — remove or privatise<br/>breaking signal, minor bump<br/>+ breaking-change log entry"]
+    E["wait — migrate the consumer first"]
     A --> B --> C
     C -- "yes" --> D
     C -- "no" --> E
 ```
 
 A removal with **no** consumer at all (a dead module) still ends at phase 3 and
-still needs a log entry — `0.4.0` and `0.5.0` below are that shape.
+still needs a log entry — `0.4.0` and `0.5.0` below are that shape — and the
+gate still runs, which is what proves there was no consumer.
 
 ## Breaking-change log
 
@@ -234,6 +278,15 @@ validation as `new`, plus a span check rejecting a neuron whose
 is `neurons()`, `synapses()`, `hot_weights()`, `hot_from()`, `activations()`,
 `hint_values()`, `trace_data()`, `num_neurons()`, `num_inputs()` and
 `num_synapses()` — every one hands out a shared borrow, never `&mut`.
+
+**Postscript (Issue #644).** The two consumers named above were not the only
+two that broke: NEAT-AI-scorer, NEAT-AI-Lamarck, NEAT-AI-Forests, NEAT-AI-Ockham
+and NEAT-AI-Backpropagation all read the fields directly, none had been migrated
+when this merged, and the production fleet — which builds them from this
+repository's `Develop` at head — stopped compiling `rust_scorer` within minutes.
+Each was migrated after the fact. This release is why the three-phase flow above
+now covers every public-API change, why the consumer list is a registry, and why
+`downstream-consumers` is a required check.
 
 ### `0.11.0` — an untyped `IF` row reads as the positive arm (Issue #591)
 
