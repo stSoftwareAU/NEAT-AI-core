@@ -501,8 +501,12 @@ each build one owned `String` UUID per declared input — so a width checked
 entries, and a large enough literal abort the process on the allocation. A
 declared `input` past `MAX_NODE_COUNT` is `CreatureError::TooManyNodes`.
 `creature_validate` walks the width too but is not a caller by design — it owes
-NEAT-AI's rule wording, not a typed width error — so its ceiling stays at its
-own JSON boundary (`oversized_detail` / `MAX_REQUEST_NEURONS`). Adding a *new*
+NEAT-AI's rule wording, not a typed width error — so it enforces the same
+ceiling itself, ahead of its own walk, reading `oversized_detail` /
+`MAX_REQUEST_NEURONS` rather than restating the comparison (Issue #639); its
+standalone synapse half `validate_synapse_and_memetic_rules` does the same.
+`MemeticExport::prune_to` is the residual — it answers with `()` and cannot
+report a refusal without a public signature change (Issue #650). Adding a *new*
 caller of `validate_creature_width` inherits the ceiling; adding a new width
 walk that bypasses it needs its own.
 `neat-core/tests/creature_width_allocations.rs` is the oracle: a counting global

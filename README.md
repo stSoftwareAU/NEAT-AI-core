@@ -508,9 +508,18 @@ is already `CreatureError::OutputCountMismatch`.
 
 `creature_validate` walks the declared width the same way but is deliberately
 **not** a caller: it reports rule violations in NEAT-AI's wording rather than a
-typed width error, so its ceiling stays at its own JSON boundary
-(`oversized_detail` / `MAX_REQUEST_NEURONS`, which every WASM and `prune_json`
-request passes through) — see the boundary table in `creature_validate_json`.
+typed width error. It therefore carries the same ceiling as a rule of its own,
+ahead of the walk, reading it from `oversized_detail` / `MAX_REQUEST_NEURONS` —
+the one home the WASM and `prune_json` boundaries already ask (Issue #639). A
+native Rust caller handing a `CreatureExport { input: 100_000_000, .. }`
+straight to `creature_validate`, or to its standalone synapse half
+`validate_synapse_and_memetic_rules`, is refused in bounded time with
+`ValidationError` / `OTHER` carrying that boundary's wording, instead of buying
+one `NeuronView` per declared input. The JSON boundaries still refuse the same
+creature first, as a *malformed request* rather than a verdict — see the
+boundary table in `creature_validate_json`. `MemeticExport::prune_to` walks the
+same width and is the one route still unbounded (Issue #650): it answers with
+`()`, so refusing needs a public signature change rather than a guard.
 
 The Display text (`Must have at least one input neurons was: 0`) mirrors
 NEAT-AI `src/architecture/CreatureValidate.ts` so logs line up across the TS
