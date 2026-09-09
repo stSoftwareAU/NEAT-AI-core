@@ -130,9 +130,22 @@ jobs:
           if [ "${PR_BREAKING_LABEL:-false}" = "true" ]; then
             BREAKING=true
           fi
-          if [ "$(scripts/detect-breaking.sh "$RANGE")" = "true" ]; then
-            BREAKING=true
+          # Issue #634: capture the answer and the exit status separately.
+          # `[ "$(scripts/detect-breaking.sh …)" = "true" ]` throws the status
+          # away, so a failed detector reads as a definite "not breaking" and a
+          # breaking change ships on a patch bump.
+          if ! DETECTED_BREAKING=$(scripts/detect-breaking.sh "$RANGE"); then
+            echo "detect-breaking.sh failed for range '$RANGE'" >&2
+            exit 1
           fi
+          case "$DETECTED_BREAKING" in
+            true) BREAKING=true ;;
+            false) ;;
+            *)
+              echo "detect-breaking.sh printed '$DETECTED_BREAKING' for range '$RANGE'; expected true or false" >&2
+              exit 1
+              ;;
+          esac
           echo "Breaking change signalled: $BREAKING"
 
           # Skip the semver bump only when the head version already satisfies the
@@ -235,9 +248,21 @@ jobs:
             BREAKING=true
           fi
           chmod +x scripts/detect-breaking.sh scripts/check-version-bump.sh
-          if [ "$(scripts/detect-breaking.sh "origin/$BASE_BRANCH..HEAD")" = "true" ]; then
-            BREAKING=true
+          # Issue #634 — see the version-increment job: a non-zero exit is a
+          # detector failure, not a `false`, and must fail this gate loudly.
+          RANGE="origin/$BASE_BRANCH..HEAD"
+          if ! DETECTED_BREAKING=$(scripts/detect-breaking.sh "$RANGE"); then
+            echo "detect-breaking.sh failed for range '$RANGE'" >&2
+            exit 1
           fi
+          case "$DETECTED_BREAKING" in
+            true) BREAKING=true ;;
+            false) ;;
+            *)
+              echo "detect-breaking.sh printed '$DETECTED_BREAKING' for range '$RANGE'; expected true or false" >&2
+              exit 1
+              ;;
+          esac
           echo "base=$BASE_VERSION head=$HEAD_VERSION breaking=$BREAKING"
           scripts/check-version-bump.sh "$BASE_VERSION" "$HEAD_VERSION" "$BREAKING"
 
