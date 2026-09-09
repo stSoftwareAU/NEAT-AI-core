@@ -166,7 +166,10 @@ for job in (data.get("jobs") or {}).values():
         with open(os.path.join(out, "step.sh"), "w") as fh:
             fh.write(body)
         with open(os.path.join(out, "shell.cmd"), "w") as fh:
-            fh.write(argv)
+            # Newline-terminated: callers read it with `read -r -a`, which
+            # returns non-zero at EOF on an unterminated line and would abort
+            # an errexit test body before its assertions run.
+            fh.write(argv + "\n")
         sys.exit(0)
 
 sys.exit(f"no step named like {needle!r} with a run: block in {workflow}")

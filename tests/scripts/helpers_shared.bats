@@ -187,6 +187,12 @@ YAML
   run extract_step "${FIXTURES}/steps.yml" "pipefail" "$FIXTURES"
   [ "$status" -eq 0 ]
   [ "$(cat "${FIXTURES}/shell.cmd")" = "bash --noprofile --norc -eo pipefail" ]
+
+  # Callers split shell.cmd with `read -r -a`, which returns non-zero at EOF on
+  # an unterminated line and aborts an errexit test body before its assertions.
+  local shell_argv
+  read -r -a shell_argv <"${FIXTURES}/shell.cmd"
+  [ "${shell_argv[0]}" = "bash" ]
 }
 
 @test "extract_step fails loud when the named step is absent" {
