@@ -264,6 +264,22 @@ lock_snapshot() {
   ' "$LOCK_FILE" | LC_ALL=C sort
 }
 
+# Names of packages the lockfile carries with no `source` — workspace members
+# and path dependencies. crates.io has no release age for them, so the
+# out-of-plan check below must not demand one: ci.yml's version-increment step
+# rewrites this crate's own version in Cargo.toml and *then* runs bump-deps.sh,
+# so the first `cargo update` carries that version into Cargo.lock. Treating it
+# as an unverifiable transitive move would revert every bump on the PR path.
+lock_local_packages() {
+  [[ -f "$LOCK_FILE" ]] || return 0
+  awk '
+    /^\[\[package\]\]/     { if (name != "" && !src) print name; name = ""; src = 0 }
+    /^name[[:space:]]*=/    { gsub(/"/, ""); name = $3 }
+    /^source[[:space:]]*=/  { src = 1 }
+    END                     { if (name != "" && !src) print name }
+  ' "$LOCK_FILE"
+}
+
 # Exit 0 when <crate> is locked at <version>. The snapshot is materialised
 # before the match rather than piped: `grep -q` exits at the first hit, and a
 # SIGPIPE'd `sort` upstream would make `pipefail` report a locked crate as
@@ -309,9 +325,8 @@ RUN_LOCK_BACKUP=""
 # The trigger is the lockfile itself, not the bump counter: `cargo update` also
 # rewrites out-of-plan transitive entries, which the quarantine check allows
 # once their release age clears and which leave `external_changed` at 0.
-# Comparing against the snapshot is
-# what makes "nothing lands unscanned" true of every byte of the file, not
-# just of the crates the plan named. A run that found no lockfile cannot have
+# Comparing against the snapshot is what makes "nothing lands unscanned" true
+# of every byte of the file, not just of the crates the plan named. A run that found no lockfile cannot have
 # changed one — every update pass refuses to run without it.
 revert_run_bumps() {
   local reason="$1"
@@ -361,11 +376,9 @@ BUMP_DEFER_REASON=()
 #
 # Movement of out-of-plan transitive crates is still allowed — cargo must be
 # free to move a dependency to satisfy the versions it was asked for — but
-# only onto a version that has itself cleared the release-age window. The plan
-# never named those crates, so nothing else checks them, and a crate dragged
-# onto a version published minutes ago would otherwise land in Cargo.lock
-# unverified (Issue #627). An age the run could not establish counts as a
-# breach: refusing the update beats keeping a version nobody vouched for.
+# only onto a version that has itself cleared the release-age window, and an
+# age the run could not establish counts as a breach (Issue #627). The
+# rationale lives once, in SECURITY.md's "Dependency bump quarantine".
 quarantine_breach() {
   local before="$1" after i name version clean line crate published_at
   after="$(lock_snapshot)"
@@ -376,8 +389,9 @@ quarantine_breach() {
       return 0
     fi
   done <<<"$BUMP_DEFERRED_LOCK"
-  # Guarded: bash 3.2 treats "${!arr[@]}" on an empty array as unbound. The
-  # guard skips only this loop — the out-of-plan check below still runs.
+  # Expanded through ${arr[@]+…}: bash 3.2 treats "${!arr[@]}" on an empty
+  # array as unbound, and an empty plan must fall through to the out-of-plan
+  # check below rather than return early.
   for i in ${BUMP_NAMES[@]+"${!BUMP_NAMES[@]}"}; do
     name="${BUMP_NAMES[i]}"
     # Every version the crate is now locked at must be its approved target or
@@ -398,14 +412,17 @@ quarantine_breach() {
     return 0
   done
   # Everything else the update left in the lock: the "<name> <version>" lines
-  # present after it and absent before it. Both snapshots come out of
-  # lock_snapshot already `LC_ALL=C sort`ed, so one comm names the movement
-  # rather than a grep per package — a real Cargo.lock carries hundreds.
-  local approved="" moved
+  # present after it and absent before it. One awk pass rather than a grep per
+  # package — a real Cargo.lock carries hundreds — and deliberately not `comm`,
+  # which exits 1 on input it thinks is unsorted and would trip `set -e` inside
+  # the command substitution the callers wrap this function in.
+  local approved="" moved local_pkgs rc
   for i in ${BUMP_NAMES[@]+"${!BUMP_NAMES[@]}"}; do
     approved+="${BUMP_NAMES[i]} ${BUMP_TARGETS[i]}"$'\n'
   done
-  moved="$(LC_ALL=C comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
+  local_pkgs="$(lock_local_packages)"
+  moved="$(awk 'NR == FNR { held[$0] = 1; next } !($0 in held)' \
+    <(printf '%s\n' "$before") <(printf '%s\n' "$after"))"
   # The one exemption, by exact "<name> <version>" rather than by crate name:
   # a planned crate on its approved target, age-checked when the plan was read
   # (the loop above has already rejected it anywhere else). Exempting the name
@@ -414,13 +431,24 @@ quarantine_breach() {
   while read -r crate version; do
     [[ -n "$crate" ]] || continue
     if grep -qxF "$crate $version" <<<"$approved"; then continue; fi
+    if grep -qxF "$crate" <<<"$local_pkgs"; then continue; fi
     if ! published_at="$(crate_published_at_cached "$crate" "$version")"; then
       printf 'moved out-of-plan %s to %s (release age unknown)\n' "$crate" "$version"
       return 0
     fi
-    if ! is_older_than_hours "$published_at" "$QUARANTINE_HOURS"; then
+    # 0 = past the window, 1 = inside it, 2 = the answer would not parse. The
+    # last two both refuse the update, but they are different faults and the
+    # log has to say which: "too fresh" would misreport an unreadable answer.
+    rc=0
+    is_older_than_hours "$published_at" "$QUARANTINE_HOURS" || rc=$?
+    if [[ "$rc" -eq 1 ]]; then
       printf 'moved out-of-plan %s to %s (within %sh quarantine, published %s)\n' \
         "$crate" "$version" "$QUARANTINE_HOURS" "$published_at"
+      return 0
+    fi
+    if [[ "$rc" -ne 0 ]]; then
+      printf 'moved out-of-plan %s to %s (unparsable publish time %s)\n' \
+        "$crate" "$version" "$published_at"
       return 0
     fi
   done <<<"$moved"
@@ -772,14 +800,16 @@ cleanup_run_files() {
 }
 trap cleanup_run_files EXIT
 
-AGE_CACHE_FILE="$(mktemp "${TMPDIR:-/tmp}/bump-deps-age-cache.XXXXXX")"
-
 if [[ -f "$LOCK_FILE" ]]; then
   RUN_LOCK_BACKUP="$(mktemp "${TMPDIR:-/tmp}/bump-deps-run-lock.XXXXXX")"
   cp "$LOCK_FILE" "$RUN_LOCK_BACKUP"
 fi
 
-if [[ "$SKIP_EXTERNAL" -eq 0 ]]; then bump_external; fi
+# Only the external stage looks a release age up, so only it needs the memo.
+if [[ "$SKIP_EXTERNAL" -eq 0 ]]; then
+  AGE_CACHE_FILE="$(mktemp "${TMPDIR:-/tmp}/bump-deps-age-cache.XXXXXX")"
+  bump_external
+fi
 if [[ "$SKIP_AUDIT"    -eq 0 ]]; then run_audit;     fi
 if [[ "$SKIP_BUILD"    -eq 0 ]]; then run_build;     fi
 

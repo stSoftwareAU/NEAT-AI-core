@@ -315,15 +315,22 @@ STUB
   chmod +x "$STUB_BIN/curl"
 }
 
-# Write a minimal Cargo.lock holding the given "<name> <version>" pairs.
+# Write a minimal Cargo.lock holding the given "<name> <version>" pairs, each
+# sourced from the crates.io registry as a real lockfile records them.
 write_fake_lock() {
   {
     echo 'version = 4'
     for pair in "$@"; do
       set -- $pair
-      printf '\n[[package]]\nname = "%s"\nversion = "%s"\n' "$1" "$2"
+      printf '\n[[package]]\nname = "%s"\nversion = "%s"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n' "$1" "$2"
     done
   } >"$TMP_REPO/Cargo.lock"
+}
+
+# Append a package with no `source` — a workspace member or path dependency,
+# which crates.io has no release age for.
+append_local_package() {
+  printf '\n[[package]]\nname = "%s"\nversion = "%s"\n' "$1" "$2" >>"$TMP_REPO/Cargo.lock"
 }
 
 # Put <name> on the stub PATH so `command -v <name>` finds it.
@@ -752,7 +759,7 @@ TXT
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: per-crate update of cc moved out-of-plan bumpalo to 3.1.0 (within 24h quarantine"* ]]
   [[ "$output" == *"defer: cc -> 1.4.5"* ]]
-  ! grep -q '3.1.0' "$TMP_REPO/Cargo.lock"
+  [ "$(grep -c '3.1.0' "$TMP_REPO/Cargo.lock")" -eq 0 ]
   grep -qx 'version = "3.0.0"' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
 }
@@ -774,7 +781,7 @@ TXT
   [[ "$output" == *"revert: grouped retry moved out-of-plan bumpalo to 3.1.0 (within 24h quarantine"* ]]
   [[ "$output" == *"defer: js-sys -> 0.3.105 (reverted — grouped retry moved out-of-plan bumpalo"* ]]
   [[ "$output" == *"defer: wasm-bindgen -> 0.2.128"* ]]
-  ! grep -q '3.1.0' "$TMP_REPO/Cargo.lock"
+  [ "$(grep -c '3.1.0' "$TMP_REPO/Cargo.lock")" -eq 0 ]
   grep -qx 'version = "0.3.104"' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "0.2.127"' "$TMP_REPO/Cargo.lock"
 }
@@ -811,7 +818,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: per-crate update of cc moved out-of-plan newdep to 9.9.9 (within 24h quarantine"* ]]
-  ! grep -q '9.9.9' "$TMP_REPO/Cargo.lock"
+  [ "$(grep -c '9.9.9' "$TMP_REPO/Cargo.lock")" -eq 0 ]
 }
 
 @test "external: --quarantine-hours 0 keeps a freshly published transitive version" {
@@ -830,6 +837,49 @@ TXT
   [[ "$output" == *"bump: cc -> 1.4.5"* ]]
   [[ "$output" != *"revert:"* ]]
   grep -qx 'version = "3.1.0"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: the workspace crate's own version moving does not revert the run" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2"
+  # ci.yml's version-increment step rewrites neat-core's version in Cargo.toml
+  # and *then* runs bump-deps.sh, so the first cargo update carries that new
+  # version into Cargo.lock. A workspace member has no crates.io release age;
+  # demanding one would 404 and revert every bump on the PR path.
+  append_local_package "neat-core" "0.12.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  printf 'neat-core 0.12.0 0.12.1\n' >"$STUB_DRAG"
+  # Through the real registry path, where crates.io has no such release to
+  # name — the fixture fallback would mask the fault by calling it ancient.
+  cat >"$STUB_CURL_OUT" <<'JSON'
+{"versions":[{"num":"1.4.5","created_at":"2020-01-01T00:00:00Z"}]}
+JSON
+  STUB_FIXTURE_DIR="" run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bump: cc -> 1.4.5"* ]]
+  [[ "$output" != *"revert:"* ]]
+  [[ "$output" != *"neat-core"* ]]
+  grep -qx 'version = "0.12.1"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: an unparsable transitive publish time is named as such" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # The registry answered with something that is not a timestamp. The update
+  # is still refused, but the log must not claim the crate is merely too
+  # fresh — nothing could be parsed at all.
+  echo "not-a-date" >"$TMP_REPO/publish/bumpalo-3.1.0.iso"
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of cc moved out-of-plan bumpalo to 3.1.0 (unparsable publish time"* ]]
+  [[ "$output" != *"within 24h quarantine"* ]]
+  grep -qx 'version = "3.0.0"' "$TMP_REPO/Cargo.lock"
 }
 
 @test "external: a transitive release-age lookup is made once per version" {

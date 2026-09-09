@@ -146,6 +146,15 @@ a crate published minutes ago reaches `Cargo.lock` having passed no check.
 The lookups are memoised for the run, so a resolution change that moves dozens
 of crates costs one query per version rather than one per update.
 
+Packages the lockfile records with no `source` — the workspace members and
+path dependencies — are exempt, because crates.io has no release age to give
+for them. That is not a gap: nothing publishes them, so nothing can slip a
+fresh version past the window. It matters because `ci.yml`'s
+*version-increment* step rewrites this crate's own version in `Cargo.toml` and
+then runs `bump-deps.sh`, so the first `cargo update` carries that version into
+`Cargo.lock`; demanding a release age for it would revert every bump on the PR
+path.
+
 ```mermaid
 flowchart TD
     U["cargo update pass"] --> D{"deferred crate moved?"}
@@ -157,6 +166,7 @@ flowchart TD
     T -->|yes| A{"landed version older than the window?"}
     A -->|yes| K
     A -->|no, or age unknown| R
+    T -->|"yes, but a workspace / path package"| K
 ```
 
 ## Supply-chain audit scope
