@@ -14,10 +14,11 @@
 
 use std::error::Error;
 
+use neat_core::if_graft::{GraftError, validate_creature_topology};
 use neat_core::network::MAX_NODE_COUNT;
 use neat_core::{
-    CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature, creature_to_json,
-    creature_to_json_pretty, parse_creature_json,
+    CleanupError, CreatureError, CreatureExport, NeuronExport, SynapseExport, cleanup_creature,
+    compile_creature, creature_to_json, creature_to_json_pretty, parse_creature_json,
 };
 
 /// Zero-input creature JSON exactly as written in the issue's acceptance
@@ -306,43 +307,136 @@ const HUGE_INPUT_JSON: &str = r#"{"input":100000000,"output":1,"neurons":[{"type
 /// neuron — the same meaning `TooManyNodes` has after compilation.
 const HUGE_NODE_COUNT: usize = 100_000_001;
 
+/// One entry point that must refuse the over-wide declaration, with the case
+/// name it is reported and cited under.
+///
+/// Driving every caller of `validate_creature_width` from one table is what
+/// stops a *new* entry point being added with the floor wired up and the
+/// ceiling forgotten — the two halves of the rule are one check, so they are
+/// one table.
+struct CeilingSite {
+    /// Case name, reported by
+    /// [`every_entry_point_refuses_a_declared_input_past_the_node_ceiling`].
+    name: &'static str,
+    /// Drives the entry point over a creature declaring `input` inputs beside
+    /// one output neuron, returning the declared node count the typed refusal
+    /// named, or `None` if the entry point accepted the creature.
+    refuse: fn(usize) -> Option<usize>,
+    /// Whether this entry point goes on to build the per-input index once the
+    /// width passes. The three that do also carry the *node* ceiling — inputs
+    /// plus listed neurons — so they refuse a creature declaring exactly
+    /// `MAX_NODE_COUNT` inputs beside an output neuron, and are excluded from
+    /// the accepting-edge case below for that reason rather than the width one.
+    walks_the_width: bool,
+}
+
+/// Every route that accepts or emits a creature and then indexes it by the
+/// declared width — the four call sites of `validate_creature_width` named in
+/// AGENTS.md, plus the two the graft and prune boundaries add.
+const CEILING_SITES: &[CeilingSite] = &[
+    CeilingSite {
+        name: "parse_creature_json_refuses_a_declared_input_past_the_node_ceiling",
+        refuse: |input| {
+            let json = format!(
+                r#"{{"input":{input},"output":1,"neurons":[{{"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}}],"synapses":[]}}"#
+            );
+            match parse_creature_json(&json) {
+                Err(CreatureError::TooManyNodes { count }) => Some(count),
+                Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+                Ok(_) => None,
+            }
+        },
+        walks_the_width: false,
+    },
+    CeilingSite {
+        name: "compile_creature_refuses_a_declared_input_past_the_node_ceiling",
+        refuse: |input| match compile_creature(&creature_with_widths(input, 1)) {
+            Err(CreatureError::TooManyNodes { count }) => Some(count),
+            Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+            Ok(_) => None,
+        },
+        walks_the_width: true,
+    },
+    CeilingSite {
+        name: "creature_to_json_refuses_a_declared_input_past_the_node_ceiling",
+        refuse: |input| match creature_to_json(&creature_with_widths(input, 1)) {
+            Err(CreatureError::TooManyNodes { count }) => Some(count),
+            Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+            Ok(_) => None,
+        },
+        walks_the_width: false,
+    },
+    CeilingSite {
+        name: "creature_to_json_pretty_refuses_a_declared_input_past_the_node_ceiling",
+        refuse: |input| match creature_to_json_pretty(&creature_with_widths(input, 1)) {
+            Err(CreatureError::TooManyNodes { count }) => Some(count),
+            Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+            Ok(_) => None,
+        },
+        walks_the_width: false,
+    },
+    CeilingSite {
+        name: "validate_creature_topology_refuses_a_declared_input_past_the_node_ceiling",
+        refuse: |input| match validate_creature_topology(&creature_with_widths(input, 1)) {
+            Err(GraftError::Creature(CreatureError::TooManyNodes { count })) => Some(count),
+            Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+            Ok(()) => None,
+        },
+        walks_the_width: true,
+    },
+    CeilingSite {
+        name: "cleanup_creature_refuses_a_declared_input_past_the_node_ceiling",
+        refuse: |input| match cleanup_creature(&creature_with_widths(input, 1)) {
+            Err(CleanupError::Creature(CreatureError::TooManyNodes { count })) => Some(count),
+            Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+            Ok(_) => None,
+        },
+        walks_the_width: true,
+    },
+];
+
 #[test]
-fn parse_rejects_a_declared_input_past_the_node_ceiling() {
+fn every_entry_point_refuses_a_declared_input_past_the_node_ceiling() {
+    for site in CEILING_SITES {
+        let Some(count) = (site.refuse)(100_000_000) else {
+            panic!(
+                "{}: a declared input of 100000000 must be refused",
+                site.name
+            );
+        };
+        assert_eq!(
+            count, HUGE_NODE_COUNT,
+            "{}: the refusal must name the declared node count",
+            site.name
+        );
+    }
+}
+
+#[test]
+fn every_entry_point_accepts_the_widest_addressable_declaration() {
+    // The accepting edge of the same comparison, driven from the same table:
+    // `MAX_NODE_COUNT` inputs is the widest observation a `u16` source index
+    // can name, so no entry point may refuse it on *width* grounds. Only the
+    // sites that stop at the width are asked; the three that walk it go on to
+    // add the listed output neuron and refuse 65 537 *nodes*, which is the
+    // Issue #177 ceiling and a different question from the rule under test.
+    for site in CEILING_SITES.iter().filter(|site| !site.walks_the_width) {
+        assert!(
+            (site.refuse)(MAX_NODE_COUNT).is_none(),
+            "{}: {MAX_NODE_COUNT} inputs is addressable and must not be refused",
+            site.name
+        );
+    }
+}
+
+#[test]
+fn the_issues_exact_payload_is_refused_rather_than_walked() {
+    // The literal reproducer from Issue #622, byte for byte: under 200 bytes of
+    // JSON that used to buy a hundred million owned `String` map keys.
     match parse_creature_json(HUGE_INPUT_JSON) {
         Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
         Err(other) => panic!("expected TooManyNodes, got {other:?}"),
         Ok(c) => panic!("input: 100000000 must not parse, got input {}", c.input),
-    }
-}
-
-#[test]
-fn compile_rejects_a_declared_input_past_the_node_ceiling() {
-    match compile_creature(&creature_with_widths(100_000_000, 1)) {
-        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
-        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
-        Ok(_) => panic!("input: 100000000 must not compile"),
-    }
-}
-
-#[test]
-fn neither_serialiser_writes_a_declared_input_past_the_node_ceiling() {
-    // Both writers, so the ceiling is pinned at all four call sites of
-    // `validate_creature_width` exactly as the lower bound is.
-    match creature_to_json(&creature_with_widths(100_000_000, 1)) {
-        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
-        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
-        Ok(json) => panic!(
-            "input: 100000000 must not serialise, got {} bytes",
-            json.len()
-        ),
-    }
-    match creature_to_json_pretty(&creature_with_widths(100_000_000, 1)) {
-        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
-        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
-        Ok(json) => panic!(
-            "input: 100000000 must not pretty-serialise, got {} bytes",
-            json.len()
-        ),
     }
 }
 
