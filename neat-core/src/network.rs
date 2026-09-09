@@ -12,8 +12,9 @@ use crate::batch_scoring::{inline_squash, load_record};
 use crate::loss::MSE_TILE_LANES;
 use crate::range::apply_limit_range;
 use crate::simd::{
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
-    weighted_sum_simd, weighted_sum_simd_4records,
+    weighted_sum_no_bias_simd_unchecked, weighted_sum_of_squares_simd_unchecked,
+    weighted_sum_of_squares_v2_simd_unchecked, weighted_sum_simd_4records_unchecked,
+    weighted_sum_simd_unchecked,
 };
 use crate::squash::SquashType;
 use crate::squash_simd::squash_x4;
@@ -58,6 +59,23 @@ pub enum NetworkError {
         /// The network's node count; valid indices are `0..num_neurons`.
         num_neurons: usize,
     },
+    /// A neuron declares a synapse span that runs past the end of the synapse
+    /// table (`start_synapse + num_synapses > synapses.len()`).
+    ///
+    /// Issue #625 - the forward pass hands `start..end` to the
+    /// `simd::*_unchecked` kernels, which walk that range with `get_unchecked`.
+    /// [`CompiledNetwork::new`] cannot produce an overrunning span (it grows the
+    /// table as it reads), but [`CompiledNetwork::from_parts`] takes both halves
+    /// from the caller, so it rejects one here rather than reading past the
+    /// slice during activation.
+    InvalidSynapseSpan {
+        /// Index of the offending neuron within the non-input neuron list.
+        neuron: usize,
+        /// The one-past-the-end synapse index the neuron declared.
+        end: usize,
+        /// Number of synapses actually present.
+        len: usize,
+    },
 }
 
 impl std::fmt::Display for NetworkError {
@@ -81,6 +99,13 @@ impl std::fmt::Display for NetworkError {
                     f,
                     "Synapse source index {from_index} is out of bounds for a network \
                      with {num_neurons} nodes (valid indices are 0..{num_neurons})"
+                )
+            }
+            NetworkError::InvalidSynapseSpan { neuron, end, len } => {
+                write!(
+                    f,
+                    "Neuron {neuron} declares synapses up to index {end}, past the \
+                     {len} synapses present"
                 )
             }
         }
@@ -166,6 +191,28 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
     (weights, from)
 }
 
+/// Serialise the smallest network that loads and activates: 1 input, 1 identity
+/// output, weight 1.0, bias 0.5.
+///
+/// Issue #625 - shared by the [`CompiledNetwork`] doctests that pin the field
+/// encapsulation, so the refusing and the compiling halves of that pair are
+/// driven by **one** fixture. A second copy could drift and let the
+/// `compile_fail` half start failing for the wrong reason.
+pub fn doc_fixture_bytes() -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&2u32.to_le_bytes()); // num_neurons
+    data.extend_from_slice(&1u32.to_le_bytes()); // num_inputs
+    data.extend_from_slice(&0.5_f64.to_le_bytes()); // bias
+    data.push(SquashType::Identity as u8);
+    data.push(0); // is_constant
+    data.extend_from_slice(&1u16.to_le_bytes()); // num_synapses
+    data.extend_from_slice(&0u16.to_le_bytes()); // from_index
+    data.push(0); // synapse_type
+    data.push(0); // padding
+    data.extend_from_slice(&1.0_f64.to_le_bytes()); // weight
+    data
+}
+
 /// Compiled network data structure
 ///
 /// `Clone` is supported so native tools (for example the NEAT-AI scorer) can run
@@ -185,79 +232,290 @@ pub fn hot_synapse_soa(synapses: &[SynapseData]) -> (Vec<f32>, Vec<u16>) {
 ///
 /// This compact format minimises memory access and enables efficient iteration.
 /// Issue #1175 - Uses typed structs for better cache locality and compiler optimisation.
+///
+/// # Field invariant the forward pass relies on
+///
+/// [`Self::new`] rejects any `from_index` outside `0..num_neurons`
+/// ([`NetworkError::InvalidSynapseIndex`]), and every activation buffer is sized
+/// to `num_neurons`. The forward and batched-scoring paths discharge the
+/// `simd::*_unchecked` index contract (Issue #613) from exactly that check, so
+/// the invariant has to survive for as long as the value does.
+///
+/// Issue #625 makes it survive **by construction**: every field is private, so
+/// the crate's own construction paths ([`Self::new`] and
+/// [`crate::creature::compile_creature`]) are the only way to set one and safe
+/// code outside the crate cannot write `synapses`, `hot_from`, `neurons`,
+/// `activations` or `num_neurons` after validation, nor assemble the struct as
+/// a literal that skips it. Consumers read the same data through the
+/// borrow-only accessors — [`Self::neurons`], [`Self::synapses`],
+/// [`Self::hot_weights`], [`Self::hot_from`], [`Self::activations`],
+/// [`Self::hint_values`], [`Self::trace_data`], [`Self::num_neurons`],
+/// [`Self::num_inputs`] — which hand out `&[T]`, never `&mut`. To change a
+/// network, rebuild it through `new` rather than editing one in place.
+///
+/// The gate is the pair of doctests below. A doctest is compiled as its own
+/// crate linking `neat_core`, so it *is* an out-of-crate safe caller — the exact
+/// threat model. The first must not compile; the second is identical except that
+/// it reads through the accessors, and it compiles **and runs**, so a refusal
+/// can never come from a broken fixture rather than from the privacy rule
+/// (AGENTS.md oracle rule 5). They run under `cargo test --doc`, which
+/// `quality.sh` and the CI Rust job both execute.
+///
+/// The Issue #625 write is refused:
+///
+/// ```compile_fail
+/// use neat_core::network::CompiledNetwork;
+/// # fn main() {
+/// let mut net = CompiledNetwork::new(&neat_core::network::doc_fixture_bytes()).unwrap();
+/// net.synapses[0].from_index = 60_000;
+/// net.hot_from[0] = 60_000;
+/// let _ = net.activate(&[1.0], 1);
+/// # }
+/// ```
+///
+/// So is assembling the struct as a literal, which would skip validation
+/// altogether:
+///
+/// ```compile_fail
+/// use neat_core::network::CompiledNetwork;
+/// # fn main() {
+/// let net = CompiledNetwork { num_neurons: 2, num_inputs: 1, ..todo!() };
+/// # let _ = net;
+/// # }
+/// ```
+///
+/// The same fixture read through the accessors compiles and activates:
+///
+/// ```
+/// use neat_core::network::CompiledNetwork;
+/// let mut net = CompiledNetwork::new(&neat_core::network::doc_fixture_bytes()).unwrap();
+/// assert_eq!(net.synapses()[0].from_index, 0);
+/// assert_eq!(net.hot_from()[0], 0);
+/// assert_eq!(net.activations().len(), net.num_neurons());
+/// // identity(2.0 * 1.0 + 0.5)
+/// let out = net.activate(&[2.0], 1);
+/// assert!((out[0] - 2.5).abs() < 1e-5, "{out:?}");
+/// ```
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 #[derive(Clone)]
 pub struct CompiledNetwork {
     /// Total number of neurons (including input)
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub num_neurons: usize,
+    pub(crate) num_neurons: usize,
     /// Number of input neurons
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub num_inputs: usize,
+    pub(crate) num_inputs: usize,
     /// Neuron metadata using typed struct for cache efficiency
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub neurons: Vec<NeuronData>,
+    pub(crate) neurons: Vec<NeuronData>,
     /// Synapse data using typed struct for cache efficiency
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub synapses: Vec<SynapseData>,
+    pub(crate) synapses: Vec<SynapseData>,
     /// Hot-path weights, struct-of-arrays view of `synapses[i].weight`
     /// (Issue #533). Built by [`hot_synapse_soa`] at every construction path;
     /// read only by the record-interleaved gather.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub hot_weights: Vec<f32>,
+    pub(crate) hot_weights: Vec<f32>,
     /// Hot-path source indices, struct-of-arrays view of
     /// `synapses[i].from_index` (Issue #533). Same order and length as
     /// [`Self::synapses`] and [`Self::hot_weights`].
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub hot_from: Vec<u16>,
+    pub(crate) hot_from: Vec<u16>,
     /// Activation buffer - reused across calls
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub activations: Vec<f32>,
+    pub(crate) activations: Vec<f32>,
     /// Pre-allocated buffer for hint values in activate_and_trace
     /// Issue #1173 - Pre-allocate `Vec<f32>` buffers in CompiledNetwork struct
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub hint_values_buffer: Vec<f32>,
+    pub(crate) hint_values_buffer: Vec<f32>,
     /// Pre-allocated buffer for trace data in activate_and_trace
     /// Issue #1173 - Eliminates heap allocation per call
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub trace_data_buffer: Vec<f32>,
+    pub(crate) trace_data_buffer: Vec<f32>,
     /// Pre-allocated per-record activation buffers for the 4-way batch path.
     /// Issue #155 - Extends the #1173 buffer-reuse precedent to
     /// `activate_and_trace_batch_4way` so the 4 activation buffers are reused
     /// across calls instead of re-allocated each invocation.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub batch_activations: [Vec<f32>; 4],
+    pub(crate) batch_activations: [Vec<f32>; 4],
     /// Pre-allocated per-record hint-value buffers for the 4-way batch path.
     /// Issue #155 - Reused across calls (zeroed per call), mirroring
     /// `hint_values_buffer`.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub batch_hints: [Vec<f32>; 4],
+    pub(crate) batch_hints: [Vec<f32>; 4],
     /// Pre-allocated per-record trace-data buffers for the 4-way batch path.
     /// Issue #155 - Reused across calls (cleared per call), mirroring
     /// `trace_data_buffer`.
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub batch_traces: [Vec<f32>; 4],
+    pub(crate) batch_traces: [Vec<f32>; 4],
     /// Record-interleaved scratch for the fused MSE path
     /// (`inter[n * MSE_TILE_LANES + l]`). Sized
     /// `num_neurons * `[`crate::loss::MSE_TILE_LANES`] and reused across
     /// `mse_sum_batch_packed` calls instead of allocating per chunk
     /// (NEAT-AI-scorer#531). The 4-way remainder of that path reuses
     /// [`Self::batch_activations`].
-    #[cfg_attr(target_family = "wasm", wasm_bindgen(skip))]
-    pub mse_inter: Vec<f32>,
+    pub(crate) mse_inter: Vec<f32>,
 }
 
 impl CompiledNetwork {
+    /// Assemble a network from typed parts, deriving every hot view and scratch
+    /// buffer, and validating the index invariant the SIMD kernels rest on.
+    ///
+    /// Issue #625 - [`Self::new`] deserialises bytes; this is the one way to
+    /// build a `CompiledNetwork` from parts already in memory, now that the
+    /// fields are private and a struct literal is no longer expressible outside
+    /// the crate. `neurons` holds one entry per **non-input** neuron in
+    /// evaluation order, so the node count is `num_inputs + neurons.len()`.
+    ///
+    /// Both halves of the `simd::*_unchecked` contract are checked here, and a
+    /// value that fails either is not produced:
+    ///
+    /// - every `from_index` is in `0..num_neurons`
+    ///   ([`NetworkError::InvalidSynapseIndex`]), so the activation gather is in
+    ///   bounds; and
+    /// - every neuron's `start_synapse + num_synapses` is within the synapse
+    ///   table ([`NetworkError::InvalidSynapseSpan`]), so the span walk is.
+    ///
+    /// A node count past [`MAX_NODE_COUNT`] is rejected with
+    /// [`NetworkError::TooManyNodes`], as in [`Self::new`].
+    pub fn from_parts(
+        num_inputs: usize,
+        neurons: Vec<NeuronData>,
+        synapses: Vec<SynapseData>,
+    ) -> Result<Self, NetworkError> {
+        let num_neurons = num_inputs + neurons.len();
+        if num_neurons > MAX_NODE_COUNT {
+            return Err(NetworkError::TooManyNodes { count: num_neurons });
+        }
+        if let Some(bad) = synapses
+            .iter()
+            .find(|s| s.from_index as usize >= num_neurons)
+        {
+            return Err(NetworkError::InvalidSynapseIndex {
+                from_index: bad.from_index,
+                num_neurons,
+            });
+        }
+        for (neuron, data) in neurons.iter().enumerate() {
+            let end = data.start_synapse as usize + data.num_synapses as usize;
+            if end > synapses.len() {
+                return Err(NetworkError::InvalidSynapseSpan {
+                    neuron,
+                    end,
+                    len: synapses.len(),
+                });
+            }
+        }
+        Ok(Self::assemble(num_inputs, neurons, synapses))
+    }
+
+    /// Derive the hot views and reusable scratch buffers around already-valid
+    /// parts.
+    ///
+    /// Crate-internal and infallible: the single home of the buffer-sizing rule
+    /// shared by [`Self::new`], [`Self::from_parts`] and
+    /// [`crate::creature::compile_creature`]. Callers must have established the
+    /// index invariant already — [`Self::from_parts`] validates it, while `new`
+    /// and `compile_creature` build in-range indices as they read.
+    pub(crate) fn assemble(
+        num_inputs: usize,
+        neurons: Vec<NeuronData>,
+        synapses: Vec<SynapseData>,
+    ) -> Self {
+        let num_non_inputs = neurons.len();
+        let num_neurons = num_inputs + num_non_inputs;
+
+        // Issue #1173 - Pre-allocate trace data buffer with estimated capacity.
+        // Estimate ~10% of neurons have aggregate functions (MINIMUM, MAXIMUM, IF);
+        // each records 2 floats (neuron_idx, trace_info), plus a -1.0 terminator.
+        let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
+
+        // Issue #533 - struct-of-arrays view of the two fields the interleaved
+        // gather reads, built from the same vector so it cannot drift.
+        let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
+
+        CompiledNetwork {
+            num_neurons,
+            num_inputs,
+            neurons,
+            synapses,
+            hot_weights,
+            hot_from,
+            activations: vec![0.0; num_neurons],
+            hint_values_buffer: vec![0.0; num_non_inputs],
+            trace_data_buffer: Vec::with_capacity(estimated_trace_size),
+            // Issue #155 - Pre-allocate the 4-way batch scratch buffers
+            batch_activations: [
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+                vec![0.0; num_neurons],
+            ],
+            batch_hints: [
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+                vec![0.0; num_non_inputs],
+            ],
+            batch_traces: [
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+                Vec::with_capacity(estimated_trace_size),
+            ],
+            // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
+            mse_inter: vec![0.0; num_neurons * MSE_TILE_LANES],
+        }
+    }
+
+    /// Borrow the neuron metadata in evaluation order (non-input neurons only).
+    ///
+    /// Issue #625 - the fields carrying the `simd::*_unchecked` index invariant
+    /// are private, so consumers read them through these borrow-only accessors.
+    /// Each hands out a shared slice, never `&mut`, so a validated network
+    /// cannot be edited into an out-of-bounds state after [`Self::new`].
+    #[inline]
+    pub fn neurons(&self) -> &[NeuronData] {
+        &self.neurons
+    }
+
+    /// Borrow the synapse table, indexed by
+    /// [`NeuronData::start_synapse`]`..start_synapse + `[`NeuronData::num_synapses`].
+    #[inline]
+    pub fn synapses(&self) -> &[SynapseData] {
+        &self.synapses
+    }
+
+    /// Borrow the struct-of-arrays weight view of [`Self::synapses`] (Issue #533).
+    #[inline]
+    pub fn hot_weights(&self) -> &[f32] {
+        &self.hot_weights
+    }
+
+    /// Borrow the struct-of-arrays source-index view of [`Self::synapses`] (Issue #533).
+    #[inline]
+    pub fn hot_from(&self) -> &[u16] {
+        &self.hot_from
+    }
+
+    /// Borrow the activation buffer, which is always `num_neurons` long.
+    #[inline]
+    pub fn activations(&self) -> &[f32] {
+        &self.activations
+    }
+
+    /// Borrow the pre-squash hint values recorded by the last
+    /// `activate_and_trace*` call (one per non-input neuron).
+    #[inline]
+    pub fn hint_values(&self) -> &[f32] {
+        &self.hint_values_buffer
+    }
+
+    /// Borrow the aggregate-function trace recorded by the last
+    /// `activate_and_trace*` call.
+    #[inline]
+    pub fn trace_data(&self) -> &[f32] {
+        &self.trace_data_buffer
+    }
+
     /// Debug-only guard that the Issue #533 struct-of-arrays hot view still
     /// mirrors [`Self::synapses`] element-for-element.
     ///
     /// The two views are redundant by construction — [`hot_synapse_soa`] builds
-    /// them from the same vector at every construction path — but the fields are
-    /// public, so a caller assembling a [`CompiledNetwork`] literal (or mutating
-    /// `synapses` afterwards) could let them drift. Every entry point into the
-    /// record-interleaved gather calls this first, so a drifted network fails
-    /// loudly in debug and test builds rather than silently scoring wrong
-    /// numbers. Compiles away entirely in release.
+    /// them from the same vector at every construction path — but they are two
+    /// vectors, so an in-crate edit that touches one and not the other could let
+    /// them drift (Issue #625 closed the out-of-crate half by making the fields
+    /// private). Every entry point into the record-interleaved gather calls this
+    /// first, so a drifted network fails loudly in debug and test builds rather
+    /// than silently scoring wrong numbers. Compiles away entirely in release.
     #[inline]
     pub(crate) fn debug_assert_hot_soa(&self) {
         debug_assert_eq!(
@@ -395,64 +653,15 @@ impl CompiledNetwork {
             });
         }
 
-        // Issue #207 - validate every source index against the node count before the
-        // network can be activated. The forward pass reads the activation buffer (sized
-        // to num_neurons) with unchecked indexing keyed on from_index; an out-of-range
-        // index would be an out-of-bounds read (undefined behaviour). Rejecting here
-        // upholds that precondition once, keeping the hot path unchanged.
-        if let Some(bad) = synapses
-            .iter()
-            .find(|s| s.from_index as usize >= num_neurons)
-        {
-            return Err(NetworkError::InvalidSynapseIndex {
-                from_index: bad.from_index,
-                num_neurons,
-            });
-        }
-
-        // Issue #1173 - Pre-allocate trace data buffer with estimated capacity
-        // Estimate ~10% of neurons have aggregate functions (MINIMUM, MAXIMUM, IF)
-        // Each aggregate records 2 floats (neuron_idx, trace_info), plus -1.0 terminator
-        let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
-
-        // Issue #533 - struct-of-arrays view of the two fields the interleaved
-        // gather reads, built from the same vector so it cannot drift.
-        let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-
-        Ok(CompiledNetwork {
-            num_neurons,
-            num_inputs,
-            neurons,
-            synapses,
-            hot_weights,
-            hot_from,
-            activations: vec![0.0; num_neurons],
-            // Issue #1173 - Pre-allocate hint values buffer
-            hint_values_buffer: vec![0.0; num_non_inputs],
-            // Issue #1173 - Pre-allocate trace data buffer
-            trace_data_buffer: Vec::with_capacity(estimated_trace_size),
-            // Issue #155 - Pre-allocate the 4-way batch scratch buffers
-            batch_activations: [
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-            ],
-            batch_hints: [
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-            ],
-            batch_traces: [
-                Vec::with_capacity(estimated_trace_size),
-                Vec::with_capacity(estimated_trace_size),
-                Vec::with_capacity(estimated_trace_size),
-                Vec::with_capacity(estimated_trace_size),
-            ],
-            // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
-            mse_inter: vec![0.0; num_neurons * MSE_TILE_LANES],
-        })
+        // Issue #207 - every source index must be validated against the node count
+        // before the network can be activated: the forward pass reads the activation
+        // buffer (sized to num_neurons) with unchecked indexing keyed on from_index,
+        // so an out-of-range index would be an out-of-bounds read (undefined
+        // behaviour). Issue #625 - `from_parts` is the one home of that check and of
+        // the span check beside it; delegating keeps a single copy rather than
+        // re-inlining the scan here. `neurons.len()` is exactly `num_non_inputs`, so
+        // it re-derives the same `num_neurons` this loop read from the header.
+        Self::from_parts(num_inputs, neurons, synapses)
     }
 
     /// Activate the network with the given input values
@@ -540,23 +749,31 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        let sum_sq = weighted_sum_of_squares_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                            )
+                        };
                         sum_sq.sqrt() + neuron.bias
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        let sum_sq = weighted_sum_of_squares_v2_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_v2_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         sum_sq.sqrt()
                     }
                     SquashType::Mean => {
@@ -565,25 +782,33 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            let sum = weighted_sum_no_bias_simd(
-                                &self.synapses,
-                                &self.activations,
-                                start_synapse,
-                                end_synapse,
-                            );
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                            let sum = unsafe {
+                                weighted_sum_no_bias_simd_unchecked(
+                                    &self.synapses,
+                                    &self.activations,
+                                    start_synapse,
+                                    end_synapse,
+                                )
+                            };
                             sum / n + neuron.bias
                         }
                     }
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        let sum = weighted_sum_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum = unsafe {
+                            weighted_sum_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         // Issue #1177 - Inline common squash functions for performance
                         // These 4 functions cover ~80% of typical networks
                         inline_squash(neuron.squash_type, squash, sum)
@@ -699,23 +924,31 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        let sum_sq = weighted_sum_of_squares_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                            )
+                        };
                         sum_sq.sqrt() + neuron.bias
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        let sum_sq = weighted_sum_of_squares_v2_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_v2_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         sum_sq.sqrt()
                     }
                     SquashType::Mean => {
@@ -724,25 +957,33 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            let sum = weighted_sum_no_bias_simd(
-                                &self.synapses,
-                                &self.activations,
-                                start_synapse,
-                                end_synapse,
-                            );
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                            let sum = unsafe {
+                                weighted_sum_no_bias_simd_unchecked(
+                                    &self.synapses,
+                                    &self.activations,
+                                    start_synapse,
+                                    end_synapse,
+                                )
+                            };
                             sum / n + neuron.bias
                         }
                     }
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        let sum = weighted_sum_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum = unsafe {
+                            weighted_sum_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         // Issue #1177 - Inline common squash functions for performance
                         // These 4 functions cover ~80% of typical networks
                         inline_squash(neuron.squash_type, squash, sum)
@@ -932,12 +1173,16 @@ impl CompiledNetwork {
                     }
                     SquashType::Hypotenuse => {
                         // Issue #1178 - Use SIMD-optimised sum of squares
-                        let sum_sq = weighted_sum_of_squares_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                            )
+                        };
                         let result = sum_sq.sqrt() + neuron.bias;
                         self.trace_data_buffer.push(neuron_idx as f32);
                         self.trace_data_buffer.push(0.0f32);
@@ -945,13 +1190,17 @@ impl CompiledNetwork {
                     }
                     SquashType::HypotenuseV2 => {
                         // Issue #1178 - Use SIMD-optimised sum of squares V2
-                        let sum_sq = weighted_sum_of_squares_v2_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum_sq = unsafe {
+                            weighted_sum_of_squares_v2_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         let result = sum_sq.sqrt();
                         self.trace_data_buffer.push(neuron_idx as f32);
                         self.trace_data_buffer.push(0.0f32);
@@ -963,12 +1212,16 @@ impl CompiledNetwork {
                             neuron.bias
                         } else {
                             // Issue #1178 - Use SIMD-optimised weighted sum for Mean
-                            let sum = weighted_sum_no_bias_simd(
-                                &self.synapses,
-                                &self.activations,
-                                start_synapse,
-                                end_synapse,
-                            );
+                            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                            // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                            let sum = unsafe {
+                                weighted_sum_no_bias_simd_unchecked(
+                                    &self.synapses,
+                                    &self.activations,
+                                    start_synapse,
+                                    end_synapse,
+                                )
+                            };
                             sum / n + neuron.bias
                         };
                         self.trace_data_buffer.push(neuron_idx as f32);
@@ -978,13 +1231,17 @@ impl CompiledNetwork {
                     _ => {
                         // Standard activation: weighted sum + bias, then apply squash
                         // Issue #1178 - Use SIMD-optimised weighted sum
-                        let sum = weighted_sum_simd(
-                            &self.synapses,
-                            &self.activations,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let sum = unsafe {
+                            weighted_sum_simd_unchecked(
+                                &self.synapses,
+                                &self.activations,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
                         // Issue #1177 - Inline common squash functions for performance
                         let squashed = inline_squash(neuron.squash_type, squash, sum);
                         // For standard squash, hintValue is the pre-squash value (sum)
@@ -1029,8 +1286,8 @@ impl CompiledNetwork {
     /// Issue #1212 - Batch activate and trace for 4 records simultaneously.
     ///
     /// Processes 4 input records through the network in parallel, capturing trace
-    /// data for backpropagation. Uses SIMD via `weighted_sum_simd_4records()` for
-    /// standard squash functions.
+    /// data for backpropagation. Uses SIMD via
+    /// [`weighted_sum_simd_4records_unchecked`] for standard squash functions.
     ///
     /// # Arguments
     /// * `inputs` - Packed input array: [input0..., input1..., input2..., input3...]
@@ -1229,16 +1486,20 @@ impl CompiledNetwork {
                     }
                     _ => {
                         // Standard squash: use SIMD 4-record weighted sum
-                        let (s0, s1, s2, s3) = weighted_sum_simd_4records(
-                            &self.synapses,
-                            act0,
-                            act1,
-                            act2,
-                            act3,
-                            start_synapse,
-                            end_synapse,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and `activations` is sized to `num_neurons` (Issue #207).
+                        let (s0, s1, s2, s3) = unsafe {
+                            weighted_sum_simd_4records_unchecked(
+                                &self.synapses,
+                                act0,
+                                act1,
+                                act2,
+                                act3,
+                                start_synapse,
+                                end_synapse,
+                                neuron.bias,
+                            )
+                        };
 
                         // Apply squash to all 4 records. The hot transcendental
                         // squashes (Tanh/Logistic/Gelu/Mish) evaluate every batch

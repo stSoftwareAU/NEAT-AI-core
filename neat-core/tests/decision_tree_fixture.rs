@@ -201,7 +201,7 @@ fn residual_fixture_adds_a_non_zero_correction_over_the_linear_base() {
 fn role_histogram(creature: &CreatureExport) -> [usize; 4] {
     let net = compile_creature(creature).expect("compiles");
     let mut counts = [0usize; 4];
-    for s in &net.synapses {
+    for s in net.synapses() {
         counts[SynapseType::from(s.synapse_type) as usize] += 1;
     }
     counts

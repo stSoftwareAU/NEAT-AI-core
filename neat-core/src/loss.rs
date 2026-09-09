@@ -11,7 +11,7 @@ use crate::batch_scoring::{
 };
 use crate::network::CompiledNetwork;
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
-use crate::simd::{weighted_sum_simd_4records, weighted_sum_simd_8records};
+use crate::simd::{weighted_sum_simd_4records_unchecked, weighted_sum_simd_8records_unchecked};
 use crate::squash::SquashType;
 use crate::squash_simd::{squash_x4, squash_x8};
 use crate::training_bin_stream::{for_each_read_chunk_with_mode, training_read_tuning_from_env};
@@ -104,7 +104,9 @@ macro_rules! batch_8way_activation {
                         }
                         _ => {
                             let (sum0, sum1, sum2, sum3, sum4, sum5, sum6, sum7) =
-                                weighted_sum_simd_8records(
+                                // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                                // `from_index`, and every activation buffer is sized to `num_neurons`.
+                                unsafe { weighted_sum_simd_8records_unchecked(
                                     &$network.synapses,
                                     &act0,
                                     &act1,
@@ -117,7 +119,7 @@ macro_rules! batch_8way_activation {
                                     start_synapse,
                                     end_synapse,
                                     neuron.bias,
-                                );
+                                ) };
 
                             // Hot transcendental squashes evaluate all 8 batch
                             // lanes at once via the vectorised approximation
@@ -211,7 +213,9 @@ macro_rules! batch_8way_activation {
                                 }
                             }
                             _ => {
-                                let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
+                                // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                                // `from_index`, and every activation buffer is sized to `num_neurons`.
+                                let (sum0, sum1, sum2, sum3) = unsafe { weighted_sum_simd_4records_unchecked(
                                     &$network.synapses,
                                     &act0,
                                     &act1,
@@ -220,7 +224,7 @@ macro_rules! batch_8way_activation {
                                     start_synapse,
                                     end_synapse,
                                     neuron.bias,
-                                );
+                                ) };
 
                                 // Vectorised squash for the hot transcendental
                                 // types (Issue #180); scalar fallback otherwise.
@@ -711,16 +715,20 @@ fn mse_sum_batch_interleaved<const R: usize>(
             let squash = SquashType::from(neuron.squash_type);
             let start_synapse = neuron.start_synapse as usize;
             let end_synapse = start_synapse + neuron.num_synapses as usize;
-            let (sum0, sum1, sum2, sum3) = weighted_sum_simd_4records(
-                &network.synapses,
-                &network.batch_activations[0],
-                &network.batch_activations[1],
-                &network.batch_activations[2],
-                &network.batch_activations[3],
-                start_synapse,
-                end_synapse,
-                neuron.bias,
-            );
+            // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+            // `from_index`, and every activation buffer is sized to `num_neurons`.
+            let (sum0, sum1, sum2, sum3) = unsafe {
+                weighted_sum_simd_4records_unchecked(
+                    &network.synapses,
+                    &network.batch_activations[0],
+                    &network.batch_activations[1],
+                    &network.batch_activations[2],
+                    &network.batch_activations[3],
+                    start_synapse,
+                    end_synapse,
+                    neuron.bias,
+                )
+            };
             let sums = [sum0, sum1, sum2, sum3];
             let squashed = match squash_x4(squash, sums) {
                 Some(vec) => vec,
@@ -1953,35 +1961,8 @@ mod interleaved_mse_parity {
             is_constant: false,
         });
 
-        let num_non_inputs = neurons.len();
-        let num_neurons = num_inputs + num_non_inputs;
-        let (hot_weights, hot_from) = crate::network::hot_synapse_soa(&synapses);
-        CompiledNetwork {
-            num_neurons,
-            num_inputs,
-            neurons,
-            synapses,
-            hot_weights,
-            hot_from,
-            activations: vec![0.0; num_neurons],
-            hint_values_buffer: vec![0.0; num_non_inputs],
-            trace_data_buffer: Vec::new(),
-            batch_activations: [
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-                vec![0.0; num_neurons],
-            ],
-            batch_hints: [
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-                vec![0.0; num_non_inputs],
-            ],
-            batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-            // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-            mse_inter: vec![0.0; num_neurons * 8],
-        }
+        CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+            .expect("fixture must satisfy the load-time index invariant")
     }
 
     /// Packed `[inputs..., target]` records with distinct per-record values so a
@@ -2139,5 +2120,31 @@ mod interleaved_mse_parity {
                 );
             }
         }
+    }
+
+    /// Fail-loud guard (debug builds): a hot view that has drifted from
+    /// `synapses` must panic rather than score silently-wrong numbers.
+    ///
+    /// Issue #625 moved this test in-crate. It used to live in
+    /// `tests/hot_synapse_soa.rs` and drift the view by writing the then-public
+    /// `synapses` field from outside the crate — the write that issue closed.
+    /// Drift is now only expressible inside `neat-core`, which is exactly where
+    /// `debug_assert_hot_soa` still has to catch it.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "Issue #533")]
+    fn a_drifted_hot_view_fails_loud_instead_of_scoring_wrong_numbers() {
+        let input_size = 6;
+        let mut net = build_network(input_size, SquashType::Tanh);
+
+        // The redundancy hazard: a weight is changed and the hot view is not
+        // rebuilt from it.
+        net.synapses[0].weight = 12.5;
+
+        // Same entry point the test drove before Issue #625 moved it in-crate, so
+        // `mse_sum_batch_packed`'s own guard call stays pinned rather than only
+        // the interleaved kernel's.
+        let records = build_records(8, input_size);
+        let _ = mse_sum_batch_packed(&mut net, &records, input_size, 1, true);
     }
 }

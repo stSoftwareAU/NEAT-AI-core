@@ -95,20 +95,20 @@ fn every_synapse_of_a_loaded_network_indexes_its_activation_buffer() {
         .expect("well-formed network must load");
 
     // Obligation 2a: the activation buffer is sized to exactly num_neurons.
-    assert_eq!(net.activations.len(), net.num_neurons);
+    assert_eq!(net.activations().len(), net.num_neurons());
     // Obligation 2b: every from_index indexes that buffer.
-    for (i, synapse) in net.synapses.iter().enumerate() {
+    for (i, synapse) in net.synapses().iter().enumerate() {
         assert!(
-            (synapse.from_index as usize) < net.activations.len(),
+            (synapse.from_index as usize) < net.activations().len(),
             "synapse {i} has from_index {} outside the {}-long activation buffer",
             synapse.from_index,
-            net.activations.len()
+            net.activations().len()
         );
     }
     // Obligation 1: the neuron's declared span lies inside `synapses`.
-    let neuron = &net.neurons[0];
+    let neuron = &net.neurons()[0];
     let end = neuron.start_synapse as usize + neuron.num_synapses as usize;
-    assert!(end <= net.synapses.len());
+    assert!(end <= net.synapses().len());
     assert_eq!(end, SPAN);
 }
 
@@ -125,8 +125,8 @@ fn the_largest_in_range_index_still_loads() {
     let net = CompiledNetwork::new(&serialise(num_neurons, num_inputs, &from_indices))
         .expect("boundary index must load");
     assert!(
-        net.synapses
+        net.synapses()
             .iter()
-            .all(|s| (s.from_index as usize) < net.num_neurons)
+            .all(|s| (s.from_index as usize) < net.num_neurons())
     );
 }

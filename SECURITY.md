@@ -65,6 +65,62 @@ outside `docs/archive/` (historical, never rewritten) may cite
 files under `neat-core/src` that read unchecked — so a new unchecked-read site
 in the crate's sources fails the gate until it is documented here.
 
+### Callers that hold no loaded network (Issue #613)
+
+The load-time validation covers callers holding a `CompiledNetwork`. It cannot
+cover a downstream crate that calls `neat_core::simd` with slices of its own, so
+the public kernels are split in two:
+
+- The **safe** kernels (`weighted_sum_simd`, `weighted_sum_simd_8records`,
+  `weighted_sum_interleaved`, and the rest of the family) validate the span
+  through `neat_core::simd::bounds` before dispatching and **panic** when it
+  does not hold — both halves of the contract, an out-of-range `from_index` and
+  an `end` past the synapse slice, are refused the same way rather than answered
+  from a truncated span. No combination of safe arguments reaches an unchecked
+  read, on either the native or the `wasm` target.
+- The **`unsafe`** `*_unchecked` kernels carry the index precondition as a
+  `# Safety` contract for callers — `CompiledNetwork` among them — that have
+  already discharged it, so the forward-pass hot path is unchanged.
+
+`neat-core/tests/simd_public_bounds.rs` pins the safe half: the out-of-range
+reproducer from Issue #613 fails loud on every kernel instead of reading past
+the activation buffer, an over-long `end` is refused rather than truncated, and
+each safe entry point is asserted bit-identical to its `*_unchecked` twin on
+spans that do satisfy the precondition.
+
+### The struct itself holds the invariant (Issue #625)
+
+That split left one residual path: `CompiledNetwork`'s fields were `pub`, so
+safe code could write `synapses` / `hot_from` / `activations` after `new` had
+validated them and then call `activate*`, which reaches the `*_unchecked`
+kernels on the strength of the now-stale check. Issue #625 closed it **by
+construction** rather than by prose:
+
+- Every field is private, so no safe caller outside the crate can write one, and
+  no struct literal can skip the validation.
+- Consumers read the same state through borrow-only accessors
+  (`neurons()`, `synapses()`, `hot_weights()`, `hot_from()`, `activations()`,
+  `hint_values()`, `trace_data()`, `num_neurons()`, `num_inputs()`), which hand
+  out `&[T]` and never `&mut`.
+- `CompiledNetwork::from_parts` is the one way to build a network from parts
+  already in memory. It re-runs the `from_index < num_neurons` check and also
+  rejects a neuron whose `start_synapse + num_synapses` runs past the synapse
+  table (`NetworkError::InvalidSynapseSpan`) — the other half of the kernels'
+  contract, which `new` could never violate but a caller-supplied span could.
+
+The gate is the `compile_fail` doctest pair on `CompiledNetwork`
+(`neat-core/src/network.rs`). A doctest is compiled as its own crate linking
+`neat_core`, so it is an out-of-crate safe caller — the exact threat model. One
+half performs the Issue #625 mutation and must not compile; the other reads the
+same fixture through the accessors and compiles **and runs**, so a refusal can
+never come from a broken fixture. Widening either field back to `pub` makes the
+first half fail, which is what proves the gate can fail at all.
+
+The consumers this closed API break reaches are **NEAT-AI-scorer** (reads
+`neurons` / `synapses` / `num_neurons` / `num_inputs` on its GPU upload path) and
+**NEAT-AI-Backpropagation** (reads `activations`); both move to the accessors.
+The migration is recorded in [`RELEASING.md`](RELEASING.md#0120--compilednetworks-fields-are-private).
+
 ## Dependency bump quarantine
 
 Dependency bumps honour a release-age **quarantine window**
@@ -73,6 +129,12 @@ published less than that many hours ago are deferred, which defends against
 fast-flagged malicious publishes that are later yanked. `bump-deps.sh` applies
 the window, and the *Upgrade Cargo Dependencies* workflow feeds it from the
 `VIBE_BUMP_QUARANTINE_HOURS` repository variable.
+
+Deferring a version is not enough on its own: `cargo update` is free to move
+crates the bump plan never named. Both update passes therefore snapshot
+`Cargo.lock` and verify it afterwards — an update that drags a deferred crate
+off the version it was held at, or any planned crate off its approved target,
+is reverted and named in the log rather than left in the lock (Issue #614).
 
 ## Supply-chain audit scope
 

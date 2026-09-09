@@ -66,7 +66,7 @@ fn to_dot_contains_node_for_every_neuron() {
     let dot = network.to_dot(creature.output);
 
     // Two inputs + one hidden + one output = 4 nodes declared as `n0`..`n3`.
-    for i in 0..network.num_neurons {
+    for i in 0..network.num_neurons() {
         let needle = format!("n{i} ");
         assert!(
             dot.contains(&needle),
@@ -117,7 +117,7 @@ fn to_dot_declares_one_edge_per_synapse() {
     let edge_count = dot.matches(" -> ").count();
     assert_eq!(
         edge_count,
-        network.synapses.len(),
+        network.synapses().len(),
         "DOT edge count must match synapse count"
     );
 }

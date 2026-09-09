@@ -176,9 +176,26 @@ for impl_open in impls:
 if body is None:
     sys.exit("network.rs has no CompiledNetwork::new constructor")
 
+# Issue #625 moved the check itself into `from_parts`, which `new` returns
+# through, so the docs' claim holds when `new` either raises the error itself
+# or hands the whole construction to `from_parts` — and, in that case, only if
+# `from_parts` is where the check now lives.
 if "NetworkError::InvalidSynapseIndex" not in body:
-    sys.exit("CompiledNetwork::new no longer raises NetworkError::"
-             "InvalidSynapseIndex — the docs' soundness claim is stale")
+    if not re.search(r"Self::from_parts\(", body):
+        sys.exit("CompiledNetwork::new no longer raises NetworkError::"
+                 "InvalidSynapseIndex, nor delegates to from_parts — the docs' "
+                 "soundness claim is stale")
+    parts_start = src.find("pub fn from_parts(")
+    if parts_start < 0:
+        sys.exit("network.rs has no CompiledNetwork::from_parts constructor")
+    parts_open = src.index("{", src.index(")", parts_start))
+    parts_close = block_end(src, parts_open)
+    if parts_close is None:
+        sys.exit("could not read the body of CompiledNetwork::from_parts")
+    if "NetworkError::InvalidSynapseIndex" not in src[parts_open:parts_close]:
+        sys.exit("neither CompiledNetwork::new nor the from_parts it delegates "
+                 "to raises NetworkError::InvalidSynapseIndex — the docs' "
+                 "soundness claim is stale")
 PY
   echo "$output"
   [ "$status" -eq 0 ]

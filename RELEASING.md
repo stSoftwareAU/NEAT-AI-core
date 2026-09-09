@@ -163,7 +163,7 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
-### `0.12.0` — `GraftError::CountNotRepresentable` (Issue #606)
+### `0.13.0` — `GraftError::CountNotRepresentable` (Issue #606)
 
 `GraftError` gains a variant. The enum is not `#[non_exhaustive]`, so a
 downstream exhaustive `match` on it stops compiling until it handles
@@ -193,27 +193,65 @@ match err {
 }
 ```
 
-### `0.11.0` — the pruning surface (Issues #588–#592)
+### `0.12.0` — `CompiledNetwork`'s fields are private (Issue #625)
 
-The Pruning milestone (#619) adds five public modules — `prune_cleanup`,
-`prune_fixtures`, `prune_json`, `prune_neuron` and `prune_synapse` — with
-`prune_neuron` / `prune_synapse` exported to JS through `wasm_exports` as
-`prune_neuron(request: string) -> string` and
-`prune_synapse(request: string) -> string`. `creature_validate_json`'s
-oversized-creature check is now the public `oversized_detail`, so every JSON
-boundary that accepts a creature asks one place for the ceiling.
+Every field of `CompiledNetwork` becomes private. The forward and batched-scoring
+paths call the `simd::*_unchecked` kernels and discharge their index contract
+from the load-time `InvalidSynapseIndex` check in `new`; while the fields were
+`pub`, safe code could rewrite `synapses` / `hot_from` / `activations` after that
+check and turn the next `activate()` into an out-of-bounds read. Closing them is
+what makes the discharge hold for the life of the value rather than only at
+construction.
 
-The minor bump was earned by a `BREAKING CHANGE` footer inside the milestone:
-`PruneResult::removed_neuron` became `Option<String>`, `PruneResult` and
-`CleanupOutcome` gained public fields, and `PruneError` gained
-`UnknownSynapse`. **Every one of those types was introduced in this same
-release**, so the break was internal to the milestone branch and no `0.10.x`
-consumer can observe it.
+`NetworkError` gains an `InvalidSynapseSpan` variant, and `CreatureError` gains
+`InvalidNetwork(NetworkError)` — both are additional breaks for a consumer that
+matches either enum exhaustively.
 
-**Migration** — none. The release is additive for anything compiled against
-`0.10.x`; a consumer picking up the new pruning API should read
-`prune_json`'s request/response shapes rather than porting from an earlier
-one, because there is no earlier one.
+**Affected consumers.** **NEAT-AI-scorer** reads `neurons` / `synapses` /
+`num_neurons` / `num_inputs` on its GPU upload path (`rust_scorer/src/gpu/
+forward_mse_batched.rs`, `if_tree_fixture.rs`, `dual_role_fixture.rs`) and
+mutates them in its own tests. **NEAT-AI-Backpropagation** reads `activations`
+(`backpropagation/src/propagate_layout.rs`).
+
+**Migration** — reads become accessor calls; writes and struct literals are
+replaced by a rebuild through `from_parts`:
+
+```rust
+// Before (0.11.x)
+let n = net.num_neurons;
+for s in &net.synapses { /* … */ }
+let net = CompiledNetwork { num_neurons, num_inputs, neurons, synapses, /* … */ };
+
+// After (0.12.0)
+let n = net.num_neurons();
+for s in net.synapses() { /* … */ }
+let net = CompiledNetwork::from_parts(num_inputs, neurons, synapses)?;
+```
+
+`from_parts` derives every hot view and scratch buffer and re-runs the same
+validation as `new`, plus a span check rejecting a neuron whose
+`start_synapse + num_synapses` overruns the synapse table. The full read surface
+is `neurons()`, `synapses()`, `hot_weights()`, `hot_from()`, `activations()`,
+`hint_values()`, `trace_data()`, `num_neurons()`, `num_inputs()` and
+`num_synapses()` — every one hands out a shared borrow, never `&mut`.
+
+### `0.11.0` — an untyped `IF` row reads as the positive arm (Issue #591)
+
+`canonical_role` folds `Standard` and `Positive` to one answer at an `IF`
+target, matching what the forward pass and `IfRoles::tally` already do with an
+untyped inward edge. Before this, asking `prune_synapse` for the positive arm of
+a creature that wrote that arm untyped came back `Err(UnknownSynapse)` — a
+blanket refusal of exactly the removal the API exists to perform. `PruneResult`
+and the `IfRepair::Rewrite` cleanup policy landed in the same milestone.
+
+**Migration** — no signature changed; the behaviour did. A caller that relied on
+the refusal (treating `UnknownSynapse` as "this IF row is untouchable") now gets
+a successful, exact rewrite instead and should drop that special case.
+
+**Recorded retrospectively** in the Issue #625 PR: the `0.11.0` bump
+(commit `c15ac0e`, PR #619) shipped without a log entry, and the completeness
+gate in `tests/scripts/releasing_breaking_change_log.bats` only surfaced the gap
+once `0.12.0` gave it a newer neighbour.
 
 ### `0.10.0` — `MemeticExport::weights` is a two-form enum
 
@@ -258,6 +296,10 @@ match &memetic.weights {
 at every construction path. The interleaved gather kernels
 (`weighted_sum_interleaved` / `weighted_sum_interleaved_8`) now take those two
 slices instead of `&[SynapseData]`.
+
+**Superseded by `0.12.0`** — struct-literal construction is no longer possible;
+use `CompiledNetwork::from_parts`, which derives both fields for you. The
+snippet below is kept as the historical record of the 0.9.0 break.
 
 **Migration** — callers constructing `CompiledNetwork` literals must supply
 the two fields; `hot_synapse_soa` is exported for that:

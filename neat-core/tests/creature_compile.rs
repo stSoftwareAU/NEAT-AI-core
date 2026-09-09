@@ -147,10 +147,10 @@ fn test_compile_minimal_creature() {
     let creature = parse_creature_json(json).unwrap();
     let mut network = compile_creature(&creature).unwrap();
 
-    assert_eq!(network.num_neurons, 3);
-    assert_eq!(network.num_inputs, 2);
-    assert_eq!(network.neurons.len(), 1);
-    assert_eq!(network.synapses.len(), 2);
+    assert_eq!(network.num_neurons(), 3);
+    assert_eq!(network.num_inputs(), 2);
+    assert_eq!(network.neurons().len(), 1);
+    assert_eq!(network.synapses().len(), 2);
 
     // Activate and verify: output = identity(0.5 * 1.0 + (-0.3) * 0.5 + 0.1) = 0.45
     let output = network.activate(&[1.0, 0.5], 1);
@@ -370,7 +370,7 @@ fn test_compile_creature_synapse_types() {
     let creature = parse_creature_json(json).unwrap();
     let network = compile_creature(&creature).unwrap();
     assert_eq!(
-        network.synapses[0].synapse_type,
+        network.synapses()[0].synapse_type,
         SynapseType::Positive as u8
     );
 }
@@ -549,10 +549,10 @@ fn test_parse_real_creature_json() {
     let creature = parse_creature_json(json).unwrap();
     let mut network = compile_creature(&creature).unwrap();
 
-    assert_eq!(network.num_neurons, 7);
-    assert_eq!(network.num_inputs, 2);
-    assert_eq!(network.neurons.len(), 5);
-    assert_eq!(network.synapses.len(), 7);
+    assert_eq!(network.num_neurons(), 7);
+    assert_eq!(network.num_inputs(), 2);
+    assert_eq!(network.neurons().len(), 5);
+    assert_eq!(network.synapses().len(), 7);
 
     // Verify the network activates without error
     let output = network.activate(&[0.5, -0.3], 2);
@@ -616,10 +616,10 @@ fn test_compile_creature_large_network() {
     let creature = parse_creature_json(&json).unwrap();
     let mut network = compile_creature(&creature).unwrap();
 
-    assert_eq!(network.num_neurons, 17); // 5 inputs + 10 hidden + 2 outputs
-    assert_eq!(network.num_inputs, 5);
-    assert_eq!(network.neurons.len(), 12);
-    assert_eq!(network.synapses.len(), 70); // 5*10 + 10*2
+    assert_eq!(network.num_neurons(), 17); // 5 inputs + 10 hidden + 2 outputs
+    assert_eq!(network.num_inputs(), 5);
+    assert_eq!(network.neurons().len(), 12);
+    assert_eq!(network.synapses().len(), 70); // 5*10 + 10*2
 
     let output = network.activate(&[0.1, 0.2, 0.3, 0.4, 0.5], 2);
     assert_eq!(output.len(), 2);
@@ -667,7 +667,7 @@ fn test_parse_creature_json_ignores_extra_fields() {
     let creature = parse_creature_json(json).unwrap();
     assert_eq!(creature.input, 1);
     let network = compile_creature(&creature).unwrap();
-    assert_eq!(network.num_neurons, 2);
+    assert_eq!(network.num_neurons(), 2);
 }
 
 #[test]
@@ -697,7 +697,7 @@ fn test_compile_creature_deprecated_squash() {
         let creature = parse_creature_json(&json).unwrap();
         let network = compile_creature(&creature).unwrap();
         assert_eq!(
-            SquashType::from(network.neurons[0].squash_type),
+            SquashType::from(network.neurons()[0].squash_type),
             expected_squash,
             "Failed for deprecated squash: {name}"
         );

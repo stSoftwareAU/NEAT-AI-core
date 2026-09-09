@@ -155,7 +155,7 @@ fn grafted_node_carries_the_if_squash_and_all_three_roles() {
 
     let net = compile_creature(&grafted).expect("compiles");
     let mut counts = [0usize; 4];
-    for s in &net.synapses {
+    for s in net.synapses() {
         counts[SynapseType::from(s.synapse_type) as usize] += 1;
     }
     assert_eq!(counts[SynapseType::Condition as usize], 2);

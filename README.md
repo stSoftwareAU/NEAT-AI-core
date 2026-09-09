@@ -116,7 +116,7 @@ safe-fall-back invariants; see
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). |
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
-| `bump-deps.sh` | Cargo dep refresh + audit + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). |
+| `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). Exits non-zero only when the tree it produced must not be kept — see [Dependency updates](#dependency-updates-two-channels). |
 | `.github/dependabot.yml` | Weekly Cargo **version-updates** channel for both lockfiles (7-day `cooldown`, 10-PR limit) — see [Dependency updates](#dependency-updates-two-channels). |
 | `deno.json` | Deno/JSR supply-chain config (Issue #603): a 24h `minimumDependencyAge` release-age quarantine for external JSR/npm specifiers (internal `@stsoftware/*` scopes excluded, they bump at 0h) and a **frozen** `deno.lock` — see [JSR (Deno) dependencies](#jsr-deno-dependencies). |
 | `deno.lock` | Committed integrity pin for every JSR dependency the `.ts` gates import. Frozen: `deno check`/`deno test` fail rather than re-resolve a floating range. |
@@ -194,11 +194,75 @@ Scoring a production-size dataset pushes many records through one [creature](#gl
 embarrassingly parallel workload *across records*. Both `score_records_flat`
 and `score_records_parallel_flat` drive the forward pass through the **8-record
 batched SIMD path** (Issue #230): records are grouped into 8s (then a 4-record group,
-then a scalar tail) and forwarded through `weighted_sum_simd_8records` /
-`weighted_sum_simd_4records`, loading each synapse weight once and applying it
-across the lanes. On the gather-bound production topology this cut single-core
+then a scalar tail) and forwarded through
+`weighted_sum_simd_8records_unchecked` /
+`weighted_sum_simd_4records_unchecked`, loading each synapse weight once and
+applying it across the lanes. On the gather-bound production topology this cut single-core
 scoring time by **~39%** (see `docs/archive/pr-summaries/pr-summary-230.md`).
 With the `parallel` feature the throughput additionally scales with core count.
+
+Every kernel in `neat_core::simd` ships in two forms (Issue #613). The plain
+name — `weighted_sum_simd`, `weighted_sum_simd_8records`,
+`weighted_sum_interleaved`, … — is a **safe** `pub fn` that validates the span
+through `neat_core::simd::bounds` and **panics** if it does not hold, so no safe
+caller can drive an out-of-bounds read. The `*_unchecked` twin is an `unsafe fn`
+whose `# Safety` contract is the load-time `InvalidSynapseIndex` invariant; use
+it only where that invariant is already held — as `CompiledNetwork`'s own
+forward and scoring paths do, which is why the hot path pays nothing for the
+safe half. The pre-pass is `O(end - start)` and is not free: on the committed
+64-synapse bench it costs **+68%** over the unchecked kernel
+(`weighted_sum_simd/single_checked` beside `weighted_sum_simd/single`), so a
+downstream consumer with its own load-time validation should call the
+`*_unchecked` form on its hot path.
+
+### `CompiledNetwork` is read-only after construction (Issue #625)
+
+The `*_unchecked` kernels above are sound in `CompiledNetwork`'s own forward and
+scoring paths because `new` validated every source index at load time. That
+discharge only holds while nothing can rewrite the validated values afterwards,
+so **every field is private** and the state is read through borrow-only
+accessors:
+
+```rust
+let net = CompiledNetwork::new(&bytes)?;
+
+net.num_neurons();   // usize            net.num_inputs();  // usize
+net.neurons();       // &[NeuronData]    net.synapses();    // &[SynapseData]
+net.hot_weights();   // &[f32]           net.hot_from();    // &[u16]
+net.activations();   // &[f32]
+net.hint_values();   // &[f32]           net.trace_data();  // &[f32]
+```
+
+To build a network from parts already in memory — rather than from a serialised
+buffer — use `CompiledNetwork::from_parts(num_inputs, neurons, synapses)`. It
+runs the same validation as `new` and additionally rejects a neuron whose
+`start_synapse + num_synapses` overruns the synapse table
+(`NetworkError::InvalidSynapseSpan`). To change a network, rebuild it; there is
+no in-place edit.
+
+```mermaid
+flowchart LR
+    B[".bin buffer"] --> N["CompiledNetwork::new"]
+    P["neurons + synapses"] --> F["CompiledNetwork::from_parts"]
+    C["CreatureExport JSON"] --> G["compile_creature"]
+    N --> V{"validate: from_index &lt; num_neurons<br/>span within synapses"}
+    F --> V
+    G --> V
+    V -- no --> E["Err(NetworkError)"]
+    V -- yes --> K["CompiledNetwork — private fields"]
+    K --> R["read-only accessors"]
+    K --> A["activate / scoring → *_unchecked kernels"]
+```
+
+**Consumer break.** Reads that were `net.synapses` become `net.synapses()`, and
+writes are no longer expressible — the semver bump for this change is a
+`0.11.x → 0.12.0` minor (major-equivalent pre-1.0). It reaches
+**NEAT-AI-scorer** (reads `neurons` / `synapses` / `num_neurons` / `num_inputs`
+on its GPU upload path) and **NEAT-AI-Backpropagation** (reads `activations`).
+`NetworkError` also gains an `InvalidSynapseSpan` variant and `CreatureError` an
+`InvalidNetwork` variant, which break an exhaustive `match` on either. The full
+migration is in
+[`RELEASING.md`](RELEASING.md#0120--compilednetworks-fields-are-private-issue-625).
 
 On the exact committed production topology the native lane beats the wasm32 lane
 **1.78×** per core (NEON + FMA vs `simd128` + relaxed-madd) and **4.75×** at 12
@@ -372,11 +436,12 @@ the aggregate/IF and single-record paths, which are unchanged. Values and
 accumulation order are identical, so every result stays bit-identical.
 
 Both views are built by `hot_synapse_soa` at every construction path
-(`CompiledNetwork::new`, `compile_creature`), and cost **+6 B per synapse per
-compiled network** — ~126 KB on the production creature, cloned once per
-directory-scoring worker. Because the fields are public they can be made to
-drift; `debug_assert_hot_soa` runs at every interleaved entry point and panics
-in debug builds if they have.
+(`CompiledNetwork::new`, `CompiledNetwork::from_parts`, `compile_creature`), and
+cost **+6 B per synapse per compiled network** — ~126 KB on the production
+creature, cloned once per directory-scoring worker. Since Issue #625 the fields
+are private, so a caller outside the crate cannot drift them at all; they are
+still two vectors, so `debug_assert_hot_soa` runs at every interleaved entry
+point and panics in debug builds if an in-crate edit has let them drift.
 
 ```mermaid
 flowchart LR
@@ -1397,9 +1462,45 @@ bump:
 
 - **Routine bump (authoritative)** — [`.github/workflows/upgrade-dependencies.yml`](.github/workflows/upgrade-dependencies.yml)
   runs `bump-deps.sh` every Monday (`cron "0 6 * * 1"`), applying the
-  `VIBE_BUMP_QUARANTINE_HOURS` release-age quarantine, `cargo audit`, and
+  `VIBE_BUMP_QUARANTINE_HOURS` release-age quarantine, the advisory scan
+  (`cargo deny check advisories`, falling back to `cargo audit`), and
   dual native/WASM builds before raising a general upgrade PR. The same script
   runs on every PR from the `ci.yml` `version-increment` job.
+
+  `bump-deps.sh` is deliberately resilient (Issue #621), because a run that
+  exits non-zero has its whole bump reverted by the caller and, repeated,
+  disables dependency updates for the repository. A crate that cannot be
+  bumped **safely** — rejected by `cargo update`, still inside the quarantine
+  window, or of a release age the registry would not name — is reported as a
+  **deferral**, left on the version it is already on, and the run carries on.
+  A release age nobody could establish is counted apart from a quarantine wait
+  (`… , N release age unknown`), because that is a host or registry fault
+  rather than a routine hold — a run where every crate lands there has quietly
+  stopped bumping anything, and the summary has to say so.
+  Non-zero is reserved for a tree that must not be kept: `cargo` missing, an
+  advisory found, a build failure, or a `Cargo.lock` that could not be
+  restored. With **no** advisory scanner installed the scan cannot vouch for
+  the bump, so the run warns, restores the `Cargo.lock` it started with and
+  reports the resulting no-op. The restore is driven by comparing the file
+  against a pre-run snapshot rather than by the bump counter, so a transitive
+  entry `cargo update` rewrote on its own way past the plan is dropped too —
+  nothing lands unscanned, and a missing tool never fails the run:
+
+  ```mermaid
+  flowchart TD
+      Plan["cargo update --dry-run"] -->|plan unread| Report["external: plan unavailable — exit 0"]
+      Plan -->|plan read| Crate{"crate bumpable safely?"}
+      Crate -->|no| Defer["defer: crate — left as it is"]
+      Crate -->|yes| Bump["bump: crate -> target"]
+      Defer --> Scan
+      Bump --> Scan{"advisory scanner on PATH?"}
+      Scan -->|no| Revert["warn, revert this run's bumps — exit 0"]
+      Scan -->|yes, clean| Build{"native + wasm build"}
+      Scan -->|yes, advisory| Fail["audit: FAILED — exit 1"]
+      Build -->|ok| Done["exit 0"]
+      Build -->|broken| Fail
+  ```
+
 - **Dependabot version updates** — [`.github/dependabot.yml`](.github/dependabot.yml)
   configures one Cargo **version-updates** entry per lockfile — the workspace
   root and the excluded `wasm-bench` harness (Issue #607) — each with

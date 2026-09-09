@@ -82,8 +82,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
-use crate::loss::MSE_TILE_LANES;
-use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData, hot_synapse_soa};
+use crate::network::{CompiledNetwork, MAX_NODE_COUNT, NeuronData, SynapseData};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -369,6 +368,17 @@ pub enum CreatureError {
         /// The node count that exceeded [`crate::network::MAX_NODE_COUNT`].
         count: usize,
     },
+    /// Assembling the compiled network from the creature's topology was refused.
+    ///
+    /// Issue #625 - `compile_creature` builds every source index from
+    /// `uuid_to_index` and grows each neuron's span from the synapse table, so
+    /// this is unreachable while those two rules hold. It exists so that
+    /// **every** construction path runs the same
+    /// [`crate::network::CompiledNetwork::from_parts`] validation rather than
+    /// resting on a prose argument: if the mapping ever regresses, the caller
+    /// gets a typed error instead of a network the `simd::*_unchecked` kernels
+    /// would read out of bounds.
+    InvalidNetwork(crate::network::NetworkError),
     /// `CreatureExport::input` was below the minimum of one (Issue #550).
     ///
     /// `input` is the authoritative observation width and cannot be re-derived
@@ -439,6 +449,9 @@ impl std::fmt::Display for CreatureError {
                     crate::network::MAX_NODE_COUNT
                 )
             }
+            CreatureError::InvalidNetwork(e) => {
+                write!(f, "Creature does not assemble into a valid network: {e}")
+            }
             CreatureError::InvalidInputCount { found } => {
                 write!(f, "Must have at least one input neurons was: {found}")
             }
@@ -463,6 +476,7 @@ impl std::error::Error for CreatureError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CreatureError::Json(e) => Some(e),
+            CreatureError::InvalidNetwork(e) => Some(e),
             _ => None,
         }
     }
@@ -852,45 +866,12 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
         });
     }
 
-    let num_non_inputs = creature.neurons.len();
-
-    // Estimate trace data buffer capacity (same heuristic as binary deserialisation)
-    let estimated_trace_size = (num_non_inputs / 10).max(1) * 2 + 1;
-
-    // Issue #533 - struct-of-arrays view of the two fields the interleaved
-    // gather reads, built from the same vector so it cannot drift.
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-
-    Ok(CompiledNetwork {
-        num_neurons,
-        num_inputs,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; num_neurons],
-        hint_values_buffer: vec![0.0; num_non_inputs],
-        trace_data_buffer: Vec::with_capacity(estimated_trace_size),
-        // Issue #155 - 4-way batch scratch buffers
-        batch_activations: [
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-        ],
-        batch_hints: [
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-        ],
-        batch_traces: [
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-            Vec::with_capacity(estimated_trace_size),
-        ],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch (reused).
-        mse_inter: vec![0.0; num_neurons * MSE_TILE_LANES],
-    })
+    // Issue #625 - `from_parts` is the one validated construction path, shared
+    // with `CompiledNetwork::new`. Every source index above came from
+    // `uuid_to_index` and each neuron's span was grown from the synapse table, so
+    // the checks inside it hold by construction here; routing through them anyway
+    // is what makes "the load-time validation is the only way in" true of every
+    // path rather than of two out of three.
+    CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+        .map_err(CreatureError::InvalidNetwork)
 }

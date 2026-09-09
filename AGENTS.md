@@ -261,6 +261,23 @@ sound and the hot path stays branch-free. **Never remove or bypass that check as
 "redundant" — doing so reintroduces UB behind `get_unchecked`.** (See also the
 memory-safety note in [`SECURITY.md`](SECURITY.md#memory-safety-of-compiled-network-loading).)
 
+Since Issue #625 the check is the **only** way in, and it cannot be outrun after
+the fact: every `CompiledNetwork` field is private, so safe code outside the
+crate can neither rewrite a validated `synapses` / `hot_from` / `activations` nor
+assemble the struct as a literal. Consumers read the state through borrow-only
+accessors (`synapses()`, `hot_from()`, `activations()`, …), and
+`CompiledNetwork::from_parts` is the one entry point for parts already in memory
+— it re-runs the index check and also rejects a neuron whose
+`start_synapse + num_synapses` overruns the synapse table
+(`NetworkError::InvalidSynapseSpan`), which is the span half of the same
+contract. Never widen a field back to `pub`, and never add a `&mut` accessor for
+one: that is the hole #625 closed.
+The gate is the `compile_fail` doctest pair on `CompiledNetwork`
+(`neat-core/src/network.rs`): a doctest compiles as its own crate linking
+`neat_core`, so it is an out-of-crate safe caller. One half must not compile; its
+companion reads the same fixture through the accessors and does compile and run,
+so the refusal cannot come from a broken fixture.
+
 The wasm `gather4` scaffold helper (`simd.rs`) rests on the same invariant
 since Issue #509 — it reads four `SynapseData` entries and four indirect
 activations unchecked. `checked-gather4` restores the bounds-checked control if
@@ -277,8 +294,50 @@ flowchart LR
     B --> C{"every from_index &lt; num_neurons?"}
     C -- no --> D["Err(NetworkError::InvalidSynapseIndex)"]
     C -- yes --> E["network loaded — invariant holds"]
-    E --> F["activate() → weighted_sum_simd"]
+    E --> F["activate() → weighted_sum_simd_unchecked"]
     F --> G["get_unchecked(from_index) — sound"]
+```
+
+### The kernel a caller reaches depends on who holds the invariant
+
+The load-time validation above only covers callers that **hold a loaded
+network**. Nothing establishes it for a downstream crate calling
+`neat_core::simd` directly, so every kernel is exported in two forms
+(Issue #613) and choosing the wrong one is either unsound or slow:
+
+- `weighted_sum_simd`, `weighted_sum_simd_8records`,
+  `weighted_sum_interleaved`, … — **safe** `pub fn`s. Each runs the matching
+  `simd::bounds` predicate over the span first and, when it does not hold,
+  refuses the call with a panic rather than reaching an unchecked read. These
+  are the only kernels safe caller code may reach.
+- `weighted_sum_simd_unchecked`, `weighted_sum_simd_8records_unchecked`,
+  `weighted_sum_interleaved_unchecked`, … — **`unsafe` `pub fn`s** carrying the
+  index precondition as a `# Safety` contract. `CompiledNetwork`'s own forward
+  and batched-scoring paths call these, discharging the contract from the
+  load-time validation, which is why the hot path pays nothing.
+
+A safe kernel handed a span it may not read **fails loud** — it panics through
+`bounds::reject_span` / `bounds::reject_interleaved_span` rather than answering
+from a truncated span. Both halves of the contract are refused the same way, on
+both targets: an out-of-range `from_index`, and an `end` past the synapse slice.
+
+`simd::bounds` is the **one** home of the predicates. Never re-inline a span
+check into a kernel, never bypass one by making a safe kernel reach an
+unchecked read, and never widen a hot-path caller to the safe form "to be
+tidy" — the pre-pass measured **+33% to +64%** on `forward_pass` when it was
+prototyped on the hot path (Issue #613). The isolated cost is reproducible from
+the committed tree: `cargo bench -p neat-core --bench hot_paths -- weighted_sum_simd`
+reports `single` (the `*_unchecked` hot-path form) beside `single_checked` (the
+safe entry point).
+
+```mermaid
+flowchart LR
+    S["safe caller (no loaded network)"] --> W["weighted_sum_* (safe)"]
+    W --> P{"simd::bounds predicate holds?"}
+    P -- no --> R["reject_span — panics, naming the invariant"]
+    P -- yes --> U["weighted_sum_*_unchecked"]
+    N["CompiledNetwork (invariant already held)"] --> U
+    U --> G2["get_unchecked(from_index) — sound"]
 ```
 
 ### `unsafe` blocks under `unsafe_op_in_unsafe_fn = "deny"`
@@ -304,10 +363,20 @@ function this changes how intrinsics must be wrapped:
     that one contract — the caller is who must satisfy them — not re-copied onto
     each of its eight blocks.
   - otherwise the block carries its own `// SAFETY:` note. This is **required**
-    for every `unsafe` block in a *safe* fn, and when the block sits under a
-    runtime feature check the note must **name the `is_*_feature_detected!`
-    guard** (`is_x86_feature_detected!` / `is_aarch64_feature_detected!`)
-    proving the callee's `#[target_feature]` precondition.
+    for every `unsafe` block in a *safe* fn.
+
+  A written discharge names **the obligation that block actually discharges**.
+  There are two, and a note that names the wrong one is as bad as no note
+  (Issue #613):
+  - **Feature availability** — a block calling a `#[target_feature]` fn names
+    the `is_*_feature_detected!` guard (`is_x86_feature_detected!` /
+    `is_aarch64_feature_detected!`) proving the callee's precondition.
+  - **Index validity** — a block calling a `*_unchecked` kernel or a
+    `scalar::tail_*` helper names the load-time `CompiledNetwork::new`
+    validation (or the `simd::bounds` predicate that has just run), since those
+    kernels' contracts are about indices, not features.
+
+  A block that crosses both obligations names both.
 
   `tests/scripts/unsafe_block_safety_notes.bats` sweeps the live sources
   (`simd_native.rs`, `simd.rs`, `simd/scalar.rs`, wasm half included) and fails
@@ -538,13 +607,18 @@ scalar/AVX2/NEON/wasm variants) take the two slices instead of
 stays on `SynapseData` for the aggregate/IF and single-record paths, which are
 untouched. Numerics are unchanged — same values, same order.
 
-The redundancy is the hazard, and the fields are public, so a caller can still
-assemble a `CompiledNetwork` literal (the test and bench fixtures do) or mutate
-`synapses` afterwards. `CompiledNetwork::debug_assert_hot_soa` is the fail-loud
-guard: every entry point into the interleaved gather calls it, so a drifted view
-panics in debug and test builds instead of silently scoring wrong numbers, and
-compiles away in release. `neat-core/tests/hot_synapse_soa.rs` pins the
-invariant across both construction paths, `Clone`, and the guard itself.
+The redundancy is the hazard. Since Issue #625 the fields are private and
+`from_parts` *derives* the hot view rather than accepting one, so no caller
+outside the crate can assemble a drifted literal or mutate `synapses` after the
+fact — but they are still two vectors, so an in-crate edit can drift them.
+`CompiledNetwork::debug_assert_hot_soa` is the fail-loud guard: every entry point
+into the interleaved gather calls it, so a drifted view panics in debug and test
+builds instead of silently scoring wrong numbers, and compiles away in release.
+`neat-core/tests/hot_synapse_soa.rs` pins the invariant across every construction
+path and `Clone`; the guard itself is pinned by
+`loss::interleaved_mse_parity::a_drifted_hot_view_fails_loud_instead_of_scoring_wrong_numbers`,
+which drifts the view in-crate — the only level at which drift is still
+expressible.
 
 `load_record` (`neat-core/src/batch_scoring.rs`) owns the loading sub-rule:
 copy `min(record.len(), num_inputs)` values and **zero** every input slot the
@@ -735,7 +809,7 @@ flowchart TD
 
 ## CI / secrets
 
-- PR pipeline: version bump + **`./bump-deps.sh --quarantine-hours … --skip-build`** (a `cargo update` under the **`VIBE_BUMP_QUARANTINE_HOURS`** release-age quarantine, Issue #76), **`cargo audit`**, dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. Pushes need **`ACTIONS_PUSH`** (**org-level** PAT with **contents:write**).
+- PR pipeline: version bump + **`./bump-deps.sh --quarantine-hours … --skip-build`** (a `cargo update` under the **`VIBE_BUMP_QUARANTINE_HOURS`** release-age quarantine, Issue #76), its advisory scan (**`cargo deny check advisories`**, falling back to **`cargo audit`**, and skipped-with-the-bump-reverted when neither is installed — Issues #598, #621), dependency review, rustfmt bot, then fmt/clippy/deny/tests/doc. `bump-deps.sh` exits non-zero **only** when the tree it produced must not be kept (cargo missing, an advisory, a build failure, an unrestorable `Cargo.lock`); a crate it cannot bump safely is a **deferral**, not a failure — a run that exits non-zero has its whole bump reverted, which is what disabled bumps here three runs running (Issue #621). Pushes need **`ACTIONS_PUSH`** (**org-level** PAT with **contents:write**).
 - **`cargo upgrade --incompatible` is local-only** — it runs from `quality.sh` (guarded by `command -v cargo-upgrade`) and from **no workflow**. Do not "fix" CI to call it: a direct upgrade bypasses the quarantine `bump-deps.sh` applies, which is why `ci.yml` drops `cargo-edit` and `tests/scripts/ci_workflow_quarantine.bats` fails any unguarded invocation.
 - **`ACTIONS_PUSH` is supplied just-in-time** (Issue #483): the `version-increment` / `auto-format` checkouts run with **`persist-credentials: false`** and no `token:`, and the PAT reaches only the one step that pushes, through an explicit `https://x-access-token:…` remote URL. Never hand it to a checkout — those jobs execute PR-authored code (`bump-deps.sh`, `cargo fmt`) that would then be able to read an org-wide credential off `.git/config`.
 - **Versioning/release policy:** **`RELEASING.md`** is the single source of truth (Issue #251) — semver, what counts as breaking, and how to signal it. In CI the `version-increment` job bumps minor on a break (patch otherwise); the `version-gate` job **fails** a break shipped on a patch-only bump; `release.yml` cuts a **`v<version>`** tag + GitHub release on `Develop`, decoupled from `wasm-bundle-<sha>`.

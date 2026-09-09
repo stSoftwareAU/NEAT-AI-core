@@ -222,6 +222,28 @@ def safety_doc_lines(lines):
                 break
 
 
+def unguarded_feature(lines, kernels, decl, idx):
+    """Rule 5 detail for the block at `idx`, or None when every feature is proven.
+
+    The guard in front of a `#[target_feature]` kernel must detect **every**
+    feature that kernel enables, unless the enclosing fn already enables them
+    itself. AVX2 does not imply FMA (Issue #605).
+    """
+    detected = detected_features(lines, decl, idx) | enabled_features(lines, decl)
+    for name in sorted(called_names(lines, idx)):
+        required = kernels.get(name)
+        if required and not required <= detected:
+            missing = "/".join(sorted(required - detected))
+            seen = "/".join(sorted(detected)) or "no feature"
+            return (
+                "calls `%s`, which enables %s, but only %s is detected "
+                "before this block — %s is unguarded" % (
+                    name, "/".join(sorted(required)), seen, missing
+                )
+            )
+    return None
+
+
 def sweep(path):
     """Yield (line_no, verdict, detail) for every `unsafe {` block in `path`."""
     with open(path, encoding="utf-8") as handle:
@@ -235,6 +257,14 @@ def sweep(path):
         if not UNSAFE_BLOCK_RE.search(code_part(line)):
             continue
         decl, decl_match = enclosing_fn(lines, i)
+        # Rule 5 runs before the coverage rules and applies to every block.
+        # Issue #613 moved the AVX2/FMA dispatch inside `*_unchecked` kernels,
+        # which are `unsafe fn`s with a `# Safety` doc — that contract binds the
+        # caller on *indices*, and can never discharge a `#[target_feature]`
+        # precondition the block itself must prove with a runtime guard.
+        if decl is not None and unguarded_feature(lines, kernels, decl, i) is not None:
+            yield i + 1, "unguarded-feature", unguarded_feature(lines, kernels, decl, i)
+            continue
         if decl is not None and decl_match.group("unsafe") and has_safety_doc(lines, decl):
             yield i + 1, "ok", (
                 "`# Safety` doc on `unsafe fn %s`" % decl_match.group("name")
@@ -255,25 +285,6 @@ def sweep(path):
                     "guard that discharges the `#[target_feature]` precondition"
                 )
                 continue
-        if decl is not None:
-            # Rule 5: the guard must detect every feature the callee enables,
-            # unless the enclosing fn already enables them itself.
-            detected = detected_features(lines, decl, i) | enabled_features(lines, decl)
-            for name in sorted(called_names(lines, i)):
-                required = kernels.get(name)
-                if required and not required <= detected:
-                    missing = "/".join(sorted(required - detected))
-                    seen = "/".join(sorted(detected)) or "no feature"
-                    yield i + 1, "unguarded-feature", (
-                        "calls `%s`, which enables %s, but only %s is detected "
-                        "before this block — %s is unguarded" % (
-                            name, "/".join(sorted(required)), seen, missing
-                        )
-                    )
-                    break
-            else:
-                yield i + 1, "ok", "`// SAFETY:` note at line %d" % (note + 1)
-            continue
         yield i + 1, "ok", "`// SAFETY:` note at line %d" % (note + 1)
 
 

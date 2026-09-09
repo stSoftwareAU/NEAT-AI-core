@@ -15,7 +15,7 @@
 //! loaded one (statelessness), and a narrow record must score identically
 //! through the single-record path and the batched loader (parity).
 
-use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData};
 
 const IDENTITY: u8 = 0;
 const TANH: u8 = 7;
@@ -44,35 +44,8 @@ const SHORT_PADDED: [f32; NUM_INPUTS] = [0.4, -0.7, 0.0, 0.0];
 const TOL: f32 = 1e-5;
 
 fn network(neurons: Vec<NeuronData>, synapses: Vec<SynapseData>) -> CompiledNetwork {
-    let num_non_inputs = neurons.len();
-    let num_neurons = NUM_INPUTS + num_non_inputs;
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-    CompiledNetwork {
-        num_neurons,
-        num_inputs: NUM_INPUTS,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; num_neurons],
-        hint_values_buffer: vec![0.0; num_non_inputs],
-        trace_data_buffer: Vec::new(),
-        batch_activations: [
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-        ],
-        batch_hints: [
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-        ],
-        batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-        mse_inter: vec![0.0; num_neurons * 8],
-    }
+    CompiledNetwork::from_parts(NUM_INPUTS, neurons, synapses)
+        .expect("fixture must satisfy the load-time index invariant")
 }
 
 /// One hidden neuron reading all four inputs, one output neuron reading it.

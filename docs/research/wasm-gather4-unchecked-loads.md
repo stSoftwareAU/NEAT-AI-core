@@ -81,8 +81,10 @@ so its memory-traffic behaviour is production-representative.
 
 ### Benchmarks
 
-- `kernel` — isolated: one `weighted_sum_simd` call per non-input neuron over
-  the creature's real synapse spans, ×200 (the `gather4` consumer).
+- `kernel` — isolated: one `weighted_sum_simd_unchecked` call per non-input
+  neuron over the creature's real synapse spans, ×200 (the `gather4` consumer).
+  Issue #613 split the kernel in two; this harness measures the `*_unchecked`
+  form, which is the one the forward pass reaches.
 - `activate` — end-to-end **single-record inference**: `activate_into` over
   every record. This is the production forward pass that calls `gather4`.
 - `score` — end-to-end **batched scoring**: `score_records_flat` over the whole
@@ -167,9 +169,11 @@ inline the gather more aggressively.
   `num_neurons`, and the boundary index `num_neurons - 1` still loads. It runs
   in the native CI suite *and* on wasm.
 - **No new unsoundness class.** The obligation is exactly the one
-  `scalar::tail_*` and every native SIMD kernel already carry. `CompiledNetwork`
-  has public fields, so a caller can still hand-build a network without going
-  through `new` — that exposure predates this change and is unchanged by it.
+  `scalar::tail_*` and every native SIMD kernel already carry. At the time of
+  this measurement `CompiledNetwork` had public fields, so a caller could still
+  hand-build a network without going through `new`; that exposure predated this
+  change and was unchanged by it. Issue #625 has since closed it — the fields are
+  private and `from_parts` is the one validated way to build from parts.
 - **Other production targets.** The change is `#[cfg(target_arch = "wasm32")]`,
   so x86_64/aarch64 native builds are untouched; `./quality.sh` (fmt, clippy,
   deny, doc, full native suite) passes.

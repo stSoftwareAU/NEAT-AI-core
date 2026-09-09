@@ -93,7 +93,7 @@ fn bench_scoring(c: &mut Criterion) {
     group.sample_size(20);
     for percent in AGGREGATE_PERCENTS {
         let net = with_aggregates(build_network(spec, 0x5EED), percent);
-        let stride = net.num_inputs;
+        let stride = net.num_inputs();
         let inputs: Vec<f32> = build_records(stride, PRODUCTION_SCORING_RECORDS)
             .into_iter()
             .flatten()

@@ -1,7 +1,10 @@
 //! Micro-benchmark for the single-record weighted-sum primitives (Issue #153).
 //!
 //! Measures the four single-record forward-pass primitives that `activate()` calls
-//! per neuron. Run with:
+//! per neuron — the `*_unchecked` forms, which is what the forward pass reaches
+//! after `CompiledNetwork::new` has discharged their index contract (Issue #613).
+//! Timing the safe entry points instead would add the `simd::bounds` pre-pass and
+//! stop measuring the hot path. Run with:
 //!
 //! ```sh
 //! cargo run --release --example bench_single_record_weighted_sums
@@ -14,8 +17,8 @@
 
 use neat_core::network::SynapseData;
 use neat_core::simd::{
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_of_squares_v2_simd,
-    weighted_sum_simd,
+    weighted_sum_no_bias_simd_unchecked, weighted_sum_of_squares_simd_unchecked,
+    weighted_sum_of_squares_v2_simd_unchecked, weighted_sum_simd_unchecked,
 };
 use std::time::Instant;
 
@@ -73,16 +76,22 @@ fn main() {
     };
 
     println!("single-record weighted-sum benchmark ({num_synapses} synapses, {iters} iters)");
-    bench("weighted_sum_simd", &|syn, act, bias| {
-        weighted_sum_simd(syn, act, 0, syn.len(), bias)
+    // SAFETY (all four): the fixture above builds `from_index = i % num_inputs`
+    // against an `activations` buffer of `num_inputs` floats, and every span is
+    // `0..syn.len()`, so both halves of the `*_unchecked` contract hold.
+    bench("weighted_sum_simd", &|syn, act, bias| unsafe {
+        weighted_sum_simd_unchecked(syn, act, 0, syn.len(), bias)
     });
-    bench("weighted_sum_no_bias_simd", &|syn, act, _bias| {
-        weighted_sum_no_bias_simd(syn, act, 0, syn.len())
+    bench("weighted_sum_no_bias_simd", &|syn, act, _bias| unsafe {
+        weighted_sum_no_bias_simd_unchecked(syn, act, 0, syn.len())
     });
-    bench("weighted_sum_of_squares_simd", &|syn, act, _bias| {
-        weighted_sum_of_squares_simd(syn, act, 0, syn.len())
+    bench("weighted_sum_of_squares_simd", &|syn, act, _bias| unsafe {
+        weighted_sum_of_squares_simd_unchecked(syn, act, 0, syn.len())
     });
-    bench("weighted_sum_of_squares_v2_simd", &|syn, act, bias| {
-        weighted_sum_of_squares_v2_simd(syn, act, 0, syn.len(), bias)
-    });
+    bench(
+        "weighted_sum_of_squares_v2_simd",
+        &|syn, act, bias| unsafe {
+            weighted_sum_of_squares_v2_simd_unchecked(syn, act, 0, syn.len(), bias)
+        },
+    );
 }

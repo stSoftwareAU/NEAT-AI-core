@@ -18,8 +18,9 @@ use std::hint::black_box;
 use neat_core::loss::mse_sum_batch_packed;
 use neat_core::network::SynapseData;
 use neat_core::simd::{
-    weighted_sum_no_bias_simd, weighted_sum_of_squares_simd, weighted_sum_simd,
-    weighted_sum_simd_4records, weighted_sum_simd_8records,
+    weighted_sum_no_bias_simd_unchecked, weighted_sum_of_squares_simd_unchecked, weighted_sum_simd,
+    weighted_sum_simd_4records_unchecked, weighted_sum_simd_8records_unchecked,
+    weighted_sum_simd_unchecked,
 };
 use neat_core::squash::{SquashType, apply_squash};
 use neat_core::squash_simd::squash_x4;
@@ -411,6 +412,12 @@ fn bench_topology_ops(c: &mut Criterion) {
 }
 
 /// Activation primitives — `weighted_sum_simd` family plus squash/unsquash.
+///
+/// Issue #613 - these measure the `*_unchecked` kernels, which are what the
+/// forward pass runs once `CompiledNetwork::new` has discharged the index
+/// precondition. `single_checked` is the safe entry point of the same name, so
+/// the `O(end - start)` bounds pre-pass a caller holding no loaded network pays
+/// is measurable side by side with the kernel it guards.
 fn bench_activation_primitives(c: &mut Criterion) {
     // weighted_sum_simd family over a representative synapse block.
     let mut sum_group = c.benchmark_group("weighted_sum_simd");
@@ -440,6 +447,25 @@ fn bench_activation_primitives(c: &mut Criterion) {
 
     sum_group.bench_function("single", |b| {
         b.iter(|| {
+            // SAFETY: the fixture's `from_index` values are `0..synapse_count`
+            // and every activation buffer is `synapse_count` long, so the
+            // kernels' index precondition holds for the whole span.
+            black_box(unsafe {
+                weighted_sum_simd_unchecked(
+                    black_box(&synapses),
+                    black_box(&activations),
+                    0,
+                    end,
+                    0.25,
+                )
+            })
+        });
+    });
+    // Issue #613 - the safe entry point of the same name, so the cost of the
+    // bounds pre-pass a caller holding no loaded network pays is reproducible
+    // from the committed tree rather than only from the PR summary.
+    sum_group.bench_function("single_checked", |b| {
+        b.iter(|| {
             black_box(weighted_sum_simd(
                 black_box(&synapses),
                 black_box(&activations),
@@ -451,54 +477,74 @@ fn bench_activation_primitives(c: &mut Criterion) {
     });
     sum_group.bench_function("no_bias", |b| {
         b.iter(|| {
-            black_box(weighted_sum_no_bias_simd(
-                black_box(&synapses),
-                black_box(&activations),
-                0,
-                end,
-            ))
+            // SAFETY: the fixture's `from_index` values are `0..synapse_count`
+            // and every activation buffer is `synapse_count` long, so the
+            // kernels' index precondition holds for the whole span.
+            black_box(unsafe {
+                weighted_sum_no_bias_simd_unchecked(
+                    black_box(&synapses),
+                    black_box(&activations),
+                    0,
+                    end,
+                )
+            })
         });
     });
     sum_group.bench_function("of_squares", |b| {
         b.iter(|| {
-            black_box(weighted_sum_of_squares_simd(
-                black_box(&synapses),
-                black_box(&activations),
-                0,
-                end,
-            ))
+            // SAFETY: the fixture's `from_index` values are `0..synapse_count`
+            // and every activation buffer is `synapse_count` long, so the
+            // kernels' index precondition holds for the whole span.
+            black_box(unsafe {
+                weighted_sum_of_squares_simd_unchecked(
+                    black_box(&synapses),
+                    black_box(&activations),
+                    0,
+                    end,
+                )
+            })
         });
     });
     sum_group.bench_function("batch_4records", |b| {
         b.iter(|| {
-            black_box(weighted_sum_simd_4records(
-                black_box(&synapses),
-                &a0,
-                &a1,
-                &a2,
-                &a3,
-                0,
-                end,
-                0.25,
-            ))
+            // SAFETY: the fixture's `from_index` values are `0..synapse_count`
+            // and every activation buffer is `synapse_count` long, so the
+            // kernels' index precondition holds for the whole span.
+            black_box(unsafe {
+                weighted_sum_simd_4records_unchecked(
+                    black_box(&synapses),
+                    &a0,
+                    &a1,
+                    &a2,
+                    &a3,
+                    0,
+                    end,
+                    0.25,
+                )
+            })
         });
     });
     sum_group.bench_function("batch_8records", |b| {
         b.iter(|| {
-            black_box(weighted_sum_simd_8records(
-                black_box(&synapses),
-                &a0,
-                &a1,
-                &a2,
-                &a3,
-                &a4,
-                &a5,
-                &a6,
-                &a7,
-                0,
-                end,
-                0.25,
-            ))
+            // SAFETY: the fixture's `from_index` values are `0..synapse_count`
+            // and every activation buffer is `synapse_count` long, so the
+            // kernels' index precondition holds for the whole span.
+            black_box(unsafe {
+                weighted_sum_simd_8records_unchecked(
+                    black_box(&synapses),
+                    &a0,
+                    &a1,
+                    &a2,
+                    &a3,
+                    &a4,
+                    &a5,
+                    &a6,
+                    &a7,
+                    0,
+                    end,
+                    0.25,
+                )
+            })
         });
     });
     sum_group.finish();

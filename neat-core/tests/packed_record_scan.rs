@@ -19,7 +19,7 @@ use neat_core::loss::{
     mae_sum_batch_packed, mape_sum_batch_packed, mse_mean_record, mse_sum_batch_packed,
     msle_sum_batch_packed,
 };
-use neat_core::{CompiledNetwork, NeuronData, SynapseData, hot_synapse_soa};
+use neat_core::{CompiledNetwork, NeuronData, SynapseData};
 
 /// Identity squash — keeps every fixture's activation exact, so a mismatch is a
 /// carve bug rather than an approximation.
@@ -67,7 +67,7 @@ fn linear_network() -> CompiledNetwork {
             is_constant: false,
         },
     ];
-    network(4, 2, neurons, synapses)
+    network(2, neurons, synapses)
 }
 
 /// One input into a single output neuron that also reads **its own** previous
@@ -93,43 +93,16 @@ fn self_loop_network() -> CompiledNetwork {
         squash_type: IDENTITY,
         is_constant: false,
     }];
-    network(2, 1, neurons, synapses)
+    network(1, neurons, synapses)
 }
 
 fn network(
-    num_neurons: usize,
     num_inputs: usize,
     neurons: Vec<NeuronData>,
     synapses: Vec<SynapseData>,
 ) -> CompiledNetwork {
-    let num_non_inputs = neurons.len();
-    let (hot_weights, hot_from) = hot_synapse_soa(&synapses);
-    CompiledNetwork {
-        num_neurons,
-        num_inputs,
-        neurons,
-        synapses,
-        hot_weights,
-        hot_from,
-        activations: vec![0.0; num_neurons],
-        hint_values_buffer: vec![0.0; num_non_inputs],
-        trace_data_buffer: Vec::new(),
-        batch_activations: [
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-            vec![0.0; num_neurons],
-        ],
-        batch_hints: [
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-            vec![0.0; num_non_inputs],
-        ],
-        batch_traces: [Vec::new(), Vec::new(), Vec::new(), Vec::new()],
-        // NEAT-AI-scorer#531 — fused MSE interleaved scratch.
-        mse_inter: vec![0.0; num_neurons * 8],
-    }
+    CompiledNetwork::from_parts(num_inputs, neurons, synapses)
+        .expect("fixture must satisfy the load-time index invariant")
 }
 
 type PackedEntry = fn(&mut CompiledNetwork, &[f32], usize, usize, bool) -> f64;

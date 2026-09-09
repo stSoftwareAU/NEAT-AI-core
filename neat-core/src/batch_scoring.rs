@@ -5,7 +5,8 @@
 //! ([`CompiledNetwork::activate_into`]) re-reads each synapse's weight and
 //! metadata once **per record**. This module drives the forward pass through
 //! the existing across-records SIMD primitives
-//! ([`weighted_sum_simd_8records`] / [`weighted_sum_simd_4records`]), loading
+//! ([`weighted_sum_simd_8records_unchecked`] /
+//! [`weighted_sum_simd_4records_unchecked`]), loading
 //! each synapse weight once and applying it across 8 (then 4) records. That
 //! amortises the weight load and synapse-index read across the batch, cutting
 //! gather traffic on the dominant standard-squash neurons.
@@ -14,7 +15,8 @@
 //!
 //! Standard-squash neurons accumulate their weighted sum across records rather
 //! than across synapses, so the summation is re-associated relative to the
-//! single-record [`weighted_sum_simd`] kernel. In `f32` that yields results
+//! single-record [`weighted_sum_simd_unchecked`] kernel. In `f32` that yields
+//! results
 //! that match the per-record reference **within a small tolerance**, not
 //! bit-for-bit (Issue #230 acceptance criteria explicitly allow SIMD
 //! reordering / `f32` accumulation differences). Every other numeric step is
@@ -43,9 +45,10 @@
 use crate::network::{CompiledNetwork, NeuronData, SynapseData};
 use crate::range::{apply_get_range, apply_limit_range, apply_limit_range_bounds};
 use crate::simd::{
-    weighted_sum_interleaved, weighted_sum_no_bias_simd, weighted_sum_of_squares_simd,
-    weighted_sum_of_squares_v2_simd, weighted_sum_simd, weighted_sum_simd_4records,
-    weighted_sum_simd_8records,
+    weighted_sum_interleaved_unchecked, weighted_sum_no_bias_simd_unchecked,
+    weighted_sum_of_squares_simd_unchecked, weighted_sum_of_squares_v2_simd_unchecked,
+    weighted_sum_simd_4records_unchecked, weighted_sum_simd_8records_unchecked,
+    weighted_sum_simd_unchecked,
 };
 use crate::squash::{SquashType, apply_squash};
 use crate::squash_simd::{squash_x4, squash_x8, squash_xn};
@@ -158,6 +161,15 @@ impl BatchScratch {
 /// `hot_from`, Issue #533): the gather reads only weight and source index, so
 /// leaving `synapse_type` behind on [`SynapseData`] narrows the hot stream from
 /// 8 B to 6 B per synapse.
+///
+/// # Preconditions (Issue #613)
+///
+/// Crate-internal: this helper reaches the `*_unchecked` kernels, so the caller
+/// must hold a loaded `CompiledNetwork` — every `hot_from` entry `< num_neurons`
+/// (`CompiledNetwork::new`), `inter` sized `num_neurons * R`, and every
+/// neuron's `start_synapse..start_synapse + num_synapses` inside both hot
+/// arrays. The public, bounds-validating form is
+/// [`crate::simd::weighted_sum_interleaved`].
 pub(crate) fn run_interleaved_forward<const R: usize>(
     neurons: &[NeuronData],
     hot_weights: &[f32],
@@ -179,8 +191,19 @@ pub(crate) fn run_interleaved_forward<const R: usize>(
         let squash = SquashType::from(neuron.squash_type);
         let start = neuron.start_synapse as usize;
         let end = start + neuron.num_synapses as usize;
-        let sums =
-            weighted_sum_interleaved::<R>(hot_weights, hot_from, inter, start, end, neuron.bias);
+        // SAFETY: the caller's precondition (documented on this function) is the
+        // load-time `CompiledNetwork::new` invariant — every `hot_from` entry is
+        // `< num_neurons` and `inter` is sized `num_neurons * R`.
+        let sums = unsafe {
+            weighted_sum_interleaved_unchecked::<R>(
+                hot_weights,
+                hot_from,
+                inter,
+                start,
+                end,
+                neuron.bias,
+            )
+        };
 
         let squashed = squash_xn(squash, sums).unwrap_or_else(|| {
             let st = neuron.squash_type;
@@ -232,6 +255,13 @@ pub(crate) fn inline_squash(squash_type: u8, squash: SquashType, sum: f32) -> f3
 /// `activate` / `activate_into` keep their own inlined copy: routing them
 /// through this helper measured ~30–46% slower on the `forward_pass` benchmark
 /// (Issue #441), and neither had diverged.
+///
+/// # Preconditions (Issue #613)
+///
+/// Crate-internal: this helper reaches the `*_unchecked` kernels, so the caller
+/// must hold a loaded `CompiledNetwork` — every `from_index` in `synapses`
+/// `< num_neurons` (`CompiledNetwork::new`) and `act` sized to `num_neurons`.
+/// The public, bounds-validating kernels are re-exported from [`crate::simd`].
 #[inline]
 pub(crate) fn neuron_activation_scalar(
     synapses: &[SynapseData],
@@ -294,11 +324,18 @@ pub(crate) fn neuron_activation_scalar(
             }
         }
         SquashType::Hypotenuse => {
-            let sum_sq = weighted_sum_of_squares_simd(synapses, act, start, end);
+            // SAFETY: this function's documented precondition is the load-time
+            // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
+            let sum_sq =
+                unsafe { weighted_sum_of_squares_simd_unchecked(synapses, act, start, end) };
             sum_sq.sqrt() + neuron.bias
         }
         SquashType::HypotenuseV2 => {
-            let sum_sq = weighted_sum_of_squares_v2_simd(synapses, act, start, end, neuron.bias);
+            // SAFETY: this function's documented precondition is the load-time
+            // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
+            let sum_sq = unsafe {
+                weighted_sum_of_squares_v2_simd_unchecked(synapses, act, start, end, neuron.bias)
+            };
             sum_sq.sqrt()
         }
         SquashType::Mean => {
@@ -306,12 +343,17 @@ pub(crate) fn neuron_activation_scalar(
             if n <= 0.0 {
                 neuron.bias
             } else {
-                let sum = weighted_sum_no_bias_simd(synapses, act, start, end);
+                // SAFETY: this function's documented precondition is the load-time
+                // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
+                let sum = unsafe { weighted_sum_no_bias_simd_unchecked(synapses, act, start, end) };
                 sum / n + neuron.bias
             }
         }
         _ => {
-            let sum = weighted_sum_simd(synapses, act, start, end, neuron.bias);
+            // SAFETY: this function's documented precondition is the load-time
+            // `CompiledNetwork::new` invariant — see the `# Preconditions` note above.
+            let sum =
+                unsafe { weighted_sum_simd_unchecked(synapses, act, start, end, neuron.bias) };
             inline_squash(neuron.squash_type, squash, sum)
         }
     };
@@ -558,20 +600,24 @@ impl CompiledNetwork {
                     _ => {
                         let start = neuron.start_synapse as usize;
                         let end = start + neuron.num_synapses as usize;
-                        let (s0, s1, s2, s3, s4, s5, s6, s7) = weighted_sum_simd_8records(
-                            &self.synapses,
-                            act0,
-                            act1,
-                            act2,
-                            act3,
-                            act4,
-                            act5,
-                            act6,
-                            act7,
-                            start,
-                            end,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and every scratch buffer is sized to `num_neurons`.
+                        let (s0, s1, s2, s3, s4, s5, s6, s7) = unsafe {
+                            weighted_sum_simd_8records_unchecked(
+                                &self.synapses,
+                                act0,
+                                act1,
+                                act2,
+                                act3,
+                                act4,
+                                act5,
+                                act6,
+                                act7,
+                                start,
+                                end,
+                                neuron.bias,
+                            )
+                        };
                         // Vectorised squash across all 8 lanes for the covered
                         // types (Issue #243); scalar inline fallback otherwise.
                         let sums = [s0, s1, s2, s3, s4, s5, s6, s7];
@@ -645,16 +691,20 @@ impl CompiledNetwork {
                     _ => {
                         let start = neuron.start_synapse as usize;
                         let end = start + neuron.num_synapses as usize;
-                        let (s0, s1, s2, s3) = weighted_sum_simd_4records(
-                            &self.synapses,
-                            act0,
-                            act1,
-                            act2,
-                            act3,
-                            start,
-                            end,
-                            neuron.bias,
-                        );
+                        // SAFETY: loaded `CompiledNetwork` — `new` rejected every out-of-range
+                        // `from_index`, and every scratch buffer is sized to `num_neurons`.
+                        let (s0, s1, s2, s3) = unsafe {
+                            weighted_sum_simd_4records_unchecked(
+                                &self.synapses,
+                                act0,
+                                act1,
+                                act2,
+                                act3,
+                                start,
+                                end,
+                                neuron.bias,
+                            )
+                        };
                         // Vectorised squash across all 4 lanes for the covered
                         // types (Issue #243); scalar inline fallback otherwise.
                         let sums = [s0, s1, s2, s3];
