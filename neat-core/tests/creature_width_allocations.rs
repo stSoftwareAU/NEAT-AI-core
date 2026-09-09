@@ -11,7 +11,9 @@
 //! The cost is observable without touching the implementation: a counting
 //! global allocator totals the bytes handed out across one refusal. A width
 //! that is walked before it is bounded shows up as a total proportional to the
-//! declared count; a width bounded first costs nothing.
+//! declared count, so quadrupling the declaration quadruples the bill; a width
+//! bounded first does not move at all. Comparing the two readings is what makes
+//! the assertion hold on any machine — an absolute byte figure would not.
 //!
 //! Modelled on `tests/topology_ops_allocations.rs`.
 
@@ -19,9 +21,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use neat_core::if_graft::validate_creature_topology;
+use neat_core::if_graft::{GraftError, validate_creature_topology};
 use neat_core::network::MAX_NODE_COUNT;
-use neat_core::{CreatureExport, NeuronExport, SynapseExport, compile_creature};
+use neat_core::{CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature};
 
 /// Global allocator forwarding to the system allocator while totalling the
 /// bytes it hands out.
@@ -71,10 +73,34 @@ static MEASURING: Mutex<()> = Mutex::new(());
 /// point is the *shape* of the cost, not how far it can be pushed.
 const OVERSIZED_INPUT: usize = 1_000_000;
 
-/// Bytes a refusal may allocate in total. The declared width contributes
-/// nothing once it is bounded first; an unbounded walk of [`OVERSIZED_INPUT`]
-/// costs tens of megabytes in map entries and owned `String` keys alone.
-const REFUSAL_BUDGET_BYTES: usize = 64 * 1024;
+/// The same declaration, four times as wide. Both are refused for the same
+/// reason, so the difference between the two costs is what the declared width
+/// bought — see [`GROWTH_SLACK_BYTES`].
+const QUADRUPLED_INPUT: usize = 4 * OVERSIZED_INPUT;
+
+/// Floor on the heap one *walked* input costs: the `input-N` map entry holds a
+/// `String` handle (24 B) beside its `usize` index (8 B), before the name's own
+/// heap and the table's load-factor headroom. Deliberately conservative — the
+/// figure this file actually measures against the unbounded walk is ~81 B per
+/// input — so anything derived from it understates the walk rather than
+/// flattering the fix.
+const BYTES_PER_WALKED_INPUT: usize = 32;
+
+/// Bytes a refusal may allocate in total, derived rather than picked: refusing
+/// an impossible width must cost less than *accepting* the widest creature the
+/// `u16` index space allows, which is the largest walk this crate ever
+/// legitimately performs. At [`BYTES_PER_WALKED_INPUT`] that is 2 MiB, and the
+/// refusal in fact spends none of it.
+const REFUSAL_BUDGET_BYTES: usize = MAX_NODE_COUNT * BYTES_PER_WALKED_INPUT;
+
+/// How far the cost of a refusal may move when the declared width is
+/// **quadrupled**. A width that is walked before it is bounded quadruples with
+/// it (tens of megabytes here); a width bounded first does not move at all, so
+/// a few kilobytes of slack covers allocator noise without covering a walk.
+///
+/// This is the assertion that survives a change of machine: it compares two
+/// readings of the same work rather than one reading against a constant.
+const GROWTH_SLACK_BYTES: usize = 4 * 1024;
 
 /// Structurally valid apart from the declared width, so any rejection can only
 /// come from the width rule.
@@ -108,43 +134,56 @@ fn start_measuring() -> MutexGuard<'static, ()> {
     guard
 }
 
-fn assert_within_budget(spent: usize, entry_point: &str) {
+/// Bytes allocated while `refuse` turns `input` away, measured on its own.
+fn cost_of_refusing(input: usize, refuse: impl Fn(&CreatureExport) -> bool) -> usize {
+    let creature = creature_declaring(input);
+
+    let guard = start_measuring();
+    let refused = refuse(&creature);
+    let spent = TOTAL_BYTES.load(Ordering::Relaxed);
+    drop(guard);
+
+    assert!(refused, "a declared input of {input} must be refused");
+    spent
+}
+
+/// The two readings a bounded width must produce: small in absolute terms, and
+/// unmoved by quadrupling the declared count.
+fn assert_width_is_not_walked(entry_point: &str, refuse: impl Fn(&CreatureExport) -> bool) {
+    let at_width = cost_of_refusing(OVERSIZED_INPUT, &refuse);
+    let at_quadruple = cost_of_refusing(QUADRUPLED_INPUT, &refuse);
+    let growth = at_quadruple.saturating_sub(at_width);
+
     assert!(
-        spent <= REFUSAL_BUDGET_BYTES,
-        "{entry_point} allocated {spent} B refusing a declared input of {OVERSIZED_INPUT} \
+        at_width <= REFUSAL_BUDGET_BYTES,
+        "{entry_point} allocated {at_width} B refusing a declared input of {OVERSIZED_INPUT} \
          (budget {REFUSAL_BUDGET_BYTES} B, ceiling {MAX_NODE_COUNT}); \
          the declared width is being walked before it is bounded"
+    );
+    assert!(
+        growth <= GROWTH_SLACK_BYTES,
+        "{entry_point} spent {growth} B more refusing {QUADRUPLED_INPUT} inputs than \
+         {OVERSIZED_INPUT} ({at_quadruple} B against {at_width} B, slack \
+         {GROWTH_SLACK_BYTES} B); the cost still scales with the declared width"
     );
 }
 
 #[test]
 fn compiling_refuses_an_oversized_declared_input_without_paying_for_it() {
-    let creature = creature_declaring(OVERSIZED_INPUT);
-
-    let guard = start_measuring();
-    let outcome = compile_creature(&creature);
-    let spent = TOTAL_BYTES.load(Ordering::Relaxed);
-    drop(guard);
-
-    assert!(
-        outcome.is_err(),
-        "a declared input of {OVERSIZED_INPUT} must be refused"
-    );
-    assert_within_budget(spent, "compile_creature");
+    assert_width_is_not_walked("compile_creature", |creature| {
+        matches!(
+            compile_creature(creature),
+            Err(CreatureError::TooManyNodes { .. })
+        )
+    });
 }
 
 #[test]
 fn topology_validation_refuses_an_oversized_declared_input_without_paying_for_it() {
-    let creature = creature_declaring(OVERSIZED_INPUT);
-
-    let guard = start_measuring();
-    let outcome = validate_creature_topology(&creature);
-    let spent = TOTAL_BYTES.load(Ordering::Relaxed);
-    drop(guard);
-
-    assert!(
-        outcome.is_err(),
-        "a declared input of {OVERSIZED_INPUT} must be refused"
-    );
-    assert_within_budget(spent, "validate_creature_topology");
+    assert_width_is_not_walked("validate_creature_topology", |creature| {
+        matches!(
+            validate_creature_topology(creature),
+            Err(GraftError::Creature(CreatureError::TooManyNodes { .. }))
+        )
+    });
 }

@@ -564,8 +564,13 @@ impl From<CreatureError> for GraftError {
 /// [`validate_creature_width`]** (Issue #622). `creature.input` is a declared
 /// count with no backing data, and this walk turns it into one owned `String`
 /// per declared input — so an unbounded width sets the memory spent here from
-/// a payload under 100 bytes. Every caller reaches this through
-/// [`validate_creature_topology`], which runs that check first.
+/// a payload under 100 bytes. Every route in reaches that check first, by one
+/// of two paths: [`validate_creature_topology`] calls it directly (and every
+/// `graft_*` entry point calls that before [`place_and_build`]), while
+/// [`sort_synapses_canonically`] is reached from
+/// [`crate::prune_cleanup::cleanup_creature_with`], which calls it at its own
+/// boundary, and from [`crate::decision_tree`]'s own fixtures. A new caller
+/// owes the same check.
 fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
     let mut map = HashMap::with_capacity(creature.input + creature.neurons.len());
     for i in 0..creature.input {
@@ -582,14 +587,16 @@ fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
 /// Reuses [`validate_creature_width`], [`validate_topology_typed`],
 /// [`validate_structural_integrity`] and [`validate_no_duplicate_synapses`]
 /// rather than restating their rules, so a creature that passes here is one the
-/// compiler and the WASM consumers accept. The width gate runs first and is
-/// what bounds the declared observation count, so a creature declaring more
-/// inputs than the `u16` index space can address comes back as
-/// [`GraftError::Creature`] wrapping [`CreatureError::TooManyNodes`], rather
-/// than as a map with one entry per declared input (Issue #622). The last of those is the order
+/// compiler and the WASM consumers accept. The last of those is the order
 /// independent leg: it is what knows a repeated pair is only meaningful into an
 /// `IF` target (Issue #577), which the index gates are not told the squashes to
 /// answer.
+///
+/// The width gate runs **first**, and bounds the declared observation count as
+/// well as flooring it: a creature declaring more inputs than the `u16` index
+/// space can address comes back as [`GraftError::Creature`] wrapping
+/// [`CreatureError::TooManyNodes`], rather than as a map with one entry per
+/// declared input (Issue #622).
 ///
 /// The ordering gate only runs for `forwardOnly` creatures: a recurrent creature
 /// legitimately carries backward edges, which that gate rejects by design.

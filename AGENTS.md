@@ -437,8 +437,13 @@ caller (Issue #622). `input` is a declared count the payload never backs, and
 `compile_creature`, `validate_creature_topology` and `cleanup_creature_with`
 each build one owned `String` UUID per declared input — so a width checked
 *after* that walk lets a sub-100-byte creature buy a hundred million map
-entries, and a large enough literal abort the module on the allocation. A
+entries, and a large enough literal abort the process on the allocation. A
 declared `input` past `MAX_NODE_COUNT` is `CreatureError::TooManyNodes`.
+`creature_validate` walks the width too but is not a caller by design — it owes
+NEAT-AI's rule wording, not a typed width error — so its ceiling stays at its
+own JSON boundary (`oversized_detail` / `MAX_REQUEST_NEURONS`). Adding a *new*
+caller of `validate_creature_width` inherits the ceiling; adding a new width
+walk that bypasses it needs its own.
 `neat-core/tests/creature_width_allocations.rs` is the oracle: a counting global
 allocator asserts a refusal costs O(1) bytes, so re-ordering the check back
 behind the walk fails even though the returned error would be unchanged.

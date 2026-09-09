@@ -301,10 +301,15 @@ fn valid_creature_round_trips_input_and_output_byte_identically() {
 /// million inputs no creature can carry.
 const HUGE_INPUT_JSON: &str = r#"{"input":100000000,"output":1,"neurons":[{"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}],"synapses":[]}"#;
 
+/// `HUGE_INPUT_JSON` and `creature_with_widths(100_000_000, 1)` both list one
+/// neuron, so the declared node count the error carries is the width plus that
+/// neuron — the same meaning `TooManyNodes` has after compilation.
+const HUGE_NODE_COUNT: usize = 100_000_001;
+
 #[test]
 fn parse_rejects_a_declared_input_past_the_node_ceiling() {
     match parse_creature_json(HUGE_INPUT_JSON) {
-        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, 100_000_000),
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
         Err(other) => panic!("expected TooManyNodes, got {other:?}"),
         Ok(c) => panic!("input: 100000000 must not parse, got input {}", c.input),
     }
@@ -312,24 +317,46 @@ fn parse_rejects_a_declared_input_past_the_node_ceiling() {
 
 #[test]
 fn compile_rejects_a_declared_input_past_the_node_ceiling() {
-    // The count reported is the declared width itself: it is refused before the
-    // listed neurons are added to it, because adding them is what costs.
     match compile_creature(&creature_with_widths(100_000_000, 1)) {
-        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, 100_000_000),
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
         Err(other) => panic!("expected TooManyNodes, got {other:?}"),
         Ok(_) => panic!("input: 100000000 must not compile"),
     }
 }
 
 #[test]
-fn serialise_refuses_a_declared_input_past_the_node_ceiling() {
+fn neither_serialiser_writes_a_declared_input_past_the_node_ceiling() {
+    // Both writers, so the ceiling is pinned at all four call sites of
+    // `validate_creature_width` exactly as the lower bound is.
     match creature_to_json(&creature_with_widths(100_000_000, 1)) {
-        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, 100_000_000),
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
         Err(other) => panic!("expected TooManyNodes, got {other:?}"),
         Ok(json) => panic!(
             "input: 100000000 must not serialise, got {} bytes",
             json.len()
         ),
+    }
+    match creature_to_json_pretty(&creature_with_widths(100_000_000, 1)) {
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, HUGE_NODE_COUNT),
+        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+        Ok(json) => panic!(
+            "input: 100000000 must not pretty-serialise, got {} bytes",
+            json.len()
+        ),
+    }
+}
+
+#[test]
+fn the_width_ceiling_error_reads_as_a_node_count() {
+    // The Display text is shared with the post-compilation check, so the number
+    // it names must be a node count on this path too.
+    match compile_creature(&creature_with_widths(100_000_000, 1)) {
+        Err(e) => assert_eq!(
+            e.to_string(),
+            "Creature has 100000001 nodes, exceeding the maximum of 65536 \
+             addressable by a u16 source index"
+        ),
+        Ok(_) => panic!("input: 100000000 must not compile"),
     }
 }
 

@@ -369,11 +369,11 @@ pub enum CreatureError {
     /// may contain at most [`crate::network::MAX_NODE_COUNT`] nodes.
     ///
     /// Issue #622 - also raised by [`validate_creature_width`] when the
-    /// *declared* observation width alone exceeds that ceiling, so the count is
-    /// refused before anything allocates one entry per declared input. `count`
-    /// is then the declared width itself rather than the total node count: the
-    /// listed neurons are never added to it, because adding them is the walk
-    /// this check exists to prevent.
+    /// *declared* observation width alone exceeds that ceiling, so the creature
+    /// is refused before anything allocates one entry per declared input.
+    /// `count` carries the same meaning on both paths — the creature's declared
+    /// node count, inputs plus listed neurons — so the [`std::fmt::Display`]
+    /// text stays true whichever check spoke.
     TooManyNodes {
         /// The node count that exceeded [`crate::network::MAX_NODE_COUNT`].
         count: usize,
@@ -646,18 +646,26 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
 ///
 /// `input` is a **declared** count with no backing data in the JSON — input
 /// neurons are not listed in `neurons` — so a payload under 100 bytes can say
-/// `"input": 100000000`. Every entry point turns that count into one owned
-/// `String` UUID per declared input ([`compile_creature`],
-/// [`crate::if_graft::validate_creature_topology`],
-/// [`crate::prune_cleanup::cleanup_creature_with`]), which is why the ceiling
-/// belongs *here*, ahead of them all: bounding the width afterwards means the
-/// declared count, not the payload, decides the memory spent, and a large
-/// enough literal aborts the process on the allocation instead of returning.
+/// `"input": 100000000`. Every caller of this helper turns that count into one
+/// owned `String` UUID per declared input ([`compile_creature`],
+/// [`crate::if_graft::validate_creature_topology`] and so every `graft_*`
+/// helper, and [`crate::prune_cleanup::cleanup_creature_with`]), which is why
+/// the ceiling belongs *here*, ahead of them all: bounding the width afterwards
+/// means the declared count, not the payload, decides the memory spent, and a
+/// large enough literal aborts the process on the allocation instead of
+/// returning.
+///
+/// [`crate::creature_validate()`] walks the declared width the same way and is
+/// deliberately **not** a caller — it must report the rule violations in
+/// NEAT-AI's wording rather than a typed width error, so its ceiling lives at
+/// its own JSON boundary instead
+/// ([`crate::creature_validate_json::oversized_detail`]).
 ///
 /// The ceiling is [`crate::network::MAX_NODE_COUNT`] — inclusive, since that is
 /// the widest network the `u16` source index can address — and a width past it
 /// is [`CreatureError::TooManyNodes`], the same typed error a creature whose
-/// *total* node count overflows the index space already earns (Issue #177).
+/// *total* node count overflows the index space already earns (Issue #177),
+/// carrying the same declared node count (`input` plus the listed neurons).
 /// `output` needs no companion bound: it sizes no allocation, and the output
 /// neurons it declares are counted from `neurons`, so an unreachable value is
 /// already refused by [`CreatureError::OutputCountMismatch`].
@@ -670,8 +678,11 @@ pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), Creature
         });
     }
     if creature.input > MAX_NODE_COUNT {
+        // Report the whole declared node count, so `TooManyNodes` means the
+        // same thing here as it does after compilation. Saturating because the
+        // declaration is untrusted and the sum is not what is being bounded.
         return Err(CreatureError::TooManyNodes {
-            count: creature.input,
+            count: creature.input.saturating_add(creature.neurons.len()),
         });
     }
     if creature.output < 1 {

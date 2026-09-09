@@ -482,13 +482,13 @@ calls it:
 | `creature_to_json` / `creature_to_json_pretty` | same typed error — a widthless creature is never *written* | — | — |
 
 **The rule is bounded at the top as well (Issue #622).** `input` is a *declared*
-count with no backing data in the JSON, and every entry point turns it into one
-owned `String` UUID per declared input — `compile_creature`,
-`validate_creature_topology` (and so every `graft_*` helper) and
-`cleanup_creature_with` all build that map. Sizing an allocation by a number the
-payload never backed is what lets `{"input": 100000000, …}` — under 100 bytes —
-cost a hundred million map entries, and a large enough literal abort the process
-on the allocation instead of returning. So the ceiling lives in
+count with no backing data in the JSON, and every caller of
+`validate_creature_width` turns it into one owned `String` UUID per declared
+input — `compile_creature`, `validate_creature_topology` (and so every `graft_*`
+helper) and `cleanup_creature_with` all build that map. Sizing an allocation by
+a number the payload never backed is what lets `{"input": 100000000, …}` — under
+100 bytes — cost a hundred million map entries, and a large enough literal abort
+the process on the allocation instead of returning. So the ceiling lives in
 `validate_creature_width`, ahead of them all: a declared `input` above
 `MAX_NODE_COUNT` (65 536, the widest network a `u16` source index can address)
 is `CreatureError::TooManyNodes { count }`, the same typed error a creature
@@ -498,6 +498,12 @@ neurons are never added to it, because adding them is the walk the check
 prevents. `output` needs no companion bound: it sizes no allocation, and the
 output neurons it declares are counted from `neurons`, so an unreachable value
 is already `CreatureError::OutputCountMismatch`.
+
+`creature_validate` walks the declared width the same way but is deliberately
+**not** a caller: it reports rule violations in NEAT-AI's wording rather than a
+typed width error, so its ceiling stays at its own JSON boundary
+(`oversized_detail` / `MAX_REQUEST_NEURONS`, which every WASM and `prune_json`
+request passes through) — see the boundary table in `creature_validate_json`.
 
 The Display text (`Must have at least one input neurons was: 0`) mirrors
 NEAT-AI `src/architecture/CreatureValidate.ts` so logs line up across the TS

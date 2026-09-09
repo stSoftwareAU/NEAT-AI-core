@@ -485,13 +485,16 @@ fn gate_accepts_every_canonical_fixture() {
 fn gate_rejects_a_declared_input_past_the_node_ceiling() {
     let mut creature = base_creature();
     creature.input = 100_000_000;
+    // `base_creature` lists two neurons, and the error carries the declared
+    // node count — the width plus those two.
+    let expected = 100_000_000 + creature.neurons.len();
     let err = validate_creature_topology(&creature).expect_err("rejected");
     assert!(
         matches!(
             err,
-            GraftError::Creature(CreatureError::TooManyNodes { count }) if count == 100_000_000
+            GraftError::Creature(CreatureError::TooManyNodes { count }) if count == expected
         ),
-        "expected a typed TooManyNodes refusal, got {err:?}"
+        "expected a typed TooManyNodes refusal naming {expected} nodes, got {err:?}"
     );
 }
 
