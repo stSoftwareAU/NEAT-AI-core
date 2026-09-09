@@ -11,6 +11,9 @@
 #      so versions published less than N hours ago are deferred to dodge
 #      fast-flagged supply-chain attacks. Crates the per-crate pass cannot
 #      land on their own are retried together in one grouped `cargo update`.
+#      Crates the plan never named but `cargo update` moved anyway are
+#      age-checked against the same window, so no version reaches Cargo.lock
+#      unverified (Issue #627).
 #   2. Advisory scan — `cargo deny check advisories` when `cargo-deny` is on
 #      PATH, otherwise `cargo audit`. Fails non-zero on any reported advisory,
 #      naming the offending crate + advisory ID. With neither tool installed
@@ -212,6 +215,39 @@ for v in data.get("versions", []):
   printf '%s\n' "$created"
 }
 
+# Release-age lookups memoised for the whole run (Issue #627). A resolution
+# change can move dozens of out-of-plan crates, and the breach check runs after
+# every update — without a memo the same version is re-queried each time. A
+# file rather than a shell variable: the breach check runs inside a command
+# substitution, so a subshell's cache would die with the subshell.
+AGE_CACHE_FILE=""
+
+# crate_published_at with that memo. Prints the publish timestamp and returns
+# 0; returns 1 when the release age could not be established. The failure is
+# memoised too, so an unreachable registry is not re-queried per update.
+crate_published_at_cached() {
+  local crate="$1" version="$2" cached created
+  if [[ -n "$AGE_CACHE_FILE" && -f "$AGE_CACHE_FILE" ]]; then
+    cached="$(awk -v c="$crate" -v v="$version" '$1 == c && $2 == v { print $3; exit }' "$AGE_CACHE_FILE")"
+    if [[ -n "$cached" ]]; then
+      # "-" is the memoised failure; a timestamp never looks like it.
+      [[ "$cached" == "-" ]] && return 1
+      printf '%s\n' "$cached"
+      return 0
+    fi
+  fi
+  if ! created="$(crate_published_at "$crate" "$version")"; then
+    if [[ -n "$AGE_CACHE_FILE" ]]; then
+      printf '%s %s -\n' "$crate" "$version" >>"$AGE_CACHE_FILE"
+    fi
+    return 1
+  fi
+  if [[ -n "$AGE_CACHE_FILE" ]]; then
+    printf '%s %s %s\n' "$crate" "$version" "$created" >>"$AGE_CACHE_FILE"
+  fi
+  printf '%s\n' "$created"
+}
+
 # --- lockfile helpers ------------------------------------------------------
 
 # The one definition of the lockfile path; every stage below reads this.
@@ -272,7 +308,8 @@ RUN_LOCK_BACKUP=""
 #
 # The trigger is the lockfile itself, not the bump counter: `cargo update` also
 # rewrites out-of-plan transitive entries, which the quarantine check allows
-# and which leave `external_changed` at 0. Comparing against the snapshot is
+# once their release age clears and which leave `external_changed` at 0.
+# Comparing against the snapshot is
 # what makes "nothing lands unscanned" true of every byte of the file, not
 # just of the crates the plan named. A run that found no lockfile cannot have
 # changed one — every update pass refuses to run without it.
@@ -320,11 +357,17 @@ BUMP_DEFER_REASON=()
 #
 # A breach is either a crate the quarantine deferred moving off the version it
 # was held at, or a crate in the bump plan landing anywhere other than its
-# approved target or the version(s) it held before the update. Movement of
-# out-of-plan transitive crates is expected — cargo must be free to move a
-# dependency to satisfy the versions it was asked for — so it is not a breach.
+# approved target or the version(s) it held before the update.
+#
+# Movement of out-of-plan transitive crates is still allowed — cargo must be
+# free to move a dependency to satisfy the versions it was asked for — but
+# only onto a version that has itself cleared the release-age window. The plan
+# never named those crates, so nothing else checks them, and a crate dragged
+# onto a version published minutes ago would otherwise land in Cargo.lock
+# unverified (Issue #627). An age the run could not establish counts as a
+# breach: refusing the update beats keeping a version nobody vouched for.
 quarantine_breach() {
-  local before="$1" after i name version clean line
+  local before="$1" after i name version clean line crate published_at approved
   after="$(lock_snapshot)"
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
@@ -333,9 +376,9 @@ quarantine_breach() {
       return 0
     fi
   done <<<"$BUMP_DEFERRED_LOCK"
-  # Guarded: bash 3.2 treats "${!arr[@]}" on an empty array as unbound.
-  [[ "${#BUMP_NAMES[@]}" -gt 0 ]] || return 0
-  for i in "${!BUMP_NAMES[@]}"; do
+  # Guarded: bash 3.2 treats "${!arr[@]}" on an empty array as unbound. The
+  # guard skips only this loop — the out-of-plan check below still runs.
+  for i in ${BUMP_NAMES[@]+"${!BUMP_NAMES[@]}"}; do
     name="${BUMP_NAMES[i]}"
     # Every version the crate is now locked at must be its approved target or
     # one it already held. Checked version by version rather than "is the
@@ -354,6 +397,31 @@ quarantine_breach() {
     printf 'moved %s off its approved target %s\n' "$name" "${BUMP_TARGETS[i]}"
     return 0
   done
+  # Everything else the update left in the lock. Two exemptions, both by exact
+  # "<name> <version>" rather than by crate name — a name-wide exemption would
+  # wave through a second major of a planned or deferred crate that nothing
+  # else has age-checked:
+  #   * a version the lock already held before this update, and
+  #   * a planned crate on its approved target, age-checked when the plan was
+  #     read (the loop above has already rejected it anywhere else).
+  local approved=""
+  for i in ${BUMP_NAMES[@]+"${!BUMP_NAMES[@]}"}; do
+    approved+="${BUMP_NAMES[i]} ${BUMP_TARGETS[i]}"$'\n'
+  done
+  while read -r crate version; do
+    [[ -n "$crate" ]] || continue
+    if grep -qxF "$crate $version" <<<"$before"; then continue; fi
+    if grep -qxF "$crate $version" <<<"$approved"; then continue; fi
+    if ! published_at="$(crate_published_at_cached "$crate" "$version")"; then
+      printf 'moved out-of-plan %s to %s (release age unknown)\n' "$crate" "$version"
+      return 0
+    fi
+    if ! is_older_than_hours "$published_at" "$QUARANTINE_HOURS"; then
+      printf 'moved out-of-plan %s to %s (within %sh quarantine, published %s)\n' \
+        "$crate" "$version" "$QUARANTINE_HOURS" "$published_at"
+      return 0
+    fi
+  done <<<"$after"
   # A clean lock: no breach named, and never a non-zero status the callers'
   # `breach="$(quarantine_breach …)"` assignment would trip `set -e` on.
   return 0
@@ -443,7 +511,7 @@ bump_external() {
       crate="${BASH_REMATCH[2]}"
       from_v="${BASH_REMATCH[3]}"
       new_v="${BASH_REMATCH[4]}"
-      if ! published_at="$(crate_published_at "$crate" "$new_v")"; then
+      if ! published_at="$(crate_published_at_cached "$crate" "$new_v")"; then
         # Unknown release age is treated exactly like an unexpired one: the
         # crate is held at the version it is on, and every update in this run
         # is checked against that hold.
@@ -693,11 +761,20 @@ run_build() {
 
 # --- main ------------------------------------------------------------------
 
+# One trap for every scratch file the run creates; both paths are read at exit
+# time, so the trap is armed before either is filled in.
+cleanup_run_files() {
+  [[ -n "$AGE_CACHE_FILE" ]] && rm -f "$AGE_CACHE_FILE"
+  [[ -n "$RUN_LOCK_BACKUP" ]] && rm -f "$RUN_LOCK_BACKUP"
+  return 0
+}
+trap cleanup_run_files EXIT
+
+AGE_CACHE_FILE="$(mktemp "${TMPDIR:-/tmp}/bump-deps-age-cache.XXXXXX")"
+
 if [[ -f "$LOCK_FILE" ]]; then
   RUN_LOCK_BACKUP="$(mktemp "${TMPDIR:-/tmp}/bump-deps-run-lock.XXXXXX")"
   cp "$LOCK_FILE" "$RUN_LOCK_BACKUP"
-  # shellcheck disable=SC2064  # expand now: the path must survive the trap.
-  trap "rm -f '$RUN_LOCK_BACKUP'" EXIT
 fi
 
 if [[ "$SKIP_EXTERNAL" -eq 0 ]]; then bump_external; fi

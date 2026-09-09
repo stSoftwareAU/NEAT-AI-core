@@ -136,6 +136,29 @@ crates the bump plan never named. Both update passes therefore snapshot
 off the version it was held at, or any planned crate off its approved target,
 is reverted and named in the log rather than left in the lock (Issue #614).
 
+Crates the plan never named are held to the same window (Issue #627). cargo
+stays free to shift an out-of-plan transitive dependency to satisfy the
+versions it was asked for, but the version it lands on is looked up through
+crates.io and age-checked like any other: one inside the window, or one whose
+release age the run could not establish at all, reverts the update that
+produced it. Refusing an unverifiable version is the safe default — otherwise
+a crate published minutes ago reaches `Cargo.lock` having passed no check.
+The lookups are memoised for the run, so a resolution change that moves dozens
+of crates costs one query per version rather than one per update.
+
+```mermaid
+flowchart TD
+    U["cargo update pass"] --> D{"deferred crate moved?"}
+    D -->|yes| R["revert + name the breach"]
+    D -->|no| P{"planned crate off its approved target?"}
+    P -->|yes| R
+    P -->|no| T{"out-of-plan crate moved?"}
+    T -->|no| K["keep the update"]
+    T -->|yes| A{"landed version older than the window?"}
+    A -->|yes| K
+    A -->|no, or age unknown| R
+```
+
 ## Supply-chain audit scope
 
 Two Cargo lockfiles live in this repository, and **both** are audited. The root

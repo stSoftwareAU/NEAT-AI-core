@@ -603,8 +603,10 @@ TXT
   printf 'js-sys\nwasm-bindgen\n' >"$STUB_REJECT"
   printf 'js-sys 0.3.105\nwasm-bindgen 0.2.128\n' >"$STUB_TARGETS"
   # cargo must be free to move an out-of-group dependency to satisfy the
-  # versions the group asked for; that is not a quarantine breach and must not
-  # revert a group whose own crates all landed on target.
+  # versions the group asked for — but only onto a version that has itself
+  # cleared the release-age window (Issue #627). This one is ancient, so the
+  # group is kept.
+  echo "2020-01-01T00:00:00Z" >"$TMP_REPO/publish/bumpalo-3.1.0.iso"
   printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
@@ -667,7 +669,9 @@ TXT
     Updating cc v1.4.2 -> v1.4.5
 TXT
   # cargo must stay free to move an out-of-plan dependency to satisfy the
-  # version it was asked for — the same allowance the grouped retry makes.
+  # version it was asked for — the same allowance the grouped retry makes,
+  # and only for a version already past the release-age window (Issue #627).
+  echo "2020-01-01T00:00:00Z" >"$TMP_REPO/publish/bumpalo-3.1.0.iso"
   printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
@@ -728,6 +732,128 @@ TXT
   [[ "$output" == *"skip: cc 1.4.5 (no ${TMP_REPO}/Cargo.lock to verify against)"* ]]
   [[ "$output" == *"defer: cc -> 1.4.5 (no ${TMP_REPO}/Cargo.lock to verify against)"* ]]
   ! grep -qF -- "-p cc" "$STUB_LOG"
+}
+
+# --- Issue #627: out-of-plan transitive versions are age-checked too --------
+
+@test "external: per-crate update dragging a transitive crate to a fresh version is reverted" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # bumpalo is not in the plan, so the quarantine never saw it — and cc's
+  # update drags it onto a version published seconds ago. The freed-up
+  # allowance for out-of-plan movement stops at the release-age window.
+  python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())' \
+    >"$TMP_REPO/publish/bumpalo-3.1.0.iso"
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of cc moved out-of-plan bumpalo to 3.1.0 (within 24h quarantine"* ]]
+  [[ "$output" == *"defer: cc -> 1.4.5"* ]]
+  ! grep -q '3.1.0' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "3.0.0"' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: grouped retry dragging a transitive crate to a fresh version is reverted" {
+  setup_stub_cargo
+  write_fake_lock "js-sys 0.3.104" "wasm-bindgen 0.2.127" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating js-sys v0.3.104 -> v0.3.105
+    Updating wasm-bindgen v0.2.127 -> v0.2.128
+TXT
+  printf 'js-sys\nwasm-bindgen\n' >"$STUB_REJECT"
+  printf 'js-sys 0.3.105\nwasm-bindgen 0.2.128\n' >"$STUB_TARGETS"
+  python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())' \
+    >"$TMP_REPO/publish/bumpalo-3.1.0.iso"
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: grouped retry moved out-of-plan bumpalo to 3.1.0 (within 24h quarantine"* ]]
+  [[ "$output" == *"defer: js-sys -> 0.3.105 (reverted — grouped retry moved out-of-plan bumpalo"* ]]
+  [[ "$output" == *"defer: wasm-bindgen -> 0.2.128"* ]]
+  ! grep -q '3.1.0' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "0.3.104"' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "0.2.127"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: a transitive crate of unknown release age reverts the update" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # The lookup answers but names no publish time. An age nobody could
+  # establish is not an old one: refusing the update is the safe default.
+  : >"$TMP_REPO/publish/bumpalo-3.1.0.iso"
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of cc moved out-of-plan bumpalo to 3.1.0 (release age unknown)"* ]]
+  [[ "$output" == *"defer: cc -> 1.4.5"* ]]
+  grep -qx 'version = "3.0.0"' "$TMP_REPO/Cargo.lock"
+  grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: a transitive crate new to the lockfile is age-checked too" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "newdep 0.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # A crate name the lockfile did not carry at this version before is exactly
+  # the shape a malicious publish arrives in — it must clear the window too.
+  python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())' \
+    >"$TMP_REPO/publish/newdep-9.9.9.iso"
+  printf 'newdep 0.0.0 9.9.9\n' >"$STUB_DRAG"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of cc moved out-of-plan newdep to 9.9.9 (within 24h quarantine"* ]]
+  ! grep -q '9.9.9' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: --quarantine-hours 0 keeps a freshly published transitive version" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # The emergency override collapses the window for transitive crates too —
+  # the new check is the same window, not a second one (SECURITY.md).
+  python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())' \
+    >"$TMP_REPO/publish/bumpalo-3.1.0.iso"
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  run_stubbed --quarantine-hours 0 --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bump: cc -> 1.4.5"* ]]
+  [[ "$output" != *"revert:"* ]]
+  grep -qx 'version = "3.1.0"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: a transitive release-age lookup is made once per version" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2" "dd 2.0.0" "bumpalo 3.0.0"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+    Updating dd v2.0.0 -> v2.0.1
+TXT
+  # Both per-crate updates drag bumpalo onto the same fresh version, and both
+  # revert. A large resolution change could mean dozens of such lookups, so
+  # the verdict is memoised: crates.io is asked about bumpalo 3.1.0 once.
+  now="$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')"
+  cat >"$STUB_CURL_OUT" <<JSON
+{"versions":[{"num":"1.4.5","created_at":"2020-01-01T00:00:00Z"},
+             {"num":"2.0.1","created_at":"2020-01-01T00:00:00Z"},
+             {"num":"3.1.0","created_at":"${now}"}]}
+JSON
+  printf 'bumpalo 3.0.0 3.1.0\n' >"$STUB_DRAG"
+  STUB_FIXTURE_DIR="" run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"revert: per-crate update of cc moved out-of-plan bumpalo to 3.1.0"* ]]
+  [[ "$output" == *"revert: per-crate update of dd moved out-of-plan bumpalo to 3.1.0"* ]]
+  [ "$(grep -c 'crates/bumpalo/versions' "$CURL_LOG")" -eq 1 ]
 }
 
 # --- Issue #621: a crate that cannot be bumped safely is a deferral ----------
