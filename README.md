@@ -1520,8 +1520,10 @@ bump:
   exits non-zero has its whole bump reverted by the caller and, repeated,
   disables dependency updates for the repository. A crate that cannot be
   bumped **safely** — rejected by `cargo update`, still inside the quarantine
-  window, or of a release age the registry would not name — is reported as a
-  **deferral**, left on the version it is already on, and the run carries on.
+  window, of a release age the registry would not name, or reverted because
+  its update dragged an out-of-plan transitive crate onto a version that had
+  not itself cleared the window (Issue #627) — is reported as a **deferral**,
+  left on the version it is already on, and the run carries on.
   A release age nobody could establish is counted apart from a quarantine wait
   (`… , N release age unknown`), because that is a host or registry fault
   rather than a routine hold — a run where every crate lands there has quietly
