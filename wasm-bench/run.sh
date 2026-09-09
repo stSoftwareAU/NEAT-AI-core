@@ -7,6 +7,8 @@
 #   shape-index indexes `NETWORKS` in neat-core/benches/common/mod.rs:
 #   3 = production, 4 = production_2x, 5 = production_exact (default).
 #
+#   All four positionals must be non-negative integers (Issue #608).
+#
 # Emits CSV rows (variant,bench,sample,nanos,checksum_bits) to
 # `results/shape<N>.csv` and prints the summary table.
 set -euo pipefail
