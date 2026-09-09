@@ -82,12 +82,12 @@ PR metadata. Either signal triggers the major-equivalent bump. Its single
 argument is a revision range and nothing else: an option-shaped value exits 2
 with a diagnostic on stderr rather than reaching `git log` as a flag, and the
 range is passed behind `--end-of-options` so git would refuse it even then
-(Issue #608). `tests/scripts/detect_breaking.bats` is the gate. Note that both CI
-callers capture stdout only (`[ "$(… detect-breaking.sh …)" = "true" ]`), so that
-exit 2 is discarded and the lane reads "not breaking" — the guard is defence in
-depth for a future caller, not a signal the current lanes act on, and `RANGE` is
-always `HEAD` or `origin/$BASE_BRANCH..HEAD` so no lane can trip it today. That
-caller-side gap is tracked separately as #634.
+(Issue #608). `tests/scripts/detect_breaking.bats` is the gate. Both CI callers
+capture the answer and the exit status separately and fail the step when the
+script exits non-zero or prints anything other than `true` / `false`, so a
+failed detector can never be read as "not breaking" (Issue #634);
+`tests/scripts/ci_detect_breaking_exit_status.bats` drives the real step bodies
+against a failing stub to pin that.
 
 ## Enforcement: breaking cannot ship on a patch-only bump
 
