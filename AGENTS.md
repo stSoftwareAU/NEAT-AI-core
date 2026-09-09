@@ -417,7 +417,8 @@ both the single-record and the batched scoring paths.
 ## One width check for creature JSON (Issue #550)
 
 `validate_creature_width` (`neat-core/src/creature.rs`) is the single home of
-the rule that a `CreatureExport` must declare `input >= 1` and `output >= 1`.
+the rule that a `CreatureExport` must declare `1 <= input <= MAX_NODE_COUNT` and
+`output >= 1`.
 `input` is the authoritative observation count and **cannot be re-derived from
 `neurons`** (input neurons are not listed there), so the rule is enforced at
 every boundary — `parse_creature_json` (after serde), `compile_creature`
@@ -430,6 +431,17 @@ accepts or emits creature JSON means calling the helper there; do not re-inline
 the comparison. `neat-core/tests/creature_width_contract.rs` pins the rule at
 all four sites (each was mutation-checked individually — dropping any one call
 fails its own tests).
+
+The **upper** bound is there for a different reason and must stay ahead of every
+caller (Issue #622). `input` is a declared count the payload never backs, and
+`compile_creature`, `validate_creature_topology` and `cleanup_creature_with`
+each build one owned `String` UUID per declared input — so a width checked
+*after* that walk lets a sub-100-byte creature buy a hundred million map
+entries, and a large enough literal abort the module on the allocation. A
+declared `input` past `MAX_NODE_COUNT` is `CreatureError::TooManyNodes`.
+`neat-core/tests/creature_width_allocations.rs` is the oracle: a counting global
+allocator asserts a refusal costs O(1) bytes, so re-ordering the check back
+behind the walk fails even though the returned error would be unchanged.
 
 ## `serde_json` keeps `float_roundtrip` (PR #571)
 

@@ -16,8 +16,8 @@ use neat_core::topology_ops::{
     STRUCTURAL_IF_MISSING_CONDITION, STRUCTURAL_SYNAPSE_TARGETS_INPUT,
 };
 use neat_core::{
-    CreatureExport, NeuronExport, SynapseExport, SynapseType, ValidateOptions, compile_creature,
-    creature_validate,
+    CreatureError, CreatureExport, NeuronExport, SynapseExport, SynapseType, ValidateOptions,
+    compile_creature, creature_validate,
 };
 
 const TOL: f32 = 1e-6;
@@ -477,6 +477,22 @@ fn gate_accepts_every_canonical_fixture() {
     ] {
         validate_creature_topology(&creature).expect("canonical creature passes the gate");
     }
+}
+
+/// A declared observation width past the `u16` index ceiling is refused by the
+/// gate itself, before the UUID map it would size is built (Issue #622).
+#[test]
+fn gate_rejects_a_declared_input_past_the_node_ceiling() {
+    let mut creature = base_creature();
+    creature.input = 100_000_000;
+    let err = validate_creature_topology(&creature).expect_err("rejected");
+    assert!(
+        matches!(
+            err,
+            GraftError::Creature(CreatureError::TooManyNodes { count }) if count == 100_000_000
+        ),
+        "expected a typed TooManyNodes refusal, got {err:?}"
+    );
 }
 
 #[test]

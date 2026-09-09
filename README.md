@@ -481,6 +481,24 @@ calls it:
 | `compile_creature` | same typed error, checked **before** any other validation | — | — |
 | `creature_to_json` / `creature_to_json_pretty` | same typed error — a widthless creature is never *written* | — | — |
 
+**The rule is bounded at the top as well (Issue #622).** `input` is a *declared*
+count with no backing data in the JSON, and every entry point turns it into one
+owned `String` UUID per declared input — `compile_creature`,
+`validate_creature_topology` (and so every `graft_*` helper) and
+`cleanup_creature_with` all build that map. Sizing an allocation by a number the
+payload never backed is what lets `{"input": 100000000, …}` — under 100 bytes —
+cost a hundred million map entries, and a large enough literal abort the process
+on the allocation instead of returning. So the ceiling lives in
+`validate_creature_width`, ahead of them all: a declared `input` above
+`MAX_NODE_COUNT` (65 536, the widest network a `u16` source index can address)
+is `CreatureError::TooManyNodes { count }`, the same typed error a creature
+whose *total* node count overflows the index space already earns (Issue #177).
+The ceiling is inclusive, and `count` is the declared width itself — the listed
+neurons are never added to it, because adding them is the walk the check
+prevents. `output` needs no companion bound: it sizes no allocation, and the
+output neurons it declares are counted from `neurons`, so an unreachable value
+is already `CreatureError::OutputCountMismatch`.
+
 The Display text (`Must have at least one input neurons was: 0`) mirrors
 NEAT-AI `src/architecture/CreatureValidate.ts` so logs line up across the TS
 and Rust stacks. A valid creature round-trips `input` / `output` byte-identically
@@ -501,6 +519,22 @@ flowchart LR
     P -. "input &lt; 1 / output &lt; 1" .-> X["Err(InvalidInputCount / InvalidOutputCount)"]
     C -. "input &lt; 1 / output &lt; 1" .-> X
     S -. "input &lt; 1 / output &lt; 1" .-> X
+    P -. "input &gt; MAX_NODE_COUNT" .-> Y["Err(TooManyNodes)"]
+    C -. "input &gt; MAX_NODE_COUNT" .-> Y
+    S -. "input &gt; MAX_NODE_COUNT" .-> Y
+```
+
+The ceiling is what makes that check order load-bearing rather than tidy — the
+width is bounded before anything is sized by it:
+
+```mermaid
+flowchart TD
+    W["declared input"] --> V{"validate_creature_width<br/>1 &lt;= input &lt;= MAX_NODE_COUNT"}
+    V -- "refused" --> E["Err(InvalidInputCount / TooManyNodes)<br/>O(1) — nothing allocated"]
+    V -- "accepted" --> M["build the input-N UUID map<br/>at most MAX_NODE_COUNT entries"]
+    M --> N{"input + neurons &lt;= MAX_NODE_COUNT"}
+    N -- "no" --> T["Err(TooManyNodes)"]
+    N -- "yes" --> O["compiled network"]
 ```
 
 ### Duplicate `(fromUUID, toUUID, type)` synapses are rejected (Issues #556, #577)

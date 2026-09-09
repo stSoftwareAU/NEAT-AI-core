@@ -6,9 +6,15 @@
 //! `CreatureValidate.ts`: `input < 1` or `output < 1` is never accepted —
 //! not on parse, not on compile, not on serialise — and fails with a typed
 //! error. No default, no fallback.
+//!
+//! The rule is bounded at both ends (Issue #622): `input` is a *declared* count
+//! with no backing data, so a width past `MAX_NODE_COUNT` — a creature that
+//! could never be addressed by the `u16` source index — is refused here, before
+//! any entry point allocates one map entry per declared input.
 
 use std::error::Error;
 
+use neat_core::network::MAX_NODE_COUNT;
 use neat_core::{
     CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature, creature_to_json,
     creature_to_json_pretty, parse_creature_json,
@@ -285,4 +291,56 @@ fn valid_creature_round_trips_input_and_output_byte_identically() {
     assert_eq!(reparsed.input, 2511);
     assert_eq!(reparsed.output, 1);
     assert_eq!(reparsed, creature);
+}
+
+// ---------------------------------------------------------------------------
+// Upper bound — the declared width is bounded before it is walked (Issue #622)
+// ---------------------------------------------------------------------------
+
+/// The exact payload from the issue: under 100 bytes, declaring a hundred
+/// million inputs no creature can carry.
+const HUGE_INPUT_JSON: &str = r#"{"input":100000000,"output":1,"neurons":[{"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}],"synapses":[]}"#;
+
+#[test]
+fn parse_rejects_a_declared_input_past_the_node_ceiling() {
+    match parse_creature_json(HUGE_INPUT_JSON) {
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, 100_000_000),
+        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+        Ok(c) => panic!("input: 100000000 must not parse, got input {}", c.input),
+    }
+}
+
+#[test]
+fn compile_rejects_a_declared_input_past_the_node_ceiling() {
+    // The count reported is the declared width itself: it is refused before the
+    // listed neurons are added to it, because adding them is what costs.
+    match compile_creature(&creature_with_widths(100_000_000, 1)) {
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, 100_000_000),
+        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+        Ok(_) => panic!("input: 100000000 must not compile"),
+    }
+}
+
+#[test]
+fn serialise_refuses_a_declared_input_past_the_node_ceiling() {
+    match creature_to_json(&creature_with_widths(100_000_000, 1)) {
+        Err(CreatureError::TooManyNodes { count }) => assert_eq!(count, 100_000_000),
+        Err(other) => panic!("expected TooManyNodes, got {other:?}"),
+        Ok(json) => panic!(
+            "input: 100000000 must not serialise, got {} bytes",
+            json.len()
+        ),
+    }
+}
+
+#[test]
+fn a_declared_input_at_the_node_ceiling_is_still_accepted() {
+    // The ceiling is inclusive: `MAX_NODE_COUNT` inputs is the widest creature
+    // the u16 index space can address, and the width rule must not narrow it.
+    // Parsing costs nothing per declared input, so this stays cheap.
+    let json = format!(
+        r#"{{"input":{MAX_NODE_COUNT},"output":1,"neurons":[{{"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}}],"synapses":[]}}"#
+    );
+    let creature = parse_creature_json(&json).expect("the ceiling itself must parse");
+    assert_eq!(creature.input, MAX_NODE_COUNT);
 }
