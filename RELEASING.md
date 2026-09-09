@@ -78,7 +78,9 @@ Signal a breaking change in **either** of these ways:
   `perf(network)!: narrow from_index to u16`) or a `BREAKING CHANGE:` footer.
 
 `scripts/detect-breaking.sh` reads the commit markers; the label is read from the
-PR metadata. Either signal triggers the major-equivalent bump.
+PR metadata. Either signal triggers the major-equivalent bump. Its single
+argument is a revision range and nothing else — an option-shaped value is
+rejected with exit 2 rather than reaching `git log` as a flag (Issue #608).
 
 ## Enforcement: breaking cannot ship on a patch-only bump
 
