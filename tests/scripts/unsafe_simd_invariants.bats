@@ -6,6 +6,8 @@
 # hazard) and that the load-time index-validation memory-safety note lives in
 # SECURITY.md, so a future refactor cannot silently regress them.
 
+load helpers
+
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   AGENTS_MD="${REPO_ROOT}/AGENTS.md"
@@ -122,6 +124,7 @@ setup() {
 }
 
 @test "the symbols the soundness docs cite still exist in network.rs" {
+  require_python3
   # SECURITY.md and AGENTS.md both say CompiledNetwork::new raises
   # NetworkError::InvalidSynapseIndex. Fail if either symbol is renamed away,
   # or if the guard leaves that constructor.
@@ -161,10 +164,12 @@ if "NetworkError::InvalidSynapseIndex" not in body:
     sys.exit("CompiledNetwork::new no longer raises NetworkError::"
              "InvalidSynapseIndex — the docs' soundness claim is stale")
 PY
+  echo "$output"
   [ "$status" -eq 0 ]
 }
 
 @test "SECURITY.md names every unchecked-read site in neat-core/src" {
+  require_python3
   # Set equality, both directions: the bullet list in the memory-safety section
   # must name exactly the files that read unchecked, so a new unchecked-read
   # site fails this gate until it is documented, and a site that stops reading
@@ -184,10 +189,11 @@ for root, _dirs, files in os.walk(src_dir):
         if not name.endswith(".rs"):
             continue
         path = os.path.join(root, name)
-        with open(path, encoding="utf-8") as fh:
-            # Code only — a doc comment mentioning get_unchecked is prose, not
-            # an unchecked read.
-            code = "\n".join(line.split("//")[0] for line in fh)
+        # Code only — a doc comment mentioning get_unchecked is prose, not an
+        # unchecked read.
+        text = re.sub(r"/\*.*?\*/", "", open(path, encoding="utf-8").read(),
+                      flags=re.S)
+        code = "\n".join(line.split("//")[0] for line in text.splitlines())
         if "get_unchecked" in code:
             sites.add(os.path.relpath(path, os.path.dirname(security)))
 if not sites:
@@ -210,5 +216,6 @@ if documented != sites:
              f"  documented but not unchecked: "
              f"{sorted(documented - sites) or 'none'}")
 PY
+  echo "$output"
   [ "$status" -eq 0 ]
 }

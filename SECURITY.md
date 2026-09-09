@@ -56,11 +56,12 @@ statement of this invariant in
 
 Claims here name **symbols**, never line numbers, which rot as the file moves.
 `tests/scripts/unsafe_simd_invariants.bats` enforces that: no tracked Markdown
-outside the PR-summary archive may cite `network.rs:<line>`, the cited
-`CompiledNetwork::new` / `NetworkError::InvalidSynapseIndex` symbols must still
-exist in `neat-core/src/network.rs`, and the bullet list above must name
-exactly the files that read unchecked — so a new unchecked-read site fails the
-gate until it is documented here.
+outside `docs/archive/` (historical, never rewritten) may cite
+`network.rs:<line>`, the cited `CompiledNetwork::new` /
+`NetworkError::InvalidSynapseIndex` symbols must still exist in
+`neat-core/src/network.rs`, and the bullet list above must name exactly the
+files under `neat-core/src` that read unchecked — so a new unchecked-read site
+in the crate's sources fails the gate until it is documented here.
 
 ## Dependency bump quarantine
 
