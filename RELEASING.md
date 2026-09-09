@@ -207,11 +207,19 @@ construction.
 `InvalidNetwork(NetworkError)` — both are additional breaks for a consumer that
 matches either enum exhaustively.
 
-**Affected consumers.** **NEAT-AI-scorer** reads `neurons` / `synapses` /
-`num_neurons` / `num_inputs` on its GPU upload path (`rust_scorer/src/gpu/
-forward_mse_batched.rs`, `if_tree_fixture.rs`, `dual_role_fixture.rs`) and
-mutates them in its own tests. **NEAT-AI-Backpropagation** reads `activations`
-(`backpropagation/src/propagate_layout.rs`).
+**Affected consumers — all five.** When `0.12.0` shipped this list named only
+NEAT-AI-scorer and NEAT-AI-Backpropagation. The other three broke in turn on
+every GRQ host the day the bump landed (stSoftwareAU/GRQ#4724) — a prose list is
+exactly what lets a consumer slip. Keep this table correct until the
+machine-checked consumer register of Issue #644 lands and takes over from it.
+
+| Consumer | Reads | Sites |
+| --- | --- | --- |
+| **NEAT-AI-scorer** | `neurons`, `synapses`, `num_neurons`, `num_inputs` | `rust_scorer/src/gpu/forward_mse_batched.rs`, `if_tree_fixture.rs`, `dual_role_fixture.rs`, and its own tests, which also mutated them |
+| **NEAT-AI-Lamarck** | `num_neurons`, `activations` | `lamarck/src/focus.rs`, `lamarck/src/propagate_layout.rs` |
+| **NEAT-AI-Forests** | `num_inputs`, `num_neurons`, `neurons`, `synapses` | `forests/src/graft.rs`, `forests/src/residuals.rs` |
+| **NEAT-AI-Ockham** | `num_inputs`, `activations` | `ockham/src/stats.rs`, `ockham/examples/correlated_merge_bench.rs`, `ockham/examples/neighbourhood_bench.rs` |
+| **NEAT-AI-Backpropagation** | `activations` | `backpropagation/src/propagate_layout.rs` |
 
 **Migration** — reads become accessor calls; writes and struct literals are
 replaced by a rebuild through `from_parts`:

@@ -258,7 +258,10 @@ flowchart LR
 writes are no longer expressible — the semver bump for this change is a
 `0.11.x → 0.12.0` minor (major-equivalent pre-1.0). It reaches
 **NEAT-AI-scorer** (reads `neurons` / `synapses` / `num_neurons` / `num_inputs`
-on its GPU upload path) and **NEAT-AI-Backpropagation** (reads `activations`).
+on its GPU upload path), **NEAT-AI-Lamarck** (reads `num_neurons` /
+`activations`), **NEAT-AI-Forests** (reads `num_inputs` / `num_neurons` /
+`neurons` / `synapses`), **NEAT-AI-Ockham** (reads `num_inputs` / `activations`)
+and **NEAT-AI-Backpropagation** (reads `activations`).
 `NetworkError` also gains an `InvalidSynapseSpan` variant and `CreatureError` an
 `InvalidNetwork` variant, which break an exhaustive `match` on either. The full
 migration is in
