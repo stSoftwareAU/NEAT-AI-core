@@ -9,9 +9,11 @@
 **/*.rs.bk
 .DS_Store
 
-# CI-only artefacts written by upgrade-dependencies.yml / cargo upgrade --dry-run.
+# CI-only artefacts written by upgrade-dependencies.yml / cargo upgrade --dry-run
+# and by deno-outdated.yml (Issue #646).
 upgrade.log
 upgrade-dry-run.txt
+deno-outdated.log
 
 # CycloneDX SBOMs are generated in CI (wasm-bundle.yml, Issue #125) and by the
 # SBOM bats test; they are Release assets, never committed to the tree.

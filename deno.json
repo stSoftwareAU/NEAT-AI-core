@@ -4,7 +4,7 @@
     "frozen": true
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1.0.19"
   },
   "exclude": [
     "neat-core/wasm_activation/pkg"

@@ -8,6 +8,12 @@
 // pin. `deno.json` now carries a 24h `minimumDependencyAge` and a **frozen**
 // `deno.lock`, and these tests are what fails if either is removed.
 //
+// Issue #646 added the third leg: the versions themselves live in `deno.json`'s
+// import map, because `deno outdated` — the updater the scheduled
+// `deno-outdated.yml` workflow runs — only sees dependencies declared there. A
+// source that goes back to an inline `jsr:@std/assert@1` specifier is invisible
+// to it, and the weekly update silently bumps nothing.
+//
 // "What" tests: each one reads the committed artefacts and drives a real
 // `deno check` subprocess, asserting on the exit status and the diagnostic
 // Deno actually reports.
@@ -16,8 +22,12 @@
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
-const DENO_JSON = new URL("../deno.json", import.meta.url);
-const DENO_LOCK = new URL("../deno.lock", import.meta.url);
+const REPO_ROOT = new URL("../", import.meta.url);
+const DENO_JSON = new URL("deno.json", REPO_ROOT);
+const DENO_LOCK = new URL("deno.lock", REPO_ROOT);
+
+/** Directories holding the `.ts` gates whose dependencies must stay managed. */
+const SOURCE_DIRS = ["scripts", "tests"];
 
 /** The fleet-wide external quarantine floor, in hours (VIBE_BUMP_QUARANTINE_HOURS default). */
 const QUARANTINE_HOURS = 24;
@@ -164,7 +174,11 @@ Deno.test("a JSR resolution outside the committed lockfile fails the frozen gate
     const lock = JSON.parse(
       await Deno.readTextFile(`${dir}/deno.lock`),
     ) as DenoLock;
-    delete lock.specifiers?.["jsr:@std/assert@1"];
+    for (const specifier of Object.keys(lock.specifiers ?? {})) {
+      if (specifier.startsWith("jsr:@std/assert@")) {
+        delete lock.specifiers![specifier];
+      }
+    }
     for (const name of Object.keys(lock.jsr ?? {})) {
       if (name.startsWith("@std/assert@")) delete lock.jsr![name];
     }
@@ -187,4 +201,105 @@ Deno.test("isoDurationHours converts the durations the quarantine floor uses", (
   assertEquals(isoDurationHours("PT90M"), 1.5);
   assertEquals(isoDurationHours("P1W"), 168);
   assertEquals(isoDurationHours("P1DT12H"), 36);
+});
+
+/** Every `.ts` file under `SOURCE_DIRS`, as absolute file URLs. */
+async function sourceModules(dir = ""): Promise<URL[]> {
+  const roots = dir ? [dir] : SOURCE_DIRS;
+  const found: URL[] = [];
+  for (const root of roots) {
+    const base = new URL(`${root}/`, REPO_ROOT);
+    for await (const entry of Deno.readDir(base)) {
+      if (entry.isDirectory) {
+        found.push(...await sourceModules(`${root}/${entry.name}`));
+      } else if (entry.name.endsWith(".ts")) {
+        found.push(new URL(entry.name, base));
+      }
+    }
+  }
+  return found.sort((a, b) => a.href.localeCompare(b.href));
+}
+
+interface InfoModule {
+  specifier: string;
+  dependencies?: { specifier: string }[];
+}
+
+Deno.test("every JSR dependency the sources import is declared in deno.json", async () => {
+  const modules = await sourceModules();
+  assert(modules.length > 0, "no TypeScript sources found to inspect");
+
+  // One barrel importing every source, so Deno's own resolver reports the whole
+  // graph in a single pass. `deno info` resolves; it never executes.
+  const dir = await Deno.makeTempDir({ prefix: "neat-core-imports-" });
+  try {
+    const barrel = `${dir}/all.ts`;
+    await Deno.writeTextFile(
+      barrel,
+      modules.map((url) => `import "${url.href}";`).join("\n") + "\n",
+    );
+    const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+      // `--no-lock`: the frozen lockfile is the previous test's subject, and
+      // it would reject an inline specifier before this one could name it.
+      args: [
+        "info",
+        "--json",
+        "--no-lock",
+        "--config",
+        DENO_JSON.pathname,
+        barrel,
+      ],
+      stdin: "null",
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assertEquals(
+      code,
+      0,
+      `deno info failed: ${new TextDecoder().decode(stderr)}`,
+    );
+
+    const graph = JSON.parse(new TextDecoder().decode(stdout)) as {
+      modules?: InfoModule[];
+    };
+    const unmanaged: string[] = [];
+    for (const module of graph.modules ?? []) {
+      // Only this repository's own sources are ours to fix; a third-party
+      // package's internal specifiers are its own business.
+      if (!module.specifier.startsWith(REPO_ROOT.href)) continue;
+      for (const dependency of module.dependencies ?? []) {
+        if (/^(jsr|npm):/.test(dependency.specifier)) {
+          unmanaged.push(
+            `${module.specifier.slice(REPO_ROOT.href.length)} imports ` +
+              `${dependency.specifier}`,
+          );
+        }
+      }
+    }
+    assertEquals(
+      unmanaged,
+      [],
+      "these imports bypass the deno.json import map, so `deno outdated` " +
+        `cannot update them:\n  ${unmanaged.join("\n  ")}`,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("deno.json declares the import map deno outdated updates", async () => {
+  const config = await readJson<
+    DenoConfig & { imports?: Record<string, string> }
+  >(DENO_JSON);
+  const imports = config.imports ?? {};
+  const entries = Object.entries(imports);
+  assert(entries.length > 0, "deno.json declares no imports to keep updated");
+  for (const [name, specifier] of entries) {
+    // An exact pin is what `deno outdated --update --latest` rewrites; a
+    // floating range would drift underneath the frozen lockfile instead.
+    assert(
+      /^(jsr|npm):@?[^@]+@\d+\.\d+\.\d+/.test(specifier),
+      `${name} must map to an exact jsr:/npm: version, got ${specifier}`,
+    );
+  }
 });
