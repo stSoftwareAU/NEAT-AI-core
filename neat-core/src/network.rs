@@ -45,6 +45,19 @@ pub enum NetworkError {
         /// The declared node count that exceeded [`MAX_NODE_COUNT`].
         count: usize,
     },
+    /// The header declares more input nodes than the network has nodes in total.
+    ///
+    /// Issue #601 - `num_neurons - num_inputs` is a `usize` subtraction, so a
+    /// header with `num_inputs > num_neurons` underflowed to a value near
+    /// `usize::MAX` under the release profile's `overflow-checks = false` and
+    /// aborted the module in `Vec::with_capacity`. A malformed buffer is
+    /// rejected here instead.
+    InvalidInputCount {
+        /// The declared input count read from the buffer.
+        num_inputs: usize,
+        /// The declared node count; `num_inputs` must not exceed it.
+        num_neurons: usize,
+    },
     /// A synapse references a source neuron index that is not a valid index into
     /// the activation buffer (`from_index >= num_neurons`).
     ///
@@ -89,6 +102,16 @@ impl std::fmt::Display for NetworkError {
                     f,
                     "Network has {count} nodes, exceeding the maximum of {MAX_NODE_COUNT} \
                      addressable by a u16 source index"
+                )
+            }
+            NetworkError::InvalidInputCount {
+                num_inputs,
+                num_neurons,
+            } => {
+                write!(
+                    f,
+                    "Network declares {num_inputs} inputs but only {num_neurons} nodes; \
+                     the input count must not exceed the node count"
                 )
             }
             NetworkError::InvalidSynapseIndex {
@@ -585,6 +608,17 @@ impl CompiledNetwork {
         // would overflow the index space before reading any synapses.
         if num_neurons > MAX_NODE_COUNT {
             return Err(NetworkError::TooManyNodes { count: num_neurons });
+        }
+
+        // Issue #601 - `num_neurons - num_inputs` is a usize subtraction, so a header
+        // claiming more inputs than nodes would wrap to a huge capacity (release
+        // builds carry the Cargo default `overflow-checks = false`) and abort the
+        // WASM module inside `Vec::with_capacity`. Reject the malformed header first.
+        if num_inputs > num_neurons {
+            return Err(NetworkError::InvalidInputCount {
+                num_inputs,
+                num_neurons,
+            });
         }
 
         let num_non_inputs = num_neurons - num_inputs;
@@ -2213,6 +2247,67 @@ mod tests {
         let bytes = serialise_single_synapse_network(4, 3, 3);
         let net = CompiledNetwork::new(&bytes).expect("in-range index must load");
         assert_eq!(net.synapses[0].from_index, 3);
+    }
+
+    // ---- Issue #601: input count validated against node count at load ----
+
+    #[test]
+    fn new_rejects_more_inputs_than_neurons() {
+        // Issue #601 - the minimal malicious header (num_neurons = 0, num_inputs = 1)
+        // underflowed `num_neurons - num_inputs` and aborted the module inside
+        // `Vec::with_capacity`. It must now return a typed error.
+        let mut header = Vec::new();
+        header.extend_from_slice(&0u32.to_le_bytes()); // num_neurons
+        header.extend_from_slice(&1u32.to_le_bytes()); // num_inputs
+
+        match CompiledNetwork::new(&header) {
+            Err(NetworkError::InvalidInputCount {
+                num_inputs,
+                num_neurons,
+            }) => {
+                assert_eq!(num_inputs, 1);
+                assert_eq!(num_neurons, 0);
+            }
+            Err(other) => panic!("expected InvalidInputCount, got {other:?}"),
+            Ok(_) => panic!("expected InvalidInputCount error, network loaded"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_input_count_above_node_ceiling() {
+        // Issue #601 - a header whose input count sits near the top of the u32 range
+        // is refused for the same reason, so no attacker-chosen width slips past the
+        // guard into the subtraction.
+        let mut header = Vec::new();
+        header.extend_from_slice(&(MAX_NODE_COUNT as u32).to_le_bytes()); // num_neurons
+        header.extend_from_slice(&u32::MAX.to_le_bytes()); // num_inputs
+
+        match CompiledNetwork::new(&header) {
+            Err(NetworkError::InvalidInputCount {
+                num_inputs,
+                num_neurons,
+            }) => {
+                assert_eq!(num_inputs, u32::MAX as usize);
+                assert_eq!(num_neurons, MAX_NODE_COUNT);
+            }
+            Err(other) => panic!("expected InvalidInputCount, got {other:?}"),
+            Ok(_) => panic!("expected InvalidInputCount error, network loaded"),
+        }
+    }
+
+    #[test]
+    fn new_accepts_input_count_equal_to_node_count() {
+        // Issue #601 - equality is the boundary the guard must not reject: an
+        // all-input network has zero non-input neurons and loads from the header
+        // alone, proving the check refuses only num_inputs > num_neurons.
+        let mut header = Vec::new();
+        header.extend_from_slice(&3u32.to_le_bytes()); // num_neurons
+        header.extend_from_slice(&3u32.to_le_bytes()); // num_inputs
+
+        let net = CompiledNetwork::new(&header).expect("all-input network must load");
+        assert_eq!(net.num_neurons, 3);
+        assert_eq!(net.num_inputs, 3);
+        assert_eq!(net.neurons.len(), 0);
     }
 
     #[test]

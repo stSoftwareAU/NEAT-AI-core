@@ -207,6 +207,56 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.15.0` — `NetworkError::InvalidInputCount` (Issue #601)
+
+`NetworkError` gains a variant. The enum is not `#[non_exhaustive]`, so a
+downstream exhaustive `match` on it stops compiling until it handles
+`InvalidInputCount { num_inputs: usize, num_neurons: usize }`.
+
+`CompiledNetwork::new` read `num_neurons` and `num_inputs` from the 8-byte
+header and computed `num_neurons - num_inputs` without comparing them. That is a
+`usize` subtraction, so a buffer declaring more inputs than nodes — minimally
+`num_neurons = 0`, `num_inputs = 1` — wrapped to a value near `usize::MAX` under
+the release profile's Cargo-default `overflow-checks = false`, and the following
+`Vec::with_capacity` aborted the whole WASM module. The header is now validated
+before anything is allocated from it, and the new variant is what such a buffer
+returns. A buffer whose `num_inputs <= num_neurons` — every buffer this crate
+emits — is unaffected.
+
+**Migration** — add an arm (or a `_ =>` catch-all) for the new variant:
+
+```rust
+match err {
+    // … existing arms …
+    NetworkError::InvalidInputCount {
+        num_inputs,
+        num_neurons,
+    } => {
+        eprintln!("header declares {num_inputs} inputs but only {num_neurons} nodes");
+    }
+}
+```
+
+### `0.14.0` — the declared observation width carries a ceiling (Issue #622)
+
+`validate_creature_width` refuses a declared `input` above `MAX_NODE_COUNT`, so
+`parse_creature_json`, `compile_creature`, `creature_to_json`,
+`creature_to_json_pretty`, `validate_creature_topology` and
+`cleanup_creature_with` reject creature JSON they previously accepted, with
+`CreatureError::TooManyNodes`.
+
+The declared width has no backing data, and those entry points each built one
+owned UUID per declared input before anything bounded it — so a sub-100-byte
+creature declaring a hundred million inputs cost a hundred million map entries,
+and a large enough literal aborted on the allocation. The ceiling sits in
+`validate_creature_width`, the single home of the width rule, so every caller
+gained it at once.
+
+**Migration** — a creature declaring more inputs than `MAX_NODE_COUNT` was never
+compilable; it now fails at the boundary instead of during allocation. Handle
+`CreatureError::TooManyNodes` from these entry points, and cap any generated
+`input` at `MAX_NODE_COUNT`.
+
 ### `0.13.0` — `GraftError::CountNotRepresentable` (Issue #606)
 
 `GraftError` gains a variant. The enum is not `#[non_exhaustive]`, so a

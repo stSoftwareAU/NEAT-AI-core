@@ -124,3 +124,32 @@ fn compiled_network_new_truncated_returns_typed_error() {
     // Implements std::error::Error.
     let _as_err: &dyn Error = &err;
 }
+
+#[test]
+fn compiled_network_new_rejects_more_inputs_than_neurons() {
+    // Issue #601 - a header declaring more inputs than nodes used to underflow
+    // `num_neurons - num_inputs` (release builds run with `overflow-checks =
+    // false`, so it wrapped near `usize::MAX`) and abort the WASM module in
+    // `Vec::with_capacity`. The loader must reject the buffer with a typed
+    // error instead of panicking.
+    let mut header = Vec::new();
+    header.extend_from_slice(&0u32.to_le_bytes()); // num_neurons
+    header.extend_from_slice(&1u32.to_le_bytes()); // num_inputs
+
+    let err: NetworkError = CompiledNetwork::new(&header)
+        .err()
+        .expect("more inputs than neurons must be rejected");
+    match err {
+        NetworkError::InvalidInputCount {
+            num_inputs,
+            num_neurons,
+        } => {
+            assert_eq!(num_inputs, 1);
+            assert_eq!(num_neurons, 0);
+        }
+        other => panic!("expected InvalidInputCount, got {other:?}"),
+    }
+    // Display names both counts so a host can report the malformed header.
+    assert!(err.to_string().contains('1'));
+    let _as_err: &dyn Error = &err;
+}
