@@ -146,6 +146,7 @@ setup_stub_cargo() {
   mkdir -p "$STUB_BIN" "$TMP_REPO/home" "$TMP_REPO/publish"
   STUB_LOG="$TMP_REPO/cargo-argv.log"
   STUB_DRY_RUN="$TMP_REPO/dry-run.txt"
+  STUB_DRY_RUN_STATUS="$TMP_REPO/dry-run-status.txt"
   STUB_TARGETS="$TMP_REPO/targets.txt"
   STUB_REJECT="$TMP_REPO/reject.txt"
   STUB_DRAG="$TMP_REPO/drag.txt"
@@ -153,13 +154,14 @@ setup_stub_cargo() {
   STUB_AUDIT_STATUS="$TMP_REPO/audit-status.txt"
   : >"$STUB_LOG"
   : >"$STUB_DRY_RUN"
+  echo 0 >"$STUB_DRY_RUN_STATUS"
   : >"$STUB_TARGETS"
   : >"$STUB_REJECT"
   : >"$STUB_DRAG"
   : >"$STUB_AUDIT_OUT"
   echo 0 >"$STUB_AUDIT_STATUS"
-  export STUB_LOG STUB_DRY_RUN STUB_TARGETS STUB_REJECT STUB_DRAG \
-    STUB_AUDIT_OUT STUB_AUDIT_STATUS
+  export STUB_LOG STUB_DRY_RUN STUB_DRY_RUN_STATUS STUB_TARGETS STUB_REJECT \
+    STUB_DRAG STUB_AUDIT_OUT STUB_AUDIT_STATUS
 
   cat >"$STUB_BIN/cargo" <<'STUB'
 #!/usr/bin/env bash
@@ -179,7 +181,7 @@ case "$cmd" in
 esac
 
 for a in "$@"; do
-  if [ "$a" = "--dry-run" ]; then cat "$STUB_DRY_RUN"; exit 0; fi
+  if [ "$a" = "--dry-run" ]; then cat "$STUB_DRY_RUN"; exit "$(cat "$STUB_DRY_RUN_STATUS")"; fi
 done
 
 specs=()
@@ -269,6 +271,7 @@ run_stubbed() {
     PATH="$STUB_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
     BUMP_DEPS_PUBLISH_FIXTURE="$TMP_REPO/publish" \
     STUB_LOG="$STUB_LOG" STUB_DRY_RUN="$STUB_DRY_RUN" \
+    STUB_DRY_RUN_STATUS="$STUB_DRY_RUN_STATUS" \
     STUB_TARGETS="$STUB_TARGETS" STUB_REJECT="$STUB_REJECT" \
     STUB_DRAG="$STUB_DRAG" \
     STUB_AUDIT_OUT="$STUB_AUDIT_OUT" STUB_AUDIT_STATUS="$STUB_AUDIT_STATUS" \
@@ -295,12 +298,34 @@ run_stubbed() {
   grep -q "^audit" "$STUB_LOG"
 }
 
-@test "audit: neither scanner installed fails loud naming both installs" {
+@test "audit: neither scanner installed warns and skips instead of failing the run" {
+  # Issue #621: a scanner missing from an unattended host is a host gap, not a
+  # bumped tree that must be rejected. Nothing was bumped here, so the run is a
+  # clean no-op — but the warning must still name both installs.
   setup_stub_cargo
   run_stubbed --skip-external --skip-build
-  [ "$status" -eq 1 ]
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"audit: SKIPPED"* ]]
   [[ "$output" == *"cargo install cargo-deny --locked"* ]]
   [[ "$output" == *"cargo install cargo-audit --locked"* ]]
+}
+
+@test "audit: neither scanner installed reverts the bumps rather than landing them unscanned" {
+  # Skipping the scan must never leave an unscanned bump behind: the run drops
+  # what it bumped and reports a no-op, so the exit stays 0 without weakening
+  # the supply-chain gate.
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  run_stubbed --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"bump: cc -> 1.4.5"* ]]
+  [[ "$output" == *"audit: SKIPPED"* ]]
+  [[ "$output" == *"reverted"* ]]
+  grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+  ! grep -q '1.4.5' "$TMP_REPO/Cargo.lock"
 }
 
 @test "audit: a cargo-deny advisory names the crate and RUSTSEC id" {
@@ -362,7 +387,7 @@ TXT
   [ "$status" -eq 0 ]
   [[ "$output" == *"bump: js-sys -> 0.3.105"* ]]
   [[ "$output" == *"bump: wasm-bindgen -> 0.2.128"* ]]
-  [[ "$output" == *"external: 2 bumped, 0 deferred, 0 failed"* ]]
+  [[ "$output" == *"external: 2 bumped, 0 deferred"* ]]
   # One grouped invocation carrying both specs.
   grep -qF -- "-p js-sys@0.3.104" "$STUB_LOG"
   grep -F -- "-p js-sys@0.3.104" "$STUB_LOG" | grep -qF -- "-p wasm-bindgen@0.2.127"
@@ -382,7 +407,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"defer: quarantined 1.0.1"* ]]
-  [[ "$output" == *"1 bumped, 1 deferred, 0 failed"* ]]
+  [[ "$output" == *"1 bumped, 1 deferred"* ]]
   # The quarantined crate must never be handed to cargo update.
   ! grep -qF -- "-p quarantined" "$STUB_LOG"
   grep -qx 'version = "1.0.0"' "$TMP_REPO/Cargo.lock"
@@ -400,8 +425,8 @@ TXT
   printf 'js-sys 0.3.199\nwasm-bindgen 0.2.128\n' >"$STUB_TARGETS"
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
-  [[ "$output" == *"fail: js-sys -> 0.3.105"* ]]
-  [[ "$output" == *"fail: wasm-bindgen -> 0.2.128"* ]]
+  [[ "$output" == *"defer: js-sys -> 0.3.105"* ]]
+  [[ "$output" == *"defer: wasm-bindgen -> 0.2.128"* ]]
   # Each member reports the revert, not the misleading "cargo update rejected".
   [[ "$output" != *"(cargo update rejected)"* ]]
   [[ "$output" == *"(reverted — grouped retry moved js-sys off its approved target 0.3.105)"* ]]
@@ -428,7 +453,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"bump: find-msvc-tools -> 0.1.12"* ]]
-  [[ "$output" == *"0 failed"* ]]
+  [[ "$output" == *"2 bumped, 0 deferred"* ]]
 }
 
 @test "audit: cargo-deny is preferred when both scanners are installed" {
@@ -457,7 +482,7 @@ JSON
   [[ "$output" == *"audit: FAILED — smallvec (RUSTSEC-2021-0003)"* ]]
 }
 
-@test "external: a crate with no unambiguous package spec fails loud" {
+@test "external: a crate with no unambiguous package spec is deferred, not guessed" {
   setup_stub_cargo
   # syn is locked at two majors and the dry run names a third version, so no
   # `-p syn@<locked>` spec exists. That must be reported, not passed to cargo
@@ -469,7 +494,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"skip: syn 3.1.0 (locked at several versions"* ]]
-  [[ "$output" == *"fail: syn -> 3.1.0"* ]]
+  [[ "$output" == *"defer: syn -> 3.1.0"* ]]
   ! grep -qF -- "-p syn" "$STUB_LOG"
 }
 
@@ -490,7 +515,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: grouped retry moved quarantined quarantined off 1.0.0"* ]]
-  [[ "$output" == *"fail: js-sys -> 0.3.105"* ]]
+  [[ "$output" == *"defer: js-sys -> 0.3.105"* ]]
   grep -qx 'version = "1.0.0"' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "0.3.104"' "$TMP_REPO/Cargo.lock"
 }
@@ -512,7 +537,7 @@ TXT
   [ "$status" -eq 0 ]
   [[ "$output" == *"bump: js-sys -> 0.3.105"* ]]
   [[ "$output" == *"bump: wasm-bindgen -> 0.2.128"* ]]
-  [[ "$output" == *"2 bumped, 0 deferred, 0 failed"* ]]
+  [[ "$output" == *"2 bumped, 0 deferred"* ]]
   [[ "$output" != *"revert:"* ]]
   grep -qx 'version = "3.1.0"' "$TMP_REPO/Cargo.lock"
 }
@@ -534,7 +559,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: per-crate update of cc moved quarantined quarantined off 1.0.0"* ]]
-  [[ "$output" == *"fail: cc -> 1.4.5"* ]]
+  [[ "$output" == *"defer: cc -> 1.4.5"* ]]
   [[ "$output" != *"(cargo update rejected)"* ]]
   grep -qx 'version = "1.0.0"' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
@@ -554,7 +579,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: per-crate update of cc moved find-msvc-tools off its approved target 0.1.12"* ]]
-  [[ "$output" == *"fail: cc -> 1.4.5"* ]]
+  [[ "$output" == *"defer: cc -> 1.4.5"* ]]
   # The restored lock must still let the next crate land: cc sitting at its
   # pre-bump version is not itself a breach.
   [[ "$output" == *"bump: find-msvc-tools -> 0.1.12"* ]]
@@ -591,7 +616,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: per-crate update of syn moved syn off its approved target 3.0.5"* ]]
-  [[ "$output" == *"fail: syn -> 3.0.5"* ]]
+  [[ "$output" == *"defer: syn -> 3.0.5"* ]]
   ! grep -q '2.0.999' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "2.0.119"' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "3.0.3"' "$TMP_REPO/Cargo.lock"
@@ -613,7 +638,7 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"revert: grouped retry moved syn off its approved target 3.1.0"* ]]
-  [[ "$output" == *"fail: js-sys -> 0.3.105"* ]]
+  [[ "$output" == *"defer: js-sys -> 0.3.105"* ]]
   ! grep -q '3.0.7' "$TMP_REPO/Cargo.lock"
   grep -qx 'version = "0.3.104"' "$TMP_REPO/Cargo.lock"
 }
@@ -628,6 +653,80 @@ TXT
   run_stubbed --skip-audit --skip-build
   [ "$status" -eq 0 ]
   [[ "$output" == *"skip: cc 1.4.5 (no ${TMP_REPO}/Cargo.lock to verify against)"* ]]
-  [[ "$output" == *"fail: cc -> 1.4.5 (no ${TMP_REPO}/Cargo.lock to verify against)"* ]]
+  [[ "$output" == *"defer: cc -> 1.4.5 (no ${TMP_REPO}/Cargo.lock to verify against)"* ]]
   ! grep -qF -- "-p cc" "$STUB_LOG"
+}
+
+# --- Issue #621: a crate that cannot be bumped safely is a deferral ----------
+
+@test "external: a crate cargo update rejects is deferred, not failed" {
+  setup_stub_cargo
+  write_fake_lock "js-sys 0.3.104"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating js-sys v0.3.104 -> v0.3.105
+TXT
+  # Rejected on its own, and the grouped retry cannot land it either — the
+  # crate simply stays where it is, which is a deferral and not a run failure.
+  printf 'js-sys\n' >"$STUB_REJECT"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"defer: js-sys -> 0.3.105 (cargo update rejected)"* ]]
+  [[ "$output" == *"external: 0 bumped, 1 deferred"* ]]
+  [[ "$output" != *"failed"* ]]
+  grep -qx 'version = "0.3.104"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: a crate whose release age cannot be established is deferred" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # No publish fixture and an unreachable crates.io: the release age cannot be
+  # established, so the crate must be left alone rather than bumped blind or
+  # counted a failure.
+  run env -i \
+    HOME="$TMP_REPO/home" \
+    PATH="$STUB_BIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+    BUMP_DEPS_CRATES_IO_URL="http://127.0.0.1:9/api/v1" \
+    STUB_LOG="$STUB_LOG" STUB_DRY_RUN="$STUB_DRY_RUN" \
+    STUB_DRY_RUN_STATUS="$STUB_DRY_RUN_STATUS" \
+    STUB_TARGETS="$STUB_TARGETS" STUB_REJECT="$STUB_REJECT" \
+    STUB_DRAG="$STUB_DRAG" \
+    STUB_AUDIT_OUT="$STUB_AUDIT_OUT" STUB_AUDIT_STATUS="$STUB_AUDIT_STATUS" \
+    bash "$SCRIPT_UNDER_TEST" --repo "$TMP_REPO" --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"defer: cc 1.4.5 (publish time lookup failed)"* ]]
+  [[ "$output" == *"external: 0 bumped, 1 deferred"* ]]
+  ! grep -qF -- "-p cc" "$STUB_LOG"
+  grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
+}
+
+@test "external: a failed cargo update --dry-run is reported, not passed off as no updates" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2"
+  echo "error: failed to query replaced source registry crates-io" >"$STUB_DRY_RUN"
+  echo 101 >"$STUB_DRY_RUN_STATUS"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"external: plan unavailable (cargo update --dry-run failed)"* ]]
+  # "no updates" would claim the registry said there was nothing to do.
+  [[ "$output" != *"no updates"* ]]
+  [[ "$output" == *"failed to query replaced source registry"* ]]
+}
+
+@test "external: a publish time the registry does not name defers the crate" {
+  setup_stub_cargo
+  write_fake_lock "cc 1.4.2"
+  cat >"$STUB_DRY_RUN" <<'TXT'
+    Updating cc v1.4.2 -> v1.4.5
+TXT
+  # The lookup answers, but names no publish time for this version. An unknown
+  # release age is not an ancient one — the crate must be held, not bumped.
+  : >"$TMP_REPO/publish/cc-1.4.5.iso"
+  run_stubbed --skip-audit --skip-build
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"defer: cc 1.4.5 (publish time lookup failed)"* ]]
+  ! grep -qF -- "-p cc" "$STUB_LOG"
+  grep -qx 'version = "1.4.2"' "$TMP_REPO/Cargo.lock"
 }
