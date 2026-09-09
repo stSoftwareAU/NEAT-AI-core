@@ -481,6 +481,37 @@ calls it:
 | `compile_creature` | same typed error, checked **before** any other validation | — | — |
 | `creature_to_json` / `creature_to_json_pretty` | same typed error — a widthless creature is never *written* | — | — |
 
+**The rule is bounded at the top as well (Issue #622).** `input` is a *declared*
+count with no backing data in the JSON, and three of the callers that trust it
+go on to turn it into one owned `String` UUID per declared input —
+`compile_creature`, `validate_creature_topology` (and so every `graft_*` helper)
+and `cleanup_creature_with` each build that map. The other three
+(`parse_creature_json` and the two serialisers) allocate nothing per input, and
+take the ceiling so that a width no site can honour is never parsed in or
+written back out. Sizing an allocation by
+a number the payload never backed is what lets `{"input": 100000000, …}` — under
+100 bytes — cost a hundred million map entries, and a large enough literal abort
+the process on the allocation instead of returning. So the ceiling lives in
+`validate_creature_width`, ahead of them all: a declared `input` above
+`MAX_NODE_COUNT` (65 536, the widest network a `u16` source index can address)
+is `CreatureError::TooManyNodes { count }`, the same typed error a creature
+whose *total* node count overflows the index space already earns (Issue #177).
+The ceiling is inclusive, and `count` is the declared **node** count — the
+declared width plus the listed neurons, added with a saturating sum because the
+declaration is untrusted — so the shared `Display` ("Creature has N nodes,
+exceeding the maximum of 65536…") says the same thing whichever of the two
+checks spoke. Counting the listed neurons costs nothing: they are a real vector,
+already in memory. It is the *declared* width, which backs no data, that is
+never walked. `output` needs no companion bound: it sizes no allocation, and the
+output neurons it declares are counted from `neurons`, so an unreachable value
+is already `CreatureError::OutputCountMismatch`.
+
+`creature_validate` walks the declared width the same way but is deliberately
+**not** a caller: it reports rule violations in NEAT-AI's wording rather than a
+typed width error, so its ceiling stays at its own JSON boundary
+(`oversized_detail` / `MAX_REQUEST_NEURONS`, which every WASM and `prune_json`
+request passes through) — see the boundary table in `creature_validate_json`.
+
 The Display text (`Must have at least one input neurons was: 0`) mirrors
 NEAT-AI `src/architecture/CreatureValidate.ts` so logs line up across the TS
 and Rust stacks. A valid creature round-trips `input` / `output` byte-identically
@@ -501,6 +532,22 @@ flowchart LR
     P -. "input &lt; 1 / output &lt; 1" .-> X["Err(InvalidInputCount / InvalidOutputCount)"]
     C -. "input &lt; 1 / output &lt; 1" .-> X
     S -. "input &lt; 1 / output &lt; 1" .-> X
+    P -. "input &gt; MAX_NODE_COUNT" .-> Y["Err(TooManyNodes)"]
+    C -. "input &gt; MAX_NODE_COUNT" .-> Y
+    S -. "input &gt; MAX_NODE_COUNT" .-> Y
+```
+
+The ceiling is what makes that check order load-bearing rather than tidy — the
+width is bounded before anything is sized by it:
+
+```mermaid
+flowchart TD
+    W["declared input"] --> V{"validate_creature_width<br/>1 &lt;= input &lt;= MAX_NODE_COUNT"}
+    V -- "refused" --> E["Err(InvalidInputCount / TooManyNodes)<br/>O(1) — nothing allocated"]
+    V -- "accepted" --> M["build the input-N UUID map<br/>at most MAX_NODE_COUNT entries"]
+    M --> N{"input + neurons &lt;= MAX_NODE_COUNT"}
+    N -- "no" --> T["Err(TooManyNodes)"]
+    N -- "yes" --> O["compiled network"]
 ```
 
 ### Duplicate `(fromUUID, toUUID, type)` synapses are rejected (Issues #556, #577)
@@ -647,12 +694,14 @@ itself.
 restating their rules. The ordering gate only runs for `forwardOnly` creatures,
 because a recurrent creature legitimately carries backward edges.
 
-Those gates read `u32` widths and `u32` neuron indices, so the gate bounds the
-declared counts against that index space **first** — before the UUID map names
-one entry per declared input. An `input`, `output` or node count past
-`u32::MAX` earns `GraftError::CountNotRepresentable`; it is never narrowed
+Those gates read `u32` widths and `u32` neuron indices, so a declared count is
+bounded **before** the UUID map names one entry per declared input. A count past
+`u32::MAX` earns `GraftError::CountNotRepresentable` and is never narrowed
 (Issue #606, which is what a declared `output` of `4_294_967_297` read as `1`
-before).
+before). Since Issue #622 the narrower `MAX_NODE_COUNT` ceiling on `input` runs
+ahead of it, so through a creature only `output` still reaches that gate:
+an over-wide `input`, and the node count it drives, come back as
+`GraftError::Creature(CreatureError::TooManyNodes)` instead.
 
 ```mermaid
 flowchart LR

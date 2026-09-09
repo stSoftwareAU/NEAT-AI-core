@@ -428,9 +428,13 @@ restate their rules here. The last of those is what carries the Issue #577 rule
 that only an `IF` target may take two roles from one source. The ordering
 gate runs only for `forwardOnly` creatures; a recurrent creature legitimately
 carries backward edges, which that gate rejects by design. Those gates read
-`u32` widths and indices, so the declared `input` / `output` / node counts are
-bounded against `u32::MAX` before anything walks them — past it is
-`GraftError::CountNotRepresentable`, never a silent narrowing (Issue #606). The
+`u32` widths and indices, so a declared count is bounded before anything walks
+it — past `u32::MAX` is `GraftError::CountNotRepresentable`, never a silent
+narrowing (Issue #606). Since Issue #622 the *narrower* ceiling answers first:
+`validate_creature_width` bounds `input` against `MAX_NODE_COUNT` (65 536) at
+the top of `validate_creature_topology`, so through a creature only `output`
+still reaches the representability gate — `input` and the node count come back
+as `GraftError::Creature(CreatureError::TooManyNodes)`. The
 post-build check
 is deliberate defence in depth: it is unreachable while the pre-checks are
 complete, so it is exercised directly against synthetic creatures
@@ -448,7 +452,8 @@ both the single-record and the batched scoring paths.
 ## One width check for creature JSON (Issue #550)
 
 `validate_creature_width` (`neat-core/src/creature.rs`) is the single home of
-the rule that a `CreatureExport` must declare `input >= 1` and `output >= 1`.
+the rule that a `CreatureExport` must declare `1 <= input <= MAX_NODE_COUNT` and
+`output >= 1`.
 `input` is the authoritative observation count and **cannot be re-derived from
 `neurons`** (input neurons are not listed there), so the rule is enforced at
 every boundary — `parse_creature_json` (after serde), `compile_creature`
@@ -461,6 +466,22 @@ accepts or emits creature JSON means calling the helper there; do not re-inline
 the comparison. `neat-core/tests/creature_width_contract.rs` pins the rule at
 all four sites (each was mutation-checked individually — dropping any one call
 fails its own tests).
+
+The **upper** bound is there for a different reason and must stay ahead of every
+caller (Issue #622). `input` is a declared count the payload never backs, and
+`compile_creature`, `validate_creature_topology` and `cleanup_creature_with`
+each build one owned `String` UUID per declared input — so a width checked
+*after* that walk lets a sub-100-byte creature buy a hundred million map
+entries, and a large enough literal abort the process on the allocation. A
+declared `input` past `MAX_NODE_COUNT` is `CreatureError::TooManyNodes`.
+`creature_validate` walks the width too but is not a caller by design — it owes
+NEAT-AI's rule wording, not a typed width error — so its ceiling stays at its
+own JSON boundary (`oversized_detail` / `MAX_REQUEST_NEURONS`). Adding a *new*
+caller of `validate_creature_width` inherits the ceiling; adding a new width
+walk that bypasses it needs its own.
+`neat-core/tests/creature_width_allocations.rs` is the oracle: a counting global
+allocator asserts a refusal costs O(1) bytes, so re-ordering the check back
+behind the walk fails even though the returned error would be unchanged.
 
 ## `serde_json` keeps `float_roundtrip` (PR #571)
 

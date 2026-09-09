@@ -572,6 +572,18 @@ impl From<CreatureError> for GraftError {
 /// Mirrors [`crate::creature::compile_creature`] exactly: inputs take
 /// `0..input` under their `input-N` names, then the listed neurons follow in
 /// order (a listed neuron reusing an `input-N` name wins, as it does there).
+///
+/// **Precondition: the declared width has already passed
+/// [`validate_creature_width`]** (Issue #622). `creature.input` is a declared
+/// count with no backing data, and this walk turns it into one owned `String`
+/// per declared input — so an unbounded width sets the memory spent here from
+/// a payload under 100 bytes. Every route in reaches that check first, by one
+/// of two paths: [`validate_creature_topology`] calls it directly (and every
+/// `graft_*` entry point calls that before [`place_and_build`]), while
+/// [`sort_synapses_canonically`] is reached from
+/// [`crate::prune_cleanup::cleanup_creature_with`], which calls it at its own
+/// boundary, and from [`crate::decision_tree`]'s own fixtures. A new caller
+/// owes the same check.
 fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
     let mut map = HashMap::with_capacity(creature.input + creature.neurons.len());
     for i in 0..creature.input {
@@ -605,12 +617,15 @@ struct DeclaredCounts {
 /// is now [`GraftError::CountNotRepresentable`], and the node count it returns
 /// is what makes the `from`/`to` casts in the edge loop lossless.
 ///
-/// A creature at this boundary cannot be built in a test — `index_map` names
-/// one entry per declared input — so the rule is exercised directly at its
-/// accepting and rejecting edges (AGENTS.md oracle rule 5) rather than through
-/// a creature. This bounds *representability* only: a width that fits `u32` but
-/// far exceeds [`crate::network::MAX_NODE_COUNT`] is still walked one entry at a
-/// time by `index_map`, which is a separate root cause (Issue #622).
+/// This bounds *representability* only. The narrower rule — a declared width
+/// must fit [`crate::network::MAX_NODE_COUNT`] — is
+/// [`validate_creature_width`], which [`validate_creature_topology`] now runs
+/// first (Issue #622), so by the time a creature reaches here its `input` is
+/// already known to be at most 65 536. That leaves the `input` leg below
+/// unreachable through a creature, and the `node` leg reachable only through
+/// `u32::MAX` *listed* neurons, which no test can build: both are exercised
+/// directly at their accepting and rejecting edges (AGENTS.md oracle rule 5)
+/// rather than through a creature.
 fn bounded_counts(
     input: usize,
     output: usize,
@@ -653,9 +668,18 @@ fn fits_index_space(field: &'static str, value: usize) -> Result<u32, GraftError
 /// `IF` target (Issue #577), which the index gates are not told the squashes to
 /// answer.
 ///
+/// The width gate runs **first**, and bounds the declared observation count as
+/// well as flooring it: a creature declaring more inputs than the `u16` index
+/// space can address comes back as [`GraftError::Creature`] wrapping
+/// [`CreatureError::TooManyNodes`], rather than as a map with one entry per
+/// declared input (Issue #622).
+///
 /// The ordering gate only runs for `forwardOnly` creatures: a recurrent creature
 /// legitimately carries backward edges, which that gate rejects by design.
 pub fn validate_creature_topology(creature: &CreatureExport) -> Result<(), GraftError> {
+    // First, and before `index_map` below sizes itself by the declared width:
+    // that check is what bounds `creature.input` against `MAX_NODE_COUNT`
+    // (Issue #622), and every graft entry point reaches the map through here.
     validate_creature_width(creature)?;
 
     let counts = bounded_counts(creature.input, creature.output, creature.neurons.len())?;

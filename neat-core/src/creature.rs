@@ -45,7 +45,10 @@
 //! all call it and fail with [`CreatureError::InvalidInputCount`] /
 //! [`CreatureError::InvalidOutputCount`]. There is no default and no fallback:
 //! a missing key is a serde error, a zero is a typed error, and neither is
-//! ever written back out.
+//! ever written back out. The rule is bounded at the top as well (Issue #622):
+//! a declared `input` past [`crate::network::MAX_NODE_COUNT`] is
+//! [`CreatureError::TooManyNodes`], refused before any caller sizes an
+//! allocation by a count the payload never backed.
 //!
 //! **Duplicate-synapse rule (Issues #556, #577).** NEAT-AI's TypeScript loader
 //! keys synapses by `(fromUUID, toUUID, type)` and keeps only one copy of a
@@ -364,6 +367,13 @@ pub enum CreatureError {
     ///
     /// Issue #177 - mirrors [`crate::network::NetworkError::TooManyNodes`]; a creature
     /// may contain at most [`crate::network::MAX_NODE_COUNT`] nodes.
+    ///
+    /// Issue #622 - also raised by [`validate_creature_width`] when the
+    /// *declared* observation width alone exceeds that ceiling, so the creature
+    /// is refused before anything allocates one entry per declared input.
+    /// `count` carries the same meaning on both paths — the creature's declared
+    /// node count, inputs plus listed neurons — so the [`std::fmt::Display`]
+    /// text stays true whichever check spoke.
     TooManyNodes {
         /// The node count that exceeded [`crate::network::MAX_NODE_COUNT`].
         count: usize,
@@ -622,7 +632,8 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
     }
 }
 
-/// Enforce the observation-width contract: `input >= 1` and `output >= 1`.
+/// Enforce the observation-width contract: `1 <= input <= MAX_NODE_COUNT` and
+/// `output >= 1`.
 ///
 /// Single home of the rule (Issue #550) called by [`parse_creature_json`],
 /// [`compile_creature`], [`creature_to_json`] and [`creature_to_json_pretty`].
@@ -631,11 +642,51 @@ pub fn synapse_type_name_from(ty: SynapseType) -> Option<&'static str> {
 /// [`CreatureExport`] by hand, or deserialise one through their own serde
 /// path, should call this at their own boundary before trusting the widths.
 ///
+/// # The upper bound is load-bearing (Issue #622)
+///
+/// `input` is a **declared** count with no backing data in the JSON — input
+/// neurons are not listed in `neurons` — so a payload under 100 bytes can say
+/// `"input": 100000000`. Three of the callers that trust this helper then turn
+/// that count into one owned `String` UUID per declared input
+/// ([`compile_creature`], [`crate::if_graft::validate_creature_topology`] and so
+/// every `graft_*` helper, and
+/// [`crate::prune_cleanup::cleanup_creature_with`]) — the other three
+/// ([`parse_creature_json`] and the two serialisers) allocate nothing per input
+/// and take the ceiling so a width no site can honour is never read in or
+/// written back out. The three that walk it are why
+/// the ceiling belongs *here*, ahead of them all: bounding the width afterwards
+/// means the declared count, not the payload, decides the memory spent, and a
+/// large enough literal aborts the process on the allocation instead of
+/// returning.
+///
+/// [`crate::creature_validate()`] walks the declared width the same way and is
+/// deliberately **not** a caller — it must report the rule violations in
+/// NEAT-AI's wording rather than a typed width error, so its ceiling lives at
+/// its own JSON boundary instead
+/// ([`crate::creature_validate_json::oversized_detail`]).
+///
+/// The ceiling is [`crate::network::MAX_NODE_COUNT`] — inclusive, since that is
+/// the widest network the `u16` source index can address — and a width past it
+/// is [`CreatureError::TooManyNodes`], the same typed error a creature whose
+/// *total* node count overflows the index space already earns (Issue #177),
+/// carrying the same declared node count (`input` plus the listed neurons).
+/// `output` needs no companion bound: it sizes no allocation, and the output
+/// neurons it declares are counted from `neurons`, so an unreachable value is
+/// already refused by [`CreatureError::OutputCountMismatch`].
+///
 /// Mirrors NEAT-AI (TS) `src/architecture/CreatureValidate.ts`.
 pub fn validate_creature_width(creature: &CreatureExport) -> Result<(), CreatureError> {
     if creature.input < 1 {
         return Err(CreatureError::InvalidInputCount {
             found: creature.input,
+        });
+    }
+    if creature.input > MAX_NODE_COUNT {
+        // Report the whole declared node count, so `TooManyNodes` means the
+        // same thing here as it does after compilation. Saturating because the
+        // declaration is untrusted and the sum is not what is being bounded.
+        return Err(CreatureError::TooManyNodes {
+            count: creature.input.saturating_add(creature.neurons.len()),
         });
     }
     if creature.output < 1 {
@@ -770,7 +821,11 @@ pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, Crea
 /// The observation-width contract ([`validate_creature_width`]) is checked
 /// before anything else, so a hand-built `CreatureExport { input: 0, .. }`
 /// fails exactly as loudly as one that came through [`parse_creature_json`]
-/// (Issue #550). A repeated `(fromUUID, toUUID, type)` triple is then rejected
+/// (Issue #550). That check is also what bounds the declared width before the
+/// UUID map below is sized by it: `input` names no data in the export, so
+/// without it a hundred-million-wide declaration would cost a hundred million
+/// owned `String` keys on the way to the node-count check further down
+/// (Issue #622). A repeated `(fromUUID, toUUID, type)` triple is then rejected
 /// by [`validate_no_duplicate_synapses`] rather than summed, because TypeScript
 /// keeps only one copy of it (Issues #556, #577).
 pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, CreatureError> {
