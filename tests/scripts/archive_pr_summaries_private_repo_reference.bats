@@ -16,6 +16,15 @@
 # tests/scripts/private_repo_reference.bats and
 # tests/scripts/bump_deps_private_repo_reference.bats.
 #
+# Issue #664 (BP-0d874b5eea84) extends the guard again, to the seven archives
+# that recorded the earlier reword fixes themselves: `pr-summary-373.md` …
+# `pr-summary-378.md` named the private repositories while describing how they
+# were removed elsewhere, and `pr-summary-546.md` cited a live private issue
+# slug as the provenance of the fleet build-profile decision. A record of a
+# reword is still a public page naming a private repository, so those archives
+# now state the "before" side at concept level — the historical narrative of
+# what changed and why is unaffected.
+#
 # Issue #663 (BP-540ad6093f8a) extends the same guard to three archived
 # incident reports that named the private repository's issue numbers and its
 # internal sampler paths directly. Two of them carried the private name in
@@ -46,6 +55,13 @@ setup() {
     "${ARCHIVE}/pr-summary-296.md"
     "${ARCHIVE}/pr-summary-298.md"
     "${ARCHIVE}/pr-summary-299.md"
+    "${ARCHIVE}/pr-summary-373.md"
+    "${ARCHIVE}/pr-summary-374.md"
+    "${ARCHIVE}/pr-summary-375.md"
+    "${ARCHIVE}/pr-summary-376.md"
+    "${ARCHIVE}/pr-summary-377.md"
+    "${ARCHIVE}/pr-summary-378.md"
+    "${ARCHIVE}/pr-summary-546.md"
     "${ARCHIVE}/pr-summary-572.md"
     "${ARCHIVE}/pr-summary-memetic-weight-forms.md"
     "${ARCHIVE}/pr-summary-exact-float-parsing.md"
@@ -108,6 +124,42 @@ setup() {
 
 @test "pr-summary-286 still records the production creature topology numbers" {
   run grep -nE '1,666 non-input' "${ARCHIVE}/pr-summary-286.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-373 still records the README lane (d) reword" {
+  run grep -nF 'lane (d)' "${ARCHIVE}/pr-summary-373.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-374 still records the lane (d) doc rename" {
+  run grep -nF 'wasm64-lane-d-learn-wiring-verification.md' \
+    "${ARCHIVE}/pr-summary-374.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-375 still records the constrained-host sizing case" {
+  run grep -nF '3865 MB available' "${ARCHIVE}/pr-summary-375.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-376 still records the bench fixture topology numbers" {
+  run grep -nF '21,513 synapses' "${ARCHIVE}/pr-summary-376.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-377 still records the bump quarantine contract" {
+  run grep -niE 'quarantine window' "${ARCHIVE}/pr-summary-377.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-378 still records the thirteen-archive reword" {
+  run grep -niE 'thirteen archived PR summaries' "${ARCHIVE}/pr-summary-378.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-546 still records the measured dev-build profile change" {
+  run grep -nF 'line-tables-only' "${ARCHIVE}/pr-summary-546.md"
   [ "$status" -eq 0 ]
 }
 

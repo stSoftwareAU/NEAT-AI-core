@@ -1,11 +1,11 @@
-# Reword VibeCoding issue references in bump-deps.sh to concept level
+# Reword worker-orchestration issue references in bump-deps.sh to concept level
 
 ## Summary
 
-The `bump-deps.sh` header comment named the private `stSoftwareAU/VibeCoding`
-repository twice, as issue slugs (`#1613` and `#1614`). NEAT-AI-core is public
-and `VibeCoding` is private, so those pointers were dead weight to every public
-reader and disclosed the existence of a private orchestration repository
+The `bump-deps.sh` header comment named the private worker-orchestration
+repository twice, as issue slugs. NEAT-AI-core is public and that orchestration
+repository is not, so those pointers were dead weight to every public reader and
+disclosed the existence of a private orchestration repository
 (private-repo-reference audit, check 3).
 
 The fix rewords the header to concept level — it now states the contract inline
@@ -21,7 +21,7 @@ new bats guard plus the existing `bump-deps.sh` suite and the full quality gate.
 
 ```mermaid
 flowchart LR
-    A["bump-deps.sh header"] -->|before| B["names stSoftwareAU/VibeCoding#1613, #1614"]
+    A["bump-deps.sh header"] -->|before| B["names two private<br/>orchestration issue slugs"]
     A -->|after| C["concept-level contract, no private slugs"]
     C --> D["bump_deps_private_repo_reference.bats guards regression"]
 ```
@@ -30,9 +30,9 @@ flowchart LR
 
 - Added `tests/scripts/bump_deps_private_repo_reference.bats` — "what" tests over
   the committed `bump-deps.sh` artefact:
-  - names no private repository (`VibeCoding` token absent)
-  - references no private path/issue slug (`stSoftwareAU/VibeCoding`,
-    `VibeCoding#N` absent)
+  - names no private repository (the orchestration repo's name absent)
+  - references no private path or issue slug (its `owner/repo` path and
+    `repo#N` slugs absent)
   - concept-level contract wording survives (quarantine + "no internal pins to
     refresh" still present)
   - These fail against the pre-fix header and pass after the rewrite.
