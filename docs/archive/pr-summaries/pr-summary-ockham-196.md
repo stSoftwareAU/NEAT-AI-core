@@ -50,6 +50,10 @@ the matching PR.
 - `a_hypot_v2_output_left_with_no_inward_edge_becomes_an_absolute` (11), which
   also asserts `apply_limit_range` clamps `HYPOTv2` and `ABSOLUTE` identically
 - `a_hidden_aggregate_left_with_no_inward_edge_becomes_a_support_constant`
+- `a_bare_aggregate_with_no_statistic_is_still_reported_uncompensated` — the
+  error path: foldable is not the same as having something to fold
+- `a_bare_aggregate_folds_a_structurally_fixed_source_exactly` — a constant
+  source needs no statistic and a supplied mean does not override it
 - `an_aggregate_target_with_an_edge_left_is_never_given_a_bias_fold` — the
   renamed, narrowed former `an_aggregate_target_is_never_given_a_bias_fold`
 

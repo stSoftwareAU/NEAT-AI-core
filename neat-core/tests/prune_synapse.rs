@@ -1606,3 +1606,69 @@ fn a_hidden_aggregate_left_with_no_inward_edge_becomes_a_support_constant() {
         );
     }
 }
+
+#[test]
+fn a_bare_aggregate_with_no_statistic_is_still_reported_uncompensated() {
+    // Being foldable is not the same as having something to fold: a varying
+    // source with no statistic supplied leaves the target named, not guessed
+    // at.
+    let json = aggregate_output_json("MINIMUM");
+    let before = creature(&json);
+    let result = pruned(
+        &before,
+        &key("h-1", "output-0", SynapseType::Standard),
+        None,
+    );
+
+    assert_eq!(result.bias_folds, vec![]);
+    assert_eq!(result.uncompensated.len(), 1);
+    let entry = &result.uncompensated[0];
+    assert_eq!(entry.target_uuid, "output-0");
+    assert_eq!(entry.reason, UncompensatedReason::NoStatistics);
+    assert_eq!(entry.squash, "MINIMUM");
+    assert_close(
+        "the bias is untouched",
+        neuron(&result.creature, "output-0").bias,
+        AGG_BIAS,
+    );
+    assert_eq!(result.transform, TransformClass::Approximate);
+    assert_valid("bare aggregate, no statistic", &result.creature);
+}
+
+#[test]
+fn a_bare_aggregate_folds_a_structurally_fixed_source_exactly() {
+    // A constant source needs no statistic and admits none: the term is
+    // `w · bias` on every record, so the fold is exact even though the target
+    // aggregates.
+    let before = creature(
+        r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+  "neurons":[
+    {"type":"constant","uuid":"c-1","bias":0.5},
+    {"type":"output","uuid":"output-0","bias":0.25,"squash":"MAXIMUM"},
+    {"type":"output","uuid":"output-1","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":-2.0,"fromUUID":"c-1","toUUID":"output-0"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-1"}
+  ]
+}"#,
+    );
+    // A supplied mean must not override the structural value.
+    let result = pruned(
+        &before,
+        &key("c-1", "output-0", SynapseType::Standard),
+        Some(&mean_only(9.0)),
+    );
+
+    assert_within(
+        "the exact fold",
+        neuron(&result.creature, "output-0").bias,
+        0.25 + -2.0 * 0.5,
+        STRUCTURAL_FOLD_TOL,
+    );
+    assert!(result.bias_folds[0].exact, "a structural fold is exact");
+    assert_eq!(result.transform, TransformClass::Exact);
+    assert_same_function("bare aggregate, constant source", &before, &result.creature);
+    assert_valid("bare aggregate, constant source", &result.creature);
+}
