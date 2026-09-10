@@ -1225,3 +1225,326 @@ fn an_exact_prune_is_always_the_same_function_of_the_inputs() {
         "the sweep must actually arm the exact branch, saw {exact_seen}"
     );
 }
+
+// --- targets left with no inward edge (Ockham #196) --------------------------
+
+/// `h-1` is the only source of **both** outputs, so removing it leaves each of
+/// them with nothing to sum.
+const SOLE_SOURCE_OF_TWO_OUTPUTS_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
+    {"type":"output","uuid":"output-1","bias":-0.2,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
+    {"weight":-0.5,"fromUUID":"h-1","toUUID":"output-1"}
+  ]
+}"#;
+
+/// `h-1` feeds both outputs, but only `output-0` has nothing else: `output-1`
+/// keeps its own observation edge.
+const ONE_OUTPUT_LOSES_ITS_LAST_EDGE_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":2,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
+    {"type":"output","uuid":"output-1","bias":-0.2,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":1.0,"fromUUID":"input-1","toUUID":"output-1"},
+    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
+    {"weight":-0.5,"fromUUID":"h-1","toUUID":"output-1"}
+  ]
+}"#;
+
+/// The neuron being removed is itself an aggregate. Its own squash says
+/// nothing about how a *target* takes the term it loses.
+const AGGREGATE_SOURCE_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-min","bias":0.25,"squash":"MINIMUM"},
+    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-min"},
+    {"weight":0.5,"fromUUID":"input-1","toUUID":"h-min"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"},
+    {"weight":2.0,"fromUUID":"h-min","toUUID":"output-0"}
+  ]
+}"#;
+
+/// Assert an output holds `expected` on every probe record, to `1e-6` relative.
+fn assert_output_on_every_probe(
+    name: &str,
+    creature: &CreatureExport,
+    index: usize,
+    expected: f64,
+) {
+    let probes = probe_inputs(creature.input);
+    assert!(probes.len() >= 3, "{name}: fewer than three probe records");
+    for probe in probes {
+        let got = f64::from(outputs(creature, &probe)[index]);
+        assert!(
+            (got - expected).abs() <= 1e-6 * (1.0 + expected.abs()),
+            "{name}: output {index} on {probe:?} is {got}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn the_sole_source_of_two_outputs_folds_into_both_biases() {
+    let before = creature(SOLE_SOURCE_OF_TWO_OUTPUTS_JSON);
+    let result = pruned(&before, "h-1", Some(&mean_only(0.6)));
+
+    assert_close(
+        "output-0 fold",
+        neuron(&result.creature, "output-0").bias,
+        0.3 + 2.0 * 0.6,
+    );
+    assert_close(
+        "output-1 fold",
+        neuron(&result.creature, "output-1").bias,
+        -0.2 + -0.5 * 0.6,
+    );
+    assert_eq!(result.bias_folds.len(), 2, "one fold per target");
+    assert_eq!(result.uncompensated, vec![]);
+    assert_valid("sole source of two outputs", &result.creature);
+    assert_output_on_every_probe(
+        "sole source of two outputs",
+        &result.creature,
+        0,
+        0.3 + 2.0 * 0.6,
+    );
+    assert_output_on_every_probe(
+        "sole source of two outputs",
+        &result.creature,
+        1,
+        -0.2 + -0.5 * 0.6,
+    );
+}
+
+#[test]
+fn only_the_output_that_loses_its_last_edge_goes_constant() {
+    let before = creature(ONE_OUTPUT_LOSES_ITS_LAST_EDGE_JSON);
+    let result = pruned(&before, "h-1", Some(&mean_only(0.6)));
+
+    assert_close(
+        "output-0 fold",
+        neuron(&result.creature, "output-0").bias,
+        0.3 + 2.0 * 0.6,
+    );
+    assert_close(
+        "output-1 fold",
+        neuron(&result.creature, "output-1").bias,
+        -0.2 + -0.5 * 0.6,
+    );
+    assert_valid("one output loses its last edge", &result.creature);
+    assert_output_on_every_probe(
+        "the output with nothing left",
+        &result.creature,
+        0,
+        0.3 + 2.0 * 0.6,
+    );
+    // `output-1` still reads `input-1`, so it is not constant.
+    assert!(has_edge_into(&result.creature, "output-1"));
+    let varied: Vec<f64> = probe_inputs(result.creature.input)
+        .iter()
+        .map(|p| f64::from(outputs(&result.creature, p)[1]))
+        .collect();
+    assert!(
+        varied.windows(2).any(|w| (w[0] - w[1]).abs() > 1e-6),
+        "output-1 stopped varying with its observation"
+    );
+}
+
+#[test]
+fn a_removed_aggregate_folds_its_mean_into_each_target_like_any_other_source() {
+    let before = creature(AGGREGATE_SOURCE_JSON);
+    let result = pruned(&before, "h-min", Some(&mean_only(0.6)));
+
+    // The *source's* squash never enters the fold: the target is a point-wise
+    // `IDENTITY`, so it takes `W · μ` exactly as it would from any source.
+    assert_close(
+        "output-0 fold",
+        neuron(&result.creature, "output-0").bias,
+        0.3 + 2.0 * 0.6,
+    );
+    assert_eq!(result.uncompensated, vec![]);
+    assert_valid("aggregate source", &result.creature);
+}
+
+/// `h-1` is the only source of two aggregate outputs — one that reads a term
+/// as `w·a` and one that reads it as `|bias + w·a|`.
+const SOLE_SOURCE_OF_AGGREGATE_OUTPUTS_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.25,"squash":"MEAN"},
+    {"type":"output","uuid":"output-1","bias":0.25,"squash":"HYPOTv2"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":-2.0,"fromUUID":"h-1","toUUID":"output-0"},
+    {"weight":-2.0,"fromUUID":"h-1","toUUID":"output-1"}
+  ]
+}"#;
+
+#[test]
+fn an_aggregate_target_left_with_no_inward_edge_takes_the_fold() {
+    let before = creature(SOLE_SOURCE_OF_AGGREGATE_OUTPUTS_JSON);
+    let result = pruned(&before, "h-1", Some(&mean_only(0.6)));
+
+    // Removing the neuron takes the last inward edge of both outputs, so both
+    // are foldable — the same rule `prune_synapse` applies, reached from the
+    // other caller.
+    let folded = 0.25 + -2.0 * 0.6;
+    assert_close(
+        "the MEAN fold",
+        neuron(&result.creature, "output-0").bias,
+        folded,
+    );
+    assert_close(
+        "the HYPOTv2 fold",
+        neuron(&result.creature, "output-1").bias,
+        folded,
+    );
+    assert_eq!(
+        neuron(&result.creature, "output-0").squash.as_deref(),
+        Some("MEAN"),
+        "a summing aggregate keeps its squash"
+    );
+    assert_eq!(
+        neuron(&result.creature, "output-1").squash.as_deref(),
+        Some("ABSOLUTE"),
+        "HYPOTv2 ignores its bias with no term, so it becomes ABSOLUTE"
+    );
+    assert_eq!(result.uncompensated, vec![]);
+    assert_valid("aggregate targets", &result.creature);
+    assert_output_on_every_probe("MEAN target", &result.creature, 0, folded);
+    assert_output_on_every_probe("HYPOTv2 target", &result.creature, 1, folded.abs());
+}
+
+fn has_edge_into(creature: &CreatureExport, uuid: &str) -> bool {
+    creature.synapses.iter().any(|s| s.to_uuid == uuid)
+}
+
+// --- the golden 12-IDENTITY acceptance test (Ockham #196) --------------------
+
+/// Probe batch for the golden creature: four records of exact binary
+/// fractions, so a four-record mean is exact too and the test measures the
+/// rewrite rather than `f32` rounding.
+const GOLDEN_PROBES: [[f32; 2]; 4] = [[-0.5, 0.0], [-0.25, 0.125], [0.0, 0.25], [0.25, 0.375]];
+
+/// Twelve `IDENTITY` hidden neurons, each fed by one observation and feeding
+/// one `IDENTITY` output. Every weight and bias is an exact binary fraction.
+fn golden_twelve_identity() -> CreatureExport {
+    let mut neurons = String::new();
+    let mut synapses = String::new();
+    for k in 0..12 {
+        let input = k % 2;
+        let output = k % 2;
+        // Dyadic, and distinct per neuron.
+        let bias = (k as f64 - 6.0) / 8.0;
+        let in_weight = [0.5, -0.25, 1.0, 0.75][k % 4];
+        let out_weight = [2.0, -0.5, 0.25, -1.0][(k + 1) % 4];
+        neurons.push_str(&format!(
+            r#"{{"type":"hidden","uuid":"h-{k:02}","bias":{bias},"squash":"IDENTITY"}},"#
+        ));
+        synapses.push_str(&format!(
+            r#"{{"weight":{in_weight},"fromUUID":"input-{input}","toUUID":"h-{k:02}"}},"#
+        ));
+        synapses.push_str(&format!(
+            r#"{{"weight":{out_weight},"fromUUID":"h-{k:02}","toUUID":"output-{output}"}},"#
+        ));
+    }
+    let json = format!(
+        r#"{{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":2,
+  "neurons":[{neurons}
+    {{"type":"output","uuid":"output-0","bias":0.25,"squash":"IDENTITY"}},
+    {{"type":"output","uuid":"output-1","bias":-0.5,"squash":"IDENTITY"}}
+  ],
+  "synapses":[{synapses}
+    {{"weight":0.5,"fromUUID":"input-0","toUUID":"output-0"}}
+  ]
+}}"#
+    );
+    creature(&json)
+}
+
+/// Mean activation of `uuid` over the golden probe batch, sampled from the
+/// creature the caller is about to prune — the caller's half of the ownership
+/// boundary, done here the way a caller would.
+fn sampled_mean(creature: &CreatureExport, uuid: &str) -> f64 {
+    // `compile_creature` indexes the observation neurons first and then the
+    // listed neurons in declared order, so this is the neuron's activation
+    // slot.
+    let index = creature.input
+        + creature
+            .neurons
+            .iter()
+            .position(|n| n.uuid == uuid)
+            .unwrap_or_else(|| panic!("no neuron {uuid} to sample"));
+    let mut net = compile_creature(creature).expect("creature compiles");
+    let mut total = 0.0f64;
+    for probe in GOLDEN_PROBES {
+        net.activate(&probe, creature.output);
+        total += f64::from(net.activations()[index]);
+    }
+    total / GOLDEN_PROBES.len() as f64
+}
+
+/// Mean of every output over the golden probe batch.
+fn mean_outputs(creature: &CreatureExport) -> Vec<f64> {
+    let mut totals = vec![0.0f64; creature.output];
+    for probe in GOLDEN_PROBES {
+        let got = outputs(creature, &probe);
+        for (slot, value) in totals.iter_mut().zip(got.iter()) {
+            *slot += f64::from(*value);
+        }
+    }
+    for slot in &mut totals {
+        *slot /= GOLDEN_PROBES.len() as f64;
+    }
+    totals
+}
+
+#[test]
+fn twelve_identity_neurons_prune_one_by_one_without_moving_the_mean_output() {
+    let original = golden_twelve_identity();
+    let baseline = mean_outputs(&original);
+    let means: Vec<f64> = (0..12)
+        .map(|k| sampled_mean(&original, &format!("h-{k:02}")))
+        .collect();
+
+    let mut current = original.clone();
+    for k in 0..12 {
+        let uuid = format!("h-{k:02}");
+        let result = prune_neuron(&current, &uuid, Some(&mean_only(means[k])))
+            .unwrap_or_else(|e| panic!("step {k}: pruning {uuid} failed: {e}"));
+        assert_valid(&format!("golden step {k}"), &result.creature);
+        assert_eq!(
+            result.uncompensated,
+            vec![],
+            "step {k}: a target was left uncompensated"
+        );
+
+        let after = mean_outputs(&result.creature);
+        for (index, (got, want)) in after.iter().zip(baseline.iter()).enumerate() {
+            assert!(
+                (got - want).abs() <= 1e-6 * (1.0 + want.abs()),
+                "step {k}: mean output {index} moved from {want} to {got}"
+            );
+        }
+        current = result.creature;
+    }
+
+    assert!(
+        !current.neurons.iter().any(|n| n.uuid.starts_with("h-")),
+        "every hidden neuron should be gone after twelve steps"
+    );
+}

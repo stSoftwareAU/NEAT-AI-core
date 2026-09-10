@@ -915,13 +915,49 @@ they are refused too rather than turned into a negative residual variance.
 
 **Where a bias fold means nothing, it is not attempted.** A point-wise squash
 computes `squash(bias + Σ w·a)`, so `W · μ` in the bias stands where the removed
-term was. An aggregate does not — `MINIMUM` takes the smallest inward term,
-`MEAN` divides by its inward count, `HYPOT` squares each term, and an `IF` reads
-its condition sum to pick a branch — so those targets are named on
-`PruneResult::uncompensated` instead, with the same entry recording a target
-left bare because no statistics were supplied at all. The entry is per
-**readable key**, not per target: an `IF` fed on two roles is reported once per
-role, because it never sums its arms into the single term a total would imply.
+term was. An aggregate that still has terms to aggregate does not — `MINIMUM`
+takes the smallest inward term, `MEAN` divides by its inward count, `HYPOT`
+squares each term, and an `IF` reads its condition sum to pick a branch — so
+those targets are named on `PruneResult::uncompensated` instead, with the same
+entry recording a target left bare because no statistics were supplied at all.
+The entry is per **readable key**, not per target: an `IF` fed on two roles is
+reported once per role, because it never sums its arms into the single term a
+total would imply.
+
+#### A target left with no inward edge takes the fold (Ockham #196)
+
+Once the cut leaves a target with **nothing** inward, the forward pass stops
+reading a set of terms and evaluates the neuron from its bias alone
+(`prune_cleanup::zero_inward_activation`) — a point-wise reading again — so the
+fold is the closest creature there is rather than a number nobody can justify.
+`prune_neuron::fold_policy(target_squash, remaining_inward_edges)` is the single
+rule, asked by **both** entry points so a neuron removal and a synapse removal
+can never disagree about what a target is owed. The shape of the fold follows
+the empty form:
+
+| Squash | one inward term | no inward term | the fold |
+|---|---|---|---|
+| point-wise (`IDENTITY`, `LOGISTIC`, …) | `squash(bias + W·a)` | `squash(bias)` | `bias += W·μ`, whatever it is left with |
+| `MINIMUM` / `MAXIMUM` / `MEAN` | `W·a + bias` | `bias` | `bias += W·μ` |
+| `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` — the term is a magnitude |
+| `HYPOTv2` | `\|bias + W·a\|` | `0`, the bias never read | `bias += W·μ` **and the squash becomes `ABSOLUTE`** |
+
+`HYPOTv2` is the one place a **target's squash is rewritten**. Its bias lives
+inside a per-synapse square, so with no synapse left the forward pass answers
+`0` and a bias fold alone would change nothing; `ABSOLUTE` over the folded bias
+computes `|bias + W·μ|`, which is what `HYPOTv2` computed with the term still
+there. The two forms share the `[0, f32::MAX]` activation range, so the
+replacement cannot answer a value the original would have clamped away.
+
+An `IF` is excluded whatever it is left with: rule 12 means an `IF` short an
+edge is short a **role**, and `IfRepair` owns that repair, not a number. And no
+correlated survivor helps a bare target — a share can only land on an edge into
+it, and there is none — so the fold there is mean-only and a supplied proxy
+goes unused rather than refused.
+
+A **hidden** aggregate left bare takes the fold first and then meets cleanup's
+own `fold_zero_inward_hidden`, which moves that now-fixed value into its outward
+weights exactly and leaves a bias-1 support constant behind.
 
 #### `Exact` is earned, never assumed
 
@@ -967,7 +1003,7 @@ flowchart TD
     F -- yes --> S{"statistics supplied?"}
     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
     S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
-    X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
+    X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate with edges left gets neither,<br/>one with none takes the fold"]
     C --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
     R -- fails --> E["Err(Cleanup)"]
     R -- passes --> O["Ok(PruneResult) —<br/>Exact or Approximate"]
@@ -1019,7 +1055,8 @@ activation, so the same compensation table as Issue #590 applies with `W = w`:
 |---|---|
 | the creature fixes `a` (a constant, or a source with nothing to sum) | `target.bias += w · a`, exactly; no statistic is needed and a supplied mean never overrides it — `TransformClass::Exact` |
 | `a` varies and `PruneStats` are supplied | `w · μ` folds into the bias, and a supplied correlated survivor takes `β · w` on its own edge |
-| the target aggregates (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost |
+| the target aggregates and the cut leaves it something to aggregate (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost |
+| the cut leaves the target with **no inward edge at all** | the forward pass reads it from its bias alone, so it takes the fold after all — see [A target left with no inward edge takes the fold](#a-target-left-with-no-inward-edge-takes-the-fold-ockham-196). `IF` is still excluded |
 
 `PruneResult::removed_neuron` is `None` for a synapse prune and
 `removed_synapses` carries the one requested triple; for `prune_neuron` it is

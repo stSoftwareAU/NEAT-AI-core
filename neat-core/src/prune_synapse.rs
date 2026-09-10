@@ -15,7 +15,7 @@
 //!     F -- yes --> S{"statistics supplied?"}
 //!     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
 //!     S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
-//!     X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
+//!     X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate with edges left gets neither,<br/>one with none takes the fold"]
 //!     C --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
 //!     R -- fails --> E["Err(Cleanup)"]
 //!     R -- passes --> O["Ok(PruneResult) —<br/>Exact or Approximate"]
@@ -82,10 +82,19 @@
 //!   source: the only edge it could carry the share on is the one just
 //!   removed, so the share lands nowhere and the whole prune is refused with
 //!   [`PruneError::MissingProxyEdge`] rather than half-applied;
-//! - where the target **aggregates** — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`,
-//!   or an `IF` reading one role's sum — no bias fold stands in for the term,
-//!   so none is attempted and the target is named on
-//!   [`PruneResult::uncompensated`] with the role it lost.
+//! - where the target **aggregates** and the cut leaves it something to
+//!   aggregate — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one
+//!   role's sum — no bias fold stands in for the term, so none is attempted
+//!   and the target is named on [`PruneResult::uncompensated`] with the role it
+//!   lost;
+//! - where the cut leaves an aggregate with **no inward edge at all**, the
+//!   forward pass reads it from its bias alone, so it takes the fold after all
+//!   — `bias += W·μ`, or `bias += |W·μ|` for `HYPOT`, whose term is a
+//!   magnitude, or `bias += W·μ` **with the squash rewritten to `ABSOLUTE`**
+//!   for `HYPOTv2`, which never reads its bias with nothing to square
+//!   (Ockham #196). `prune_neuron::fold_policy` is the one rule both
+//!   entry points ask. An `IF` is excluded whatever it is left with: what it
+//!   lost is a role, and [`IfRepair`] owns that.
 
 use crate::creature::{CreatureExport, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
@@ -93,8 +102,8 @@ use crate::prune_cleanup::{
 };
 use crate::prune_neuron::{
     BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
-    UncompensatedTarget, WeightShare, add_to_edge, check_proxy, check_stats, compensate,
-    target_squash,
+    UncompensatedTarget, WeightShare, add_to_edge, apply_zero_edge_fold, check_proxy, check_stats,
+    compensate, fold_policy, inward_edge_count, target_squash, zero_edge_fold,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -195,7 +204,7 @@ pub fn prune_synapse(
     let mut weight_shares = Vec::new();
     let mut uncompensated = Vec::new();
 
-    if squash.is_aggregate() {
+    if !fold_policy(squash, inward_edge_count(&cut, &key.to_uuid)) {
         uncompensated.push(UncompensatedTarget {
             target_uuid: key.to_uuid.clone(),
             role: wanted,
@@ -203,6 +212,28 @@ pub fn prune_synapse(
             squash: squash_name_from(squash),
             reason: UncompensatedReason::AggregateTarget,
         });
+    } else if squash.is_aggregate() {
+        // The cut left the aggregate with nothing to aggregate, so it takes
+        // the fold its empty forward-pass form implies (Ockham #196).
+        match zero_edge_fold(squash, invariant_value, effective_stats, weight_sum) {
+            Some(fold) => {
+                apply_zero_edge_fold(&mut cut, &key.to_uuid, &fold);
+                bias_folds.push(BiasFold {
+                    target_uuid: key.to_uuid.clone(),
+                    weight_sum,
+                    delta: fold.bias_delta,
+                    exact: fold.exact,
+                    residual_variance: fold.residual_variance,
+                });
+            }
+            None => uncompensated.push(UncompensatedTarget {
+                target_uuid: key.to_uuid.clone(),
+                role: wanted,
+                weight_sum,
+                squash: squash_name_from(squash),
+                reason: UncompensatedReason::NoStatistics,
+            }),
+        }
     } else if let Some(compensation) = compensate(invariant_value, effective_stats, weight_sum) {
         // A share of exactly zero moves nothing — an uncorrelated survivor
         // predicts none of what went — so the edge it would land on need not
