@@ -292,6 +292,12 @@ pub enum CleanupError {
     /// Two edges would have to merge into one at a target whose squash reads
     /// its inward **count** or squares each term, where merging would change
     /// the value the target computes.
+    ///
+    /// Reachable only for a creature a caller built by hand: it needs
+    /// duplicate-role rows into that target, which the shared validator
+    /// rejects as a `TypedDuplicateSynapse`. A **valid** creature never
+    /// reaches this variant through `prune_neuron` or `prune_synapse`, and
+    /// `neat-core/tests/prune_total.rs` is the sweep that proves it.
     InexactMerge {
         /// Source neuron UUID.
         from_uuid: String,

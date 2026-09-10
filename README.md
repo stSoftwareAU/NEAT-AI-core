@@ -937,6 +937,10 @@ have produced, but the fold re-associates the sum.
 Everything else is `Approximate` — including an `IF` that lost a role, which can
 no longer branch at all.
 
+**Any hidden neuron prunes** — see
+[Total prunability](#total-prunability-any-candidate-always-a-valid-creature-ockham-195)
+below, which governs this entry point as much as the synapse one.
+
 **The memetic record is pruned, not dropped** — Issue #590's call on the choice
 `docs/research/pruning-parity-matrix.md` left open. TypeScript drops `memetic`
 wholesale on every removal; this crate applies rule 31's inverse
@@ -1025,23 +1029,44 @@ activation, so the same compensation table as Issue #590 applies with `W = w`:
 `removed_synapses` carries the one requested triple; for `prune_neuron` it is
 `Some(uuid)` and every edge naming that neuron.
 
-#### Total prunability: any candidate, always a valid creature
+### Total prunability: any candidate, always a valid creature (Ockham #195)
+
+This section governs **both** entry points above.
 
 A caller that screens candidates cannot be asked to guess which of them the
 shared helpers will refuse, so the contract is total: **every hidden neuron and
 every listed `(from, to, role)` triple of a valid creature prunes to `Ok`, and
-what comes back passes `creature_validate`.** An `Err(PruneError::Cleanup)` —
-`InexactMerge`, `NotStable` or `Invalid` — on a valid creature is a defect in
-this crate, not a refusal to code around.
+what comes back passes `creature_validate`.**
 
-`neat-core/tests/prune_total.rs` is what proves it rather than asserting it. It
-sweeps every fixture the prune tests carry — each captured
-`PRUNE_PARITY_CASES` `before`, plus the inline creatures — and for every hidden
-neuron and every listed triple, with no statistics and with a mean-only
-`PruneStats`, checks the call returns `Ok`, the result validates, it carries no
-more than `MAX_SUPPORT_CONSTANTS` constants, and the rewrite is deterministic.
-Absolute floors on the request count keep the sweep from eroding into a
-vacuous pass.
+That does not make `Err(PruneError::Cleanup)` unreachable, and the flowcharts
+above are right to show it: `InexactMerge`, `NotStable` and `Invalid` are real
+outcomes for a creature a caller built by hand — `InexactMerge`, for instance,
+needs duplicate-role rows into a `MINIMUM` / `MAXIMUM` from a hidden source,
+which is not a shape a canonical creature carries. What the contract says is
+that a **valid** creature never reaches one, so a `Cleanup` refusal there is a
+defect in this crate rather than a refusal for callers to code around.
+
+```mermaid
+flowchart TD
+    C["a valid creature"] --> P["prune_neuron(uuid)<br/>prune_synapse(from, to, role)"]
+    P --> O["Ok — always"]
+    O --> V["passes creature_validate<br/>+ the topology gate"]
+    O --> K["at most MAX_SUPPORT_CONSTANTS<br/>support constants"]
+    O --> D["deterministic — same request,<br/>same creature"]
+    P -. "only for a creature<br/>a caller built by hand" .-> E["Err(Cleanup) —<br/>on a valid creature<br/>this is a core defect"]
+```
+
+`neat-core/tests/prune_total.rs` is what proves that rather than asserting it.
+It sweeps three fixture homes, deduplicated by creature: every `before` of
+`PRUNE_PARITY_CASES`, every creature carried by `prune_golden_cases()`, and a
+short inline list for the shapes neither home holds. `prune_cleanup.rs`'s own
+fixtures are not enumerated — they address `cleanup_creature` directly rather
+than the two prune entry points. For every hidden neuron and every listed
+triple of every fixture, with no statistics and with a mean-only `PruneStats`,
+the sweep checks the call returns `Ok`, the request was actually carried out,
+the result validates, it carries no more than `MAX_SUPPORT_CONSTANTS`
+constants, and the rewrite is deterministic. Each home is counted separately so
+one going empty cannot hide behind the others.
 
 Three structural rules the contract rests on are pinned in the same file:
 
@@ -1049,7 +1074,7 @@ Three structural rules the contract rests on are pinned in the same file:
 |---|---|
 | a hidden neuron left with **no outward** edge | removed, recursively — a three-deep chain collapses in the one `prune_synapse` call that cuts its last edge |
 | a hidden neuron left with **no inward** edge | folded to a **bias-1** support constant, its value moved into the reading edges' weights (`fold_zero_inward_hidden`) |
-| validation rules 16 / 17 / 18 | unchanged — an outward-free constant and a hidden neuron missing either direction are invalid, while an **inward-free output is valid**, which is what makes cutting the last edge into an output an ordinary candidate |
+| wiring rules 16-18 of the [`creature_validate` rule table](neat-core/src/creature_validate.rs) | unchanged — an outward-free constant and a hidden neuron missing either direction are invalid, while an **inward-free output is valid**, which is what makes cutting the last edge into an output an ordinary candidate |
 
 ### Pruning over the WASM boundary (Issue #592)
 

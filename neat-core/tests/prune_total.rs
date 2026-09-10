@@ -8,39 +8,61 @@
 //! pick be pruned at all?* A screen that has to guess which of its candidates
 //! the shared helper will refuse is a screen with a hole in it.
 //!
-//! So this file sweeps instead of sampling. Every fixture the prune tests
-//! carry, every hidden neuron of it, every `(from, to, role)` triple it
-//! lists — with no statistics and with a mean-only [`PruneStats`] — and for
-//! each of those requests:
+//! So this file sweeps instead of sampling. For every fixture, every hidden
+//! neuron of it, every `(from, to, role)` triple it lists — with no statistics
+//! and with a mean-only [`PruneStats`] — and for each of those requests:
 //!
-//! - the call returns `Ok`; an `Err(PruneError::Cleanup)` on a **valid**
-//!   fixture is a core defect, not a refusal a caller should code around;
+//! - the call returns `Ok`. `Err(PruneError::Cleanup)` is a reachable outcome
+//!   of the entry points, and the README flowcharts are right to show it: a
+//!   creature a caller built by hand can be beyond repair. What it must never
+//!   be is the answer for a **valid** creature, and that is what this sweep
+//!   proves rather than asserts;
+//! - the request was actually carried out — the neuron is gone, or the edge is
+//!   named on `removed_synapses` and the creature moved;
 //! - the creature that comes back passes `creature_validate` and the topology
 //!   gate;
 //! - it carries no more than [`MAX_SUPPORT_CONSTANTS`] constants, so a sweep
 //!   cannot inflate the support prefix; and
 //! - the rewrite is deterministic — the same request twice gives the same
-//!   creature, byte for byte.
+//!   creature, field for field.
 //!
 //! Edges sourced at an `input-N` and edges targeting an output neuron are
 //! ordinary candidates here, exactly as `prune_synapse`'s contract says: the
 //! declared widths are untouched by dropping one term from a sum.
 //!
-//! The sweep is guarded against going vacuous. It asserts how many fixtures it
-//! enumerated, that every fixture yielded at least one synapse request, and
-//! that at least eight of them yielded at least one hidden-neuron request —
-//! so a fixture table that silently stopped loading fails the test rather
-//! than passing it with nothing to do.
+//! # Where the fixtures come from
+//!
+//! Three homes, in this order, deduplicated by creature so an overlap counts
+//! once:
+//!
+//! 1. every `before()` of [`PRUNE_PARITY_CASES`] — the Issue #588 TypeScript
+//!    captures;
+//! 2. every creature carried by [`prune_golden_cases`] — the committed
+//!    boundary record, which adds the static-`IF`, restored-role, proxy and
+//!    refusal shapes;
+//! 3. a short inline list below, for the creatures Ockham #195 names that
+//!    neither home carries.
+//!
+//! `prune_cleanup.rs`'s own fixtures are deliberately not enumerated: they
+//! address `cleanup_creature` directly rather than the two prune entry points
+//! this contract is about, and the constant cap they exercise
+//! (`FIVE_CONSTANTS_JSON`) has its dedicated coverage there.
+//!
+//! The sweep is guarded against going vacuous by
+//! [`the_sweep_covers_valid_creatures`], which counts each home separately —
+//! so a fixture table that silently stopped loading fails the test rather than
+//! being covered for by the other two.
 //!
 //! Below the sweep sit the structural guards: the three-deep chain that
-//! collapses in one call, the zero-inward fold, and the four
-//! `creature_validate` wiring rules (16, 17, 18) the whole contract rests on.
+//! collapses in one call, the zero-inward fold, and the four `creature_validate`
+//! wiring guards over rules 16-18 (`neat-core/src/creature_validate.rs`, the
+//! rule table in the module header) that the whole contract rests on.
 
 use neat_core::prune_fixtures::PRUNE_PARITY_CASES;
 use neat_core::{
     CreatureExport, MAX_SUPPORT_CONSTANTS, PruneStats, SUPPORT_CONSTANT_BIAS, SynapseKey,
     SynapseType, ValidateOptions, creature_validate, parse_creature_json, parse_synapse_type,
-    prune_neuron, prune_synapse, validate_creature_topology,
+    prune_golden_cases, prune_neuron, prune_synapse, validate_creature_topology,
 };
 
 const OPTIONS: ValidateOptions = ValidateOptions {
@@ -57,23 +79,16 @@ const OPTIONS: ValidateOptions = ValidateOptions {
 /// agrees with it only to `f32` precision.
 const STRUCTURAL_FOLD_TOL: f64 = 1e-6;
 
-/// Floors on how much the two sweeps actually do, measured on the table as it
-/// stands (102 neuron and 222 synapse requests) and rounded down.
-///
-/// A relative "twice the fixture count" check would still pass on a table that
-/// had shrunk to one neuron and one edge per creature. These are absolute, so
-/// coverage cannot quietly erode.
-const MIN_NEURON_REQUESTS: usize = 100;
-/// Companion floor for the synapse sweep — see [`MIN_NEURON_REQUESTS`].
-const MIN_SYNAPSE_REQUESTS: usize = 200;
-
-// --- fixtures ---------------------------------------------------------------
+// --- inline fixtures --------------------------------------------------------
 //
-// The inline creatures are the ones `prune_neuron.rs` and `prune_synapse.rs`
-// carry, transcribed unchanged. Only the **valid** ones are swept: those files
-// also carry deliberately malformed creatures (a dangling target, an unknown
-// squash, a backward edge) whose refusal is the behaviour under test there, and
-// a refusal on an invalid creature says nothing about total prunability.
+// Only the creatures Ockham #195 names that no shared home already carries.
+// The issue's other named creatures are covered and are **not** copied here:
+// `CONSTANT_SOURCE_JSON` is the golden record's `constant_edge_folds_exactly`,
+// `ORDINARY_JSON` differs from `TWO_TARGETS_JSON` by one direct input edge the
+// parity captures already carry, and of the `IF` creatures the golden record
+// supplies the live, static-condition and restored-role shapes while
+// `EDGE_ROLE_IDENTITY` supplies the two-sources-per-branch one. What is left
+// below is what would otherwise go untested.
 
 /// `h-1` feeds two surviving targets, one of which is also fed by a survivor.
 const TWO_TARGETS_JSON: &str = r#"{
@@ -92,7 +107,8 @@ const TWO_TARGETS_JSON: &str = r#"{
   ]
 }"#;
 
-/// `h-1` feeds a `MINIMUM` aggregate as well as the output.
+/// `h-1` feeds a `MINIMUM` aggregate as well as the output — the target that
+/// reads its smallest inward term, so no bias fold stands in for a removal.
 const AGGREGATE_TARGET_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
   "neurons":[
@@ -110,6 +126,9 @@ const AGGREGATE_TARGET_JSON: &str = r#"{
 }"#;
 
 /// `h-1` sums nothing, so its activation is `LOGISTIC(0.4)` on every record.
+///
+/// Deliberately **non-canonical**: rule 17 refuses a hidden neuron with no
+/// inward edge. It is swept anyway — see [`Fixture::canonical`].
 const ZERO_INWARD_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
   "neurons":[
@@ -123,6 +142,8 @@ const ZERO_INWARD_JSON: &str = r#"{
 }"#;
 
 /// `h-dead` has no outward edge, so nothing reads what it computes.
+///
+/// Deliberately non-canonical for the mirror-image reason: rule 18.
 const DEAD_NEURON_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
   "neurons":[
@@ -135,7 +156,8 @@ const DEAD_NEURON_JSON: &str = r#"{
   ]
 }"#;
 
-/// An `IDENTITY` neuron that sums nothing is worth `0.5` on every record.
+/// An `IDENTITY` neuron that sums nothing is worth `0.5` on every record — the
+/// hidden-neuron twin of the captured constant fold.
 const DISCOVERY_FOLD_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
   "neurons":[
@@ -148,80 +170,9 @@ const DISCOVERY_FOLD_JSON: &str = r#"{
   ]
 }"#;
 
-/// `c-1` is a constant, so what it carried into the output is known exactly.
-/// The one fixture here with no hidden neuron at all.
-const CONSTANT_SOURCE_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
-  "neurons":[
-    {"type":"constant","uuid":"c-1","bias":0.5},
-    {"type":"output","uuid":"output-0","bias":0.25,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"},
-    {"weight":0.2,"fromUUID":"c-1","toUUID":"output-0"}
-  ]
-}"#;
-
-/// `h-1` feeds two surviving targets; `h-2` also feeds the output.
-const ORDINARY_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-2","bias":0.2,"squash":"LOGISTIC"},
-    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
-    {"weight":0.75,"fromUUID":"input-1","toUUID":"h-2"},
-    {"weight":0.5,"fromUUID":"h-1","toUUID":"h-2"},
-    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
-    {"weight":1.0,"fromUUID":"h-2","toUUID":"output-0"},
-    {"weight":0.25,"fromUUID":"input-0","toUUID":"output-0"}
-  ]
-}"#;
-
-/// A live `IF`: `h-cond` is its only condition source and `h-a` feeds both
-/// branches.
-const IF_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-cond","bias":0.1,"squash":"TANH"},
-    {"type":"hidden","uuid":"h-a","bias":0.2,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"if-1","bias":0.05,"squash":"IF"},
-    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-cond"},
-    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-a"},
-    {"weight":1.0,"fromUUID":"h-cond","toUUID":"if-1","type":"condition"},
-    {"weight":-3.0,"fromUUID":"h-a","toUUID":"if-1","type":"negative"},
-    {"weight":2.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
-    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
-  ]
-}"#;
-
-/// An `IF` whose branches are fed by two sources each.
-const IF_SHARED_BRANCHES_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-a","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-b","bias":0.2,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
-    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
-    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-b"},
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"if-1","type":"condition"},
-    {"weight":-1.0,"fromUUID":"h-a","toUUID":"if-1","type":"negative"},
-    {"weight":2.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
-    {"weight":-2.0,"fromUUID":"h-b","toUUID":"if-1","type":"negative"},
-    {"weight":3.0,"fromUUID":"h-b","toUUID":"if-1","type":"positive"},
-    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
-  ]
-}"#;
-
-/// `h-c` is the `IF`'s only condition source, fed by exactly one edge.
+/// An `IF` whose only condition source is a **hidden** neuron fed by one edge,
+/// so cutting that edge fixes the condition. The golden record's static-`IF`
+/// case reaches the same state from a *constant* condition source.
 const IF_STATIC_AFTER_CUT_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
   "neurons":[
@@ -242,30 +193,8 @@ const IF_STATIC_AFTER_CUT_JSON: &str = r#"{
   ]
 }"#;
 
-/// The static-condition shape with the negative branch behind a two-step chain.
-const IF_STATIC_MULTILEVEL_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-c","bias":0.5,"squash":"IDENTITY"},
-    {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-n2","bias":0.3,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-n","bias":0.4,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
-    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-c"},
-    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
-    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-n2"},
-    {"weight":1.0,"fromUUID":"h-n2","toUUID":"h-n"},
-    {"weight":1.0,"fromUUID":"h-c","toUUID":"if-1","type":"condition"},
-    {"weight":2.0,"fromUUID":"h-p","toUUID":"if-1","type":"positive"},
-    {"weight":-1.0,"fromUUID":"h-n","toUUID":"if-1","type":"negative"},
-    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
-  ]
-}"#;
-
-/// The static-condition shape with the positive arm written **untyped**.
+/// The same shape with the positive arm written **untyped**, which the forward
+/// pass and `IfRoles::tally` both read as positive.
 const IF_STATIC_UNTYPED_ARM_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
   "neurons":[
@@ -286,7 +215,9 @@ const IF_STATIC_UNTYPED_ARM_JSON: &str = r#"{
   ]
 }"#;
 
-/// An `IF` with a varying condition, in a creature already carrying support.
+/// An `IF` with a varying condition, in a creature that **already** carries a
+/// support constant: restoring an emptied branch role has to hang off that
+/// constant rather than mint a second one (Ockham #180).
 const IF_WITH_SUPPORT_CONSTANT_JSON: &str = r#"{
   "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
   "neurons":[
@@ -305,6 +236,33 @@ const IF_WITH_SUPPORT_CONSTANT_JSON: &str = r#"{
   ]
 }"#;
 
+/// Four bias-1 support constants — one more than [`MAX_SUPPORT_CONSTANTS`].
+///
+/// Written for this file rather than copied: the point is that the cap
+/// assertion in the two sweeps is not vacuous. Every fixture above comes back
+/// with at most one constant, so `constants <= MAX_SUPPORT_CONSTANTS` would
+/// hold on any of them whatever the cap did. Here the cleanup has to merge the
+/// surplus away on every one of the requests the sweep makes.
+const SURPLUS_CONSTANTS_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"constant","uuid":"k-a","bias":1.0},
+    {"type":"constant","uuid":"k-b","bias":1.0},
+    {"type":"constant","uuid":"k-c","bias":1.0},
+    {"type":"constant","uuid":"k-d","bias":1.0},
+    {"type":"hidden","uuid":"h-1","bias":0.15,"squash":"TANH"},
+    {"type":"output","uuid":"output-0","bias":0.05,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":0.4,"fromUUID":"k-a","toUUID":"h-1"},
+    {"weight":-0.6,"fromUUID":"k-b","toUUID":"h-1"},
+    {"weight":1.5,"fromUUID":"k-c","toUUID":"output-0"},
+    {"weight":-0.3,"fromUUID":"k-d","toUUID":"output-0"},
+    {"weight":1.0,"fromUUID":"h-1","toUUID":"output-0"}
+  ]
+}"#;
+
 /// The inline creatures, paired with the name a failure reports.
 const INLINE_FIXTURES: &[(&str, &str)] = &[
     ("two_targets", TWO_TARGETS_JSON),
@@ -312,36 +270,43 @@ const INLINE_FIXTURES: &[(&str, &str)] = &[
     ("zero_inward", ZERO_INWARD_JSON),
     ("dead_neuron", DEAD_NEURON_JSON),
     ("discovery_fold", DISCOVERY_FOLD_JSON),
-    ("constant_source", CONSTANT_SOURCE_JSON),
-    ("ordinary", ORDINARY_JSON),
-    ("if_live", IF_JSON),
-    ("if_shared_branches", IF_SHARED_BRANCHES_JSON),
     ("if_static_after_cut", IF_STATIC_AFTER_CUT_JSON),
-    ("if_static_multilevel", IF_STATIC_MULTILEVEL_JSON),
     ("if_static_untyped_arm", IF_STATIC_UNTYPED_ARM_JSON),
     ("if_with_support_constant", IF_WITH_SUPPORT_CONSTANT_JSON),
+    ("surplus_constants", SURPLUS_CONSTANTS_JSON),
 ];
+
+// --- the fixture table ------------------------------------------------------
+
+/// Which home a fixture came from, so the anti-vacuity guard can count each
+/// separately rather than let one cover for another going empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Parity,
+    Golden,
+    Inline,
+}
 
 /// One creature to sweep, and the name a failure reports it by.
 struct Fixture {
     name: String,
+    source: Source,
     creature: CreatureExport,
     /// Whether the fixture *itself* passes `creature_validate`.
     ///
-    /// Most do. `inline/zero_inward` deliberately does not — its `h-1` has no
-    /// inward edge, which is rule 17 — because the behaviour it pins next door
-    /// is what a prune does with a neuron in that state. The sweep still runs
-    /// it: a caller can hand core a creature straight out of a population, and
-    /// the promise is about the creature that comes **back**. What the flag
-    /// buys is the anti-vacuity guard in
+    /// Most do. `inline/zero_inward` and `inline/dead_neuron` deliberately do
+    /// not — one breaks rule 17, the other rule 18 — because the behaviour
+    /// they pin next door is what a prune does with a neuron in that state.
+    /// The sweep still runs them: a caller can hand core a creature straight
+    /// out of a population, and the promise is about the creature that comes
+    /// **back**. What the flag buys is the guard in
     /// [`the_sweep_covers_valid_creatures`]: the sweep must be reaching real
     /// canonical creatures, not a table that has quietly filled with
     /// degenerate ones.
     canonical: bool,
 }
 
-/// Every fixture the sweep covers: the `before` of each captured parity case,
-/// then the inline creatures above.
+/// Every fixture the sweep covers, deduplicated by creature.
 ///
 /// `neat-core/tests/fixtures/creature_validate/happy-paths.json` is **not**
 /// here: its creatures are written in the index-addressed runtime shape
@@ -351,26 +316,57 @@ struct Fixture {
 /// assumption on Ockham #195 admits them "only if they load through
 /// `parse_creature_json`", and they do not.
 fn fixtures() -> Vec<Fixture> {
-    let mut out = Vec::new();
+    let mut out: Vec<Fixture> = Vec::new();
+
     for case in PRUNE_PARITY_CASES {
-        out.push(fixture(format!("parity/{}", case.name), case.before()));
+        push_unique(
+            &mut out,
+            format!("parity/{}", case.name),
+            Source::Parity,
+            case.before(),
+        );
     }
+
+    for case in prune_golden_cases() {
+        // The boundary record carries deliberately malformed payloads too —
+        // a missing creature, a creature with an unreadable field. Those are
+        // requests, not creatures, so they are skipped rather than swept.
+        let Some(value) = case.request.get("creature") else {
+            continue;
+        };
+        let Ok(creature) = serde_json::from_value::<CreatureExport>(value.clone()) else {
+            continue;
+        };
+        push_unique(
+            &mut out,
+            format!("golden/{}", case.name),
+            Source::Golden,
+            creature,
+        );
+    }
+
     for (name, json) in INLINE_FIXTURES {
         let creature = parse_creature_json(json)
             .unwrap_or_else(|e| panic!("inline fixture {name} does not parse: {e}"));
-        out.push(fixture(format!("inline/{name}"), creature));
+        push_unique(&mut out, format!("inline/{name}"), Source::Inline, creature);
     }
+
     out
 }
 
-fn fixture(name: String, creature: CreatureExport) -> Fixture {
+/// Add a fixture unless the same creature is already in the table.
+fn push_unique(out: &mut Vec<Fixture>, name: String, source: Source, creature: CreatureExport) {
+    if out.iter().any(|f| f.creature == creature) {
+        return;
+    }
     let canonical = creature_validate(&creature, &OPTIONS).is_ok()
         && validate_creature_topology(&creature).is_ok();
-    Fixture {
+    out.push(Fixture {
         name,
+        source,
         creature,
         canonical,
-    }
+    });
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -429,29 +425,16 @@ fn constant_count(creature: &CreatureExport) -> usize {
         .count()
 }
 
-/// Everything the contract promises about one successful prune.
-fn assert_prune_contract(name: &str, pruned: &CreatureExport) {
+/// Everything the contract promises about one successful prune, and the number
+/// of constants it left so the sweep can prove the cap was exercised.
+fn assert_prune_contract(name: &str, pruned: &CreatureExport) -> usize {
     assert_valid(name, pruned);
     let constants = constant_count(pruned);
     assert!(
         constants <= MAX_SUPPORT_CONSTANTS,
         "{name}: {constants} constants survived, above the {MAX_SUPPORT_CONSTANTS} cap"
     );
-}
-
-/// What the caller asked for, spelled for a failure message.
-fn neuron_label(fixture: &str, uuid: &str, stats: Option<&PruneStats>) -> String {
-    format!("{fixture} neuron {uuid} ({})", stats_label(stats))
-}
-
-fn synapse_label(fixture: &str, key: &SynapseKey, stats: Option<&PruneStats>) -> String {
-    format!(
-        "{fixture} synapse {} -> {} ({:?}, {})",
-        key.from_uuid,
-        key.to_uuid,
-        key.role,
-        stats_label(stats)
-    )
+    constants
 }
 
 fn stats_label(stats: Option<&PruneStats>) -> &'static str {
@@ -464,21 +447,48 @@ fn stats_label(stats: Option<&PruneStats>) -> &'static str {
 
 // --- the sweep --------------------------------------------------------------
 
-/// The sweep is reaching real canonical creatures, and enough of them.
+/// The sweep is reaching real canonical creatures, and enough of them, from
+/// every home it claims to read.
 ///
-/// This is the anti-vacuity guard the whole file rests on: a fixture table that
-/// stopped loading, or filled up with degenerate creatures, would let the two
-/// sweeps below pass with nothing to prove. It pins the count of fixtures, the
-/// count that pass `creature_validate` unaided, and — one fixture at a time —
-/// that every fixture yields at least one synapse request and all but the
-/// constant-only ones yield at least one hidden neuron.
+/// This is the guard the whole file rests on: a fixture home that stopped
+/// loading, or filled up with degenerate creatures, would let the two sweeps
+/// below pass with nothing to prove. Each home is counted **separately**, so
+/// one going empty cannot hide behind the others.
 #[test]
 fn the_sweep_covers_valid_creatures() {
     let fixtures = fixtures();
+
+    let parity = fixtures
+        .iter()
+        .filter(|f| f.source == Source::Parity)
+        .count();
+    assert_eq!(
+        parity,
+        PRUNE_PARITY_CASES.len(),
+        "the parity captures did not all reach the table"
+    );
     assert!(
-        fixtures.len() >= 8,
-        "only {} fixtures enumerated",
-        fixtures.len()
+        parity >= 8,
+        "only {parity} captured parity cases — the Issue #588 record has shrunk"
+    );
+
+    let golden = fixtures
+        .iter()
+        .filter(|f| f.source == Source::Golden)
+        .count();
+    assert!(
+        golden >= 1,
+        "no creature reached the table from the golden boundary record"
+    );
+
+    let inline = fixtures
+        .iter()
+        .filter(|f| f.source == Source::Inline)
+        .count();
+    assert_eq!(
+        inline,
+        INLINE_FIXTURES.len(),
+        "an inline fixture was swallowed as a duplicate — it is no longer earning its place"
     );
 
     let canonical = fixtures.iter().filter(|f| f.canonical).count();
@@ -527,23 +537,38 @@ fn every_hidden_neuron_of_every_fixture_prunes() {
     let fixtures = fixtures();
     let stats = mean_only(0.5);
     let mut requests = 0usize;
-    let mut fixtures_with_hidden = 0usize;
+    let mut swept_fixtures = 0usize;
+    let mut max_constants = 0usize;
 
     for fixture in &fixtures {
         let hidden = hidden_uuids(&fixture.creature);
         if !hidden.is_empty() {
-            fixtures_with_hidden += 1;
+            swept_fixtures += 1;
         }
         for uuid in &hidden {
             for supplied in [None, Some(&stats)] {
-                let label = neuron_label(&fixture.name, uuid, supplied);
-                let result = prune_neuron(&fixture.creature, uuid, supplied)
-                    .unwrap_or_else(|e| panic!("{label}: refused, but every hidden neuron of a valid creature must prune: {e}"));
-                assert_prune_contract(&label, &result.creature);
+                let label = format!("{} neuron {uuid} ({})", fixture.name, stats_label(supplied));
+                let result = prune_neuron(&fixture.creature, uuid, supplied).unwrap_or_else(|e| {
+                    panic!("{label}: refused, but every hidden neuron must prune: {e}")
+                });
+
+                max_constants = max_constants.max(assert_prune_contract(&label, &result.creature));
                 assert_eq!(
                     result.removed_neuron.as_deref(),
                     Some(uuid.as_str()),
                     "{label}: a different neuron was reported removed"
+                );
+                assert!(
+                    !result.creature.neurons.iter().any(|n| &n.uuid == uuid),
+                    "{label}: the neuron was reported removed but is still in the creature"
+                );
+                assert!(
+                    !result
+                        .creature
+                        .synapses
+                        .iter()
+                        .any(|s| &s.from_uuid == uuid || &s.to_uuid == uuid),
+                    "{label}: an edge still names the removed neuron"
                 );
 
                 let again = prune_neuron(&fixture.creature, uuid, supplied)
@@ -558,12 +583,21 @@ fn every_hidden_neuron_of_every_fixture_prunes() {
     }
 
     assert!(
-        fixtures_with_hidden >= 8,
-        "only {fixtures_with_hidden} fixtures carried a hidden neuron — the sweep has gone vacuous"
+        swept_fixtures >= 8,
+        "only {swept_fixtures} fixtures carried a hidden neuron — the sweep has gone vacuous"
+    );
+    assert_eq!(
+        requests % 2,
+        0,
+        "{requests} neuron requests — each should run with and without statistics"
     );
     assert!(
-        requests >= 2 * fixtures_with_hidden && requests >= MIN_NEURON_REQUESTS,
-        "only {requests} neuron requests over {fixtures_with_hidden} fixtures — at least {MIN_NEURON_REQUESTS} are expected, each hidden neuron run with and without statistics"
+        requests >= 2 * swept_fixtures,
+        "{requests} neuron requests over {swept_fixtures} fixtures"
+    );
+    assert!(
+        max_constants >= 2,
+        "the most constants any pruned creature carried was {max_constants} — `inline/surplus_constants` should drive the {MAX_SUPPORT_CONSTANTS} cap, so the bound is not being exercised"
     );
 }
 
@@ -573,6 +607,7 @@ fn every_listed_synapse_of_every_fixture_prunes() {
     let fixtures = fixtures();
     let stats = mean_only(0.5);
     let mut requests = 0usize;
+    let mut max_constants = 0usize;
 
     for fixture in &fixtures {
         let keys = synapse_keys(&fixture.creature);
@@ -583,13 +618,39 @@ fn every_listed_synapse_of_every_fixture_prunes() {
         );
         for key in &keys {
             for supplied in [None, Some(&stats)] {
-                let label = synapse_label(&fixture.name, key, supplied);
-                let result = prune_synapse(&fixture.creature, key, supplied)
-                    .unwrap_or_else(|e| panic!("{label}: refused, but every listed synapse of a valid creature must prune: {e}"));
-                assert_prune_contract(&label, &result.creature);
+                let label = format!(
+                    "{} synapse {} -> {} ({:?}, {})",
+                    fixture.name,
+                    key.from_uuid,
+                    key.to_uuid,
+                    key.role,
+                    stats_label(supplied)
+                );
+                let result = prune_synapse(&fixture.creature, key, supplied).unwrap_or_else(|e| {
+                    panic!("{label}: refused, but every listed synapse must prune: {e}")
+                });
+
+                max_constants = max_constants.max(assert_prune_contract(&label, &result.creature));
                 assert!(
                     result.removed_neuron.is_none(),
                     "{label}: a synapse request reported a removed neuron"
+                );
+                // The request was carried out, not merely reported. A role the
+                // rewrites may legitimately restore — a zero-weight support
+                // edge into an emptied `IF` branch — makes "that triple is
+                // absent" the wrong assertion, so the check is that the edge
+                // was taken and the creature moved.
+                assert!(
+                    result
+                        .removed_synapses
+                        .iter()
+                        .any(|s| s.from_uuid == key.from_uuid && s.to_uuid == key.to_uuid),
+                    "{label}: the requested edge is not among the removed ones: {:?}",
+                    result.removed_synapses
+                );
+                assert_ne!(
+                    result.creature, fixture.creature,
+                    "{label}: the creature came back unchanged"
                 );
 
                 let again = prune_synapse(&fixture.creature, key, supplied)
@@ -609,9 +670,13 @@ fn every_listed_synapse_of_every_fixture_prunes() {
         fixtures.len()
     );
     assert!(
-        requests >= 2 * fixtures.len() && requests >= MIN_SYNAPSE_REQUESTS,
-        "only {requests} synapse requests over {} fixtures — at least {MIN_SYNAPSE_REQUESTS} are expected, each listed triple run with and without statistics",
+        requests >= 2 * fixtures.len(),
+        "{requests} synapse requests over {} fixtures — each listed triple should run with and without statistics",
         fixtures.len()
+    );
+    assert!(
+        max_constants >= 2,
+        "the most constants any pruned creature carried was {max_constants} — `inline/surplus_constants` should drive the {MAX_SUPPORT_CONSTANTS} cap, so the bound is not being exercised"
     );
 }
 
@@ -623,7 +688,7 @@ fn every_listed_synapse_of_every_fixture_prunes() {
 /// so the output stays fed. Cutting the last edge of the chain leaves `h-3`
 /// with nothing to feed; removing it strands `h-2`, and removing that strands
 /// `h-1` — so the whole chain goes in the single `prune_synapse` call, not one
-/// neuron per call the caller has to iterate (corner case 12).
+/// neuron per call the caller has to iterate.
 #[test]
 fn three_deep_chain_collapses_in_one_synapse_prune() {
     let chain = creature(
