@@ -16,10 +16,10 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
 
-# Issue #546 (fleet decision stSoftwareAU/VibeCoding#4159): dev builds compile
-# as fast as possible. `line-tables-only` keeps panic/backtrace file:line and
-# drops the rest of the DWARF; `opt-level = 0` and incremental stay at cargo's
-# dev defaults. Stable Rust only — no nightly flags.
+# Issue #546 (fleet build-profile decision): dev builds compile as fast as
+# possible. `line-tables-only` keeps panic/backtrace file:line and drops the
+# rest of the DWARF; `opt-level = 0` and incremental stay at cargo's dev
+# defaults. Stable Rust only — no nightly flags.
 [profile.dev]
 debug = "line-tables-only"
 

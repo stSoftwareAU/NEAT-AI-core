@@ -154,10 +154,10 @@ with code nobody wrote. Fix a formatting failure with `deno fmt`.
 
 ### Build profiles (Issue #546)
 
-Fleet decision (`stSoftwareAU/VibeCoding#4159`): **dev builds compile as fast as
-possible; release builds produce the most optimised artefact possible and
-compile time is irrelevant.** Stable Rust only — no nightly, no `-Zthreads`, no
-Cranelift. The root `Cargo.toml` carries both profiles workspace-wide:
+Fleet build-profile decision: **dev builds compile as fast as possible;
+release builds produce the most optimised artefact possible and compile time
+is irrelevant.** Stable Rust only — no nightly, no `-Zthreads`, no Cranelift.
+The root `Cargo.toml` carries both profiles workspace-wide:
 
 | Profile | Settings | Why |
 |---------|----------|-----|
