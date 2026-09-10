@@ -923,6 +923,66 @@ left bare because no statistics were supplied at all. The entry is per
 **readable key**, not per target: an `IF` fed on two roles is reported once per
 role, because it never sums its arms into the single term a total would imply.
 
+#### An aggregate that keeps its edges (Ockham #197)
+
+Naming the target is not the whole answer: what the cut left behind decides what
+can still be said about it. `neat-core/src/prune_rewrite.rs` is the rule, asked
+by both entry points after the cut and before cleanup, and it only ever looks at
+the targets the request itself touched — cleanup owns the canonical form of
+everything else.
+
+| What the cut left the aggregate | What comes back |
+|---|---|
+| exactly **one** inward edge | the squash is rewritten to the point-wise one that computes the same number, and the rewrite is named on `PruneResult::converted_neurons` (`convertedNeurons` on the wire) |
+| **two or more** inward edges | the squash stands — it is still reducing a range, and no point-wise form says the same thing |
+| either way | the target is named on `PruneResult::uncompensated`, carrying `UncompensatedTarget::dropped_mean` (`droppedMean`) — the magnitude of the term that went |
+
+The conversions are read straight off the aggregate arms of
+`CompiledNetwork::activate`, so each is **exact**: reducing one term is that
+term, and `transform` is untouched by the rewrite. "The same number" means what
+it means for the structural fold above — the same number to the `f32` precision
+the forward pass works in, for every finite term it can represent without
+overflow. `prune_rewrite`'s module documentation names the two boundaries
+outside that (a non-finite term, and a term whose square overflows `f32`)
+rather than leaving them implied.
+
+| Aggregate | With one term the forward pass computes | Replacement |
+|---|---|---|
+| `MINIMUM` / `MAXIMUM` | the extreme of one term, `w·a + bias` | `IDENTITY`, same bias |
+| `MEAN` | `w·a / 1 + bias` | `IDENTITY`, same bias |
+| `HYPOTv2` | `sqrt((bias + w·a)²)` — the magnitude of `bias + w·a` | `ABSOLUTE`, same bias |
+| `HYPOT` at bias `0` | `sqrt((w·a)²) + bias` — the magnitude of `w·a` | `ABSOLUTE`, same bias |
+| `HYPOT` at any other bias | the magnitude of `w·a`, **plus** the bias | **kept** — `HYPOT` adds its bias where `ABSOLUTE` folds it inside the root, so the two agree only at `0`. The `HYPOT` is already exact as it stands |
+| `IF` | the branch its condition sum picks | **kept** — `IfRepair` owns what a lost role means (validation rule 12) |
+
+The forward pass puts every activation through `apply_limit_range`, whose bounds
+depend on the squash, so each rule is checked against those ranges before it is
+taken and a rule whose clamp moved is skipped rather than applied. That is what
+makes the `HYPOT`-at-zero rule sound: `ABSOLUTE` floors at `0` where `HYPOT`
+does not, and at bias `0` the activation is a magnitude that never reaches below
+that floor.
+
+**`dropped_mean` is reported, never enforced.** It is `W · μ` where the caller
+supplied statistics and `W · a` where the creature itself fixes the source's
+activation — the same precedence the compensation takes — and `None` where
+neither proves a number, so no magnitude is invented. Nothing in this crate
+refuses a prune for the size of what it dropped: judging the loss is the
+caller's half of the Issue #587 boundary. Statistics this crate cannot make
+sense of are a different matter and still refuse outright.
+
+```mermaid
+flowchart TD
+    T["a target the request touched"] --> E{"inward edges left?"}
+    E -- "two or more" --> K["keep the squash"]
+    E -- "exactly one" --> A{"an aggregate, and not IF?"}
+    A -- no --> K
+    A -- yes --> R{"a replacement that<br/>computes the same number,<br/>and clamps the same?"}
+    R -- no --> K
+    R -- yes --> W["rewrite the squash,<br/>report it on convertedNeurons"]
+    K --> U["name the target on uncompensated,<br/>with droppedMean"]
+    W --> U
+```
+
 #### `Exact` is earned, never assumed
 
 `PruneResult::transform` is the honest label on what came back. It is `Exact`
@@ -1019,7 +1079,7 @@ activation, so the same compensation table as Issue #590 applies with `W = w`:
 |---|---|
 | the creature fixes `a` (a constant, or a source with nothing to sum) | `target.bias += w · a`, exactly; no statistic is needed and a supplied mean never overrides it — `TransformClass::Exact` |
 | `a` varies and `PruneStats` are supplied | `w · μ` folds into the bias, and a supplied correlated survivor takes `β · w` on its own edge |
-| the target aggregates (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost |
+| the target aggregates (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost and the magnitude of what went on `dropped_mean` ([above](#an-aggregate-that-keeps-its-edges-ockham-197)) |
 
 `PruneResult::removed_neuron` is `None` for a synapse prune and
 `removed_synapses` carries the one requested triple; for `prune_neuron` it is
@@ -1064,7 +1124,9 @@ already exchanges — a creature file goes in and a creature file comes out:
 { "ok": true, "creature": { /* CreatureExport */ }, "transform": "exact", "passes": 2,
   "removedNeuron": "h-1", "removedSynapses": [ /* … */ ], "cascadeNeurons": [ /* … */ ],
   "staticIfNeurons": [ /* … */ ], "biasFolds": [ /* … */ ], "weightShares": [ /* … */ ],
-  "uncompensated": [ /* … */ ] }
+  "uncompensated": [ { "targetUUID": "h-agg", "type": "standard", "weightSum": 0.5,
+                       "squash": "MEAN", "reason": "AGGREGATE_TARGET", "droppedMean": 0.3 } ],
+  "convertedNeurons": [ { "uuid": "h-agg", "from": "MINIMUM", "to": "IDENTITY" } ] }
 { "ok": false, "failure": { "reason": "PROTECTED_NEURON",
                             "message": "Neuron output-0 is a output node and is protected from direct removal",
                             "malformed": false } }

@@ -83,6 +83,23 @@
 //! The same entry records a target left uncompensated because no statistics were
 //! supplied at all.
 //!
+//! # What an aggregate that keeps its edges answers with (Ockham #197)
+//!
+//! Reporting the target is not the whole answer, because what the removal left
+//! behind decides what can still be said about it:
+//!
+//! | What the cut left the aggregate | What comes back |
+//! |---|---|
+//! | exactly **one** inward edge | the squash is rewritten to the point-wise one that computes the same number — `MINIMUM`/`MAXIMUM`/`MEAN` to `IDENTITY`, `HYPOTv2` (and `HYPOT` at bias `0`) to `ABSOLUTE` — and the rewrite is named on [`PruneResult::converted_neurons`]. Reducing one term is that term, so nothing the creature computes moves ([`mod@crate::prune_rewrite`]) |
+//! | **two or more** inward edges | the squash stands: it is still reducing a range, and no point-wise form says the same thing |
+//! | either way | the target is named on [`PruneResult::uncompensated`] carrying [`UncompensatedTarget::dropped_mean`] — the magnitude `W · μ` of the term that went, where a statistic or the creature's own structure proves one |
+//!
+//! **No magnitude refuses a prune.** `dropped_mean` is reported so the caller's
+//! scorer can judge the loss; nothing in this crate compares it against a
+//! threshold, because deciding whether a creature is still worth keeping is the
+//! caller's half of the Issue #587 boundary. Statistics this crate cannot make
+//! sense of are a different matter and still refuse outright.
+//!
 //! # The memetic record is pruned, not dropped
 //!
 //! TypeScript drops `memetic` wholesale on every removal because its content
@@ -101,6 +118,7 @@ use crate::prune_cleanup::{
     CleanupError, StaticIfRewrite, SynapseKey, cleanup_creature, fixed_activation,
     is_observation_uuid,
 };
+use crate::prune_rewrite::{SquashConversion, convert_single_edge_aggregates};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -235,6 +253,20 @@ pub struct UncompensatedTarget {
     pub squash: &'static str,
     /// Why nothing was folded.
     pub reason: UncompensatedReason,
+    /// Magnitude of the term the target lost, where a number proves one
+    /// (Ockham #197).
+    ///
+    /// `Some(weight_sum · μ)` when the caller supplied statistics, and
+    /// `Some(weight_sum · a)` when the creature itself fixes the source's
+    /// activation `a` — the same precedence the compensation takes, so the
+    /// structural value outranks a supplied mean here too. `None` where neither
+    /// exists, which is every [`UncompensatedReason::NoStatistics`] entry: no
+    /// magnitude is invented to fill the gap.
+    ///
+    /// This is reported, never enforced. Nothing in this crate refuses a prune
+    /// for the size of what it dropped — judging the loss is the scorer's half
+    /// of the Issue #587 boundary.
+    pub dropped_mean: Option<f64>,
 }
 
 /// The creature a prune produced, and everything the removal cost.
@@ -273,6 +305,11 @@ pub struct PruneResult {
     pub weight_shares: Vec<WeightShare>,
     /// Targets that read the removed neuron and got nothing back.
     pub uncompensated: Vec<UncompensatedTarget>,
+    /// Aggregates the cut left with a single inward edge, rewritten to the
+    /// point-wise squash that computes the same number (Ockham #197). Every
+    /// conversion is exact, so none of them moves
+    /// [`transform`](Self::transform).
+    pub converted_neurons: Vec<SquashConversion>,
     /// Whether the whole rewrite preserves the creature's output exactly.
     pub transform: TransformClass,
     /// How many cleanup passes the fixed point took.
@@ -511,6 +548,10 @@ pub fn prune_neuron(
     };
 
     let targets = outward_keys(creature, neuron_uuid)?;
+    // The targets whose inward count the cut moves, named before the loop
+    // consumes them: cutting the neuron removes its *inward* edges too, but
+    // those only cost their sources an outward edge, so nothing else is touched.
+    let touched_targets: Vec<String> = targets.iter().map(|(uuid, ..)| uuid.clone()).collect();
 
     let mut cut = creature.clone();
     cut.neurons.retain(|n| n.uuid != neuron_uuid);
@@ -543,6 +584,7 @@ pub fn prune_neuron(
                 weight_sum,
                 squash: squash_name_from(squash),
                 reason: UncompensatedReason::AggregateTarget,
+                dropped_mean: dropped_mean(invariant_value, stats, weight_sum),
             });
             continue;
         }
@@ -554,6 +596,9 @@ pub fn prune_neuron(
                 weight_sum,
                 squash: squash_name_from(squash),
                 reason: UncompensatedReason::NoStatistics,
+                // No statistic and no structural value is exactly the case
+                // `dropped_mean` answers `None` for.
+                dropped_mean: dropped_mean(invariant_value, stats, weight_sum),
             });
             continue;
         };
@@ -586,6 +631,13 @@ pub fn prune_neuron(
         });
     }
 
+    // An aggregate the cut left with one term is no longer aggregating, so it is
+    // rewritten to the point-wise squash that computes the same number before
+    // cleanup sees it — every later pass then reads a sum rather than a
+    // reduction (Ockham #197). The rewrite is exact, so it cannot spoil the
+    // label below.
+    let converted_neurons = convert_single_edge_aggregates(&mut cut, &touched_targets)?;
+
     let outcome = cleanup_creature(&cut)?;
 
     // Exact means every term the removal took away was replaced by something
@@ -616,6 +668,7 @@ pub fn prune_neuron(
         bias_folds,
         weight_shares,
         uncompensated,
+        converted_neurons,
         transform: if exact {
             TransformClass::Exact
         } else {
@@ -676,6 +729,24 @@ pub(crate) fn compensate(
             weight_sum * weight_sum * (v - proxy.covariance * proxy.covariance / proxy.variance)
         }),
     })
+}
+
+/// The magnitude of the term a target lost, where a number proves one.
+///
+/// The same precedence [`compensate`] takes, and deliberately so: the value the
+/// creature fixes outranks a supplied mean, and without either there is no
+/// magnitude to report rather than a zero that would read as "nothing was
+/// lost". Reported on [`UncompensatedTarget::dropped_mean`]; nothing is refused
+/// for its size.
+pub(crate) fn dropped_mean(
+    invariant_value: Option<f64>,
+    stats: Option<&PruneStats>,
+    weight_sum: f64,
+) -> Option<f64> {
+    if let Some(value) = invariant_value {
+        return Some(weight_sum * value);
+    }
+    Some(weight_sum * stats?.mean_activation)
 }
 
 /// Refuse anything that is not a hidden neuron of this creature.
