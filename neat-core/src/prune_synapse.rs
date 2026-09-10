@@ -86,6 +86,14 @@
 //!   or an `IF` reading one role's sum — no bias fold stands in for the term,
 //!   so none is attempted and the target is named on
 //!   [`PruneResult::uncompensated`] with the role it lost.
+//!
+//! A shortfall normally ends any [`TransformClass::Exact`] claim, and one shape
+//! is the exception: an `IF` whose condition **the creature itself decided the
+//! same way before and after the cut** never read the term that went, so the
+//! flatten costs nothing. `prune_neuron::shortfall_costs_nothing` (Ockham #198)
+//! is the single home of that proof, and both entry points ask it in the same
+//! terms, so a synapse removal and the neuron removal that takes the same term
+//! away can never disagree about what it cost.
 
 use crate::creature::{CreatureExport, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
@@ -94,7 +102,7 @@ use crate::prune_cleanup::{
 use crate::prune_neuron::{
     BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
     UncompensatedTarget, WeightShare, add_to_edge, check_proxy, check_stats, compensate,
-    target_squash,
+    shortfall_costs_nothing, target_squash,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -252,9 +260,16 @@ pub fn prune_synapse(
     // exact by construction, so they cannot spoil the label; the downgrade
     // clause is defence in depth against a future policy change quietly
     // calling a flattened creature exact.
-    let exact = uncompensated.is_empty()
-        && bias_folds.iter().all(|f| f.exact)
-        && outcome.downgraded_if_neurons.is_empty();
+    //
+    // A shortfall the rewrite proves cost nothing does not spoil it either,
+    // and [`shortfall_costs_nothing`] (Ockham #198) is the single home of that
+    // proof — asked here in the same terms `prune_neuron` asks it, so a
+    // synapse removal and the neuron removal that takes the same term away can
+    // never disagree about what it cost.
+    let mut exact = bias_folds.iter().all(|f| f.exact) && outcome.downgraded_if_neurons.is_empty();
+    for target in &uncompensated {
+        exact = exact && shortfall_costs_nothing(creature, &outcome.static_if_neurons, target)?;
+    }
 
     Ok(PruneResult {
         creature: outcome.creature,

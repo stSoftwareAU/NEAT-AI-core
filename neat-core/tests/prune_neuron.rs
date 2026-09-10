@@ -23,9 +23,10 @@ use neat_core::prune_fixtures::{
     MEMETIC_DROPPED_ON_REMOVAL,
 };
 use neat_core::{
-    CreatureExport, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, StaticIfRewrite,
-    SynapseType, TransformClass, UncompensatedReason, ValidateOptions, compile_creature,
-    creature_validate, parse_creature_json, prune_neuron, validate_creature_topology,
+    CreatureExport, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats,
+    StaticIfRewrite, SynapseType, TransformClass, UncompensatedReason, ValidateOptions,
+    compile_creature, creature_validate, parse_creature_json, prune_neuron,
+    validate_creature_topology,
 };
 
 const OPTIONS: ValidateOptions = ValidateOptions {
@@ -364,7 +365,10 @@ fn assert_same_function_within(
     assert_eq!(left.input, right.input, "{name}: observation width moved");
     assert_eq!(left.output, right.output, "{name}: target width moved");
     let probes = probe_inputs(left.input);
-    assert!(probes.len() >= 3, "{name}: too few probe records to grade on");
+    assert!(
+        probes.len() >= 3,
+        "{name}: too few probe records to grade on"
+    );
     for probe in probes {
         let a = outputs(left, &probe);
         let b = outputs(right, &probe);
@@ -406,7 +410,10 @@ fn with_source_zeroed(creature: &CreatureExport, uuid: &str) -> CreatureExport {
             zeroed += 1;
         }
     }
-    assert!(zeroed > 0, "{uuid} feeds nothing, so the twin proves nothing");
+    assert!(
+        zeroed > 0,
+        "{uuid} feeds nothing, so the twin proves nothing"
+    );
     twin
 }
 
@@ -592,7 +599,12 @@ fn a_static_condition_feeder_that_leaves_the_branch_where_it_was_prunes_exactly(
     let before = creature(IF_STATIC_CONDITION_JSON);
     let result = pruned(&before, "h-c2", None);
 
-    assert_same_function_within("static_condition_kept", REWRITE_TOL, &before, &result.creature);
+    assert_same_function_within(
+        "static_condition_kept",
+        REWRITE_TOL,
+        &before,
+        &result.creature,
+    );
     assert_eq!(
         result.transform,
         TransformClass::Exact,
@@ -675,7 +687,10 @@ fn an_output_carrying_the_if_squash_is_rewritten_in_place_by_both_paths() {
         }]
     );
     assert!(flattened.downgraded_if_neurons.is_empty());
-    assert_eq!(flattened.creature.output, before.output, "the declared target width moved");
+    assert_eq!(
+        flattened.creature.output, before.output,
+        "the declared target width moved"
+    );
     assert_eq!(
         flattened
             .creature
@@ -701,7 +716,12 @@ fn an_output_carrying_the_if_squash_is_rewritten_in_place_by_both_paths() {
     let restored = pruned(&before, "h-p", None);
     assert!(restored.static_if_neurons.is_empty());
     assert!(restored.downgraded_if_neurons.is_empty());
-    assert_eq!(restored.restored_if_roles.len(), 1, "{:?}", restored.restored_if_roles);
+    assert_eq!(
+        restored.restored_if_roles.len(),
+        1,
+        "{:?}",
+        restored.restored_if_roles
+    );
     assert_eq!(restored.restored_if_roles[0].to_uuid, "output-0");
     assert_eq!(restored.restored_if_roles[0].role, SynapseType::Positive);
     assert_eq!(
@@ -709,7 +729,10 @@ fn an_output_carrying_the_if_squash_is_rewritten_in_place_by_both_paths() {
         Some("IF"),
         "a varying condition still branches, so the output keeps its squash"
     );
-    assert_eq!(restored.creature.output, before.output, "the declared target width moved");
+    assert_eq!(
+        restored.creature.output, before.output,
+        "the declared target width moved"
+    );
     let branch_twin = with_source_zeroed(&before, "h-p");
     assert_same_function_within(
         "output_if_restored",

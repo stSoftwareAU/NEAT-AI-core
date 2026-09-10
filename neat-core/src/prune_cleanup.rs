@@ -93,9 +93,12 @@
 //! instead (Issue #591): the `IF` is rewritten into the closest form that
 //! computes the **same number on every record** — the branch a statically
 //! decided condition always takes, or a zero-weight support edge giving back
-//! the branch role the removal emptied. Synapse pruning uses it so typed
-//! structure is rewritten rather than refused; neuron pruning (Issue #590)
-//! keeps the parity default.
+//! the branch role the removal emptied. **Both** pruning entry points ask for
+//! it — synapse pruning from the start (Issue #591), neuron pruning since
+//! Ockham #198 — so typed structure is rewritten rather than flattened,
+//! whichever way the caller asked for the removal. The parity default is what
+//! the [`crate::prune_fixtures`] captures are graded against, and
+//! `neat-core/tests/prune_cleanup.rs` is the caller that reproduces them.
 //!
 //! # What is preserved
 //!
@@ -186,7 +189,8 @@ pub struct CleanupOutcome {
     /// `IF` neurons downgraded to `IDENTITY` because a required role was gone.
     ///
     /// Only [`IfRepair::Downgrade`] fills this — the one inexact rewrite this
-    /// module has. Under [`IfRepair::Rewrite`] it is always empty, and
+    /// module has, and no pruning entry point asks for it. Under
+    /// [`IfRepair::Rewrite`] it is always empty, and
     /// [`Self::static_if_neurons`] / [`Self::restored_if_roles`] carry the
     /// exact rewrites that replaced it.
     pub downgraded_if_neurons: Vec<String>,
@@ -220,6 +224,10 @@ pub enum IfRepair {
     /// are stripped. Cheap, total, and not what the `IF` computed — the one
     /// inexact rewrite in this module, reported on
     /// [`CleanupOutcome::downgraded_if_neurons`].
+    ///
+    /// No pruning entry point asks for it: it is the default so that a caller
+    /// grading against the [`crate::prune_fixtures`] captures gets what
+    /// TypeScript produced.
     #[default]
     Downgrade,
     /// Issue #591: rewrite the `IF` into the closest form that computes the
