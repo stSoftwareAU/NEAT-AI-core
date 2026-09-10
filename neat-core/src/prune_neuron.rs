@@ -38,19 +38,23 @@
 //! [`PruneResult::transform`] is the honest label on what came back:
 //!
 //! - [`TransformClass::Exact`] — the pruned creature computes the **same number
-//!   on every record**. Two cases reach it, both provable from the creature
-//!   alone: nothing read the neuron, or the neuron had no inward edge, so it
-//!   activated to one value on every record and that value folds into each
-//!   target's bias. No statistic can buy this label, and a supplied mean never
-//!   overrides the structural value. "Same number" means to the precision the
-//!   forward pass works in: the folded value *is* the `f32` activation the
-//!   pass would have produced for a neuron with nothing to sum, but the fold
-//!   re-associates the sum, so the two agree to `f32` rounding rather than bit
-//!   for bit.
-//! - [`TransformClass::Approximate`] — everything else. A neuron whose
-//!   activation varies is gone, and the mean fold only replaces it *on
-//!   average*; an `IF` lost a condition term that decided which arm the forward
-//!   pass read.
+//!   on every record**. **Three** cases reach it, each provable from the
+//!   creature alone: nothing read the neuron; the neuron had no inward edge, so
+//!   it activated to one value on every record and that value folds into each
+//!   target's bias; or every shortfall the removal left is one the `IF` rewrite
+//!   proves cost nothing, which is the third case and is spelled out under
+//!   "An `IF` short a role is rewritten, not downgraded" below. No statistic can
+//!   buy this label, and a supplied mean never overrides the structural value.
+//!   "Same number" means to the precision the forward pass works in: the folded
+//!   value *is* the `f32` activation the pass would have produced for a neuron
+//!   with nothing to sum, but the fold re-associates the sum, so the two agree
+//!   to `f32` rounding rather than bit for bit.
+//! - [`TransformClass::Approximate`] — everything else, and it is the honest
+//!   answer far more often than not. A neuron whose activation varies is gone
+//!   and the mean fold only replaces it *on average*; an `IF` still branching on
+//!   a condition that varies lost a term the forward pass reads; an `IF` lost a
+//!   condition term that moved which arm the forward pass reads; a target lost a
+//!   term with no statistic to stand in for it.
 //!
 //! # The compensation, spelled out
 //!
@@ -127,8 +131,8 @@ use std::collections::HashMap;
 
 use crate::creature::{CreatureExport, parse_squash_name, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
-    CleanupError, CleanupOptions, IfRepair, StaticIfRewrite, SynapseKey, cleanup_creature_with,
-    fixed_activation, is_observation_uuid, static_condition_branch,
+    CleanupError, CleanupOptions, CleanupOutcome, IfRepair, StaticIfRewrite, SynapseKey,
+    cleanup_creature_with, fixed_activation, is_observation_uuid, static_condition_branch,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -633,20 +637,7 @@ pub fn prune_neuron(
         },
     )?;
 
-    // Exact means every term the removal took away was replaced by something
-    // that computes the same number on every record: every fold must be
-    // structural, every shortfall must be one the rewrite proves cost nothing,
-    // and no `IF` may have been downgraded.
-    //
-    // The downgrade clause is defence in depth rather than a branch a caller
-    // can reach: this entry point asks for `IfRepair::Rewrite`, which never
-    // fills `downgraded_if_neurons` at all. It stays because the rules are
-    // independent — a future policy change must not quietly start calling a
-    // downgraded creature exact.
-    let mut exact = bias_folds.iter().all(|f| f.exact) && outcome.downgraded_if_neurons.is_empty();
-    for target in &uncompensated {
-        exact = exact && shortfall_costs_nothing(creature, &outcome.static_if_neurons, target)?;
-    }
+    let transform = transform_class(creature, &outcome, &bias_folds, &uncompensated)?;
 
     Ok(PruneResult {
         creature: outcome.creature,
@@ -661,12 +652,46 @@ pub fn prune_neuron(
         bias_folds,
         weight_shares,
         uncompensated,
-        transform: if exact {
-            TransformClass::Exact
-        } else {
-            TransformClass::Approximate
-        },
+        transform,
         passes: outcome.passes,
+    })
+}
+
+/// How faithful the whole rewrite was, from what it left behind.
+///
+/// `Exact` means every term the removal took away was replaced by something
+/// that computes the same number on every record: every fold must be
+/// structural, every shortfall must be one the `IF` rewrite proves cost
+/// nothing, and no `IF` may have been downgraded.
+///
+/// The downgrade clause is defence in depth rather than a branch a caller can
+/// reach: both entry points ask for [`IfRepair::Rewrite`], which never fills
+/// [`crate::prune_cleanup::CleanupOutcome::downgraded_if_neurons`] at all. It
+/// stays because the rules are independent — a future policy change must not
+/// quietly start calling a downgraded creature exact.
+///
+/// This is the **one** home of that conjunction. `prune_neuron` and
+/// [`crate::prune_synapse::prune_synapse`] both ask it rather than restating
+/// it, so a rule added here can never reach one entry point and not the other.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when a condition source of a shortfall's
+/// target declares a squash name this crate does not know.
+pub(crate) fn transform_class(
+    before: &CreatureExport,
+    outcome: &CleanupOutcome,
+    bias_folds: &[BiasFold],
+    uncompensated: &[UncompensatedTarget],
+) -> Result<TransformClass, CleanupError> {
+    let mut exact = bias_folds.iter().all(|f| f.exact) && outcome.downgraded_if_neurons.is_empty();
+    for target in uncompensated {
+        exact = exact && shortfall_costs_nothing(before, &outcome.static_if_neurons, target)?;
+    }
+    Ok(if exact {
+        TransformClass::Exact
+    } else {
+        TransformClass::Approximate
     })
 }
 

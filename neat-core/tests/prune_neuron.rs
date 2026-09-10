@@ -18,6 +18,9 @@
 //! - **the TypeScript captures** in [`neat_core::PRUNE_PARITY_CASES`], which
 //!   are NEAT-AI's own output for the same removals (Issue #588).
 
+#[path = "common/prune_if.rs"]
+mod prune_if;
+
 use neat_core::prune_fixtures::{
     CASCADE_ORPHAN_FEEDERS, CONSTANT_BIAS_FOLD, IF_REPAIR_COALESCES_ROLES,
     MEMETIC_DROPPED_ON_REMOVAL,
@@ -28,6 +31,7 @@ use neat_core::{
     compile_creature, creature_validate, parse_creature_json, prune_neuron,
     validate_creature_topology,
 };
+use prune_if::{IF_STATIC_CONDITION_JSON, OUTPUT_IF_JSON};
 
 const OPTIONS: ValidateOptions = ValidateOptions {
     neurons: None,
@@ -248,52 +252,6 @@ const BACKWARD_EDGE_JSON: &str = r#"{
   ]
 }"#;
 
-/// `if-1`'s condition is decided by the creature itself: `h-c1` and `h-c2` sum
-/// nothing, so each is worth `IDENTITY(bias)` on every record and the condition
-/// is `1.0 - 0.5 = +0.5` — the positive branch, always. Dropping `h-c2` leaves
-/// `+1.0` and the same branch; dropping `h-c1` leaves `-0.5` and flips it.
-const IF_STATIC_CONDITION_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-c1","bias":1.0,"squash":"IDENTITY"},
-    {"type":"hidden","uuid":"h-c2","bias":-0.5,"squash":"IDENTITY"},
-    {"type":"hidden","uuid":"h-p","bias":0.0,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-n","bias":0.0,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"if-1","bias":0.25,"squash":"IF"},
-    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-p"},
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-n"},
-    {"weight":1.0,"fromUUID":"h-c1","toUUID":"if-1","type":"condition"},
-    {"weight":1.0,"fromUUID":"h-c2","toUUID":"if-1","type":"condition"},
-    {"weight":2.0,"fromUUID":"h-p","toUUID":"if-1","type":"positive"},
-    {"weight":-3.0,"fromUUID":"h-n","toUUID":"if-1","type":"negative"},
-    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
-  ]
-}"#;
-
-/// The **output** neuron itself carries the `IF` squash (corner case 6): the
-/// declared target width means it can never be removed or replaced, so a role
-/// it loses has to be repaired in place.
-const OUTPUT_IF_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-cond","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-n","bias":0.3,"squash":"LOGISTIC"},
-    {"type":"output","uuid":"output-0","bias":0.05,"squash":"IF"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-cond"},
-    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-n"},
-    {"weight":1.0,"fromUUID":"h-cond","toUUID":"output-0","type":"condition"},
-    {"weight":2.0,"fromUUID":"h-p","toUUID":"output-0","type":"positive"},
-    {"weight":-3.0,"fromUUID":"h-n","toUUID":"output-0","type":"negative"}
-  ]
-}"#;
-
 // --- helpers ----------------------------------------------------------------
 
 fn creature(json: &str) -> CreatureExport {
@@ -336,9 +294,13 @@ fn assert_within(name: &str, actual: f64, expected: f64, tol: f64) {
     );
 }
 
+/// The records every same-function claim is graded on — five, well above the
+/// three the issue asks for, so a claim that two creatures agree is never one
+/// lucky reading.
+const PROBE_SEEDS: [f32; 5] = [-1.5, -0.25, 0.0, 0.75, 2.0];
+
 fn probe_inputs(width: usize) -> Vec<Vec<f32>> {
-    let seeds: [f32; 5] = [-1.5, -0.25, 0.0, 0.75, 2.0];
-    seeds
+    PROBE_SEEDS
         .iter()
         .map(|s| (0..width).map(|i| s + i as f32 * 0.125).collect())
         .collect()
@@ -364,12 +326,7 @@ fn assert_same_function_within(
 ) {
     assert_eq!(left.input, right.input, "{name}: observation width moved");
     assert_eq!(left.output, right.output, "{name}: target width moved");
-    let probes = probe_inputs(left.input);
-    assert!(
-        probes.len() >= 3,
-        "{name}: too few probe records to grade on"
-    );
-    for probe in probes {
+    for probe in probe_inputs(left.input) {
         let a = outputs(left, &probe);
         let b = outputs(right, &probe);
         for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
@@ -670,10 +627,12 @@ fn emptying_a_branch_the_condition_never_reaches_prunes_exactly() {
 }
 
 #[test]
-fn an_output_carrying_the_if_squash_is_rewritten_in_place_by_both_paths() {
-    // Corner case (6). The declared target width is the fleet's contract, so
-    // an output can never be removed or reordered — an `IF` output short a
-    // role has to be repaired where it stands, by either entry point.
+fn an_output_carrying_the_if_squash_is_rewritten_in_place_by_a_neuron_prune() {
+    // Corner case (6), the neuron half. The declared target width is the
+    // fleet's contract, so an output can never be removed or reordered — an
+    // `IF` output short a role has to be repaired where it stands. The synapse
+    // half is `prune_synapse.rs::an_output_carrying_the_if_squash_is_rewritten_in_place`,
+    // over the same fixture and the same two removals.
     let before = creature(OUTPUT_IF_JSON);
 
     // The condition source goes: the condition is empty, so it settles at 0,

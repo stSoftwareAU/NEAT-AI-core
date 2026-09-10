@@ -230,7 +230,12 @@ Two consequences reach a caller:
   default policy is **unchanged** — to reproduce it.
 - **`downgraded_if_neurons` is now always empty**, on both entry points and on
   the JSON/WASM `downgradedIfNeurons` key. `staticIfNeurons` and
-  `restoredIfRoles` carry what happened instead. The key stays on the wire.
+  `restoredIfRoles` carry what happened instead. That key is serialised with
+  `skip_serializing_if = "Vec::is_empty"`, so in practice it is **no longer
+  emitted at all**: a consumer that requires it to be present will not find it,
+  and must treat its absence as normal. The field itself stays, so the shape
+  stays parseable and a future policy change that reinstated the downgrade would
+  cross the wire rather than be dropped in silence.
 
 `PruneResult::transform` also reaches `Exact` in one shape it could not before:
 an `IF` whose condition **the creature itself decided the same way before and

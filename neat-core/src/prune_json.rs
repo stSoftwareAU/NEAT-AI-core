@@ -397,6 +397,16 @@ pub struct PruneResponse {
     pub folded_neurons: Vec<String>,
     /// `IF` neurons downgraded to `IDENTITY` because a role went with the
     /// removal — the one rewrite that is not exact.
+    ///
+    /// **No request this ABI accepts can fill it.** Both entry points ask
+    /// cleanup for `IfRepair::Rewrite` (Issue #591 for the synapse path, Ockham
+    /// #198 for the neuron path), so the exact rewrites reach the caller on
+    /// [`Self::static_if_neurons`] and [`Self::restored_if_roles`] instead.
+    /// The key is skipped when empty, so it is in practice **never emitted** —
+    /// a consumer must treat its absence as normal and must not require it.
+    /// The field stays so the shape stays parseable, and so a future policy
+    /// change that reinstated the downgrade would cross the wire rather than be
+    /// dropped in silence.
     #[serde(
         rename = "downgradedIfNeurons",
         default,

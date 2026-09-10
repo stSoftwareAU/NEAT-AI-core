@@ -87,22 +87,22 @@
 //!   so none is attempted and the target is named on
 //!   [`PruneResult::uncompensated`] with the role it lost.
 //!
-//! A shortfall normally ends any [`TransformClass::Exact`] claim, and one shape
-//! is the exception: an `IF` whose condition **the creature itself decided the
-//! same way before and after the cut** never read the term that went, so the
-//! flatten costs nothing. `prune_neuron::shortfall_costs_nothing` (Ockham #198)
-//! is the single home of that proof, and both entry points ask it in the same
-//! terms, so a synapse removal and the neuron removal that takes the same term
-//! away can never disagree about what it cost.
+//! A shortfall normally ends any
+//! [`TransformClass::Exact`](crate::prune_neuron::TransformClass::Exact) claim,
+//! and one shape is the exception: an `IF` whose condition **the creature
+//! itself decided the same way before and after the cut** never read the term
+//! that went, so the flatten costs nothing. `prune_neuron::transform_class`
+//! (Ockham #198) is the single home of that whole rule, and both entry points
+//! ask it in the same terms, so a synapse removal and the neuron removal that
+//! takes the same term away can never disagree about what it cost.
 
 use crate::creature::{CreatureExport, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
     CleanupOptions, IfRepair, SynapseKey, canonical_role, cleanup_creature_with, fixed_activation,
 };
 use crate::prune_neuron::{
-    BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
-    UncompensatedTarget, WeightShare, add_to_edge, check_proxy, check_stats, compensate,
-    shortfall_costs_nothing, target_squash,
+    BiasFold, PruneError, PruneResult, PruneStats, UncompensatedReason, UncompensatedTarget,
+    WeightShare, add_to_edge, check_proxy, check_stats, compensate, target_squash, transform_class,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -255,21 +255,13 @@ pub fn prune_synapse(
         },
     )?;
 
-    // Exact means the term the removal took away was replaced by something
-    // that computes the same number on every record. The `IF` rewrites are
-    // exact by construction, so they cannot spoil the label; the downgrade
-    // clause is defence in depth against a future policy change quietly
-    // calling a flattened creature exact.
-    //
-    // A shortfall the rewrite proves cost nothing does not spoil it either,
-    // and [`shortfall_costs_nothing`] (Ockham #198) is the single home of that
-    // proof — asked here in the same terms `prune_neuron` asks it, so a
-    // synapse removal and the neuron removal that takes the same term away can
-    // never disagree about what it cost.
-    let mut exact = bias_folds.iter().all(|f| f.exact) && outcome.downgraded_if_neurons.is_empty();
-    for target in &uncompensated {
-        exact = exact && shortfall_costs_nothing(creature, &outcome.static_if_neurons, target)?;
-    }
+    // The `IF` rewrites are exact by construction, so they cannot spoil the
+    // label. What can is a term the removal took away and nothing replaced,
+    // and `transform_class` (Ockham #198) is the single home of that rule —
+    // asked here in the same terms `prune_neuron` asks it, so a synapse
+    // removal and the neuron removal that takes the same term away can never
+    // disagree about what it cost.
+    let transform = transform_class(creature, &outcome, &bias_folds, &uncompensated)?;
 
     Ok(PruneResult {
         creature: outcome.creature,
@@ -284,11 +276,7 @@ pub fn prune_synapse(
         bias_folds,
         weight_shares,
         uncompensated,
-        transform: if exact {
-            TransformClass::Exact
-        } else {
-            TransformClass::Approximate
-        },
+        transform,
         passes: outcome.passes,
     })
 }
