@@ -1476,9 +1476,14 @@ fn golden_twelve_identity() -> CreatureExport {
     creature(&json)
 }
 
-/// Mean activation of `uuid` over the golden probe batch, sampled from the
-/// creature the caller is about to prune — the caller's half of the ownership
+/// Mean activation of `uuid` over the golden probe batch, sampled by compiling
+/// and activating the creature — the caller's half of the Issue #587 ownership
 /// boundary, done here the way a caller would.
+///
+/// Every hidden neuron of the golden creature is fed by observations alone, so
+/// its activation does not move as its siblings are pruned: sampling all twelve
+/// once, from the original, is the same measurement as re-sampling before each
+/// step.
 fn sampled_mean(creature: &CreatureExport, uuid: &str) -> f64 {
     // `compile_creature` indexes the observation neurons first and then the
     // listed neurons in declared order, so this is the neuron's activation
@@ -1516,6 +1521,9 @@ fn mean_outputs(creature: &CreatureExport) -> Vec<f64> {
 #[test]
 fn twelve_identity_neurons_prune_one_by_one_without_moving_the_mean_output() {
     let original = golden_twelve_identity();
+    // The oracle: an `IDENTITY` output is linear in what reaches it, so
+    // replacing a hidden neuron by its own mean must leave the **mean** output
+    // exactly where it was, at every one of the twelve steps.
     let baseline = mean_outputs(&original);
     let means: Vec<f64> = (0..12)
         .map(|k| sampled_mean(&original, &format!("h-{k:02}")))
