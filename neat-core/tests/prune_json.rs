@@ -483,7 +483,6 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
         "cascadeNeurons",
         "cascadeSynapses",
         "foldedNeurons",
-        "downgradedIfNeurons",
         "staticIfNeurons",
         "restoredIfRoles",
         "biasFolds",
@@ -495,6 +494,22 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
                 .as_array()
                 .is_some_and(|a| !a.is_empty())),
             "no golden case carries a non-empty {payload}"
+        );
+    }
+
+    // `downgradedIfNeurons` is the exception, and it is asserted the other way
+    // round: both JSON entry points ask cleanup for `IfRepair::Rewrite`
+    // (Ockham #198), so no request this ABI accepts can fill that list. The key
+    // stays on the wire — `cleanup_creature`'s default policy still downgrades
+    // for the TypeScript-parity captures — and a case that started filling it
+    // would mean an entry point had quietly gone back to the inexact repair.
+    for recorded in &golden {
+        assert!(
+            recorded.response["downgradedIfNeurons"]
+                .as_array()
+                .is_none_or(|a| a.is_empty()),
+            "{}: an ABI entry point downgraded an IF instead of rewriting it",
+            recorded.name
         );
     }
 

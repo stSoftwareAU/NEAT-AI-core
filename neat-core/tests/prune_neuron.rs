@@ -23,9 +23,9 @@ use neat_core::prune_fixtures::{
     MEMETIC_DROPPED_ON_REMOVAL,
 };
 use neat_core::{
-    CreatureExport, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, SynapseType,
-    TransformClass, UncompensatedReason, ValidateOptions, compile_creature, creature_validate,
-    parse_creature_json, prune_neuron, validate_creature_topology,
+    CreatureExport, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, StaticIfRewrite,
+    SynapseType, TransformClass, UncompensatedReason, ValidateOptions, compile_creature,
+    creature_validate, parse_creature_json, prune_neuron, validate_creature_topology,
 };
 
 const OPTIONS: ValidateOptions = ValidateOptions {
@@ -42,6 +42,12 @@ const ACTIVATION_TOL: f32 = 1e-5;
 /// `f64` slack for a fold derived in the test: `0.25 + 2.0 * 0.6` is the same
 /// number by two different orders of operations only to within an ulp or two.
 const FOLD_TOL: f64 = 1e-12;
+
+/// Slack for an `IF` rewrite that claims to compute the same function. Tighter
+/// than [`ACTIVATION_TOL`] because nothing is re-associated: the rewrite keeps
+/// the surviving arm's own weights, so the only difference between the two
+/// creatures is which arm the forward pass reads.
+const REWRITE_TOL: f32 = 1e-6;
 
 /// Slack for a fold of a **structural** activation. That value is whatever the
 /// forward pass computes, and the forward pass computes in `f32`, so the
@@ -241,6 +247,52 @@ const BACKWARD_EDGE_JSON: &str = r#"{
   ]
 }"#;
 
+/// `if-1`'s condition is decided by the creature itself: `h-c1` and `h-c2` sum
+/// nothing, so each is worth `IDENTITY(bias)` on every record and the condition
+/// is `1.0 - 0.5 = +0.5` — the positive branch, always. Dropping `h-c2` leaves
+/// `+1.0` and the same branch; dropping `h-c1` leaves `-0.5` and flips it.
+const IF_STATIC_CONDITION_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-c1","bias":1.0,"squash":"IDENTITY"},
+    {"type":"hidden","uuid":"h-c2","bias":-0.5,"squash":"IDENTITY"},
+    {"type":"hidden","uuid":"h-p","bias":0.0,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-n","bias":0.0,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"if-1","bias":0.25,"squash":"IF"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-p"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-n"},
+    {"weight":1.0,"fromUUID":"h-c1","toUUID":"if-1","type":"condition"},
+    {"weight":1.0,"fromUUID":"h-c2","toUUID":"if-1","type":"condition"},
+    {"weight":2.0,"fromUUID":"h-p","toUUID":"if-1","type":"positive"},
+    {"weight":-3.0,"fromUUID":"h-n","toUUID":"if-1","type":"negative"},
+    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+  ]
+}"#;
+
+/// The **output** neuron itself carries the `IF` squash (corner case 6): the
+/// declared target width means it can never be removed or replaced, so a role
+/// it loses has to be repaired in place.
+const OUTPUT_IF_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-cond","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-n","bias":0.3,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.05,"squash":"IF"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-cond"},
+    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-n"},
+    {"weight":1.0,"fromUUID":"h-cond","toUUID":"output-0","type":"condition"},
+    {"weight":2.0,"fromUUID":"h-p","toUUID":"output-0","type":"positive"},
+    {"weight":-3.0,"fromUUID":"h-n","toUUID":"output-0","type":"negative"}
+  ]
+}"#;
+
 // --- helpers ----------------------------------------------------------------
 
 fn creature(json: &str) -> CreatureExport {
@@ -299,18 +351,63 @@ fn outputs(creature: &CreatureExport, inputs: &[f32]) -> Vec<f32> {
 /// Assert two creatures are the same function of the inputs — the oracle for
 /// every [`TransformClass::Exact`] claim.
 fn assert_same_function(name: &str, left: &CreatureExport, right: &CreatureExport) {
+    assert_same_function_within(name, ACTIVATION_TOL, left, right);
+}
+
+/// [`assert_same_function`] at a tolerance the caller chooses.
+fn assert_same_function_within(
+    name: &str,
+    tol: f32,
+    left: &CreatureExport,
+    right: &CreatureExport,
+) {
     assert_eq!(left.input, right.input, "{name}: observation width moved");
     assert_eq!(left.output, right.output, "{name}: target width moved");
-    for probe in probe_inputs(left.input) {
+    let probes = probe_inputs(left.input);
+    assert!(probes.len() >= 3, "{name}: too few probe records to grade on");
+    for probe in probes {
         let a = outputs(left, &probe);
         let b = outputs(right, &probe);
         for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
             assert!(
-                (x - y).abs() <= ACTIVATION_TOL * (1.0 + x.abs()),
+                (x - y).abs() <= tol * (1.0 + x.abs()),
                 "{name}: output {i} moved on {probe:?}: {x} vs {y}"
             );
         }
     }
+}
+
+/// Assert two creatures are **not** the same function — the guard against a
+/// vacuous "unchanged" pass.
+fn assert_different_function(name: &str, left: &CreatureExport, right: &CreatureExport) {
+    let moved = probe_inputs(left.input).into_iter().any(|probe| {
+        let a = outputs(left, &probe);
+        let b = outputs(right, &probe);
+        a.iter()
+            .zip(b.iter())
+            .any(|(x, y)| (x - y).abs() > ACTIVATION_TOL * (1.0 + x.abs()))
+    });
+    assert!(moved, "{name}: the two creatures agree on every probe");
+}
+
+/// The creature with every edge **out of** `uuid` zeroed.
+///
+/// Without statistics `prune_neuron` folds nothing into an aggregate target, so
+/// removing a neuron takes its terms away entirely — which is exactly what a
+/// zero weight on each of its outward edges does. The twin is a valid creature
+/// the compiler accepts, so it can be activated where the half-cut creature
+/// the rewrite actually repairs cannot.
+fn with_source_zeroed(creature: &CreatureExport, uuid: &str) -> CreatureExport {
+    let mut twin = creature.clone();
+    let mut zeroed = 0usize;
+    for synapse in &mut twin.synapses {
+        if synapse.from_uuid == uuid {
+            synapse.weight = 0.0;
+            zeroed += 1;
+        }
+    }
+    assert!(zeroed > 0, "{uuid} feeds nothing, so the twin proves nothing");
+    twin
 }
 
 fn assert_valid(name: &str, creature: &CreatureExport) {
@@ -428,22 +525,199 @@ fn removing_a_hidden_neuron_cascades_through_every_orphaned_feeder() {
     );
 }
 
+// --- IF repair: the exact rewrite, not the downgrade -------------------------
+
 #[test]
-fn an_if_left_short_of_a_role_is_downgraded_by_the_prune() {
+fn an_if_left_short_of_a_role_is_rewritten_by_the_prune() {
+    // Was `an_if_left_short_of_a_role_is_downgraded_by_the_prune`: the neuron
+    // path asked cleanup for the TypeScript-parity downgrade, so this creature
+    // came back as the capture's `IDENTITY` sum of both arms. It now asks for
+    // `IfRepair::Rewrite`, the exact repair the synapse path already used, so
+    // what it asserts is the rewrite. The capture itself is still pinned —
+    // `prune_cleanup.rs::an_if_that_loses_a_required_role_is_downgraded_and_its_rows_are_summed`
+    // drives `cleanup_creature`'s untouched default policy over the same cut.
     let case = IF_REPAIR_COALESCES_ROLES;
-    let result = pruned(&case.before(), "h-cond", None);
+    let before = case.before();
+    let result = pruned(&before, "h-cond", None);
 
     assert_eq!(
+        result.static_if_neurons,
+        vec![StaticIfRewrite {
+            uuid: "if-1".to_string(),
+            branch: SynapseType::Negative,
+        }],
+        "the condition the removal emptied is decided at 0, which is not > 0"
+    );
+    assert!(
+        result.downgraded_if_neurons.is_empty(),
+        "the neuron path must never downgrade an IF again: {:?}",
+        result.downgraded_if_neurons
+    );
+
+    // The rewrite is exact against the cut, not against the creature that
+    // still had a condition: `h-cond` decided the branch on every record and
+    // it is what the caller asked to remove.
+    let twin = with_source_zeroed(&before, "h-cond");
+    assert_same_function_within("if_short_a_role", REWRITE_TOL, &twin, &result.creature);
+
+    assert_eq!(
+        neuron(&result.creature, "if-1").squash.as_deref(),
+        Some("IDENTITY"),
+        "a statically-decided IF is the IDENTITY sum of the arm it always takes"
+    );
+    assert_close(
+        "the negative arm survives at its own weight",
+        weight(&result.creature, "h-a", "if-1"),
+        -3.0,
+    );
+    assert_ne!(
         result.creature,
         case.after(),
-        "the prune did not reproduce the TypeScript IF repair"
+        "the exact rewrite is a different creature from the parity downgrade — \
+         if they have converged this test has stopped proving anything"
     );
-    assert_eq!(result.downgraded_if_neurons, vec!["if-1".to_string()]);
     assert_eq!(
         result.transform,
         TransformClass::Approximate,
-        "an IF that can no longer branch is not an exact rewrite"
+        "h-cond varies with the record, so the branch it decided is genuinely lost"
     );
+    assert_valid("if_short_a_role", &result.creature);
+}
+
+#[test]
+fn a_static_condition_feeder_that_leaves_the_branch_where_it_was_prunes_exactly() {
+    // `h-c2` sums nothing, so the creature itself fixes its `-0.5` term. The
+    // condition is `+0.5` with it and `+1.0` without it: positive either way,
+    // so nothing the forward pass reads moves.
+    let before = creature(IF_STATIC_CONDITION_JSON);
+    let result = pruned(&before, "h-c2", None);
+
+    assert_same_function_within("static_condition_kept", REWRITE_TOL, &before, &result.creature);
+    assert_eq!(
+        result.transform,
+        TransformClass::Exact,
+        "a structurally constant condition feeder that never moved the branch costs nothing"
+    );
+    assert_eq!(
+        result.static_if_neurons,
+        vec![StaticIfRewrite {
+            uuid: "if-1".to_string(),
+            branch: SynapseType::Positive,
+        }]
+    );
+    assert!(result.downgraded_if_neurons.is_empty());
+    assert!(
+        !has_neuron(&result.creature, "h-n"),
+        "the negative arm is unreachable, so its only source is dead structure"
+    );
+    assert_valid("static_condition_kept", &result.creature);
+}
+
+#[test]
+fn a_static_condition_feeder_that_flips_the_branch_is_only_approximate() {
+    // Same creature, the other condition feeder: `+0.5` becomes `-0.5`, so the
+    // forward pass reads the negative arm where it used to read the positive
+    // one. The rewrite is still the closest creature there is, and the label
+    // has to say the output moved.
+    let before = creature(IF_STATIC_CONDITION_JSON);
+    let result = pruned(&before, "h-c1", None);
+
+    assert_different_function("static_condition_flipped", &before, &result.creature);
+    assert_eq!(
+        result.transform,
+        TransformClass::Approximate,
+        "a removal that flips the branch is not exact, however constant the feeder was"
+    );
+    assert_eq!(
+        result.static_if_neurons,
+        vec![StaticIfRewrite {
+            uuid: "if-1".to_string(),
+            branch: SynapseType::Negative,
+        }]
+    );
+    assert!(result.downgraded_if_neurons.is_empty());
+    assert_valid("static_condition_flipped", &result.creature);
+}
+
+#[test]
+fn emptying_a_branch_the_condition_never_reaches_prunes_exactly() {
+    // `h-n` feeds only the negative arm, and the condition is `+0.5` on every
+    // record, so nothing it contributed was ever read. The `IF` loses a role
+    // and is flattened onto the arm it always took.
+    let before = creature(IF_STATIC_CONDITION_JSON);
+    let result = pruned(&before, "h-n", None);
+
+    assert_same_function_within("unreachable_branch", REWRITE_TOL, &before, &result.creature);
+    assert_eq!(
+        result.transform,
+        TransformClass::Exact,
+        "an arm the condition never reaches costs nothing to remove"
+    );
+    assert!(result.downgraded_if_neurons.is_empty());
+    assert_valid("unreachable_branch", &result.creature);
+}
+
+#[test]
+fn an_output_carrying_the_if_squash_is_rewritten_in_place_by_both_paths() {
+    // Corner case (6). The declared target width is the fleet's contract, so
+    // an output can never be removed or reordered — an `IF` output short a
+    // role has to be repaired where it stands, by either entry point.
+    let before = creature(OUTPUT_IF_JSON);
+
+    // The condition source goes: the condition is empty, so it settles at 0,
+    // which is not > 0, and the output flattens onto its negative arm.
+    let flattened = pruned(&before, "h-cond", None);
+    assert_eq!(
+        flattened.static_if_neurons,
+        vec![StaticIfRewrite {
+            uuid: "output-0".to_string(),
+            branch: SynapseType::Negative,
+        }]
+    );
+    assert!(flattened.downgraded_if_neurons.is_empty());
+    assert_eq!(flattened.creature.output, before.output, "the declared target width moved");
+    assert_eq!(
+        flattened
+            .creature
+            .neurons
+            .iter()
+            .filter(|n| n.neuron_type == "output")
+            .count(),
+        1,
+        "the output block lost or gained a neuron"
+    );
+    let condition_twin = with_source_zeroed(&before, "h-cond");
+    assert_same_function_within(
+        "output_if_flattened",
+        REWRITE_TOL,
+        &condition_twin,
+        &flattened.creature,
+    );
+    assert_valid("output_if_flattened", &flattened.creature);
+
+    // A branch source goes instead: the condition still varies, so the output
+    // still has to branch and the emptied arm is given back on a zero-weight
+    // support edge.
+    let restored = pruned(&before, "h-p", None);
+    assert!(restored.static_if_neurons.is_empty());
+    assert!(restored.downgraded_if_neurons.is_empty());
+    assert_eq!(restored.restored_if_roles.len(), 1, "{:?}", restored.restored_if_roles);
+    assert_eq!(restored.restored_if_roles[0].to_uuid, "output-0");
+    assert_eq!(restored.restored_if_roles[0].role, SynapseType::Positive);
+    assert_eq!(
+        neuron(&restored.creature, "output-0").squash.as_deref(),
+        Some("IF"),
+        "a varying condition still branches, so the output keeps its squash"
+    );
+    assert_eq!(restored.creature.output, before.output, "the declared target width moved");
+    let branch_twin = with_source_zeroed(&before, "h-p");
+    assert_same_function_within(
+        "output_if_restored",
+        REWRITE_TOL,
+        &branch_twin,
+        &restored.creature,
+    );
+    assert_valid("output_if_restored", &restored.creature);
 }
 
 #[test]

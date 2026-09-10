@@ -840,17 +840,7 @@ impl Engine {
 
         let mut changed = false;
         for uuid in if_uuids {
-            if let Some(condition_sum) = self.static_condition_sum(&uuid)? {
-                // `> 0` chooses the positive arm, and an untyped edge belongs
-                // to it: both readings are
-                // [`crate::network::CompiledNetwork::activate`]'s, restated
-                // here because that helper reasons over a compiled synapse
-                // range and this pass has only the exported creature.
-                let branch = if condition_sum > 0.0 {
-                    SynapseType::Positive
-                } else {
-                    SynapseType::Negative
-                };
+            if let Some(branch) = static_condition_branch(&self.creature, &uuid)? {
                 self.flatten_static_if(&uuid, branch);
                 self.static_if_neurons
                     .push(StaticIfRewrite { uuid, branch });
@@ -880,43 +870,6 @@ impl Engine {
             }
         }
         Ok(changed)
-    }
-
-    /// The `IF`'s condition sum, when the creature alone fixes it.
-    ///
-    /// `None` means at least one condition source varies with the record, so
-    /// the branch is genuinely dynamic.
-    ///
-    /// The sum is accumulated in `f32`, walking the creature's synapse list in
-    /// storage order, because that is the closest available mirror of what
-    /// [`crate::network::CompiledNetwork::activate`] computes for **this**
-    /// creature: `compile_creature` groups the inward edges of a target in the
-    /// order it meets them, and a condition edge only ever lands in the
-    /// condition accumulator. The creature in hand is the one whose behaviour
-    /// the rewrite must preserve, so mirroring its own storage order — not the
-    /// canonical order a later pass will impose — is what keeps the strict
-    /// `> 0` branch decision the same on both sides.
-    ///
-    /// The mirror is a mirror, not the pass itself: `compile_creature`
-    /// regroups the edges per target, so the two additions can associate
-    /// differently and a sum within `f32` rounding of `0` is a boundary
-    /// neither side can claim to settle for the other. Away from that
-    /// boundary — which is every condition any training run produces — the
-    /// branch the two pick is the same, and the flatten is exact.
-    fn static_condition_sum(&self, uuid: &str) -> Result<Option<f32>, CleanupError> {
-        let mut sum = 0.0f32;
-        for synapse in self
-            .creature
-            .synapses
-            .iter()
-            .filter(|s| s.to_uuid == uuid && role_of(s) == SynapseType::Condition)
-        {
-            let Some(activation) = fixed_activation(&self.creature, &synapse.from_uuid)? else {
-                return Ok(None);
-            };
-            sum += activation * synapse.weight as f32;
-        }
-        Ok(Some(sum))
     }
 
     /// Turn a statically-decided `IF` into the `IDENTITY` sum of the branch it
@@ -1522,6 +1475,64 @@ pub(crate) fn fixed_activation(
         squash_of(neuron)?,
         neuron.bias,
     )))
+}
+
+/// The branch an `IF` always takes, when the creature alone decides it.
+///
+/// `None` means at least one condition source varies with the record, so the
+/// branch is genuinely dynamic and no rewrite may assume one.
+///
+/// `> 0` chooses the positive arm, and an untyped edge belongs to it: both
+/// readings are [`crate::network::CompiledNetwork::activate`]'s, restated here
+/// because that helper reasons over a compiled synapse range and this pass has
+/// only the exported creature.
+///
+/// This is the **one** home of that question. The `IF` rewrite here asks it of
+/// the creature it is repairing, and [`crate::prune_neuron`] asks it of the
+/// creature the caller handed in — the two readings are what prove a flatten
+/// left the branch where it was — so neither may restate the rule.
+///
+/// The sum is accumulated in `f32`, walking the creature's synapse list in
+/// storage order, because that is the closest available mirror of what
+/// [`crate::network::CompiledNetwork::activate`] computes for **this**
+/// creature: `compile_creature` groups the inward edges of a target in the
+/// order it meets them, and a condition edge only ever lands in the condition
+/// accumulator. The creature in hand is the one whose behaviour the rewrite
+/// must preserve, so mirroring its own storage order — not the canonical order
+/// a later pass will impose — is what keeps the strict `> 0` branch decision
+/// the same on both sides.
+///
+/// The mirror is a mirror, not the pass itself: `compile_creature` regroups the
+/// edges per target, so the two additions can associate differently and a sum
+/// within `f32` rounding of `0` is a boundary neither side can claim to settle
+/// for the other. Away from that boundary — which is every condition any
+/// training run produces — the branch the two pick is the same, and the flatten
+/// is exact.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when a condition source declares a squash
+/// name this crate does not know.
+pub(crate) fn static_condition_branch(
+    creature: &CreatureExport,
+    uuid: &str,
+) -> Result<Option<SynapseType>, CleanupError> {
+    let mut sum = 0.0f32;
+    for synapse in creature
+        .synapses
+        .iter()
+        .filter(|s| s.to_uuid == uuid && role_of(s) == SynapseType::Condition)
+    {
+        let Some(activation) = fixed_activation(creature, &synapse.from_uuid)? else {
+            return Ok(None);
+        };
+        sum += activation * synapse.weight as f32;
+    }
+    Ok(Some(if sum > 0.0 {
+        SynapseType::Positive
+    } else {
+        SynapseType::Negative
+    }))
 }
 
 /// Is this the wire UUID of one of the creature's observation neurons?

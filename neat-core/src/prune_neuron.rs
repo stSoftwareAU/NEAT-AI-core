@@ -98,8 +98,8 @@ use std::collections::HashMap;
 
 use crate::creature::{CreatureExport, parse_squash_name, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
-    CleanupError, StaticIfRewrite, SynapseKey, cleanup_creature, fixed_activation,
-    is_observation_uuid,
+    CleanupError, CleanupOptions, IfRepair, StaticIfRewrite, SynapseKey, cleanup_creature_with,
+    fixed_activation, is_observation_uuid, static_condition_branch,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -586,22 +586,32 @@ pub fn prune_neuron(
         });
     }
 
-    let outcome = cleanup_creature(&cut)?;
+    // `IfRepair::Rewrite`, the same policy `prune_synapse` asks for: an `IF`
+    // the removal left short of a role is rewritten into the closest form that
+    // computes the same number on every record, never blanket-downgraded to
+    // `IDENTITY`. `cleanup_creature`'s own default is untouched, so the
+    // TypeScript-parity captures still have a caller that reproduces them.
+    let outcome = cleanup_creature_with(
+        &cut,
+        CleanupOptions {
+            if_repair: IfRepair::Rewrite,
+        },
+    )?;
 
     // Exact means every term the removal took away was replaced by something
-    // that computes the same number on every record: nothing may be left
-    // uncompensated, every fold must be structural, and no `IF` may have been
-    // downgraded — that repair is cleanup's one inexact rewrite.
+    // that computes the same number on every record: every fold must be
+    // structural, every shortfall must be one the rewrite proves cost nothing,
+    // and no `IF` may have been downgraded.
     //
-    // The `IF` clause is defence in depth rather than a branch a caller can
-    // reach today: every route to a downgrade runs through an `IF` that the
-    // removed neuron fed, and an `IF` is an aggregate, so `uncompensated` is
-    // already non-empty. It stays because the two rules are independent —
-    // widening what counts as compensable must not quietly start calling a
+    // The downgrade clause is defence in depth rather than a branch a caller
+    // can reach: this entry point asks for `IfRepair::Rewrite`, which never
+    // fills `downgraded_if_neurons` at all. It stays because the rules are
+    // independent — a future policy change must not quietly start calling a
     // downgraded creature exact.
-    let exact = uncompensated.is_empty()
-        && bias_folds.iter().all(|f| f.exact)
-        && outcome.downgraded_if_neurons.is_empty();
+    let mut exact = bias_folds.iter().all(|f| f.exact) && outcome.downgraded_if_neurons.is_empty();
+    for target in &uncompensated {
+        exact = exact && shortfall_costs_nothing(creature, &outcome.static_if_neurons, target)?;
+    }
 
     Ok(PruneResult {
         creature: outcome.creature,
@@ -623,6 +633,60 @@ pub fn prune_neuron(
         },
         passes: outcome.passes,
     })
+}
+
+/// Did this shortfall cost the creature nothing at all?
+///
+/// A target named on [`PruneResult::uncompensated`] got no fold, which is
+/// normally the end of any exactness claim. One shape is the exception, and it
+/// is provable from the creature alone: an `IF` whose condition **the creature
+/// itself decided both before and after the cut, the same way**.
+///
+/// The condition's only job is to pick an arm. When [`static_condition_branch`]
+/// answers the same arm for the creature the caller handed in and for the one
+/// cleanup flattened, the pick never moved, so a condition term the removal
+/// took away was never read for anything else — and a term it took out of the
+/// arm the pick *discards* was never read at all. Both cost nothing, and the
+/// flattened `IDENTITY` computes what the `IF` computed on every record.
+///
+/// A term the removal took out of the **surviving** arm is a real loss, and so
+/// is every other shortfall: a point-wise target left without statistics, a
+/// non-`IF` aggregate, an `IF` the rewrite could not flatten because its
+/// condition still varies. All of those answer `false`.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when a condition source of the target
+/// declares a squash name this crate does not know.
+fn shortfall_costs_nothing(
+    before: &CreatureExport,
+    static_if_neurons: &[StaticIfRewrite],
+    target: &UncompensatedTarget,
+) -> Result<bool, CleanupError> {
+    if target.squash != squash_name_from(SquashType::If) {
+        return Ok(false);
+    }
+    // Not flattened means the `IF` still branches on a condition that varies,
+    // so the term it lost is a term the forward pass still reads.
+    let Some(rewrite) = static_if_neurons
+        .iter()
+        .find(|r| r.uuid == target.target_uuid)
+    else {
+        return Ok(false);
+    };
+    // Flattened, but was the arm it settled on the arm the caller's creature
+    // always took? Only the caller's creature can answer that, and only when
+    // it decided the condition itself.
+    if static_condition_branch(before, &target.target_uuid)? != Some(rewrite.branch) {
+        return Ok(false);
+    }
+    // The arm that survives is the one the flatten kept — an untyped edge
+    // belongs to the positive arm, the same reading the flatten takes.
+    let survives = match rewrite.branch {
+        SynapseType::Negative => target.role == SynapseType::Negative,
+        _ => matches!(target.role, SynapseType::Positive | SynapseType::Standard),
+    };
+    Ok(!survives)
 }
 
 /// What one target's compensation came to.
