@@ -164,7 +164,7 @@
 //! neuron `id` (rule 5) and a non-array memetic `weights` **map value** (rule
 //! 31) are [`crate::creature::CreatureError::Json`].
 //!
-//! # Both memetic weight forms resolve (GRQ #4257)
+//! # Both memetic weight forms resolve
 //!
 //! `memetic.weights` arrives in either of the two shapes NEAT-AI writes — see
 //! [`crate::creature::MemeticWeights`] — and rule 31 resolves whichever one the
@@ -1168,8 +1168,8 @@ impl NeuronIdIndex {
 /// rules walk over: `input-N` names an implicit input neuron, and every other
 /// UUID names a listed one.
 ///
-/// Both the synapse endpoints and the memetic row form (GRQ #4257) are written
-/// in that same wire vocabulary, so both resolve through this rather than each
+/// Both the synapse endpoints and the memetic row form are written in that
+/// same wire vocabulary, so both resolve through this rather than each
 /// restating the `input-N` special case.
 ///
 /// `pub(crate)` only because it appears in [`validate_prepared`]'s signature
@@ -1751,8 +1751,7 @@ fn forward_only_rules(
 }
 
 /// Rule 31: every memetic bias and weight resolves to a real neuron, and every
-/// weight entry names a synapse that exists — in **either** valid weight form
-/// (GRQ #4257).
+/// weight entry names a synapse that exists — in **either** valid weight form.
 ///
 /// A memetic reference names a neuron in one of two vocabularies, and both are
 /// current: the runtime **id** written as a string, which is what NEAT-AI's
@@ -1889,7 +1888,7 @@ fn memetic_map_rules(
     Ok(())
 }
 
-/// Rule 31 over the UUID-keyed row form (GRQ #4257).
+/// Rule 31 over the UUID-keyed row form.
 ///
 /// The checks and their wording are the map form's, in the same order — a row
 /// carries its own source, so the "not found" check that the map form runs once
@@ -2036,8 +2035,8 @@ impl MemeticExport {
 /// The memetic record as rule 31 reads it — the neutral form every request
 /// shape maps onto.
 ///
-/// The export form types `weights` as either of the two valid shapes (GRQ
-/// #4257 — [`crate::creature::MemeticWeights`]), so serde rejects a malformed
+/// The export form types `weights` as either of the two valid shapes
+/// ([`crate::creature::MemeticWeights`]), so serde rejects a malformed
 /// record before the rule sees it; the runtime shape
 /// ([`mod@crate::creature_validate_runtime`]) carries whatever the host holds
 /// in memory, so a `weights` entry that is not an array, or missing `toId` or
@@ -2058,7 +2057,7 @@ pub(crate) enum MemeticWeightsView<'a> {
     /// The id-or-uuid-keyed map — the export `ById` form, and the only shape
     /// a runtime host record carries.
     ById(Vec<(&'a str, MemeticWeightEntries<'a>)>),
-    /// The UUID-keyed row array — the export `Rows` form (GRQ #4257).
+    /// The UUID-keyed row array — the export `Rows` form.
     Rows(&'a [MemeticWeightRowExport]),
 }
 

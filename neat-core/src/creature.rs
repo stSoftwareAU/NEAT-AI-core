@@ -10,9 +10,9 @@
 //! serialisations of the same `CreatureExport` produce byte-identical JSON
 //! (serde emits fields in declaration order).
 //!
-//! **Exact float parsing (GRQ #4261).** "Preserves every field" includes the
-//! last bit of every `f64`. `serde_json`'s *default* number parser is a fast
-//! approximation that can land 1 ULP from the value the literal names, so a
+//! **Exact float parsing.** "Preserves every field" includes the last bit of
+//! every `f64`. `serde_json`'s *default* number parser is a fast approximation
+//! that can land 1 ULP from the value the literal names, so a
 //! weight such as `2.2985736498644322e-8` loaded as its neighbour
 //! `2.298573649864432e-8` and the round trip above was not an identity. That
 //! is also a cross-engine parity gap: JavaScript `JSON.parse` is exact, so the
@@ -67,8 +67,8 @@
 //! this crate reads. Both are optional and skipped when absent, so a creature
 //! written before they existed parses and round trips byte-identically.
 //!
-//! **Two memetic weight forms (GRQ #4257).** `memetic.weights` is written by
-//! NEAT-AI in either the UUID-keyed row array
+//! **Two memetic weight forms.** `memetic.weights` is written by NEAT-AI in
+//! either the UUID-keyed row array
 //! `[{fromUUID, toUUID, weight}, …]` (its wire exporter) or the id-keyed map
 //! `{"<fromId>": [{toId, weight}, …]}` (its in-memory record). Both are
 //! current, so [`MemeticWeights`] is the single home of that either/or:
@@ -77,8 +77,9 @@
 //!
 //! Issues: #1965 (initial deserialisation), #30 (symmetric serialisation),
 //! #550 (observation-width contract), #556 (duplicate-synapse rule),
-//! #559 (validation contract input format), GRQ #4257 (both memetic weight
-//! forms), GRQ #4261 (exact float parsing).
+//! #559 (validation contract input format). Two further contracts came from
+//! downstream production defects rather than issues here: both memetic weight
+//! forms, and exact float parsing.
 
 use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -196,7 +197,7 @@ pub struct MemeticExport {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-/// The two valid shapes of `memetic.weights` — GRQ #4257.
+/// The two valid shapes of `memetic.weights`.
 ///
 /// NEAT-AI writes memetic weights in **two** forms and considers both current:
 ///
@@ -210,8 +211,8 @@ pub struct MemeticExport {
 ///   `{ "<fromId>": [{ "toId": …, "weight": … }, …] }` of NEAT-AI's in-memory
 ///   `MemeticWeightsInterface`, which is what `creatureValidate` sees host-side.
 ///
-/// Modelling only the map cost the fleet a whole Backprop stage: the GRQ-10
-/// sampler fittest creature carries the row form, and
+/// Modelling only the map cost the fleet a whole Backprop stage: a production
+/// sampler fixture's fittest creature carries the row form, and
 /// `neat_ai_backpropagation` exited 1 with
 /// `Creature JSON error: invalid type: sequence, expected a map`.
 ///
@@ -321,7 +322,7 @@ pub struct MemeticWeightExport {
 }
 
 /// One row of the UUID-keyed weight form — NEAT-AI's `MemeticWeightWireRow`
-/// (`src/creature/MemeticWireExport.ts`), GRQ #4257.
+/// (`src/creature/MemeticWireExport.ts`).
 ///
 /// Every field is optional for the same reason [`MemeticWeightExport`]'s are:
 /// the `MEMETIC` rule must be able to *report* a row missing an endpoint or a
@@ -802,7 +803,7 @@ pub fn validate_no_duplicate_synapses(creature: &CreatureExport) -> Result<(), C
 ///
 /// Every weight and bias parses to **exactly** the `f64` its literal names —
 /// the same value `f64::from_str` and JavaScript `JSON.parse` produce — via
-/// `serde_json`'s `float_roundtrip` feature (GRQ #4261, module docs above).
+/// `serde_json`'s `float_roundtrip` feature (module docs above).
 pub fn parse_creature_json(json: &str) -> Result<CreatureExport, CreatureError> {
     let creature: CreatureExport = serde_json::from_str(json)?;
     validate_creature_width(&creature)?;

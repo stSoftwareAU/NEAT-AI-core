@@ -290,9 +290,9 @@ fn role_edge(from: &str, to: &str, role: &str) -> SynapseExport {
 }
 
 /// The whole entry point, not just this half: a repeated role must clear the
-/// `IF` rule as well as the duplicate one. GRQ #4277 reads as though same-role
-/// fan-in into one neuron were forbidden — it is not; only an exact repeat of
-/// the ordered `(from, to)` pair is.
+/// `IF` rule as well as the duplicate one. A downstream production report reads
+/// as though same-role fan-in into one neuron were forbidden — it is not; only
+/// an exact repeat of the ordered `(from, to)` pair is.
 #[test]
 fn same_role_fan_in_from_distinct_sources_breaks_no_rule() {
     let mut creature = doubled_role_if_creature();
