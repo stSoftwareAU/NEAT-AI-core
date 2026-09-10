@@ -1,5 +1,5 @@
-//! GRQ #4261 — a creature weight must parse to the **exact** `f64` its JSON
-//! literal names, so the Rust and TypeScript engines load the same network.
+//! A creature weight must parse to the **exact** `f64` its JSON literal names,
+//! so the Rust and TypeScript engines load the same network.
 //!
 //! `serde_json`'s default number parser is a fast approximation that lands up
 //! to 1 ULP away from the nearest `f64`; the exact algorithm is behind its
@@ -26,8 +26,8 @@ use neat_core::{CreatureExport, creature_to_json, parse_creature_json};
 
 /// Decimal literals whose nearest `f64` the approximate parser misses by 1 ULP.
 ///
-/// The first is the weight from the issue — synapse 10511 of
-/// `GRQ-sampler/samples/GRQ-10-1.json`, `input-542 -> neuron-1514601746`. The
+/// The first is the weight from the reported defect — synapse 10511 of a
+/// production sampler fixture creature, `input-542 -> neuron-1514601746`. The
 /// rest were found by round-tripping shortest-form `f64` text through the
 /// unfixed parser, and cover ordinary magnitudes as well as the extremes, so
 /// the fix cannot be mistaken for a special case on one exponent range.

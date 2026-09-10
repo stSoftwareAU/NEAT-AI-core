@@ -631,8 +631,9 @@ plausibly have diverged (duplicated pairs, sources past the last neuron,
 synapses into and out of inputs, unsorted lists).
 
 This is the forward-only leg of `creature_validate`, and it is also
-`TypedTopology.detectCycles` on the host: on GRQ's 4 272-neuron, 22 928-synapse
-production creature it was **10.75 ms of the 10.8 ms** the whole rule set spent.
+`TypedTopology.detectCycles` on the host: on the downstream production
+trainer's 4 272-neuron, 22 928-synapse production creature it was **10.75 ms of
+the 10.8 ms** the whole rule set spent.
 
 **Measured 2026-08-22**, Apple M4 Pro (12 cores, 24 GB, macOS 26.5.2 arm64),
 rustc 1.97.1, Criterion 0.8.2, `--release` bench profile. New benchmark in the

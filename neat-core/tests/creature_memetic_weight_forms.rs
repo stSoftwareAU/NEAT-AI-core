@@ -1,12 +1,13 @@
-//! GRQ #4257 — `memetic.weights` arrives in **two** valid forms, and both must
-//! parse, round trip and validate.
+//! `memetic.weights` arrives in **two** valid forms, and both must parse,
+//! round trip and validate.
 //!
 //! NEAT-AI's wire exporter (`src/creature/MemeticWireExport.ts`) writes the
 //! UUID-keyed row array `[{ fromUUID, toUUID, weight }, …]`; its in-memory
 //! runtime record is the id-keyed map `{ "<fromId>": [{ toId, weight }, …] }`.
 //! Neither is legacy. Modelling only the map made
-//! `neat_ai_backpropagation` exit 1 on the GRQ-10 sampler fittest creature with
-//! `Creature JSON error: invalid type: sequence, expected a map`, so the whole
+//! `neat_ai_backpropagation` exit 1 on a production sampler fixture's fittest
+//! creature with `Creature JSON error: invalid type: sequence, expected a map`,
+//! so the whole
 //! Backprop stage failed on a creature both stacks consider valid.
 //!
 //! The rows carry the same wire UUIDs the synapses do — `input-N` for an
@@ -71,8 +72,8 @@ fn validate_err(json: &str) -> String {
 // 1. Parsing — the reported exit 1.
 // ---------------------------------------------------------------------------
 
-/// The exact failure from `GRQ-10-sloth.log`: a UUID row array where the
-/// id-keyed map was the only modelled form.
+/// The exact failure from the reported production Backprop log: a UUID row
+/// array where the id-keyed map was the only modelled form.
 #[test]
 fn the_uuid_row_array_parses_into_rows() {
     let json = wire_form(
