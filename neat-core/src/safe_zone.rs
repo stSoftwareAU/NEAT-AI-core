@@ -606,6 +606,13 @@ pub fn apply_safe_zone_adjustment(
 ///
 /// # Returns
 /// `Vec<f32>` of safe zone factors (0.0 to 1.0), one per synapse
+///
+/// # Malformed input (Issue #658)
+/// `squash_types` sets the count and the other two slices are walked with the
+/// same index, so a shorter `raw_inputs` or `weights` would index out of range —
+/// and a panic on wasm aborts the whole module instance. Such a call returns an
+/// empty `Vec` instead, the sentinel a successful call over a non-empty
+/// `squash_types` can never produce.
 pub fn apply_safe_zone_adjustment_batch(
     squash_types: &[u8],
     raw_inputs: &[f32],
@@ -613,6 +620,11 @@ pub fn apply_safe_zone_adjustment_batch(
     weights: &[f32],
 ) -> Vec<f32> {
     let count = squash_types.len();
+
+    if raw_inputs.len() < count || weights.len() < count {
+        return Vec::new();
+    }
+
     let mut results = Vec::with_capacity(count);
 
     for i in 0..count {

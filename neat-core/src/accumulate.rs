@@ -302,6 +302,12 @@ pub(crate) fn accumulate_weight_single(
 ///   [count, totalPositiveActivation, totalNegativeActivation,
 ///    countPositiveActivations, countNegativeActivations,
 ///    totalPositiveAdjustedValue, totalNegativeAdjustedValue] × 4
+///
+/// # Malformed input (Issue #658)
+/// The three slices are walked with one index, so a caller that passes fewer
+/// than 4 values in any of them would index out of range — and a panic on wasm
+/// aborts the whole module instance. Such a call returns an empty `Vec` instead,
+/// the sentinel a successful call (always 28 values) can never produce.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_weight_batch_4way(
     current_weights: &[f64],
@@ -312,6 +318,10 @@ pub fn accumulate_weight_batch_4way(
     max_weight_adj_scale: f64,
     limit_weight_scale: f64,
 ) -> Vec<f64> {
+    if current_weights.len() < 4 || target_values.len() < 4 || activations.len() < 4 {
+        return Vec::new();
+    }
+
     let mut result = vec![0.0_f64; 28];
 
     for i in 0..4 {
@@ -342,6 +352,12 @@ pub fn accumulate_weight_batch_4way(
 /// Issue #1518 - Batch weight accumulation for 8 synapses.
 ///
 /// Same as 4-way but processes 8 synapses. Returns 56 f64 values.
+///
+/// # Malformed input (Issue #658)
+/// The three slices are walked with one index, so a caller that passes fewer
+/// than 8 values in any of them would index out of range — and a panic on wasm
+/// aborts the whole module instance. Such a call returns an empty `Vec` instead,
+/// the sentinel a successful call (always 56 values) can never produce.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_weight_batch_8way(
     current_weights: &[f64],
@@ -352,6 +368,10 @@ pub fn accumulate_weight_batch_8way(
     max_weight_adj_scale: f64,
     limit_weight_scale: f64,
 ) -> Vec<f64> {
+    if current_weights.len() < 8 || target_values.len() < 8 || activations.len() < 8 {
+        return Vec::new();
+    }
+
     let mut result = vec![0.0_f64; 56];
 
     for i in 0..8 {
@@ -432,6 +452,12 @@ pub(crate) fn accumulate_bias_single(
 /// # Returns
 /// Float64Array with 12 values (3 per neuron):
 ///   [count, totalBias, totalAdjustedBias] × 4
+///
+/// # Malformed input (Issue #658)
+/// The three slices are walked with one index, so a caller that passes fewer
+/// than 4 values in any of them would index out of range — and a panic on wasm
+/// aborts the whole module instance. Such a call returns an empty `Vec` instead,
+/// the sentinel a successful call (always 12 values) can never produce.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_bias_batch_4way(
     target_pre_activations: &[f64],
@@ -442,6 +468,10 @@ pub fn accumulate_bias_batch_4way(
     max_bias_adj_scale: f64,
     limit_bias_scale: f64,
 ) -> Vec<f64> {
+    if target_pre_activations.len() < 4 || pre_activations.len() < 4 || current_biases.len() < 4 {
+        return Vec::new();
+    }
+
     let mut result = vec![0.0_f64; 12];
 
     for i in 0..4 {
@@ -467,6 +497,12 @@ pub fn accumulate_bias_batch_4way(
 /// Issue #1518 - Batch bias accumulation for 8 neurons.
 ///
 /// Same as 4-way but processes 8 neurons. Returns 24 f64 values.
+///
+/// # Malformed input (Issue #658)
+/// The three slices are walked with one index, so a caller that passes fewer
+/// than 8 values in any of them would index out of range — and a panic on wasm
+/// aborts the whole module instance. Such a call returns an empty `Vec` instead,
+/// the sentinel a successful call (always 24 values) can never produce.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn accumulate_bias_batch_8way(
     target_pre_activations: &[f64],
@@ -477,6 +513,10 @@ pub fn accumulate_bias_batch_8way(
     max_bias_adj_scale: f64,
     limit_bias_scale: f64,
 ) -> Vec<f64> {
+    if target_pre_activations.len() < 8 || pre_activations.len() < 8 || current_biases.len() < 8 {
+        return Vec::new();
+    }
+
     let mut result = vec![0.0_f64; 24];
 
     for i in 0..8 {
@@ -671,6 +711,12 @@ pub fn calculate_bias(
 ///
 /// # Returns
 /// Float64Array with 4 calculated weights
+///
+/// # Malformed input (Issue #658)
+/// The 8-value stride is walked four times, so a `packed_state` shorter than 32
+/// values would index out of range — and a panic on wasm aborts the whole module
+/// instance. Such a call returns an empty `Vec` instead, the sentinel a
+/// successful call (always 4 weights) can never produce.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn calculate_weight_batch_4way(
     packed_state: &[f64],
@@ -682,6 +728,10 @@ pub fn calculate_weight_batch_4way(
     l1_weight_decay: f64,
     l2_weight_decay: f64,
 ) -> Vec<f64> {
+    if packed_state.len() < 32 {
+        return Vec::new();
+    }
+
     let mut result = vec![0.0_f64; 4];
 
     for i in 0..4 {
@@ -729,6 +779,13 @@ pub fn calculate_weight_batch_4way(
 ///
 /// # Returns
 /// Float64Array with 4 calculated biases
+///
+/// # Malformed input (Issue #658)
+/// The 3-value stride is walked four times, so a `packed_state` shorter than 12
+/// values would index out of range — and a panic on wasm aborts the whole module
+/// instance. Such a call returns an empty `Vec` instead, the sentinel a
+/// successful call (always 4 biases) can never produce. `no_change_flags` is
+/// already read defensively and a short one keeps defaulting to `false`.
 #[cfg_attr(target_family = "wasm", wasm_bindgen)]
 pub fn calculate_bias_batch_4way(
     packed_state: &[f64],
@@ -741,6 +798,10 @@ pub fn calculate_bias_batch_4way(
     l1_bias_decay: f64,
     l2_bias_decay: f64,
 ) -> Vec<f64> {
+    if packed_state.len() < 12 {
+        return Vec::new();
+    }
+
     let mut result = vec![0.0_f64; 4];
 
     for i in 0..4 {

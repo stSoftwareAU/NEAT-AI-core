@@ -21,6 +21,13 @@ const PLANK_CONSTANT: f32 = 1e-12;
 ///
 /// This flat layout avoids allocating multiple Vec/Float32Array objects across
 /// the WASM boundary.
+///
+/// # Malformed input (Issue #658)
+/// `upstream_squash_types` sets the count and the other three upstream slices
+/// are walked with the same index, so a shorter one would index out of range —
+/// and a panic on wasm aborts the whole module instance. Such a call returns an
+/// empty `Vec` instead, the sentinel a successful call (always at least the
+/// neuron error) can never produce.
 pub fn apply_fused_error_distribution(
     neuron_squash_type: SquashType,
     neuron_activation: f32,
@@ -32,6 +39,13 @@ pub fn apply_fused_error_distribution(
     synapse_weights: &[f32],
 ) -> Vec<f32> {
     let count = upstream_squash_types.len();
+
+    if upstream_hint_values.len() < count
+        || upstream_activations.len() < count
+        || synapse_weights.len() < count
+    {
+        return Vec::new();
+    }
 
     // Step 1: Calculate error in value-space
     let error = apply_calculate_error(
