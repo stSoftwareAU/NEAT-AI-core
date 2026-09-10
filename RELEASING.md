@@ -241,7 +241,18 @@ result a caller already handles:
   `Approximate`, where the source's value was fixed by the creature;
 - a `HYPOTv2` target left bare comes back declaring `ABSOLUTE`. The two forms
   share the `[0, f32::MAX]` activation range, so nothing the original could
-  produce is clamped away by the replacement.
+  produce is clamped away by the replacement;
+- where such a target is left bare and **no** statistics were supplied, the
+  `PruneResult::uncompensated` entry now carries
+  `UncompensatedReason::NoStatistics` where it carried
+  `UncompensatedReason::AggregateTarget`. The target is still reported; only
+  the reason changed, because what is missing is now the number rather than the
+  permission. This reaches the JSON and WASM surface as `"NO_STATISTICS"` in
+  place of `"AGGREGATE_TARGET"`, so a consumer that switches on the reason code
+  needs the new arm.
+
+`IF` is unaffected on every point above: it is excluded whatever it is left
+with, and still reports `AggregateTarget` per role.
 
 ### `0.15.0` — `NetworkError::InvalidInputCount` (Issue #601)
 

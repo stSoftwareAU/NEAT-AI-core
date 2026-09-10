@@ -101,9 +101,9 @@ use crate::prune_cleanup::{
     CleanupOptions, IfRepair, SynapseKey, canonical_role, cleanup_creature_with, fixed_activation,
 };
 use crate::prune_neuron::{
-    BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
-    UncompensatedTarget, WeightShare, add_to_edge, apply_zero_edge_fold, check_proxy, check_stats,
-    compensate, fold_policy, inward_edge_count, target_squash, zero_edge_fold,
+    BiasFold, PruneError, PruneResult, PruneStats, TargetOutcome, TransformClass,
+    UncompensatedReason, UncompensatedTarget, WeightShare, add_to_bias, add_to_edge, check_proxy,
+    check_stats, compensate, fold_bare_aggregate, fold_policy, inward_edge_count, target_squash,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -215,24 +215,17 @@ pub fn prune_synapse(
     } else if squash.is_aggregate() {
         // The cut left the aggregate with nothing to aggregate, so it takes
         // the fold its empty forward-pass form implies (Ockham #196).
-        match zero_edge_fold(squash, invariant_value, effective_stats, weight_sum) {
-            Some(fold) => {
-                apply_zero_edge_fold(&mut cut, &key.to_uuid, &fold);
-                bias_folds.push(BiasFold {
-                    target_uuid: key.to_uuid.clone(),
-                    weight_sum,
-                    delta: fold.bias_delta,
-                    exact: fold.exact,
-                    residual_variance: fold.residual_variance,
-                });
-            }
-            None => uncompensated.push(UncompensatedTarget {
-                target_uuid: key.to_uuid.clone(),
-                role: wanted,
-                weight_sum,
-                squash: squash_name_from(squash),
-                reason: UncompensatedReason::NoStatistics,
-            }),
+        match fold_bare_aggregate(
+            &mut cut,
+            &key.to_uuid,
+            wanted,
+            squash,
+            weight_sum,
+            invariant_value,
+            effective_stats,
+        )? {
+            TargetOutcome::Folded(fold) => bias_folds.push(fold),
+            TargetOutcome::Uncompensated(entry) => uncompensated.push(entry),
         }
     } else if let Some(compensation) = compensate(invariant_value, effective_stats, weight_sum) {
         // A share of exactly zero moves nothing — an uncorrelated survivor
@@ -249,11 +242,7 @@ pub fn prune_synapse(
             });
         }
 
-        for neuron in &mut cut.neurons {
-            if neuron.uuid == key.to_uuid {
-                neuron.bias += compensation.bias_delta;
-            }
-        }
+        add_to_bias(&mut cut, &key.to_uuid, compensation.bias_delta)?;
         bias_folds.push(BiasFold {
             target_uuid: key.to_uuid.clone(),
             weight_sum,

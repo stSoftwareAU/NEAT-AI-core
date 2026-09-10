@@ -1359,6 +1359,14 @@ fn only_the_output_that_loses_its_last_edge_goes_constant() {
         varied.windows(2).any(|w| (w[0] - w[1]).abs() > 1e-6),
         "output-1 stopped varying with its observation"
     );
+    for probe in probe_inputs(result.creature.input) {
+        let got = f64::from(outputs(&result.creature, &probe)[1]);
+        let expected = f64::from(probe[1]) + -0.2 + -0.5 * 0.6;
+        assert!(
+            (got - expected).abs() <= 1e-6 * (1.0 + expected.abs()),
+            "output-1 on {probe:?} is {got}, expected {expected}"
+        );
+    }
 }
 
 #[test]
@@ -1375,6 +1383,16 @@ fn a_removed_aggregate_folds_its_mean_into_each_target_like_any_other_source() {
     );
     assert_eq!(result.uncompensated, vec![]);
     assert_valid("aggregate source", &result.creature);
+    // `output-0` still reads `input-0`, so the fold shows up as the constant
+    // part of what it computes on every probe.
+    for probe in probe_inputs(result.creature.input) {
+        let got = f64::from(outputs(&result.creature, &probe)[0]);
+        let expected = f64::from(probe[0]) + 0.3 + 2.0 * 0.6;
+        assert!(
+            (got - expected).abs() <= 1e-6 * (1.0 + expected.abs()),
+            "aggregate source: output on {probe:?} is {got}, expected {expected}"
+        );
+    }
 }
 
 /// `h-1` is the only source of two aggregate outputs — one that reads a term
@@ -1426,6 +1444,59 @@ fn an_aggregate_target_left_with_no_inward_edge_takes_the_fold() {
     assert_valid("aggregate targets", &result.creature);
     assert_output_on_every_probe("MEAN target", &result.creature, 0, folded);
     assert_output_on_every_probe("HYPOTv2 target", &result.creature, 1, folded.abs());
+}
+
+/// `h-a` is `if-1`'s **only** source, on all three roles at once. Removing it
+/// leaves the `IF` with no inward edge at all — the one route to
+/// `fold_policy`'s `IF` arm with a zero edge count, because `prune_synapse`'s
+/// `IfRepair::Rewrite` restores an emptied role before it can happen.
+const SOLE_SOURCE_OF_AN_IF_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-a","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"if-1","bias":0.05,"squash":"IF"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
+    {"weight":1.0,"fromUUID":"h-a","toUUID":"if-1","type":"condition"},
+    {"weight":2.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
+    {"weight":-3.0,"fromUUID":"h-a","toUUID":"if-1","type":"negative"},
+    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+  ]
+}"#;
+
+#[test]
+fn an_if_left_with_no_inward_edge_is_still_never_given_a_bias_fold() {
+    let before = creature(SOLE_SOURCE_OF_AN_IF_JSON);
+    let result = pruned(&before, "h-a", Some(&mean_only(0.6)));
+
+    // Rule 12: what the `IF` lost is three **roles**, not three numbers, so
+    // `IfRepair` owns the repair and no bias fold is attempted — even though
+    // the target is now as bare as any aggregate that does take one.
+    assert_eq!(result.bias_folds, vec![], "an IF took a fold");
+    assert_eq!(
+        result.uncompensated.len(),
+        3,
+        "one entry per role the IF lost"
+    );
+    for entry in &result.uncompensated {
+        assert_eq!(entry.target_uuid, "if-1");
+        assert_eq!(entry.reason, UncompensatedReason::AggregateTarget);
+        assert_eq!(entry.squash, "IF");
+    }
+    let mut roles: Vec<SynapseType> = result.uncompensated.iter().map(|u| u.role).collect();
+    roles.sort_by_key(|r| format!("{r:?}"));
+    assert_eq!(
+        roles,
+        vec![
+            SynapseType::Condition,
+            SynapseType::Negative,
+            SynapseType::Positive
+        ]
+    );
+    assert_eq!(result.transform, TransformClass::Approximate);
+    assert_valid("an IF left bare", &result.creature);
 }
 
 fn has_edge_into(creature: &CreatureExport, uuid: &str) -> bool {

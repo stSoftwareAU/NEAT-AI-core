@@ -1672,3 +1672,67 @@ fn a_bare_aggregate_folds_a_structurally_fixed_source_exactly() {
     assert_same_function("bare aggregate, constant source", &before, &result.creature);
     assert_valid("bare aggregate, constant source", &result.creature);
 }
+
+#[test]
+fn a_bare_aggregate_reports_the_residual_its_form_can_justify() {
+    // A summing aggregate's term is `W·a`, so the mean fold leaves the same
+    // `W² σ²` every other linear fold reports.
+    let variance = 0.04;
+    let stats = PruneStats {
+        mean_activation: AGG_MEAN,
+        variance: Some(variance),
+        proxy: None,
+    };
+    let json = aggregate_output_json("MEAN");
+    let summing = pruned(
+        &creature(&json),
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&stats),
+    );
+    assert_close(
+        "the summing residual",
+        summing.bias_folds[0]
+            .residual_variance
+            .expect("a supplied variance yields a residual"),
+        AGG_WEIGHT * AGG_WEIGHT * variance,
+    );
+
+    // `HYPOTv2` folds `W·μ` into a bias the squash then takes the magnitude
+    // of, exactly as `LOGISTIC` squashes the point-wise path's sum, so its
+    // residual keeps the same shape.
+    let json = aggregate_output_json("HYPOTv2");
+    let hypot_v2 = pruned(
+        &creature(&json),
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&stats),
+    );
+    assert_close(
+        "the HYPOTv2 residual",
+        hypot_v2.bias_folds[0]
+            .residual_variance
+            .expect("a supplied variance yields a residual"),
+        AGG_WEIGHT * AGG_WEIGHT * variance,
+    );
+
+    // `HYPOT` is the exception: what folds is the magnitude `|W·μ|`, whose
+    // residual is `Var(|W·a|)` — a number the caller's `σ²` does not describe,
+    // so none is claimed rather than one that cannot be justified.
+    let json = aggregate_output_json("HYPOT");
+    let hypot = pruned(
+        &creature(&json),
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&stats),
+    );
+    assert_eq!(
+        hypot.bias_folds[0].residual_variance, None,
+        "HYPOT claimed a linear residual for a magnitude fold"
+    );
+
+    // A structurally fixed source leaves nothing over under any form.
+    let exact = pruned(
+        &creature(LAST_EDGE_FROM_CONSTANT_JSON),
+        &key("c-1", "output-0", SynapseType::Standard),
+        None,
+    );
+    assert_eq!(exact.bias_folds[0].residual_variance, Some(0.0));
+}

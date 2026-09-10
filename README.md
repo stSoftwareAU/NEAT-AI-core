@@ -950,10 +950,19 @@ there. The two forms share the `[0, f32::MAX]` activation range, so the
 replacement cannot answer a value the original would have clamped away.
 
 An `IF` is excluded whatever it is left with: rule 12 means an `IF` short an
-edge is short a **role**, and `IfRepair` owns that repair, not a number. And no
-correlated survivor helps a bare target — a share can only land on an edge into
-it, and there is none — so the fold there is mean-only and a supplied proxy
-goes unused rather than refused.
+edge is short a **role**, and `IfRepair` owns that repair, not a number. Where
+an aggregate is left bare and no statistics were supplied it is still reported,
+now with `UncompensatedReason::NoStatistics` rather than `AggregateTarget` —
+what is missing is the number, not the permission.
+
+No correlated survivor helps a bare **aggregate** — a share can only land on an
+edge into it, and there is none — so the fold there is mean-only and a supplied
+proxy goes unused. It is still *checked*: a proxy that is not a number, not a
+survivor, or not consistent with the variances refuses the whole prune as it
+always did. A **point-wise** target left bare is unchanged by this rule and
+still takes the ordinary path, so a proxy with a non-zero share into it is
+refused with `PruneError::MissingProxyEdge` — there is no edge left to carry
+it.
 
 A **hidden** aggregate left bare takes the fold first and then meets cleanup's
 own `fold_zero_inward_hidden`, which moves that now-fixed value into its outward
