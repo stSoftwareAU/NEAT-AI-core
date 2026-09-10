@@ -939,7 +939,12 @@ everything else.
 
 The conversions are read straight off the aggregate arms of
 `CompiledNetwork::activate`, so each is **exact**: reducing one term is that
-term, and `transform` is untouched by the rewrite.
+term, and `transform` is untouched by the rewrite. "The same number" means what
+it means for the structural fold above — the same number to the `f32` precision
+the forward pass works in, for every finite term it can represent without
+overflow. `prune_rewrite`'s module documentation names the two boundaries
+outside that (a non-finite term, and a term whose square overflows `f32`)
+rather than leaving them implied.
 
 | Aggregate | With one term the forward pass computes | Replacement |
 |---|---|---|

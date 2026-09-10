@@ -55,6 +55,28 @@
 //! sound for the one `HYPOT` rule because at `b == 0` its activation is the
 //! magnitude of `w·a` and never reaches below that floor.
 //!
+//! # Where the equality stops, said plainly
+//!
+//! "The same number" means the same thing it means for
+//! [`mod@crate::prune_neuron`]'s structural fold: the same number to the `f32`
+//! precision the forward pass itself works in, for every **finite** term that
+//! pass can represent without overflowing. Two boundaries sit outside that, and
+//! neither is reachable from a finite creature scored on finite records:
+//!
+//! - a term of `NaN` or `±inf` — only reachable from a non-finite input record,
+//!   since every neuron activation has already been through
+//!   [`apply_limit_range`](crate::range::apply_limit_range) — leaves
+//!   `MINIMUM`/`MAXIMUM` on the sentinel their empty-input arm uses and so
+//!   answers the bias, where `IDENTITY` propagates the term;
+//! - a term whose square overflows `f32` (about `1.8e19`) already makes `HYPOT`
+//!   and `HYPOTv2` answer `f32::MAX` where `ABSOLUTE` answers the magnitude —
+//!   a difference the aggregate form has with its own arithmetic, not one this
+//!   rewrite introduces.
+//!
+//! Neither is papered over: the rewrite is not claimed to be bit-exact on
+//! garbage, and a caller scoring non-finite records has a problem this module
+//! cannot fix.
+//!
 //! ```mermaid
 //! flowchart TD
 //!     T["a target the request touched"] --> E{"exactly one inward edge?"}
