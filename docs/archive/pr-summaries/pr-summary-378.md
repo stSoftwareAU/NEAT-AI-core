@@ -4,33 +4,32 @@
 
 NEAT-AI-core is a **public** repository, but thirteen archived PR summaries
 under `docs/archive/pr-summaries/` named the **private** production-trainer and
-worker-orchestration repositories by name or slug — the `stSoftwareAU/GRQ` slug,
-private issue references (`GRQ#3508`, `GRQ#2391`, `GRQ #3400`,
-`stSoftwareAU/VibeCoding#1613` / `#1614`), private paths
-(`GRQ-cluster/network.json`, `GRQ-cluster/performance.csv`), a private host
-class (`GRQ-23`), and a private launcher's own shell function
-(`grq_fail_loud_exit_trap`). A public reader following those pointers hits
-material they cannot open and learns the layout of a private production system —
-check 3 of the private-repo-reference audit.
+worker-orchestration repositories by name or slug — the production trainer's
+`owner/repo` slug, four of its private issue references, two private
+orchestration issue slugs, the private cluster repository's committed
+`network.json` and `performance.csv` paths, one of its host identifiers, and a
+private launcher's own shell function. A public reader following those pointers
+hits material they cannot open and learns the layout of a private production
+system — check 3 of the private-repo-reference audit.
 
 This change rewords the enumerated mentions to **concept level**, keeping the
 historical narrative intact:
 
 | Before | After |
 | --- | --- |
-| "VibeCoding workflow sync" | "the worker-orchestration workflow sync" |
-| "per the contract in `stSoftwareAU/VibeCoding#1613`" / "no internal pins per `stSoftwareAU/VibeCoding#1614`" | "per the worker-orchestration contract" / "no internal pins to refresh under that contract" |
-| "one `GRQ-cluster` training shard's worth … (`GRQ-cluster/performance.csv` / `result.json`)" | "one production-cluster training shard's worth … committed production-run telemetry" |
-| "Apple Silicon (GRQ-23, GRQ class)" | "Apple Silicon (Apple M4 Pro class)" |
-| "the production GRQ scoring hot path" / "Real GRQ creatures" | "the downstream production scoring hot path" / "Real production creatures" |
-| "the committed `GRQ-cluster/network.json` shape" / "the exact committed GRQ-cluster topology" | "the downstream production cluster's committed creature shape" / "the exact committed production-cluster topology" |
-| "GRQ #3400 (flags)" | "a downstream production-trainer issue (flags)" |
-| "`GRQ#3508`'s captured signature" / "= GRQ#3508" | "the downstream production trainer's captured OOME signature" / "= the production OOME" |
-| "Silent-failure guard (GRQ#2391)" | "Silent-failure guard (the fail-loud rule, Issue #3234)" |
-| "Verified against `stSoftwareAU/GRQ` `Develop`" | "Verified against the downstream production trainer's `Develop` branch" |
-| "GRQ's `worker/learn.sh`" / "GRQ's production selector" / "GRQ's real `memory_calc.sh`" | "the production trainer's `worker/learn.sh`" / "the production selector" / "the production trainer's real `memory_calc.sh`" |
-| "the GRQ-26 crash class" | "the constrained-host crash class" |
-| "`grq_fail_loud_exit_trap` EXIT trap" | "fail-loud EXIT trap" |
+| "… workflow sync", naming the private orchestration repository | "the worker-orchestration workflow sync" |
+| "per the contract in" / "no internal pins per", each citing a private orchestration issue slug | "per the worker-orchestration contract" / "no internal pins to refresh under that contract" |
+| "one … training shard's worth …", naming the private cluster repository and its committed `performance.csv` / `result.json` | "one production-cluster training shard's worth … committed production-run telemetry" |
+| "Apple Silicon", qualified by a private host identifier and its host class | "Apple Silicon (Apple M4 Pro class)" |
+| "the production … scoring hot path" / "Real … creatures", both naming the private trainer | "the downstream production scoring hot path" / "Real production creatures" |
+| "the committed `network.json` shape" / "the exact committed … topology", both naming the private cluster repository | "the downstream production cluster's committed creature shape" / "the exact committed production-cluster topology" |
+| a private trainer issue slug, "(flags)" | "a downstream production-trainer issue (flags)" |
+| "…'s captured signature" / "= …", both a private OOME issue slug | "the downstream production trainer's captured OOME signature" / "= the production OOME" |
+| "Silent-failure guard", citing a private issue slug | "Silent-failure guard (the fail-loud rule, Issue #3234)" |
+| "Verified against" the private trainer's `owner/repo` slug and its `Develop` | "Verified against the downstream production trainer's `Develop` branch" |
+| the private trainer's name possessive of "`worker/learn.sh`" / "production selector" / "real `memory_calc.sh`" | "the production trainer's `worker/learn.sh`" / "the production selector" / "the production trainer's real `memory_calc.sh`" |
+| a private host identifier's "crash class" | "the constrained-host crash class" |
+| the private launcher's own fail-loud shell function, "EXIT trap" | "fail-loud EXIT trap" |
 
 Files touched (13 archives): `pr-summary-5.md`, `pr-summary-6.md`,
 `pr-summary-38.md`, `pr-summary-228.md`, `pr-summary-243.md`,
@@ -50,15 +49,16 @@ Two deliberate exclusions:
   `pr-summary-376.md` made. The guard matches on **word boundaries**, so
   snake_case identifiers that merely embed the letters are not flagged.
 - `pr-summary-373.md` … `pr-summary-377.md` are the records of the earlier
-  reword PRs; their before/after tables must quote the old strings to stay
-  meaningful, and they were not in the issue's enumerated list.
+  reword PRs; at the time their before/after tables quoted the old strings to
+  stay meaningful, and they were not in this issue's enumerated list. Issue #664
+  later closed that exclusion — those records now state their "before" side at
+  concept level too, and all of them are covered by this guard.
 
-The before/after table above and the new guard's `grep` patterns necessarily
-quote the private tokens — a guard cannot match a name it does not spell, and
-the record of a reword is unreadable without its "before" side. That is the same
-trade the existing `private_repo_reference.bats` /
-`bump_deps_private_repo_reference.bats` guards and `pr-summary-373.md` …
-`pr-summary-377.md` already make.
+The new guard's `grep` patterns necessarily spell the private tokens — a guard
+cannot match a name it does not spell. The before/after table above no longer
+does: since Issue #664 it describes each removed name rather than reproducing
+it, which keeps the record of a reword readable without republishing the private
+name.
 
 Internal script paths (`worker/learn.sh`, `memory_calc.sh`, `node.sh`) are left
 as-is: the issue scoped this sweep to repository names and issue slugs, and
@@ -72,7 +72,7 @@ new bats guard plus the existing gates.
 
 ```mermaid
 flowchart LR
-    A["private names in 13 archives:<br/>stSoftwareAU/GRQ, GRQ#3508,<br/>GRQ-cluster/*, GRQ-23,<br/>stSoftwareAU/VibeCoding#1613"] --> B["concept-level reword"]
+    A["private names in 13 archives:<br/>trainer owner/repo slug,<br/>private issue slugs,<br/>cluster repo paths, host id,<br/>orchestration issue slug"] --> B["concept-level reword"]
     B --> C["downstream production trainer,<br/>production-cluster topology,<br/>Apple M4 Pro class,<br/>worker-orchestration contract"]
     C --> D["bats guard pins it"]
 ```
@@ -93,13 +93,14 @@ before the reword — and passes after:
 - `every enumerated archived PR summary is present` — the guard cannot silently
   pass by pointing at missing files.
 - `archived PR summaries name no private production-trainer repository` —
-  word-boundary `GRQ` absent across all thirteen.
+  the trainer repository's name, word-boundary matched, absent across all
+  thirteen.
 - `archived PR summaries name no private worker-orchestration repository` —
-  word-boundary `VibeCoding` absent.
+  the orchestration repository's name, word-boundary matched, absent.
 - `archived PR summaries reference no private repository path or issue slug` —
-  `stSoftwareAU/GRQ`, `stSoftwareAU/VibeCoding`, `GRQ#N`, `GRQ #N`,
-  `VibeCoding#N` all absent.
-- `pr-summary-299 carries no grq-prefixed private launcher identifier` — the one
+  both `owner/repo` paths and every `repo#N` / `repo #N` issue slug spelling
+  absent.
+- The private-launcher-identifier test over `pr-summary-299` — the one
   snake_case case the word-boundary rule cannot reach.
 - Four narrative-survival assertions so the reword cannot degrade into deletion:
   the bump contract (`pr-summary-38`), the learn-invocation wiring

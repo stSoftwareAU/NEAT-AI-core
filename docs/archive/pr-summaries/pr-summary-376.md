@@ -1,15 +1,15 @@
-# Reword GRQ-cluster provenance mentions in benches to concept level
+# Reword private-cluster provenance mentions in benches to concept level
 
 ## Summary
 
 NEAT-AI-core is a **public** repository, but the benchmark suite's docs and
-comments repeatedly named the **private** `stSoftwareAU/GRQ-cluster` repository
-(and the `GRQ` host class) as the provenance of the synthetic bench fixtures —
-e.g. `GRQ-cluster/network.json`, `GRQ-cluster/performance.csv`, "GRQ host
-class". The fixtures are synthesised in code (no private data is committed), so
-those private paths added nothing a public reader could use while exposing the
-layout of a private production repo (check 3 of the private-repo-reference
-audit).
+comments repeatedly named the **private** production-cluster repository by its
+`owner/repo` slug (and its host class) as the provenance of the synthetic bench
+fixtures — its committed `network.json` and `performance.csv` paths, and the
+host class named after that repository. The fixtures are synthesised in code (no
+private data is committed), so those private paths added nothing a public reader
+could use while exposing the layout of a private production repo (check 3 of the
+private-repo-reference audit).
 
 This change rewords the enumerated textual mentions to **concept level** with
 **no bench logic or number changes**:
@@ -20,7 +20,7 @@ This change rewords the enumerated textual mentions to **concept level** with
   telemetry (a 32-generation production run)"* rather than named private CSV/JSON
   paths.
 - The host class is stated as the concrete hardware — *"Apple M4 Pro class"* —
-  instead of *"GRQ host class"*.
+  instead of the private repository's own host-class name.
 - The cross-repo wiring note (`BASELINE.md`) is de-named to *"a WorkerPool
   idle-tail change and a host-flags change in the downstream production repos"*.
 
@@ -32,14 +32,14 @@ Closes #376.
 
 ## Scope note
 
-The issue enumerated the `GRQ`/`GRQ-cluster` mentions in the four bench files;
-those are all reworded. The lowercase test-function name
+The issue enumerated the private-repository and private-cluster mentions in the
+four bench files; those are all reworded. The lowercase test-function name
 `production_exact_matches_committed_grq_topology` was **not** in the enumerated
 list and is referenced by an archived, point-in-time PR summary
 (`docs/archive/pr-summaries/pr-summary-286.md`); it is left unchanged to stay
 within scope and avoid a dangling reference in that historical record. Other
-`GRQ` mentions in archived PR summaries are historical records for other issues
-and are out of scope here.
+private-name mentions in archived PR summaries are historical records for other
+issues and are out of scope here.
 
 ## Evidence
 
@@ -48,13 +48,13 @@ grep plus the existing bench-fixture test suite and a bench compile:
 
 ```mermaid
 flowchart LR
-    A["private names:<br/>GRQ-cluster/network.json,<br/>GRQ-cluster/performance.csv,<br/>GRQ host class"] --> B["concept-level reword"]
+    A["private names:<br/>cluster repo network.json,<br/>cluster repo performance.csv,<br/>private host class"] --> B["concept-level reword"]
     B --> C["committed production creature topology,<br/>committed production-run telemetry,<br/>Apple M4 Pro class"]
 ```
 
-- No enumerated `GRQ` mention remains in the four bench files:
-  `grep -rn "GRQ" neat-core/benches/ neat-core/tests/bench_fixtures.rs` → no
-  matches.
+- No enumerated private-name mention remains in the four bench files: a grep of
+  `neat-core/benches/` and `neat-core/tests/bench_fixtures.rs` for the private
+  repository's name → no matches.
 - Bench fixture tests still pass (comments only changed):
   `cargo test -p neat-core --test bench_fixtures` → **15 passed; 0 failed**.
 - Benches still compile (they include `benches/common/mod.rs`):

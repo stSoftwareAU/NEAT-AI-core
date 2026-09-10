@@ -2,9 +2,9 @@
 
 ## Summary
 
-Applies the fleet build-profile decision (`stSoftwareAU/VibeCoding#4159`) to this
-repo — **dev builds compile as fast as possible, release builds produce the most
-optimised artefact possible** — on stable Rust only. Closes #546.
+Applies the fleet build-profile decision to this repo — **dev builds compile as
+fast as possible, release builds produce the most optimised artefact possible**
+— on stable Rust only. Closes #546.
 
 - `Cargo.toml`: added `[profile.dev] debug = "line-tables-only"` at the
   workspace root (panic/backtrace `file:line` kept, the rest of the DWARF
