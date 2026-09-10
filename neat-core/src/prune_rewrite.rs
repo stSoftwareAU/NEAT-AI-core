@@ -68,10 +68,15 @@
 //!   [`apply_limit_range`](crate::range::apply_limit_range) — leaves
 //!   `MINIMUM`/`MAXIMUM` on the sentinel their empty-input arm uses and so
 //!   answers the bias, where `IDENTITY` propagates the term;
-//! - a term whose square overflows `f32` (about `1.8e19`) already makes `HYPOT`
-//!   and `HYPOTv2` answer `f32::MAX` where `ABSOLUTE` answers the magnitude —
-//!   a difference the aggregate form has with its own arithmetic, not one this
-//!   rewrite introduces.
+//! - a term whose square leaves the `f32` normal range already makes `HYPOT` and
+//!   `HYPOTv2` disagree with the magnitude they are meant to be: above about
+//!   `1.8e19` the square overflows and they answer `f32::MAX` where `ABSOLUTE`
+//!   answers the term, and below about `1.1e-19` the square is subnormal, so
+//!   `sqrt` loses bits — a measured `1e-22` term answers `9.904085e-23` rather
+//!   than `1e-22`, about 1% out. That is a difference the aggregate form has
+//!   with its own arithmetic, not one this rewrite introduces: `ABSOLUTE` is the
+//!   more accurate of the two. The rewrite is still a change of answer there,
+//!   which is why it is named here rather than claimed away.
 //!
 //! Neither is papered over: the rewrite is not claimed to be bit-exact on
 //! garbage, and a caller scoring non-finite records has a problem this module
@@ -91,6 +96,7 @@
 //! ```
 
 use crate::creature::{CreatureExport, squash_name_from};
+use crate::prune_cleanup::CleanupError;
 use crate::prune_neuron::{PruneError, squash_of};
 use crate::range::apply_get_range;
 use crate::squash::SquashType;
@@ -118,10 +124,11 @@ pub struct SquashConversion {
 ///
 /// # Errors
 ///
-/// Returns [`PruneError::Cleanup`] when a touched target declares a squash name
-/// this crate does not know. Both callers have already read those squashes to
-/// decide the compensation, so this cannot fire for them — it is propagated
-/// rather than skipped so a future caller cannot reach a silent no-op.
+/// Returns [`PruneError::Cleanup`] when a touched target is not a neuron of the
+/// creature, or declares a squash name this crate does not know. Both callers
+/// resolved those targets before the cut, so neither can fire for them — they
+/// are propagated rather than skipped so a future caller cannot reach a silent
+/// no-op.
 pub(crate) fn convert_single_edge_aggregates(
     creature: &mut CreatureExport,
     touched_targets: &[String],
@@ -138,9 +145,17 @@ pub(crate) fn convert_single_edge_aggregates(
         if inward_edge_count(creature, uuid) != 1 {
             continue;
         }
-        let Some(index) = creature.neurons.iter().position(|n| n.uuid == *uuid) else {
-            continue;
-        };
+        // A target the request named must be a neuron of the creature: both
+        // callers resolved its squash before the cut. Absent is a defect, not a
+        // condition to skip over quietly — the same reading the unknown-squash
+        // arm below takes.
+        let index = creature
+            .neurons
+            .iter()
+            .position(|n| n.uuid == *uuid)
+            .ok_or_else(|| {
+                PruneError::Cleanup(CleanupError::UnknownEndpoint { uuid: uuid.clone() })
+            })?;
         let from = squash_of(&creature.neurons[index])?;
         let Some(to) = replacement(from, creature.neurons[index].bias) else {
             continue;
@@ -213,21 +228,48 @@ fn clamps_identically(from: SquashType, to: SquashType, non_negative: bool) -> b
 mod tests {
     use super::*;
 
-    /// Every aggregate is answered for, so a new one cannot slip through
-    /// unconsidered: either the table names its replacement or it is kept.
+    /// The answer the table gives for each aggregate, by name.
+    const TABLE: [(SquashType, f64, Option<SquashType>); 7] = [
+        (SquashType::Minimum, 0.25, Some(SquashType::Identity)),
+        (SquashType::Maximum, 0.25, Some(SquashType::Identity)),
+        (SquashType::Mean, 0.25, Some(SquashType::Identity)),
+        (SquashType::HypotenuseV2, 0.25, Some(SquashType::Absolute)),
+        (SquashType::Hypotenuse, 0.0, Some(SquashType::Absolute)),
+        (SquashType::Hypotenuse, 0.25, None),
+        (SquashType::If, 0.0, None),
+    ];
+
     #[test]
-    fn every_aggregate_has_a_considered_answer() {
-        for (squash, bias, expected) in [
-            (SquashType::Minimum, 0.25, Some(SquashType::Identity)),
-            (SquashType::Maximum, 0.25, Some(SquashType::Identity)),
-            (SquashType::Mean, 0.25, Some(SquashType::Identity)),
-            (SquashType::HypotenuseV2, 0.25, Some(SquashType::Absolute)),
-            (SquashType::Hypotenuse, 0.0, Some(SquashType::Absolute)),
-            (SquashType::Hypotenuse, 0.25, None),
-            (SquashType::If, 0.0, None),
-        ] {
+    fn the_rule_table_answers_what_it_claims_to() {
+        for (squash, bias, expected) in TABLE {
             assert_eq!(replacement(squash, bias), expected, "{squash:?} at {bias}");
         }
+    }
+
+    /// A newly added aggregate must not slip through unconsidered. Rust cannot
+    /// enumerate an enum, so the sweep walks every discriminant
+    /// [`SquashType::from`] accepts and requires each aggregate it finds to be
+    /// named in [`TABLE`] — a seventh aggregate added to `squash.rs` fails here
+    /// rather than being silently kept by the `_` arm of `replacement`.
+    #[test]
+    fn every_aggregate_the_crate_carries_is_named_in_the_table() {
+        let mut swept = 0;
+        for code in 0u8..=u8::MAX {
+            let squash = SquashType::from(code);
+            if !squash.is_aggregate() {
+                continue;
+            }
+            // `From<u8>` maps every unknown code to `Identity`, which is not an
+            // aggregate, so the sweep cannot be padded by unknown codes.
+            if TABLE.iter().any(|(named, ..)| *named == squash) {
+                swept += 1;
+                continue;
+            }
+            panic!("aggregate {squash:?} (code {code}) has no entry in the rule table");
+        }
+        // The six aggregates `SquashType::is_aggregate` names, each reached once
+        // by its own discriminant.
+        assert_eq!(swept, 6, "the sweep did not reach six aggregates");
     }
 
     /// A point-wise squash is not this module's business at any edge count.

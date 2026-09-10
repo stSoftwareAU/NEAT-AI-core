@@ -207,6 +207,51 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.16.0` — the pruning report gains fields, and a single-edge aggregate is rewritten (Ockham #197)
+
+Two breaking shapes, both in the pruning surface:
+
+1. **Public structs gain public fields.** `PruneResult` gains
+   `converted_neurons: Vec<SquashConversion>` and `UncompensatedTarget` gains
+   `dropped_mean: Option<f64>`; on the wire, `PruneResponse` gains
+   `converted_neurons` (`convertedNeurons`) and `UncompensatedJson` gains
+   `dropped_mean` (`droppedMean`). None of the four is `#[non_exhaustive]`, so a
+   downstream struct literal or exhaustive destructure of any of them stops
+   compiling — `prune_json::PruneResponse::from_result` destructures
+   `PruneResult` for exactly that reason and is updated here.
+2. **Documented runtime behaviour moved.** `prune_neuron` and `prune_synapse`
+   used to return a target's squash exactly as the caller wrote it. A non-`IF`
+   aggregate the cut leaves with a **single** inward edge is now rewritten to the
+   point-wise squash that computes the same number — `MINIMUM`/`MAXIMUM`/`MEAN`
+   to `IDENTITY`, `HYPOTv2` (and `HYPOT` at bias `0`) to `ABSOLUTE`, bias
+   unchanged — because reducing one term is that term. The rewrite is reported
+   rather than silent, and `transform` is unmoved by it. `neat-core/src/prune_rewrite.rs`
+   owns the rule, names the two boundaries where the equality stops, and keeps
+   its hands off `IF` (`IfRepair` owns a lost role).
+
+Additive on the JSON wire: both new keys are `skip_serializing_if`, so a payload
+with neither is byte-identical to the one `0.15.x` wrote, and a reader that
+ignores unknown keys is unaffected.
+
+**Migration** — read the new fields, or ignore them:
+
+```rust
+// A struct literal or exhaustive destructure needs the new fields.
+let PruneResult { converted_neurons, .. } = result;
+for conversion in &converted_neurons {
+    println!("{} rewritten from {} to {}", conversion.uuid, conversion.from, conversion.to);
+}
+// An aggregate the cut left bare of all but one edge now reports a magnitude.
+for target in &result.uncompensated {
+    if let Some(dropped) = target.dropped_mean {
+        println!("{} lost a term worth {dropped}", target.target_uuid);
+    }
+}
+```
+
+A consumer that only reads `PruneResult` field by field — which is every
+registered consumer today — needs no change.
+
 ### `0.15.0` — `NetworkError::InvalidInputCount` (Issue #601)
 
 `NetworkError` gains a variant. The enum is not `#[non_exhaustive]`, so a

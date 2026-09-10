@@ -24,7 +24,7 @@ use neat_core::prune_fixtures::{
     CASCADE_ORPHAN_FEEDERS, CONSTANT_MOVES_INTO_PREFIX, EDGE_ROLE_IDENTITY,
     EDGE_SOURCE_BECOMES_DEAD, EDGE_TARGET_BECOMES_CONSTANT,
 };
-use neat_core::range::apply_limit_range;
+use neat_core::range::{apply_get_range, apply_limit_range};
 use neat_core::{
     CleanupError, CleanupOptions, CreatureExport, IfRepair, ProxyStats, PruneError, PruneResult,
     PruneStats, SquashConversion, SquashType, SynapseKey, SynapseType, TransformClass,
@@ -1786,6 +1786,36 @@ fn unusable_statistics_still_refuse_an_aggregate_prune() {
     match prune_synapse(&before, &edge, Some(&unknown_proxy)) {
         Err(PruneError::UnknownProxy { uuid }) => assert_eq!(uuid, "no-such-neuron"),
         other => panic!("an unknown proxy was not refused: {other:?}"),
+    }
+}
+
+#[test]
+fn the_replacement_clamps_to_the_bounds_the_rules_rely_on() {
+    // The guard inside `prune_rewrite` reads `apply_get_range`, so asserting one
+    // range against the other would move both sides of the comparison when that
+    // table changes. The independent oracle is the documented bound *literals*:
+    // `F32_LARGE` either side for the unbounded squashes, and a `0` floor for
+    // `ABSOLUTE` and `HYPOTv2`.
+    const LARGE: f32 = 3.4028235e38;
+    for squash in [
+        SquashType::Minimum,
+        SquashType::Maximum,
+        SquashType::Mean,
+        SquashType::Identity,
+        SquashType::Hypotenuse,
+    ] {
+        assert_eq!(
+            apply_get_range(squash),
+            (-LARGE, LARGE),
+            "{squash:?} is documented as unbounded either side"
+        );
+    }
+    for squash in [SquashType::Absolute, SquashType::HypotenuseV2] {
+        assert_eq!(
+            apply_get_range(squash),
+            (0.0, LARGE),
+            "{squash:?} is documented as floored at zero"
+        );
     }
 }
 

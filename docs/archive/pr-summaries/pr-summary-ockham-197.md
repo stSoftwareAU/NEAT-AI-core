@@ -81,8 +81,28 @@ the quality gate rather than a screenshot.
   `PruneResult` / `UncompensatedTarget` / `PruneResponse` / `UncompensatedJson`.
   No registered consumer names `PruneResult`, `UncompensatedTarget`,
   `prune_neuron` or `prune_synapse` outside Ockham, and Ockham only reads those
-  fields, so nothing can be broken by a struct gaining one. Patch bump,
-  `0.15.9 → 0.15.10`.
+  fields, so no registered consumer is broken by a struct gaining one.
+
+  The bump is nevertheless the **minor** — `0.15.9 → 0.16.0`, signalled, with a
+  breaking-change-log entry. The issue asked for a patch, but RELEASING.md's own
+  policy and log say otherwise twice over: none of the four structs is
+  `#[non_exhaustive]`, so a downstream struct literal or exhaustive destructure
+  stops compiling (core's own `PruneResponse::from_result` destructure had to be
+  updated, which is the proof), and documented runtime behaviour moved — a
+  target's squash now comes back rewritten. `0.9.0` ("CompiledNetwork gains two
+  public fields") and `0.15.0` ("NetworkError gains a variant") are the
+  precedents. The repo's policy wins over the issue's estimate.
+
+### Mutation evidence
+
+Not run. AGENTS.md makes the sweep the merge gate for a refactor that collapses N
+copies; this is new behaviour rather than an extraction, so the rule does not
+reach it, and the run budget did not cover a sweep on top of the reviewer fixes.
+What stands in its place is the three load-bearing refusals below — each of which
+*is* a mutation that has been shown to turn the suite red — and the red run this
+branch was written against: the tests were committed against an unimplemented
+`prune_rewrite` and failed to compile on `converted_neurons`, `dropped_mean` and
+`SquashConversion` before any of the three existed.
 
 ### Oracles
 
@@ -97,7 +117,14 @@ the quality gate rather than a screenshot.
   and every probe record is graded against it within `1e-6` relative.
 - **The refusal is load-bearing.** `HYPOT` at a non-zero bias is pinned as kept
   *and* shown to differ from the `ABSOLUTE` rewrite on the probe records, so the
-  bias-`0` condition cannot be deleted and stay green.
+  bias-`0` condition cannot be deleted and stay green. The same shape covers the
+  dropped term (`assert_different_function` against the un-cut creature, so an
+  "unchanged" pass cannot be vacuous) and the statistic refusals
+  (`unusable_statistics_still_refuse_an_aggregate_prune`).
+- **Bounds asserted as literals, not as the table.** The clamp guard reads
+  `apply_get_range`, so a test comparing one range against the other would move
+  both sides of its own assertion. `the_replacement_clamps_to_the_bounds_the_rules_rely_on`
+  asserts the documented bound literals instead.
 
 ## Test Plan
 
@@ -113,6 +140,7 @@ the quality gate rather than a screenshot.
 - `no_dropped_magnitude_refuses_a_prune`
 - `unusable_statistics_still_refuse_an_aggregate_prune`
 - `the_replacement_clamps_every_converted_activation_the_same_way`
+- `the_replacement_clamps_to_the_bounds_the_rules_rely_on`
 
 `neat-core/tests/prune_neuron.rs`
 
@@ -130,7 +158,8 @@ the quality gate rather than a screenshot.
 
 `neat-core/src/prune_rewrite.rs` unit tests
 
-- `every_aggregate_has_a_considered_answer`
+- `the_rule_table_answers_what_it_claims_to`
+- `every_aggregate_the_crate_carries_is_named_in_the_table`
 - `a_point_wise_squash_is_never_replaced`
 - `a_replacement_whose_clamp_moved_is_refused`
 

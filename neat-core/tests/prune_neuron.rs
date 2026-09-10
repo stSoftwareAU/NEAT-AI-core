@@ -1405,6 +1405,19 @@ fn the_dropped_term_magnitude_crosses_with_the_uncompensated_target() {
         0.5 * logistic,
         STRUCTURAL_FOLD_TOL,
     );
+
+    // Reporting a magnitude is not a licence to return something invalid, and
+    // reporting is all that happened: the creature the caller gets back is the
+    // one the aggregate form of the same cut computes.
+    assert_valid("supplied_mean", &supplied.creature);
+    assert_valid("bare", &bare.creature);
+    assert_valid("fixed", &fixed.creature);
+    assert_same_function_within(
+        "reporting the magnitude changed nothing else",
+        CONVERSION_TOL,
+        &bare.creature,
+        &removal_by_hand(&json, "h-1"),
+    );
 }
 
 /// `h-1` has nothing to sum, so it activates to `LOGISTIC(0.4)` on every record
