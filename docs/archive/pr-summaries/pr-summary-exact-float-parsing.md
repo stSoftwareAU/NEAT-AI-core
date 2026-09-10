@@ -1,4 +1,4 @@
-# GRQ #4261 — creature weights parsed 1 ULP off: `serde_json` built without `float_roundtrip`
+# Creature weights parsed 1 ULP off: `serde_json` built without `float_roundtrip`
 
 ## Summary
 
@@ -50,7 +50,7 @@ flowchart LR
 
 ### The real sampler creature, before and after
 
-`GRQ-sampler/samples/GRQ-10-1.json` at the sampler tip (2,602 neurons, 24,232
+A production sampler fixture at the sampler tip (2,602 neurons, 24,232
 synapses, 3.0 MB), through `parse_creature_json -> creature_to_json ->
 parse_creature_json`. Only `neat-core` differs between the two runs:
 
@@ -130,7 +130,7 @@ Both Rust consumers were built and tested against the patched sibling
   builds `CreatureExport` / `NeuronExport` struct literals that are missing the
   `memetic` and `id` fields added by #559, and the repo's
   `neat-core.expected-version` baseline is still `0.9.0`. That acknowledgement
-  is already tracked in stSoftwareAU/GRQ#4259.
+  is already tracked in the downstream production trainer's own backlog.
 
 ### Quality gates
 
@@ -188,8 +188,8 @@ No existing test was removed, weakened or modified.
 - `neat-core/src/creature.rs` — module docs gain an **Exact float parsing**
   paragraph beside the round-trip contract it repairs, and
   `parse_creature_json` states the guarantee.
-- `README.md` — new section "Creature weights parse to the exact `f64`
-  (GRQ #4261)" beside the other cross-engine parity rules, with the measured
+- `README.md` — new section "Creature weights parse to the exact `f64`"
+  beside the other cross-engine parity rules, with the measured
   numbers and a Mermaid diagram.
 - `AGENTS.md` — a short durable note that the feature is load-bearing and must
   not be dropped as unused by a dependency-hygiene sweep, naming the test that

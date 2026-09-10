@@ -1,10 +1,10 @@
-# creature: accept both memetic weight forms (GRQ #4257)
+# creature: accept both memetic weight forms (downstream parse failure)
 
 ## Summary
 
 `memetic.weights` was modelled as an id-keyed map only, so every creature
 carrying NEAT-AI's **wire** form — the UUID row array — failed at the parse
-boundary. That took out the whole GRQ-10 Backprop stage:
+boundary. That took out a whole downstream production Backprop stage:
 `neat_ai_backpropagation` exited 1 with
 `Creature JSON error: invalid type: sequence, expected a map`, on a creature
 both stacks consider valid.
@@ -61,9 +61,9 @@ flowchart LR
 Backend/library change — no web interface to screenshot.
 
 **The reported failure, reproduced and fixed.** A scratch test against this
-crate's `parse_creature_json` + `creature_validate`, over the real
-`GRQ-sampler/samples/GRQ-10-1.json` at the sampler tip — the creature named in
-GRQ#4257 — deleted after the run:
+crate's `parse_creature_json` + `creature_validate`, over a real production
+sampler fixture at the sampler tip — the creature named in the downstream
+report — deleted after the run:
 
 ```
 # before (this branch's merge base, Develop @ 4db5b9b)
@@ -80,12 +80,12 @@ binary, rebuilt against each side, over that creature and 32 synthesised
 
 ```console
 # before — sibling neat-core at Develop
-$ neat_ai_backpropagation train GRQ-10-1.json /tmp/bp-data --epochs 1 --max-records 32 …
+$ neat_ai_backpropagation train sampler-creature.json /tmp/bp-data --epochs 1 --max-records 32 …
 error: Creature JSON error: invalid type: sequence, expected a map at line 139268 column 13
 EXIT=1
 
 # after — sibling neat-core on this branch
-$ neat_ai_backpropagation train GRQ-10-1.json /tmp/bp-data --epochs 1 --max-records 32 …
+$ neat_ai_backpropagation train sampler-creature.json /tmp/bp-data --epochs 1 --max-records 32 …
 train: baseline_mse=1.015693731845 best_mse=1.015182269401 accepted_epochs=1
 EXIT=0
 ```
@@ -113,7 +113,7 @@ builds against this checkout: `cargo build --release` in
 NEAT-AI-Backpropagation is green, and it never reads `memetic.weights` from
 Rust, so the breaking field-type change needs no code change there — only the
 `neat-core.expected-version` baseline bump its CI gate wants after the
-`0.10.0` release (tracked in stSoftwareAU/GRQ#4259).
+`0.10.0` release (tracked in the downstream production trainer's own backlog).
 `cargo check -p neat-core --target wasm32-unknown-unknown` could not run here —
 `the wasm32-unknown-unknown target may not be installed` — and the change is
 target-agnostic (serde, `std::collections`, `std::fmt`; no `arch` or SIMD code
