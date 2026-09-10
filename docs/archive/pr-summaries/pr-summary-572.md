@@ -6,9 +6,10 @@ Issue #572 asked for the existing duplicate-`(from, to)` rejection coverage to
 be verified and recorded. It is correct on every entry point, and the evidence
 is below. What was **not** pinned anywhere is the other half of the rule the
 user clarified: many synapses may carry the **same role** into one neuron as
-long as their sources differ — GRQ #4277 reads as though that were forbidden.
-Four tests now state the rule precisely and the docs say it in words. No
-behaviour change: the only source edits are doc comments. Closes #572.
+long as their sources differ — a downstream production-trainer issue reads as
+though that were forbidden. Four tests now state the rule precisely and the docs
+say it in words. No behaviour change: the only source edits are doc comments.
+Closes #572.
 
 The rule, exactly:
 
@@ -66,7 +67,7 @@ time.
 | M1 | key the duplicate set on `(from, to, weight)` | `compile_rejects_a_repeated_pair_that_shares_one_role` **red** (+ 4 existing) |
 | M2 | key the duplicate set on `to` alone | `compile_accepts_repeated_roles_into_one_neuron_when_the_sources_differ` **red** (+ 2 existing) |
 | M3 | `positive_sum = val` instead of `+=` in the `IF` branch | `compile_accepts_repeated_roles_into_one_neuron_when_the_sources_differ` **red** — and nothing else, so the `5.5` oracle is what catches it |
-| M4 | drop the `from == last_from` guard so any repeated target reads as a duplicate (GRQ #4277's reading, encoded) | `same_role_fan_in_from_distinct_sources_breaks_no_rule` **red** (+ 6 existing) |
+| M4 | drop the `from == last_from` guard so any repeated target reads as a duplicate (the downstream issue's reading, encoded) | `same_role_fan_in_from_distinct_sources_breaks_no_rule` **red** (+ 6 existing) |
 | M5 | `else if false` in place of rule 26's `to == last_to` | `repeating_one_pair_of_that_creature_is_still_a_duplicate` **red** (+ 1 existing) |
 
 The oracles are independent of the code under test: M3's target is the network's

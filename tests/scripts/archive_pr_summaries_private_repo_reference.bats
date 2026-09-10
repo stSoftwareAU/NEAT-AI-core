@@ -16,6 +16,12 @@
 # tests/scripts/private_repo_reference.bats and
 # tests/scripts/bump_deps_private_repo_reference.bats.
 #
+# Issue #663 (BP-540ad6093f8a) extends the same guard to three archived
+# incident reports that named the private repository's issue numbers and its
+# internal sampler paths directly. Two of them carried the private name in
+# their **file name** as well, so they were renamed to concept level:
+# `pr-summary-memetic-weight-forms.md` and `pr-summary-exact-float-parsing.md`.
+#
 # Scope note: the guard matches the private repo names on **word boundaries**
 # (`-w`), so snake_case identifiers that merely embed the letters are not
 # flagged. That is deliberate — `production_exact_matches_committed_grq_topology`
@@ -40,6 +46,9 @@ setup() {
     "${ARCHIVE}/pr-summary-296.md"
     "${ARCHIVE}/pr-summary-298.md"
     "${ARCHIVE}/pr-summary-299.md"
+    "${ARCHIVE}/pr-summary-572.md"
+    "${ARCHIVE}/pr-summary-memetic-weight-forms.md"
+    "${ARCHIVE}/pr-summary-exact-float-parsing.md"
   )
 }
 
@@ -99,5 +108,32 @@ setup() {
 
 @test "pr-summary-286 still records the production creature topology numbers" {
   run grep -nE '1,666 non-input' "${ARCHIVE}/pr-summary-286.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "no archived PR summary file name embeds the private repository name" {
+  # Issue #663: two incident reports were filed as `pr-summary-grq-NNNN.md`, so
+  # the private issue slug was reconstructable from the path even once the prose
+  # was reworded. `find` exits 0 on an empty result, so the emptiness of the
+  # output — not the exit status — is the assertion.
+  run find "${ARCHIVE}" -maxdepth 1 -type f -iname '*grq*'
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "the memetic-weight-forms report still records the reported parse failure" {
+  run grep -nF 'invalid type: sequence, expected a map' \
+    "${ARCHIVE}/pr-summary-memetic-weight-forms.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "the exact-float-parsing report still records the 1 ULP drift" {
+  run grep -nF '0x3e58ae4569520dda' "${ARCHIVE}/pr-summary-exact-float-parsing.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-572 still records the same-role fan-in rule it pinned" {
+  run grep -nF 'same_role_fan_in_from_distinct_sources_breaks_no_rule' \
+    "${ARCHIVE}/pr-summary-572.md"
   [ "$status" -eq 0 ]
 }
