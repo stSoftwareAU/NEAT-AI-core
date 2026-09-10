@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 # Build-profile contract for the workspace root Cargo.toml (Issue #546).
 #
-# Fleet decision (stSoftwareAU/VibeCoding#4159): dev builds compile as fast as
-# possible, release builds produce the most optimised artefact possible and
-# compile time is irrelevant. Stable Rust only.
+# Fleet build-profile decision: dev builds compile as fast as possible,
+# release builds produce the most optimised artefact possible and compile time
+# is irrelevant. Stable Rust only.
 #
 # Cargo profiles come from the crate being built, so `neat-core`'s own tables
 # govern only this workspace's tests and benches — the settings are still
