@@ -1025,6 +1025,32 @@ activation, so the same compensation table as Issue #590 applies with `W = w`:
 `removed_synapses` carries the one requested triple; for `prune_neuron` it is
 `Some(uuid)` and every edge naming that neuron.
 
+#### Total prunability: any candidate, always a valid creature
+
+A caller that screens candidates cannot be asked to guess which of them the
+shared helpers will refuse, so the contract is total: **every hidden neuron and
+every listed `(from, to, role)` triple of a valid creature prunes to `Ok`, and
+what comes back passes `creature_validate`.** An `Err(PruneError::Cleanup)` —
+`InexactMerge`, `NotStable` or `Invalid` — on a valid creature is a defect in
+this crate, not a refusal to code around.
+
+`neat-core/tests/prune_total.rs` is what proves it rather than asserting it. It
+sweeps every fixture the prune tests carry — each captured
+`PRUNE_PARITY_CASES` `before`, plus the inline creatures — and for every hidden
+neuron and every listed triple, with no statistics and with a mean-only
+`PruneStats`, checks the call returns `Ok`, the result validates, it carries no
+more than `MAX_SUPPORT_CONSTANTS` constants, and the rewrite is deterministic.
+Absolute floors on the request count keep the sweep from eroding into a
+vacuous pass.
+
+Three structural rules the contract rests on are pinned in the same file:
+
+| Rule | Behaviour |
+|---|---|
+| a hidden neuron left with **no outward** edge | removed, recursively — a three-deep chain collapses in the one `prune_synapse` call that cuts its last edge |
+| a hidden neuron left with **no inward** edge | folded to a **bias-1** support constant, its value moved into the reading edges' weights (`fold_zero_inward_hidden`) |
+| validation rules 16 / 17 / 18 | unchanged — an outward-free constant and a hidden neuron missing either direction are invalid, while an **inward-free output is valid**, which is what makes cutting the last edge into an output an ordinary candidate |
+
 ### Pruning over the WASM boundary (Issue #592)
 
 The rewrites above are one Rust implementation with **two entry surfaces**.
