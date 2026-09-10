@@ -148,6 +148,13 @@ fn score_pass_simd(activations: &[f32], safe_zone_factors: &[f32], scores: &mut 
 /// 3. Last resort: equal split when both activations and weights are zero
 ///
 /// Returns a `Vec<f32>` of error shares whose sum equals `error`.
+///
+/// # Malformed input (Issue #658)
+/// `activations` sets the count and `safe_zone_factors` and `weights` are walked
+/// with the same index (four lanes at a time on the SIMD scoring pass), so a
+/// shorter one would index out of range — and a panic on wasm aborts the whole
+/// module instance. Such a call returns an empty `Vec` instead, the sentinel a
+/// successful call over non-empty `activations` can never produce.
 #[inline(always)]
 pub fn apply_distribute_elastic_error(
     error: f32,
@@ -157,6 +164,10 @@ pub fn apply_distribute_elastic_error(
     plank_constant: f32,
 ) -> Vec<f32> {
     let count = activations.len();
+
+    if safe_zone_factors.len() < count || weights.len() < count {
+        return Vec::new();
+    }
 
     if !error.is_finite() || count == 0 {
         return vec![0.0; count];
