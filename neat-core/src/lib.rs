@@ -38,6 +38,7 @@ pub mod prune_cleanup;
 pub mod prune_fixtures;
 pub mod prune_json;
 pub mod prune_neuron;
+pub mod prune_rewrite;
 pub mod prune_synapse;
 pub mod range;
 pub mod safe_zone;
@@ -117,12 +118,14 @@ pub use prune_neuron::{
     BiasFold, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats, TransformClass,
     UncompensatedReason, UncompensatedTarget, WeightShare, prune_neuron,
 };
+// Ockham #197 — the point-wise rewrite of an aggregate a cut left with one edge.
+pub use prune_rewrite::SquashConversion;
 // Issue #591 — synapse pruning with typed-role and `IF`-aware rewrites.
 pub use prune_synapse::prune_synapse;
 // Issue #592 — the JSON ABI both the native and the WASM surface answer on.
 pub use prune_json::{
-    BiasFoldJson, PruneFailureJson, PruneResponse, StaticIfJson, SynapseKeyJson, UncompensatedJson,
-    WeightShareJson, prune_neuron_json, prune_synapse_json,
+    BiasFoldJson, PruneFailureJson, PruneResponse, SquashConversionJson, StaticIfJson,
+    SynapseKeyJson, UncompensatedJson, WeightShareJson, prune_neuron_json, prune_synapse_json,
 };
 // The parity record is native-only test scaffolding, so it is not part of the
 // surface the published wasm bundle carries.

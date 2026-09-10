@@ -16,7 +16,8 @@
 //!     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
 //!     S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
 //!     X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
-//!     C --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
+//!     C --> V["an aggregate left with one edge —<br/>rewrite it to the point-wise squash<br/>that computes the same number"]
+//!     V --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
 //!     R -- fails --> E["Err(Cleanup)"]
 //!     R -- passes --> O["Ok(PruneResult) —<br/>Exact or Approximate"]
 //! ```
@@ -63,6 +64,14 @@
 //! | no condition edge, or every condition source structurally fixed | the branch the condition always takes, as an `IDENTITY` sum; the condition edges and the unreachable branch go, and their feeders cascade |
 //! | a `positive` / `negative` branch with nothing left in it, condition still varying | a **zero-weight** edge from a support constant into that role — an empty branch sum is `0`, and so is `0 · 1` |
 //!
+//! A third rewrite sits beside them and is exact for the same reason — it
+//! restores nothing and changes nothing, it just says what the creature already
+//! computes in the form every later pass can read:
+//!
+//! | What the removal left | Rewrite |
+//! |---|---|
+//! | a non-`IF` **aggregate** with exactly one inward edge | the point-wise squash that reduces to the same number — `MINIMUM`/`MAXIMUM`/`MEAN` to `IDENTITY`, `HYPOTv2` (and `HYPOT` at bias `0`) to `ABSOLUTE` — named on [`PruneResult::converted_neurons`] ([`mod@crate::prune_rewrite`], Ockham #197) |
+//!
 //! Neither is a compensation: they restore what the creature *already*
 //! computed once the requested edge was gone, so they never make a prune look
 //! more faithful than it is. Losing the term itself is what
@@ -85,7 +94,11 @@
 //! - where the target **aggregates** — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`,
 //!   or an `IF` reading one role's sum — no bias fold stands in for the term,
 //!   so none is attempted and the target is named on
-//!   [`PruneResult::uncompensated`] with the role it lost.
+//!   [`PruneResult::uncompensated`] with the role it lost. That entry carries
+//!   the magnitude of what went on
+//!   [`UncompensatedTarget::dropped_mean`] — `w · μ`, or `w · a` where the
+//!   creature fixes the source — so the caller's scorer can judge the loss. No
+//!   magnitude refuses a prune (Ockham #197).
 
 use crate::creature::{CreatureExport, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
@@ -94,8 +107,9 @@ use crate::prune_cleanup::{
 use crate::prune_neuron::{
     BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
     UncompensatedTarget, WeightShare, add_to_edge, check_proxy, check_stats, compensate,
-    target_squash,
+    dropped_mean, target_squash,
 };
+use crate::prune_rewrite::convert_single_edge_aggregates;
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -202,6 +216,7 @@ pub fn prune_synapse(
             weight_sum,
             squash: squash_name_from(squash),
             reason: UncompensatedReason::AggregateTarget,
+            dropped_mean: dropped_mean(invariant_value, effective_stats, weight_sum),
         });
     } else if let Some(compensation) = compensate(invariant_value, effective_stats, weight_sum) {
         // A share of exactly zero moves nothing — an uncorrelated survivor
@@ -237,8 +252,18 @@ pub fn prune_synapse(
             weight_sum,
             squash: squash_name_from(squash),
             reason: UncompensatedReason::NoStatistics,
+            // No statistic and no structural value is exactly the case
+            // `dropped_mean` answers `None` for.
+            dropped_mean: dropped_mean(invariant_value, effective_stats, weight_sum),
         });
     }
+
+    // An aggregate the cut left with one term is no longer aggregating, so it is
+    // rewritten to the point-wise squash that computes the same number before
+    // cleanup sees it (Ockham #197). The cut moves the inward count of the
+    // requested target and nothing else, so that is the one target examined.
+    let converted_neurons =
+        convert_single_edge_aggregates(&mut cut, std::slice::from_ref(&key.to_uuid))?;
 
     let outcome = cleanup_creature_with(
         &cut,
@@ -269,6 +294,7 @@ pub fn prune_synapse(
         bias_folds,
         weight_shares,
         uncompensated,
+        converted_neurons,
         transform: if exact {
             TransformClass::Exact
         } else {
