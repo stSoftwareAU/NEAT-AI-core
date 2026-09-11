@@ -19,18 +19,35 @@ call and asserts the two answer the same `PruneResponse`.
   `PruneResponse::from_result`, so a test could only spot-check a field at a
   time; comparing the two answers whole is what catches a payload the boundary
   silently dropped.
-- **`prune_json::prune_golden_cases` gains nine cases**, one per shape the
+- **`prune_json::prune_golden_cases` gains ten cases**, one per shape the
   record did not already carry: the last edge into an output from a hidden
-  source and from an observation, one removal leaving two outputs bare, one
-  leaving only one of several bare, an **output** carrying `IF` repaired in
-  place, a removal with no statistics at all, the `HYPOTv2 → ABSOLUTE` one-edge
-  conversion, every aggregate squash left with no inward edge in a single
-  request, and a three-deep hidden chain collapsing on one cut. The three
-  remaining cases were already recorded (`constant_edge_folds_exactly`,
-  `single_edge_aggregate_converted`,
+  source, from a **constant** and from an observation; one removal leaving two
+  outputs bare and one leaving only one of several bare; an **output** carrying
+  `IF` repaired in place; a removal with no statistics at all; the
+  `HYPOTv2 → ABSOLUTE` one-edge conversion; every aggregate squash left with no
+  inward edge in a single request; and a three-deep hidden chain collapsing on
+  one cut. The remaining two corner cases were already recorded
+  (`single_edge_aggregate_converted`,
   `aggregate_keeps_its_squash_with_two_edges`). Regenerated with
-  `UPDATE_PRUNE_GOLDEN=1 cargo test -p neat-core --test prune_json`; the record
-  grew by 1 161 lines and no recorded answer moved.
+  `UPDATE_PRUNE_GOLDEN=1 cargo test -p neat-core --test prune_json`; no
+  previously recorded answer moved except the one the fix below changes.
+- **A zero-edge `HYPOTv2 → ABSOLUTE` rewrite is now reported.**
+  `fold_bare_aggregate` rewrote the target's squash and pushed no
+  `SquashConversion`, so a consumer reading the report was told about the
+  single-edge conversion (Ockham #197) and not about this one — while
+  `prune_rewrite` documents the report as being there precisely so "a caller
+  never has to discover it". `TargetOutcome::Folded` now carries the rewrite
+  and both entry points collect it into `PruneResult::converted_neurons`
+  alongside the single-edge conversions. Found by driving the shape across the
+  wire, which is what this issue is for.
+- **One home per fixture.** The five creatures the native suites and the
+  golden record would otherwise have kept two copies of now live only in
+  `prune_golden_cases`, read by `neat-core/tests/prune_neuron.rs` /
+  `prune_synapse.rs` through the new `tests/common/golden_fixture.rs`. The
+  cross-surface claim ("the wire answers what the native call answers for this
+  shape") is only worth anything while both halves are graded on the *same*
+  creature, which is the same reason `tests/common/prune_if.rs` exists;
+  `OUTPUT_IF_JSON` moved out of it for that reason.
 - **The coverage gates fail on a record that stops covering a shape.**
   `the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on` now
   requires a non-empty `convertedNeurons`, an `uncompensated` entry carrying
@@ -38,6 +55,21 @@ call and asserts the two answer the same `PruneResponse`.
   `HYPOTv2 → ABSOLUTE`), and each of the twelve cases by name.
   `tests/wasm_prune_parity_test.ts` asserts the same from the Deno side, which
   is what `wasm-bundle.yml` grades the built bundle with.
+
+## What the wire/native comparison does and does not prove
+
+`crosses_unchanged` asserts the parsed wire answer equals
+`PruneResponse::from(&native_result)`. Both sides run that same conversion, so
+the equality pins the **round trip** — a filled list a `skip_serializing_if`
+drops, a `Serialize`/`Deserialize` rename that does not agree with itself, a
+number JSON does not carry back — and **not** the rewrite: a fault in
+`prune_neuron` moves both sides together. That is why each corner case also
+asserts the value the documented forward-pass form requires (`W · μ` into a
+bias, `|W · μ|` for a `HYPOT`, the squash a conversion lands on), derived in
+the test rather than read back out of the answer, and why the committed record
+compared against the built bundle stays the boundary gate. The mutation table
+below is the evidence for both halves, and the module docs and `README.md` now
+say this rather than claiming more.
 
 ## Why the Ockham #196 branch is merged here
 
@@ -53,9 +85,12 @@ the two native test files take `Develop`'s copy plus #196's additions.
 `RELEASING.md`'s #198 entry is retitled `0.16.0 → 0.17.0`, which is the version
 it actually shipped as: its branch was cut at `0.15.9` and claimed `0.16.0`,
 #197 took that slot first, and the auto-bump moved #198 to `0.17.0` on merge.
-The #196 entry takes `0.18.0`, the next slot, and the workspace version moves
-with it. The completeness gate
-(`tests/scripts/releasing_breaking_change_log.bats`) is what surfaced the gap.
+The two entries are reordered so the log still descends. The #196 entry takes
+`0.18.0`, the next slot, and the workspace version moves with it. The
+completeness gate (`tests/scripts/releasing_breaking_change_log.bats`) is what
+surfaced the gap, and `pr-summary-ockham-196.md` — written for a PR that was
+never opened, against a `Develop` at `0.15.7` — now says which version its rule
+actually ships as rather than the one it guessed.
 
 ## Evidence
 
@@ -73,36 +108,22 @@ gate rather than a screenshot.
 
 ### Mutation evidence — the new tests can fail
 
-Two mutations, each reverted after the run:
+Every mutation was run with `cargo test -p neat-core --no-fail-fast` (without
+it, `cargo test` stops at the first failing binary and under-reports), and each
+was reverted after the run. Tests that died:
 
-- `fold_bare_aggregate`'s `folds_a_magnitude = squash == SquashType::Hypotenuse`
-  → `false`, so a `HYPOT` folds the signed term:
+| Mutation | Tests that went red |
+|---|---|
+| `fold_bare_aggregate`: `folds_a_magnitude` → `false`, so a `HYPOT` folds the signed term | `a_hypot_output_left_with_no_inward_edge_folds_the_absolute_term`, `a_bare_aggregate_reports_the_residual_its_form_can_justify`, `corner_case_11_…`, `the_golden_record_is_what_the_native_abi_answers_today` |
+| `zero_edge_rewrite(HYPOTv2)` → `None`, so a bare `HYPOTv2` keeps a squash that never reads its bias | `a_hypot_v2_output_left_with_no_inward_edge_becomes_an_absolute`, `an_aggregate_target_left_with_no_inward_edge_takes_the_fold`, `corner_case_11_…`, `the_golden_record_…` |
+| the zero-edge rewrite is performed but **not reported** (the defect this PR fixes) | the same four |
+| `From<&PruneResult>`: `converted_neurons` → `Vec::new()`, so the boundary drops the conversion report | `corner_case_8_…`, `corner_case_9_…`, `corner_case_11_…`, `a_conversion_and_a_dropped_magnitude_both_cross_the_wire`, `the_golden_record_…` |
+| `add_to_bias` made a no-op — the helper Ockham #196 collapsed the two identical bias-writing loops into, so both former sites must die | 13 of 55 `prune_neuron`, 14 of 60 `prune_synapse`, 7 of 27 `prune_json` |
+| the committed record stripped of `convertedNeurons` and every `droppedMean` | `the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on` — "no golden case carries a non-empty convertedNeurons" |
 
-  ```text
-  corner_case_11_every_aggregate_left_with_no_inward_edge_takes_the_fold ... FAILED
-  output-3: folded -1.2 where 1.2 was owed
-  ```
-
-- `From<&PruneResult>`'s `converted_neurons` → `Vec::new()`, so the boundary
-  drops the conversion report:
-
-  ```text
-  corner_case_8_an_aggregate_left_with_one_edge_becomes_identity ... FAILED
-  corner_case_9_a_hypot_v2_left_with_one_edge_becomes_absolute ... FAILED
-  ```
-
-  Only those two died, which is the shared-path caveat stated in the test
-  block's header: the wire/native comparison shares the rewrite — that is the
-  claim, since this module is a translation layer — so each test also asserts
-  the value the documented forward-pass form requires, derived in the test. That
-  second oracle is what caught this mutation.
-
-- A golden record stripped of `convertedNeurons` and `droppedMean`:
-
-  ```text
-  the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on ... FAILED
-  no golden case carries a non-empty convertedNeurons
-  ```
+The fourth row is the shared-path caveat made concrete: the corner cases that
+died are the ones carrying a derived assertion about the conversion, not the
+equality assertion, which moved with the fault.
 
 ```mermaid
 flowchart LR
@@ -135,6 +156,18 @@ flowchart LR
 - `corner_case_11_every_aggregate_left_with_no_inward_edge_takes_the_fold`
 - `corner_case_12_one_cut_collapses_a_three_deep_hidden_chain`
 - `the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on` — extended
+
+`neat-core/tests/prune_synapse.rs` / `prune_neuron.rs`
+
+- `a_hypot_v2_output_left_with_no_inward_edge_becomes_an_absolute` and
+  `an_aggregate_target_left_with_no_inward_edge_takes_the_fold` — each gained
+  the assertion that the zero-edge rewrite is **reported**, which is what
+  failed against the unreported version
+- `a_summing_aggregate_output_left_with_no_inward_edge_takes_the_fold` — gained
+  the negative half: a form that reads its bias needs no rewrite, so none is
+  reported
+- five fixtures now read through `tests/common/golden_fixture.rs`; no assertion
+  changed with them
 
 `tests/wasm_prune_parity_test.ts`
 

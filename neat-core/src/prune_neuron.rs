@@ -124,8 +124,11 @@
 //! | `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` — the term is a magnitude |
 //! | `HYPOTv2` | `\|bias + W·a\|` | `0`, the bias never read | `bias += W·μ` **and the squash becomes `ABSOLUTE`** |
 //!
-//! `HYPOTv2` is the one place in this crate where a **target's squash is
-//! rewritten**. With no inward edge its bias lives inside a per-synapse square
+//! `HYPOTv2` is the one squash a **zero-edge fold** rewrites — the single-edge
+//! conversion table above rewrites four more, and both report what they did on
+//! [`PruneResult::converted_neurons`], so a caller never has to discover a
+//! squash it did not send in. With no inward edge its bias lives inside a
+//! per-synapse square
 //! that no longer exists, so the forward pass answers `0` and a bias fold alone
 //! would change nothing; `ABSOLUTE` over the folded bias computes
 //! `\|bias + W·μ\|`, which is what `HYPOTv2` computed with the term still
@@ -653,6 +656,10 @@ pub fn prune_neuron(
     let mut bias_folds = Vec::new();
     let mut weight_shares = Vec::new();
     let mut uncompensated = Vec::new();
+    // Both rewrites a request can perform land here: the zero-edge fold's
+    // `HYPOTv2 → ABSOLUTE` below, and the single-edge conversion after the
+    // loop. One list, so a caller reads every squash that moved in one place.
+    let mut converted_neurons: Vec<SquashConversion> = Vec::new();
 
     for (target_uuid, role, squash, weight_sum) in targets {
         if !fold_policy(squash, inward_edge_count(&cut, &target_uuid)) {
@@ -680,7 +687,10 @@ pub fn prune_neuron(
                 invariant_value,
                 stats,
             )? {
-                TargetOutcome::Folded(fold) => bias_folds.push(fold),
+                TargetOutcome::Folded(fold, conversion) => {
+                    bias_folds.push(fold);
+                    converted_neurons.extend(conversion);
+                }
                 TargetOutcome::Uncompensated(entry) => uncompensated.push(entry),
             }
             continue;
@@ -729,7 +739,7 @@ pub fn prune_neuron(
     // cleanup sees it — every later pass then reads a sum rather than a
     // reduction (Ockham #197). The rewrite is exact, so it cannot spoil the
     // label below.
-    let converted_neurons = convert_single_edge_aggregates(&mut cut, &touched_targets)?;
+    converted_neurons.extend(convert_single_edge_aggregates(&mut cut, &touched_targets)?);
 
     // `IfRepair::Rewrite`, the same policy `prune_synapse` asks for: an `IF`
     // the removal left short of a role is rewritten into the closest form that
@@ -974,8 +984,15 @@ pub(crate) fn inward_edge_count(creature: &CreatureExport, uuid: &str) -> usize 
 /// refusal on [`PruneResult::uncompensated`], so nothing a target lost is ever
 /// silent.
 pub(crate) enum TargetOutcome {
-    /// The fold that was applied.
-    Folded(BiasFold),
+    /// The fold that was applied, and the squash rewrite it needed to be
+    /// readable at all — `Some` only for the `HYPOTv2` target of
+    /// [`zero_edge_rewrite`].
+    ///
+    /// The rewrite is reported for the same reason
+    /// [`crate::prune_rewrite::convert_single_edge_aggregates`] reports its
+    /// own: a caller must never have to *discover* that the squash it sent in
+    /// is not the squash it got back.
+    Folded(BiasFold, Option<SquashConversion>),
     /// The target that got nothing, and why.
     Uncompensated(UncompensatedTarget),
 }
@@ -1074,16 +1091,27 @@ pub(crate) fn fold_bare_aggregate(
     };
 
     add_to_bias(cut, target_uuid, bias_delta)?;
-    if let Some(rewrite) = zero_edge_rewrite(squash) {
-        set_squash(cut, target_uuid, rewrite)?;
-    }
-    Ok(TargetOutcome::Folded(BiasFold {
-        target_uuid: target_uuid.to_string(),
-        weight_sum,
-        delta: bias_delta,
-        exact: compensation.exact,
-        residual_variance,
-    }))
+    let conversion = match zero_edge_rewrite(squash) {
+        Some(rewrite) => {
+            set_squash(cut, target_uuid, rewrite)?;
+            Some(SquashConversion {
+                uuid: target_uuid.to_string(),
+                from: squash_name_from(squash),
+                to: squash_name_from(rewrite),
+            })
+        }
+        None => None,
+    };
+    Ok(TargetOutcome::Folded(
+        BiasFold {
+            target_uuid: target_uuid.to_string(),
+            weight_sum,
+            delta: bias_delta,
+            exact: compensation.exact,
+            residual_variance,
+        },
+        conversion,
+    ))
 }
 
 /// Add `delta` to `uuid`'s bias, or refuse.

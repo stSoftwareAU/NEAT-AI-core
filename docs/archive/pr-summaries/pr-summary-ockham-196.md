@@ -15,17 +15,18 @@ fold is the closest creature there is.
 
 `prune_neuron::fold_policy(target_squash, remaining_inward_edges)` is the single
 rule both entry points now ask, so a neuron removal and a synapse removal can
-never disagree about what a target is owed. The shape of the fold follows the
-empty form:
+never disagree about what a target is owed.
 
 The shape of the fold per squash is tabulated once, in the `prune_neuron`
 module documentation, and mirrored in `README.md`'s pruning section — this
 summary points at it rather than keeping a third copy that could drift.
 
 `IF` is excluded whatever it is left with: what it lost is a role, and
-`IfRepair` owns that repair. `HYPOTv2` is the one place a target's squash
-changes; the two forms share the `[0, f32::MAX]` activation range, asserted in
-the tests rather than assumed.
+`IfRepair` owns that repair. `HYPOTv2` is the one squash a **zero-edge** fold
+rewrites — Ockham #197's single-edge conversion rewrites four more — and the
+rewrite is reported on `PruneResult::converted_neurons` like any other
+(Ockham #201). The two forms share the `[0, f32::MAX]` activation range,
+asserted in the tests rather than assumed.
 
 ```mermaid
 flowchart TD
@@ -59,21 +60,24 @@ the quality gate rather than a screenshot.
   0.25`, and `Unknown squash function` before the `HYPOTv2` name was right),
   then pass after it.
 - `stSoftwareAU/NEAT-AI-Ockham`, the registered downstream consumer this issue
-  came from, compiles and passes its full suite against `0.16.0` with no source
-  edit.
+  came from, compiles and passes its full suite against this core with no
+  source edit.
 
 ## Version
 
-`[workspace.package].version` `0.15.7 → 0.16.0`. No public item changed, but
-documented pruning behaviour callers rely on did, which is a major-equivalent
-bump pre-1.0 per `RELEASING.md`. The breaking-change log carries the entry and
-the migration note, including the `AggregateTarget → NoStatistics` reason-code
-move that reaches the JSON and WASM surface. Ockham moves its
-`neat-core.expected-version` baseline in the matching PR.
+No public item changed, but documented pruning behaviour callers rely on did,
+which is a major-equivalent bump pre-1.0 per `RELEASING.md`. The
+breaking-change log carries the entry and the migration note, including the
+`AggregateTarget → NoStatistics` reason-code move that reaches the JSON and
+WASM surface. Ockham moves its `neat-core.expected-version` baseline in the
+matching PR.
 
-`wasm-bench/Cargo.lock` moves too. It was pinned at `0.15.0` — two minors stale
-— so this bump also brings that lockfile back in step; nothing else in it
-changed.
+**This summary was written for a PR that was never opened**, against a
+`Develop` at `0.15.7`, and it claimed `0.16.0`. That slot went to Ockham #197
+and the next to #198, so the rule described here ships on the Ockham #201
+branch as **`0.18.0`** — see `pr-summary-ockham-201.md` for why it is merged
+there rather than landing on its own. `wasm-bench/Cargo.lock` moves with the
+workspace version; nothing else in it changed.
 
 ## Test plan
 

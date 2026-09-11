@@ -18,9 +18,12 @@
 //! - **the TypeScript captures** in [`neat_core::PRUNE_PARITY_CASES`], which
 //!   are NEAT-AI's own output for the same removals (Issue #588).
 
+#[path = "common/golden_fixture.rs"]
+mod golden_fixture;
 #[path = "common/prune_if.rs"]
 mod prune_if;
 
+use golden_fixture::golden_creature;
 use neat_core::prune_fixtures::{
     CASCADE_ORPHAN_FEEDERS, CONSTANT_BIAS_FOLD, IF_REPAIR_COALESCES_ROLES,
     MEMETIC_DROPPED_ON_REMOVAL,
@@ -31,7 +34,7 @@ use neat_core::{
     ValidateOptions, compile_creature, creature_validate, parse_creature_json, prune_neuron,
     validate_creature_topology,
 };
-use prune_if::{IF_STATIC_CONDITION_JSON, OUTPUT_IF_JSON};
+use prune_if::IF_STATIC_CONDITION_JSON;
 
 const OPTIONS: ValidateOptions = ValidateOptions {
     neurons: None,
@@ -638,7 +641,7 @@ fn an_output_carrying_the_if_squash_is_rewritten_in_place_by_a_neuron_prune() {
     // `IF` output short a role has to be repaired where it stands. The synapse
     // half is `prune_synapse.rs::an_output_carrying_the_if_squash_is_rewritten_in_place`,
     // over the same fixture and the same two removals.
-    let before = creature(OUTPUT_IF_JSON);
+    let before = golden_creature("output_if_rewritten_in_place");
 
     // The condition source goes: the condition is empty, so it settles at 0,
     // which is not > 0, and the output flattens onto its negative arm.
@@ -1718,38 +1721,11 @@ fn no_dropped_magnitude_refuses_a_neuron_removal() {
 
 // --- targets left with no inward edge (Ockham #196) --------------------------
 
-/// `h-1` is the only source of **both** outputs, so removing it leaves each of
-/// them with nothing to sum.
-const SOLE_SOURCE_OF_TWO_OUTPUTS_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
-  "neurons":[
-    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
-    {"type":"output","uuid":"output-1","bias":-0.2,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
-    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
-    {"weight":-0.5,"fromUUID":"h-1","toUUID":"output-1"}
-  ]
-}"#;
-
-/// `h-1` feeds both outputs, but only `output-0` has nothing else: `output-1`
-/// keeps its own observation edge.
-const ONE_OUTPUT_LOSES_ITS_LAST_EDGE_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":2,
-  "neurons":[
-    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
-    {"type":"output","uuid":"output-1","bias":-0.2,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
-    {"weight":1.0,"fromUUID":"input-1","toUUID":"output-1"},
-    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
-    {"weight":-0.5,"fromUUID":"h-1","toUUID":"output-1"}
-  ]
-}"#;
+// The creature where one removal leaves **both** outputs bare, and the one
+// where it leaves only `output-0` bare, are the `sole_source_of_two_outputs…`
+// and `one_output_of_several…` golden cases, read through
+// `common/golden_fixture.rs` so the native and wire halves cannot be graded on
+// different creatures (Ockham #201).
 
 /// The neuron being removed is itself an aggregate. Its own squash says
 /// nothing about how a *target* takes the term it loses.
@@ -1787,7 +1763,7 @@ fn assert_output_on_every_probe(
 
 #[test]
 fn the_sole_source_of_two_outputs_folds_into_both_biases() {
-    let before = creature(SOLE_SOURCE_OF_TWO_OUTPUTS_JSON);
+    let before = golden_creature("sole_source_of_two_outputs_folds_into_both");
     let result = pruned(&before, "h-1", Some(&mean_only(0.6)));
 
     assert_close(
@@ -1819,7 +1795,7 @@ fn the_sole_source_of_two_outputs_folds_into_both_biases() {
 
 #[test]
 fn only_the_output_that_loses_its_last_edge_goes_constant() {
-    let before = creature(ONE_OUTPUT_LOSES_ITS_LAST_EDGE_JSON);
+    let before = golden_creature("one_output_of_several_loses_its_last_edge");
     let result = pruned(&before, "h-1", Some(&mean_only(0.6)));
 
     assert_close(
@@ -1929,6 +1905,18 @@ fn an_aggregate_target_left_with_no_inward_edge_takes_the_fold() {
         neuron(&result.creature, "output-1").squash.as_deref(),
         Some("ABSOLUTE"),
         "HYPOTv2 ignores its bias with no term, so it becomes ABSOLUTE"
+    );
+    // Reported, not left to be discovered — the same promise the single-edge
+    // conversion makes (Ockham #201). The `MEAN` keeps its squash, so the one
+    // rewrite is the only entry.
+    assert_eq!(
+        result.converted_neurons,
+        vec![SquashConversion {
+            uuid: "output-1".to_string(),
+            from: "HYPOTv2",
+            to: "ABSOLUTE",
+        }],
+        "the zero-edge rewrite went unreported"
     );
     assert_eq!(result.uncompensated, vec![]);
     assert_valid("aggregate targets", &result.creature);

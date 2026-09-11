@@ -950,8 +950,11 @@ the empty form:
 | `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` — the term is a magnitude |
 | `HYPOTv2` | `\|bias + W·a\|` | `0`, the bias never read | `bias += W·μ` **and the squash becomes `ABSOLUTE`** |
 
-`HYPOTv2` is the one place a **target's squash is rewritten**. Its bias lives
-inside a per-synapse square, so with no synapse left the forward pass answers
+`HYPOTv2` is the one squash a **zero-edge fold** rewrites — the single-edge
+conversion table above rewrites four more, and both report what they did on
+`PruneResult::converted_neurons` (`convertedNeurons` on the wire). Its bias
+lives inside a per-synapse square, so with no synapse left the forward pass
+answers
 `0` and a bias fold alone would change nothing; `ABSOLUTE` over the folded bias
 computes `|bias + W·μ|`, which is what `HYPOTv2` computed with the term still
 there. The two forms share the `[0, f32::MAX]` activation range, so the
@@ -1249,8 +1252,13 @@ aggregate still reducing two terms, reporting `droppedMean`; every aggregate
 squash left with no inward edge, `HYPOTv2` among them; and a three-deep hidden
 chain collapsing on one cut. `neat-core/tests/prune_json.rs` drives each of
 them through the JSON entry point *and* the native call and asserts the two
-answer the same `PruneResponse`, which is what `impl From<&PruneResult> for
-PruneResponse` is public for.
+answer the same `PruneResponse` — which is what `impl From<&PruneResult> for
+PruneResponse` is public for — then asserts the numbers the documented
+forward-pass forms require. The first half pins the **round trip** (both sides
+run the same conversion, so a fault in the rewrite moves both); the second is
+what catches a rewrite that answers the wrong number, and the record compared
+against the built bundle is what catches a bundle that answers something else
+entirely.
 
 | Gate | Where | What it proves |
 |---|---|---|

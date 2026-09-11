@@ -127,7 +127,7 @@ Deno.test("the golden record carries every corner case the pruning guarantee is 
   // exports. A record that stopped naming one would silently stop grading it.
   const required = [
     "last_edge_into_output_folds_a_mean",
-    "constant_edge_folds_exactly",
+    "last_edge_from_a_constant_folds_exactly",
     "last_edge_from_an_observation_folds_a_mean",
     "sole_source_of_two_outputs_folds_into_both",
     "one_output_of_several_loses_its_last_edge",

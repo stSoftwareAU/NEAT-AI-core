@@ -2238,6 +2238,105 @@
     }
   },
   {
+    "name": "last_edge_from_a_constant_folds_exactly",
+    "note": "an output left with nothing to sum folds a constant source exactly",
+    "op": "synapse",
+    "request": {
+      "creature": {
+        "forwardOnly": true,
+        "input": 1,
+        "neurons": [
+          {
+            "bias": 0.5,
+            "type": "constant",
+            "uuid": "c-1"
+          },
+          {
+            "bias": 0.25,
+            "squash": "IDENTITY",
+            "type": "output",
+            "uuid": "output-0"
+          },
+          {
+            "bias": 0.0,
+            "squash": "IDENTITY",
+            "type": "output",
+            "uuid": "output-1"
+          }
+        ],
+        "output": 2,
+        "semanticVersion": "4.0.0",
+        "synapses": [
+          {
+            "fromUUID": "c-1",
+            "toUUID": "output-0",
+            "weight": 0.2
+          },
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-1",
+            "weight": 1.0
+          }
+        ]
+      },
+      "synapse": {
+        "fromUUID": "c-1",
+        "toUUID": "output-0"
+      }
+    },
+    "response": {
+      "biasFolds": [
+        {
+          "delta": 0.1,
+          "exact": true,
+          "residualVariance": 0.0,
+          "targetUUID": "output-0",
+          "weightSum": 0.2
+        }
+      ],
+      "cascadeNeurons": [
+        "c-1"
+      ],
+      "creature": {
+        "forwardOnly": true,
+        "input": 1,
+        "neurons": [
+          {
+            "bias": 0.35,
+            "squash": "IDENTITY",
+            "type": "output",
+            "uuid": "output-0"
+          },
+          {
+            "bias": 0.0,
+            "squash": "IDENTITY",
+            "type": "output",
+            "uuid": "output-1"
+          }
+        ],
+        "output": 2,
+        "semanticVersion": "4.0.0",
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-1",
+            "weight": 1.0
+          }
+        ]
+      },
+      "ok": true,
+      "passes": 2,
+      "removedSynapses": [
+        {
+          "fromUUID": "c-1",
+          "toUUID": "output-0",
+          "type": "standard"
+        }
+      ],
+      "transform": "exact"
+    }
+  },
+  {
     "name": "last_edge_from_an_observation_folds_a_mean",
     "note": "an edge out of input-N is a candidate, and folds like any other",
     "op": "synapse",
@@ -3092,6 +3191,13 @@
           "exact": false,
           "targetUUID": "output-4",
           "weightSum": -2.0
+        }
+      ],
+      "convertedNeurons": [
+        {
+          "from": "HYPOTv2",
+          "to": "ABSOLUTE",
+          "uuid": "output-4"
         }
       ],
       "creature": {

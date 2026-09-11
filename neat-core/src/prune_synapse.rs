@@ -127,7 +127,7 @@ use crate::prune_neuron::{
     compensate, dropped_mean, fold_bare_aggregate, fold_policy, inward_edge_count, target_squash,
     transform_class,
 };
-use crate::prune_rewrite::convert_single_edge_aggregates;
+use crate::prune_rewrite::{SquashConversion, convert_single_edge_aggregates};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -226,6 +226,9 @@ pub fn prune_synapse(
     let mut bias_folds = Vec::new();
     let mut weight_shares = Vec::new();
     let mut uncompensated = Vec::new();
+    // Both rewrites a request can perform land here: the zero-edge fold's
+    // `HYPOTv2 → ABSOLUTE` and the single-edge conversion below.
+    let mut converted_neurons: Vec<SquashConversion> = Vec::new();
 
     if !fold_policy(squash, inward_edge_count(&cut, &key.to_uuid)) {
         uncompensated.push(UncompensatedTarget {
@@ -248,7 +251,10 @@ pub fn prune_synapse(
             invariant_value,
             effective_stats,
         )? {
-            TargetOutcome::Folded(fold) => bias_folds.push(fold),
+            TargetOutcome::Folded(fold, conversion) => {
+                bias_folds.push(fold);
+                converted_neurons.extend(conversion);
+            }
             TargetOutcome::Uncompensated(entry) => uncompensated.push(entry),
         }
     } else if let Some(compensation) = compensate(invariant_value, effective_stats, weight_sum) {
@@ -291,8 +297,10 @@ pub fn prune_synapse(
     // rewritten to the point-wise squash that computes the same number before
     // cleanup sees it (Ockham #197). The cut moves the inward count of the
     // requested target and nothing else, so that is the one target examined.
-    let converted_neurons =
-        convert_single_edge_aggregates(&mut cut, std::slice::from_ref(&key.to_uuid))?;
+    converted_neurons.extend(convert_single_edge_aggregates(
+        &mut cut,
+        std::slice::from_ref(&key.to_uuid),
+    )?);
 
     let outcome = cleanup_creature_with(
         &cut,

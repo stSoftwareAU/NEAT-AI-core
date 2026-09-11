@@ -20,9 +20,12 @@
 //! - **the TypeScript captures** in [`neat_core::PRUNE_PARITY_CASES`] — NEAT-AI's
 //!   own output for the same removals (Issue #588).
 
+#[path = "common/golden_fixture.rs"]
+mod golden_fixture;
 #[path = "common/prune_if.rs"]
 mod prune_if;
 
+use golden_fixture::golden_creature;
 use neat_core::prune_fixtures::{
     CASCADE_ORPHAN_FEEDERS, CONSTANT_MOVES_INTO_PREFIX, EDGE_ROLE_IDENTITY,
     EDGE_SOURCE_BECOMES_DEAD, EDGE_TARGET_BECOMES_CONSTANT,
@@ -35,7 +38,7 @@ use neat_core::{
     compile_creature, creature_validate, parse_creature_json, prune_synapse,
     validate_creature_topology,
 };
-use prune_if::{IF_STATIC_CONDITION_JSON, OUTPUT_IF_JSON};
+use prune_if::IF_STATIC_CONDITION_JSON;
 
 const OPTIONS: ValidateOptions = ValidateOptions {
     neurons: None,
@@ -1337,7 +1340,7 @@ fn an_output_carrying_the_if_squash_is_rewritten_in_place() {
     // Corner case 6, the synapse half. The declared target width is the fleet's
     // contract, so an output can never be removed or reordered — an `IF` output
     // short a role is repaired where it stands.
-    let before = creature(OUTPUT_IF_JSON);
+    let before = golden_creature("output_if_rewritten_in_place");
 
     // The condition edge goes: the condition is empty, so it settles at 0,
     // which is not > 0, and the output flattens onto its negative arm.
@@ -1996,48 +1999,11 @@ fn the_replacement_clamps_every_converted_activation_the_same_way() {
 // the fold each of them is owed is derived here from those forward-pass forms
 // rather than read back out of the code under test.
 
-/// `h-1` is `output-0`'s **only** source, so removing that edge leaves the
-/// output with nothing to sum.
-const LAST_EDGE_INTO_OUTPUT_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
-    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}
-  ]
-}"#;
-
-/// A constant is `output-0`'s only source; `output-1` keeps the observation
-/// edge so the creature still reads its input.
-const LAST_EDGE_FROM_CONSTANT_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
-  "neurons":[
-    {"type":"constant","uuid":"c-1","bias":0.5},
-    {"type":"output","uuid":"output-0","bias":0.25,"squash":"IDENTITY"},
-    {"type":"output","uuid":"output-1","bias":0.0,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":0.2,"fromUUID":"c-1","toUUID":"output-0"},
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-1"}
-  ]
-}"#;
-
-/// `input-0` feeds both outputs directly, so removing one edge leaves that
-/// output with nothing to sum while the other keeps reading the observation.
-const LAST_EDGE_FROM_INPUT_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
-  "neurons":[
-    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
-    {"type":"output","uuid":"output-1","bias":0.1,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.5,"fromUUID":"input-0","toUUID":"output-0"},
-    {"weight":0.5,"fromUUID":"input-0","toUUID":"output-1"}
-  ]
-}"#;
+// The three creatures these cases run on — an output whose only source is a
+// hidden neuron, one whose only source is a constant, and one whose only
+// source is an observation — are the `last_edge_*` golden cases, read through
+// `common/golden_fixture.rs` so the native and wire halves cannot be graded on
+// different creatures (Ockham #201).
 
 /// `h-agg` is a hidden `MINIMUM` with a single inward edge, so the cut leaves
 /// it with nothing to aggregate while it still feeds the output.
@@ -2101,7 +2067,7 @@ fn assert_output_on_every_probe(
 
 #[test]
 fn an_output_left_with_no_inward_edge_takes_the_mean_fold() {
-    let before = creature(LAST_EDGE_INTO_OUTPUT_JSON);
+    let before = golden_creature("last_edge_into_output_folds_a_mean");
     let result = pruned(
         &before,
         &key("h-1", "output-0", SynapseType::Standard),
@@ -2127,7 +2093,7 @@ fn an_output_left_with_no_inward_edge_takes_the_mean_fold() {
 
 #[test]
 fn an_output_left_with_no_inward_edge_folds_a_constant_source_exactly() {
-    let before = creature(LAST_EDGE_FROM_CONSTANT_JSON);
+    let before = golden_creature("last_edge_from_a_constant_folds_exactly");
     let result = pruned(
         &before,
         &key("c-1", "output-0", SynapseType::Standard),
@@ -2154,7 +2120,7 @@ fn an_output_left_with_no_inward_edge_folds_a_constant_source_exactly() {
 
 #[test]
 fn an_output_left_with_no_inward_edge_folds_an_observation_source() {
-    let before = creature(LAST_EDGE_FROM_INPUT_JSON);
+    let before = golden_creature("last_edge_from_an_observation_folds_a_mean");
     let result = pruned(
         &before,
         &key("input-0", "output-0", SynapseType::Standard),
@@ -2205,6 +2171,11 @@ fn a_summing_aggregate_output_left_with_no_inward_edge_takes_the_fold() {
         );
         assert_eq!(result.uncompensated, vec![], "{squash}: uncompensated");
         assert_eq!(result.bias_folds.len(), 1, "{squash}: one fold");
+        assert_eq!(
+            result.converted_neurons,
+            vec![],
+            "{squash}: a form that reads its bias needs no rewrite, so none is reported"
+        );
         assert_valid(squash, &result.creature);
         assert_output_on_every_probe(squash, &result.creature, 0, expected);
     }
@@ -2265,6 +2236,18 @@ fn a_hypot_v2_output_left_with_no_inward_edge_becomes_an_absolute() {
         neuron(&result.creature, "output-0").squash.as_deref(),
         Some("ABSOLUTE"),
         "HYPOTv2 is rewritten to the form that reads its bias"
+    );
+    // A squash the caller sent in and did not get back is **reported**, the
+    // same way the single-edge conversion is (Ockham #201): a consumer reading
+    // the report must never have to discover it by diffing the creature.
+    assert_eq!(
+        result.converted_neurons,
+        vec![SquashConversion {
+            uuid: "output-0".to_string(),
+            from: "HYPOTv2",
+            to: "ABSOLUTE",
+        }],
+        "the zero-edge rewrite went unreported"
     );
     assert_eq!(result.uncompensated, vec![]);
     assert_valid("HYPOTv2", &result.creature);
@@ -2450,7 +2433,7 @@ fn a_bare_aggregate_reports_the_residual_its_form_can_justify() {
 
     // A structurally fixed source leaves nothing over under any form.
     let exact = pruned(
-        &creature(LAST_EDGE_FROM_CONSTANT_JSON),
+        &golden_creature("last_edge_from_a_constant_folds_exactly"),
         &key("c-1", "output-0", SynapseType::Standard),
         None,
     );

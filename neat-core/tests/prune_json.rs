@@ -543,7 +543,7 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
         "static_if_rewrite",
         "restored_if_role",
         "last_edge_into_output_folds_a_mean",
-        "constant_edge_folds_exactly",
+        "last_edge_from_a_constant_folds_exactly",
         "last_edge_from_an_observation_folds_a_mean",
         "sole_source_of_two_outputs_folds_into_both",
         "one_output_of_several_loses_its_last_edge",
@@ -891,15 +891,25 @@ fn corner_case_1_the_last_edge_into_an_output_folds_the_callers_mean() {
 
 #[test]
 fn corner_case_2_the_last_edge_from_a_constant_folds_exactly() {
-    let response = crosses_unchanged("constant_edge_folds_exactly");
+    let response = crosses_unchanged("last_edge_from_a_constant_folds_exactly");
     let creature = response.creature.clone().expect("ok");
 
     // A constant is worth its own bias on every record, so `w · b` is the
     // whole of what went: no statistic is involved and the label says exact.
     assert_eq!(response.transform.as_deref(), Some("exact"));
     assert_fold(&response, "output-0", 0.2 * 0.5);
-    assert!((bias_of(&creature, "output-0") - 0.35).abs() < 1e-12);
+    assert!((bias_of(&creature, "output-0") - (0.25 + 0.1)).abs() < 1e-12);
     assert!(response.bias_folds[0].exact, "{:?}", response.bias_folds);
+    // The corner case is the **bare** target: the constant was its only
+    // source, and the cut took the constant with it.
+    assert!(
+        !creature.synapses.iter().any(|s| s.to_uuid == "output-0"),
+        "output-0 still has something to sum, so this is not the zero-edge case"
+    );
+    assert!(
+        !creature.neurons.iter().any(|n| n.uuid == "c-1"),
+        "the constant kept no outward edge, so the cascade should have taken it"
+    );
 }
 
 #[test]
@@ -1099,6 +1109,19 @@ fn corner_case_11_every_aggregate_left_with_no_inward_edge_takes_the_fold() {
         "a bare aggregate went uncompensated: {:?}",
         response.uncompensated
     );
+    // The one squash that moved is **reported**, and only that one: a caller
+    // reading the report must never have to discover a rewrite by diffing the
+    // creature it got back against the one it sent.
+    assert_eq!(
+        response.converted_neurons.len(),
+        1,
+        "{:?}",
+        response.converted_neurons
+    );
+    let conversion = &response.converted_neurons[0];
+    assert_eq!(conversion.uuid, "output-4");
+    assert_eq!(conversion.from, "HYPOTv2");
+    assert_eq!(conversion.to, "ABSOLUTE");
 }
 
 #[test]

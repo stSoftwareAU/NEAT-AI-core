@@ -36,25 +36,8 @@ pub const IF_STATIC_CONDITION_JSON: &str = r#"{
   ]
 }"#;
 
-/// The **output** neuron itself carries the `IF` squash (corner case 6): the
-/// declared target width means it can never be removed or replaced, so a role
-/// it loses has to be repaired in place. `h-cond` varies with the record, so
-/// losing it flattens the output and losing a branch source restores that
-/// branch instead.
-pub const OUTPUT_IF_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-cond","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-n","bias":0.3,"squash":"LOGISTIC"},
-    {"type":"output","uuid":"output-0","bias":0.05,"squash":"IF"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-cond"},
-    {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-n"},
-    {"weight":1.0,"fromUUID":"h-cond","toUUID":"output-0","type":"condition"},
-    {"weight":2.0,"fromUUID":"h-p","toUUID":"output-0","type":"positive"},
-    {"weight":-3.0,"fromUUID":"h-n","toUUID":"output-0","type":"negative"}
-  ]
-}"#;
+// The **output** neuron carrying the `IF` squash (corner case 6) used to live
+// here too. It is now the `output_if_rewritten_in_place` golden case, read by
+// both suites through `common/golden_fixture.rs`, so the creature the native
+// tests are graded on and the creature the JSON boundary is graded on cannot
+// drift apart (Ockham #201).

@@ -110,7 +110,9 @@
 //! shape that stopped crossing the wire correctly fails a gate rather than
 //! reaching a host. Each is driven through the JSON entry point *and* the
 //! native call by `neat-core/tests/prune_json.rs`, which compares the two
-//! whole through [`PruneResponse`]'s `From<&PruneResult>`.
+//! whole through [`PruneResponse`]'s `From<&PruneResult>` — pinning the round
+//! trip — and asserts the numbers the documented forward-pass forms require
+//! beside it, which is the half that can catch a fault in the rewrite itself.
 
 use serde::{Deserialize, Serialize};
 
@@ -493,8 +495,14 @@ pub struct PruneResponse {
 ///
 /// Public so a caller — and `neat-core/tests/prune_json.rs` — can write down
 /// what the wire *should* say for a native result and compare the two whole
-/// (Ockham #201), rather than spot-checking a field at a time and missing
-/// whatever the boundary dropped.
+/// (Ockham #201). What that comparison pins is the **round trip**: a field
+/// this type can hold but the wire cannot carry back — a `skip_serializing_if`
+/// that drops a filled list, a `Serialize`/`Deserialize` rename that does not
+/// agree with itself, a number that does not survive JSON — fails it. It is
+/// not a check on the rewrite: both sides of it run this same conversion, so a
+/// fault in the rewrite moves both. That is what the derived-value assertions
+/// beside each corner case, and the committed golden record the built wasm
+/// bundle is compared against, are for.
 ///
 /// The result is **destructured**, not read field by field: a field added to
 /// [`PruneResult`] then fails to compile here rather than silently never
@@ -907,6 +915,22 @@ mod golden {
             response: serde_json::Value::Null,
         });
 
+        // (2) The same, from a source the creature itself fixes: the fold is
+        // `w · b` and no statistic is involved, so the label is exact. The
+        // pre-existing `constant_edge_folds_exactly` case grades the same fold
+        // into a target that keeps its other edges; this one is the **bare**
+        // target the corner case is about.
+        cases.push(PruneGoldenCase {
+            name: "last_edge_from_a_constant_folds_exactly".to_string(),
+            note: "an output left with nothing to sum folds a constant source exactly".to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": fixture(LAST_EDGE_FROM_CONSTANT),
+                "synapse": { "fromUUID": "c-1", "toUUID": "output-0" },
+            }),
+            response: serde_json::Value::Null,
+        });
+
         // (3) The same, from an observation the caller measured — an
         // `input-N` source is an ordinary candidate.
         cases.push(PruneGoldenCase {
@@ -1137,6 +1161,24 @@ mod golden {
       "synapses":[
         {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
         {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}
+      ]
+    }"#;
+
+    /// Corner case (2): a constant is `output-0`'s only source, so the cut
+    /// leaves the output bare and what it lost is the value the creature
+    /// itself fixes — an **exact** fold, with no statistic involved.
+    /// `output-1` keeps the observation edge so the creature still reads its
+    /// input.
+    const LAST_EDGE_FROM_CONSTANT: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+      "neurons":[
+        {"type":"constant","uuid":"c-1","bias":0.5},
+        {"type":"output","uuid":"output-0","bias":0.25,"squash":"IDENTITY"},
+        {"type":"output","uuid":"output-1","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":0.2,"fromUUID":"c-1","toUUID":"output-0"},
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"output-1"}
       ]
     }"#;
 
