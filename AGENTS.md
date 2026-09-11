@@ -600,6 +600,14 @@ eight entry points — the seven `*_sum_batch_packed` kernels and `mse_mean_reco
 per-record `1/num_outputs` factor lives in the closure (which is what keeps MSLE
 and hinge deliberately un-averaged).
 
+The four values that describe the buffer — `records`, `input_size`,
+`num_outputs`, `forward_only` — travel as one internal `RecordScanConfig`
+(Issue #671), built once per entry point and used for both `config.layout()`
+and the scan itself, so a sixth "what travels together" value is added in one
+struct rather than in nine parameter lists. The public
+`#[cfg_attr(wasm_bindgen)]` signatures stay flat: that is the JS/WASM calling
+convention, not a smell.
+
 The driver takes a closure and **no mode flags**: SIMD dispatch stays at the
 callers, where it genuinely differs (MSE falls back through the 8-way *and*
 4-way paths; `categorical_error_sum_batch_packed` uses neither and keeps its own
