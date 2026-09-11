@@ -82,12 +82,13 @@
 //!
 //! A point-wise squash computes `squash(bias + Σ w·a)`, so moving `W · μ` into
 //! the bias puts the mean term back where the removed one was. An **aggregate**
-//! does not: a `MINIMUM` takes the smallest inward term, a `MEAN` divides by its
-//! inward **count**, a `HYPOT` squares each term, and an `IF` reads its
-//! condition sum to choose a branch. Folding into their bias would be a number
-//! the caller could not justify, so no fold is attempted there and the target is
-//! named on [`PruneResult::uncompensated`] instead — reported, never silent.
-//! The same entry records a target left uncompensated because no statistics were
+//! that still has something to aggregate does not: a `MINIMUM` takes the
+//! smallest inward term, a `MEAN` divides by its inward **count**, a `HYPOT`
+//! squares each term, and an `IF` reads its condition sum to choose a branch.
+//! Folding into their bias would be a number the caller could not justify, so
+//! no fold is attempted there and the target is named on
+//! [`PruneResult::uncompensated`] instead — reported, never silent. The same
+//! entry records a target left uncompensated because no statistics were
 //! supplied at all.
 //!
 //! # What an aggregate that keeps its edges answers with (Ockham #197)
@@ -107,6 +108,42 @@
 //! caller's half of the Issue #587 boundary. Statistics this crate cannot make
 //! sense of are a different matter and still refuse outright.
 //!
+//! # An aggregate left with **no** inward edge takes the fold (Ockham #196)
+//!
+//! `fold_policy` is the single rule, asked by this module and by
+//! [`mod@crate::prune_synapse`] alike. Once the cut leaves an aggregate with
+//! nothing to aggregate, the forward pass stops reading a set of terms and
+//! evaluates the neuron from its bias alone
+//! (`prune_cleanup::zero_inward_activation`) — a point-wise reading
+//! again — so the fold is the closest creature there is rather than a number
+//! nobody can justify. The shape of the fold follows the empty form:
+//!
+//! | Squash | one inward term | no inward term | the fold |
+//! |---|---|---|---|
+//! | `MINIMUM` / `MAXIMUM` / `MEAN` | `W·a + bias` | `bias` | `bias += W·μ` |
+//! | `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` — the term is a magnitude |
+//! | `HYPOTv2` | `\|bias + W·a\|` | `0`, the bias never read | `bias += W·μ` **and the squash becomes `ABSOLUTE`** |
+//!
+//! `HYPOTv2` is the one place in this crate where a **target's squash is
+//! rewritten**. With no inward edge its bias lives inside a per-synapse square
+//! that no longer exists, so the forward pass answers `0` and a bias fold alone
+//! would change nothing; `ABSOLUTE` over the folded bias computes
+//! `\|bias + W·μ\|`, which is what `HYPOTv2` computed with the term still
+//! there. The two forms share an activation range — both `[0, f32::MAX]` — so
+//! the replacement cannot answer a value the original would have clamped away.
+//!
+//! An `IF` is excluded whatever it is left with: rule 12 means an `IF` short an
+//! edge is short a **role**, and repairing that is
+//! [`crate::prune_cleanup::IfRepair`]'s job, not a number's.
+//!
+//! No correlated survivor helps an **aggregate** target with no inward edge — a
+//! share can only land on an edge into that target, and there is none — so the
+//! fold there is mean-only and a supplied proxy goes unused. It is still
+//! *checked*: a proxy that is not a number, not a survivor, or not consistent
+//! with the variances refuses the whole prune as it always did. A **point-wise**
+//! target left bare is unchanged by Ockham #196 and still takes the ordinary
+//! path, so a proxy with a non-zero share into it is refused with
+//! [`PruneError::MissingProxyEdge`] — there is no edge left to carry it.
 //! # An `IF` short a role is rewritten, not downgraded
 //!
 //! Removing a neuron can leave an `IF` without a `condition`, a `positive` or a
@@ -238,8 +275,8 @@ pub struct BiasFold {
     pub weight_sum: f64,
     /// What was added to the target's bias.
     pub delta: f64,
-    /// True when the folded value is the neuron's activation on **every**
-    /// record, so the fold changes nothing the creature computes.
+    /// True when the folded value is what the removed term was worth on
+    /// **every** record, so the fold changes nothing the creature computes.
     pub exact: bool,
     /// Variance of what the compensation could not carry, when the caller
     /// supplied the variance it is derived from.
@@ -262,8 +299,10 @@ pub struct WeightShare {
 pub enum UncompensatedReason {
     /// No statistics were supplied, so there is no number to fold.
     NoStatistics,
-    /// The target's squash aggregates its inward terms, so a bias fold does
-    /// not stand in for the term the removal took away.
+    /// The target's squash aggregates the inward terms it **still has**, so a
+    /// bias fold does not stand in for the term the removal took away. An
+    /// aggregate the cut left with no inward edge at all is folded instead
+    /// (Ockham #196); an `IF` is never folded, because what it lost is a role.
     AggregateTarget,
 }
 
@@ -616,7 +655,7 @@ pub fn prune_neuron(
     let mut uncompensated = Vec::new();
 
     for (target_uuid, role, squash, weight_sum) in targets {
-        if squash.is_aggregate() {
+        if !fold_policy(squash, inward_edge_count(&cut, &target_uuid)) {
             uncompensated.push(UncompensatedTarget {
                 target_uuid,
                 role,
@@ -625,6 +664,25 @@ pub fn prune_neuron(
                 reason: UncompensatedReason::AggregateTarget,
                 dropped_mean: dropped_mean(invariant_value, stats, weight_sum),
             });
+            continue;
+        }
+
+        // An aggregate the cut left with nothing to aggregate is foldable, but
+        // in the shape its empty forward-pass form implies rather than the
+        // point-wise one below.
+        if squash.is_aggregate() {
+            match fold_bare_aggregate(
+                &mut cut,
+                &target_uuid,
+                role,
+                squash,
+                weight_sum,
+                invariant_value,
+                stats,
+            )? {
+                TargetOutcome::Folded(fold) => bias_folds.push(fold),
+                TargetOutcome::Uncompensated(entry) => uncompensated.push(entry),
+            }
             continue;
         }
 
@@ -656,11 +714,7 @@ pub fn prune_neuron(
             });
         }
 
-        for neuron in &mut cut.neurons {
-            if neuron.uuid == target_uuid {
-                neuron.bias += compensation.bias_delta;
-            }
-        }
+        add_to_bias(&mut cut, &target_uuid, compensation.bias_delta)?;
         bias_folds.push(BiasFold {
             target_uuid,
             weight_sum,
@@ -808,7 +862,8 @@ pub(crate) struct Compensation {
     pub(crate) bias_delta: f64,
     /// Added to the proxy's edge into the target; `0.0` when there is none.
     pub(crate) share: f64,
-    /// True when the folded value is the neuron's activation on every record.
+    /// True when the folded value is what the removed term was worth on every
+    /// record.
     pub(crate) exact: bool,
     /// Variance the compensation could not carry, when it is derivable.
     pub(crate) residual_variance: Option<f64>,
@@ -871,6 +926,212 @@ pub(crate) fn dropped_mean(
         return Some(weight_sum * value);
     }
     Some(weight_sum * stats?.mean_activation)
+}
+
+/// May a target carrying `target_squash` take a bias fold for the term the
+/// removal took away?
+///
+/// One rule, two callers — [`prune_neuron`] and
+/// [`crate::prune_synapse::prune_synapse`] — so a neuron removal and a synapse
+/// removal can never disagree about what a target is owed (Ockham #196).
+///
+/// - A **point-wise** squash computes `squash(bias + Σ w·a)`, so the bias is
+///   exactly where the removed term sat. Always foldable.
+/// - An **aggregate** reads its inward terms as a set — the smallest, the
+///   largest, the mean, the root of the sum of squares — and no number in its
+///   bias stands in for one of them while the set is non-empty. With
+///   `remaining_inward_edges == 0` the forward pass evaluates it from its bias
+///   alone (`prune_cleanup::zero_inward_activation`), which is a
+///   point-wise reading again, so the fold is the closest creature there is.
+/// - `IF` is never foldable, whatever it is left with: rule 12 means an `IF`
+///   short an edge is short a **role**, and that is
+///   [`crate::prune_cleanup::IfRepair`]'s repair to make, not a number's.
+pub(crate) fn fold_policy(target_squash: SquashType, remaining_inward_edges: usize) -> bool {
+    if target_squash == SquashType::If {
+        return false;
+    }
+    if target_squash.is_aggregate() {
+        return remaining_inward_edges == 0;
+    }
+    true
+}
+
+/// How many synapses still point at `uuid`.
+///
+/// Counted on the **cut** creature, because `fold_policy` asks what the
+/// target is left with, not what it started from.
+pub(crate) fn inward_edge_count(creature: &CreatureExport, uuid: &str) -> usize {
+    creature
+        .synapses
+        .iter()
+        .filter(|s| s.to_uuid == uuid)
+        .count()
+}
+
+/// What one target's compensation came to, or why it got none.
+///
+/// Both arms are reported: a fold lands on [`PruneResult::bias_folds`] and a
+/// refusal on [`PruneResult::uncompensated`], so nothing a target lost is ever
+/// silent.
+pub(crate) enum TargetOutcome {
+    /// The fold that was applied.
+    Folded(BiasFold),
+    /// The target that got nothing, and why.
+    Uncompensated(UncompensatedTarget),
+}
+
+/// The squash a target with **no** inward edge must be rewritten to for its
+/// bias to be read at all.
+///
+/// `HYPOTv2` computes `sqrt(Σ(bias + w·a)²)`, so its bias lives inside a
+/// per-synapse square: with no synapse left the forward pass answers `0` and
+/// never reads the bias, and a fold into it would change nothing. `ABSOLUTE`
+/// over the folded bias computes `|bias + W·x|`, which is what `HYPOTv2`
+/// computed with the term still there. Every other form reads its bias with
+/// nothing inward, so none of them is rewritten.
+fn zero_edge_rewrite(squash: SquashType) -> Option<SquashType> {
+    match squash {
+        SquashType::HypotenuseV2 => Some(SquashType::Absolute),
+        _ => None,
+    }
+}
+
+/// Compensate a target the cut left with **no inward edge**, or say why it
+/// could not be — the one home of the Ockham #196 rule's *action*, as
+/// [`fold_policy`] is the one home of its decision.
+///
+/// [`prune_neuron`] and [`crate::prune_synapse::prune_synapse`] both call it,
+/// so the fold a neuron removal applies and the fold a synapse removal applies
+/// cannot drift apart.
+///
+/// `W` is the total weight the removed source carried into the target and `x`
+/// is what that source was worth — the value the creature fixes, which no
+/// statistic may override, or the mean the caller measured. The term the
+/// target lost is `W · x`, read the way that squash reads one term (see the
+/// table in the module documentation), and a supplied proxy is not used **for
+/// this target**: a share can only land on an edge into it, and the cut left
+/// none. The proxy is still *checked* — a request this crate cannot make sense
+/// of is refused whether or not the compensation would have used it.
+///
+/// `W` is a **sum** over the readable key, which is what `MINIMUM`, `MAXIMUM`
+/// and `MEAN` read: each takes `w·a` per term, so one term written as two rows
+/// is the same term twice. `HYPOT` squares each row separately, so `|W·μ|`
+/// answers for it only where the key holds one row — which is every canonical
+/// creature, a second row for a pair being a `TypedDuplicateSynapse` the
+/// shared validator rejects.
+///
+/// # Errors
+///
+/// Returns [`PruneError::Cleanup`] when `target_uuid` names no neuron of
+/// `cut` — a fold that could not land is refused rather than reported as
+/// applied.
+pub(crate) fn fold_bare_aggregate(
+    cut: &mut CreatureExport,
+    target_uuid: &str,
+    role: SynapseType,
+    squash: SquashType,
+    weight_sum: f64,
+    invariant_value: Option<f64>,
+    stats: Option<&PruneStats>,
+) -> Result<TargetOutcome, PruneError> {
+    // A share has nowhere to land here, so the proxy is dropped before the
+    // arithmetic rather than after it.
+    let mean_only = stats.map(|s| PruneStats {
+        mean_activation: s.mean_activation,
+        variance: s.variance,
+        proxy: None,
+    });
+    let Some(compensation) = compensate(invariant_value, mean_only.as_ref(), weight_sum) else {
+        return Ok(TargetOutcome::Uncompensated(UncompensatedTarget {
+            target_uuid: target_uuid.to_string(),
+            role,
+            weight_sum,
+            squash: squash_name_from(squash),
+            reason: UncompensatedReason::NoStatistics,
+            // No statistic and no structural value is exactly the case
+            // `dropped_mean` answers `None` for (Ockham #197).
+            dropped_mean: dropped_mean(invariant_value, stats, weight_sum),
+        }));
+    };
+
+    // `HYPOT` reads one term as `|w·a|`, so a **magnitude** is what folds: the
+    // residual is `Var(|W·a|)`, which the caller's `σ²` does not describe, and
+    // none is claimed rather than one that cannot be justified. `HYPOTv2` is
+    // not that case — its fold is linear in the sum, so the residual keeps the
+    // `W² σ²` shape every other fold reports, and the magnitude it is read
+    // through afterwards is the squash's, exactly as `LOGISTIC` is on the
+    // point-wise path.
+    let folds_a_magnitude = squash == SquashType::Hypotenuse;
+    let bias_delta = if folds_a_magnitude {
+        compensation.bias_delta.abs()
+    } else {
+        compensation.bias_delta
+    };
+    let residual_variance = if folds_a_magnitude && !compensation.exact {
+        None
+    } else {
+        compensation.residual_variance
+    };
+
+    add_to_bias(cut, target_uuid, bias_delta)?;
+    if let Some(rewrite) = zero_edge_rewrite(squash) {
+        set_squash(cut, target_uuid, rewrite)?;
+    }
+    Ok(TargetOutcome::Folded(BiasFold {
+        target_uuid: target_uuid.to_string(),
+        weight_sum,
+        delta: bias_delta,
+        exact: compensation.exact,
+        residual_variance,
+    }))
+}
+
+/// Add `delta` to `uuid`'s bias, or refuse.
+///
+/// The single home of that edit, so a fold that names a neuron the creature
+/// does not carry fails loudly instead of quietly moving nothing while the
+/// result claims it moved.
+///
+/// # Errors
+///
+/// Returns [`PruneError::Cleanup`] when `uuid` names no neuron.
+pub(crate) fn add_to_bias(
+    creature: &mut CreatureExport,
+    uuid: &str,
+    delta: f64,
+) -> Result<(), PruneError> {
+    neuron_mut(creature, uuid)?.bias += delta;
+    Ok(())
+}
+
+/// Rewrite `uuid`'s declared squash, or refuse.
+///
+/// # Errors
+///
+/// Returns [`PruneError::Cleanup`] when `uuid` names no neuron.
+fn set_squash(
+    creature: &mut CreatureExport,
+    uuid: &str,
+    squash: SquashType,
+) -> Result<(), PruneError> {
+    neuron_mut(creature, uuid)?.squash = Some(squash_name_from(squash).to_string());
+    Ok(())
+}
+
+/// The neuron `uuid` names, or the endpoint error cleanup would raise for it.
+fn neuron_mut<'a>(
+    creature: &'a mut CreatureExport,
+    uuid: &str,
+) -> Result<&'a mut crate::creature::NeuronExport, PruneError> {
+    creature
+        .neurons
+        .iter_mut()
+        .find(|n| n.uuid == uuid)
+        .ok_or_else(|| {
+            PruneError::Cleanup(CleanupError::UnknownEndpoint {
+                uuid: uuid.to_string(),
+            })
+        })
 }
 
 /// Refuse anything that is not a hidden neuron of this creature.

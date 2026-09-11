@@ -830,8 +830,13 @@ fn a_supplied_mean_never_overrides_the_structural_value() {
     assert_eq!(result.transform, TransformClass::Exact);
 }
 
+/// An aggregate that keeps **at least one** inward edge is still never given a
+/// bias fold: it goes on reading a set of terms, and no number in its bias
+/// stands in for one of them. The zero-edge case is the other rule entirely —
+/// see `a_summing_aggregate_output_left_with_no_inward_edge_takes_the_fold`
+/// and its siblings (Ockham #196).
 #[test]
-fn an_aggregate_target_is_never_given_a_bias_fold() {
+fn an_aggregate_target_with_an_edge_left_is_never_given_a_bias_fold() {
     let before = creature(AGGREGATE_TARGET_JSON);
     let stats = mean_only(0.6);
     let result = pruned(
@@ -840,6 +845,16 @@ fn an_aggregate_target_is_never_given_a_bias_fold() {
         Some(&stats),
     );
 
+    assert_eq!(
+        result
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.to_uuid == "h-agg")
+            .count(),
+        1,
+        "the fixture must leave the aggregate an inward edge"
+    );
     assert_eq!(result.bias_folds, vec![]);
     assert_eq!(result.uncompensated.len(), 1);
     let entry = &result.uncompensated[0];
@@ -1972,4 +1987,472 @@ fn the_replacement_clamps_every_converted_activation_the_same_way() {
         apply_limit_range(SquashType::Absolute, -2.5).to_bits(),
         "the ABSOLUTE floor is what the bias-0 condition protects"
     );
+}
+
+// --- a target left with no inward edge takes the fold (Ockham #196) ----------
+//
+// A zero-edge `MINIMUM`, `MAXIMUM`, `MEAN` or `HYPOT` evaluates to its bias in
+// the forward pass, and a zero-edge `HYPOTv2` to `0` with its bias ignored, so
+// the fold each of them is owed is derived here from those forward-pass forms
+// rather than read back out of the code under test.
+
+/// `h-1` is `output-0`'s **only** source, so removing that edge leaves the
+/// output with nothing to sum.
+const LAST_EDGE_INTO_OUTPUT_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}
+  ]
+}"#;
+
+/// A constant is `output-0`'s only source; `output-1` keeps the observation
+/// edge so the creature still reads its input.
+const LAST_EDGE_FROM_CONSTANT_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+  "neurons":[
+    {"type":"constant","uuid":"c-1","bias":0.5},
+    {"type":"output","uuid":"output-0","bias":0.25,"squash":"IDENTITY"},
+    {"type":"output","uuid":"output-1","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":0.2,"fromUUID":"c-1","toUUID":"output-0"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-1"}
+  ]
+}"#;
+
+/// `input-0` feeds both outputs directly, so removing one edge leaves that
+/// output with nothing to sum while the other keeps reading the observation.
+const LAST_EDGE_FROM_INPUT_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+  "neurons":[
+    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
+    {"type":"output","uuid":"output-1","bias":0.1,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.5,"fromUUID":"input-0","toUUID":"output-0"},
+    {"weight":0.5,"fromUUID":"input-0","toUUID":"output-1"}
+  ]
+}"#;
+
+/// `h-agg` is a hidden `MINIMUM` with a single inward edge, so the cut leaves
+/// it with nothing to aggregate while it still feeds the output.
+const HIDDEN_AGGREGATE_LAST_EDGE_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-agg","bias":0.25,"squash":"MINIMUM"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":-2.0,"fromUUID":"h-1","toUUID":"h-agg"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"},
+    {"weight":3.0,"fromUUID":"h-agg","toUUID":"output-0"}
+  ]
+}"#;
+
+/// The removed term's weight and the mean the caller measured for its source,
+/// shared by the aggregate cases below. The weight is **negative** so the
+/// `HYPOT` forms, which read `|w·μ|`, answer a different number from the
+/// summing forms.
+const AGG_WEIGHT: f64 = -2.0;
+const AGG_MEAN: f64 = 0.6;
+const AGG_BIAS: f64 = 0.25;
+
+/// An output carrying `squash`, fed by exactly one hidden neuron.
+fn aggregate_output_json(squash: &str) -> String {
+    format!(
+        r#"{{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+  "neurons":[
+    {{"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"}},
+    {{"type":"output","uuid":"output-0","bias":{AGG_BIAS},"squash":"{squash}"}}
+  ],
+  "synapses":[
+    {{"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"}},
+    {{"weight":{AGG_WEIGHT},"fromUUID":"h-1","toUUID":"output-0"}}
+  ]
+}}"#
+    )
+}
+
+/// Assert an output holds `expected` on every probe record, to `1e-6` relative.
+fn assert_output_on_every_probe(
+    name: &str,
+    creature: &CreatureExport,
+    index: usize,
+    expected: f64,
+) {
+    let probes = probe_inputs(creature.input);
+    assert!(probes.len() >= 3, "{name}: fewer than three probe records");
+    for probe in probes {
+        let got = f64::from(outputs(creature, &probe)[index]);
+        assert!(
+            (got - expected).abs() <= 1e-6 * (1.0 + expected.abs()),
+            "{name}: output {index} on {probe:?} is {got}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn an_output_left_with_no_inward_edge_takes_the_mean_fold() {
+    let before = creature(LAST_EDGE_INTO_OUTPUT_JSON);
+    let result = pruned(
+        &before,
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&mean_only(0.6)),
+    );
+
+    assert_close(
+        "the mean fold",
+        neuron(&result.creature, "output-0").bias,
+        0.3 + 2.0 * 0.6,
+    );
+    assert_eq!(result.uncompensated, vec![]);
+    assert_eq!(result.transform, TransformClass::Approximate);
+    assert_valid("last edge into an output", &result.creature);
+    // Nothing is left to sum, so the output is that bias on every record.
+    assert_output_on_every_probe(
+        "last edge into an output",
+        &result.creature,
+        0,
+        0.3 + 2.0 * 0.6,
+    );
+}
+
+#[test]
+fn an_output_left_with_no_inward_edge_folds_a_constant_source_exactly() {
+    let before = creature(LAST_EDGE_FROM_CONSTANT_JSON);
+    let result = pruned(
+        &before,
+        &key("c-1", "output-0", SynapseType::Standard),
+        None,
+    );
+
+    assert_within(
+        "the exact fold",
+        neuron(&result.creature, "output-0").bias,
+        0.25 + 0.2 * 0.5,
+        STRUCTURAL_FOLD_TOL,
+    );
+    assert!(result.bias_folds[0].exact, "a structural fold is exact");
+    assert_eq!(result.transform, TransformClass::Exact);
+    assert_same_function("last edge from a constant", &before, &result.creature);
+    assert_valid("last edge from a constant", &result.creature);
+    assert_output_on_every_probe(
+        "last edge from a constant",
+        &result.creature,
+        0,
+        0.25 + 0.2 * 0.5,
+    );
+}
+
+#[test]
+fn an_output_left_with_no_inward_edge_folds_an_observation_source() {
+    let before = creature(LAST_EDGE_FROM_INPUT_JSON);
+    let result = pruned(
+        &before,
+        &key("input-0", "output-0", SynapseType::Standard),
+        Some(&mean_only(0.4)),
+    );
+
+    assert_close(
+        "the observation fold",
+        neuron(&result.creature, "output-0").bias,
+        0.3 + 1.5 * 0.4,
+    );
+    assert_eq!(result.uncompensated, vec![]);
+    assert_valid("last edge from an observation", &result.creature);
+    assert_output_on_every_probe(
+        "last edge from an observation",
+        &result.creature,
+        0,
+        0.3 + 1.5 * 0.4,
+    );
+    // The other output still reads the observation it was never asked about.
+    assert!(has_edge(&result.creature, "input-0", "output-1"));
+}
+
+#[test]
+fn a_summing_aggregate_output_left_with_no_inward_edge_takes_the_fold() {
+    // `MINIMUM`, `MAXIMUM` and `MEAN` all read a single inward term as
+    // `w·a + bias`, and all evaluate to `bias` with none, so all three take
+    // the ordinary `bias += w·μ`.
+    for squash in ["MINIMUM", "MAXIMUM", "MEAN"] {
+        let json = aggregate_output_json(squash);
+        let before = creature(&json);
+        let result = pruned(
+            &before,
+            &key("h-1", "output-0", SynapseType::Standard),
+            Some(&mean_only(AGG_MEAN)),
+        );
+
+        let expected = AGG_BIAS + AGG_WEIGHT * AGG_MEAN;
+        assert_close(
+            &format!("{squash} fold"),
+            neuron(&result.creature, "output-0").bias,
+            expected,
+        );
+        assert_eq!(
+            neuron(&result.creature, "output-0").squash.as_deref(),
+            Some(squash),
+            "{squash}: the squash was rewritten"
+        );
+        assert_eq!(result.uncompensated, vec![], "{squash}: uncompensated");
+        assert_eq!(result.bias_folds.len(), 1, "{squash}: one fold");
+        assert_valid(squash, &result.creature);
+        assert_output_on_every_probe(squash, &result.creature, 0, expected);
+    }
+}
+
+#[test]
+fn a_hypot_output_left_with_no_inward_edge_folds_the_absolute_term() {
+    // `HYPOT` computes `sqrt(Σ(w·a)²) + bias`, so one term is worth `|w·a|`.
+    let json = aggregate_output_json("HYPOT");
+    let before = creature(&json);
+    let result = pruned(
+        &before,
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&mean_only(AGG_MEAN)),
+    );
+
+    let expected = AGG_BIAS + (AGG_WEIGHT * AGG_MEAN).abs();
+    assert_close(
+        "HYPOT fold",
+        neuron(&result.creature, "output-0").bias,
+        expected,
+    );
+    assert_eq!(
+        neuron(&result.creature, "output-0").squash.as_deref(),
+        Some("HYPOT"),
+        "HYPOT keeps its squash"
+    );
+    assert_eq!(result.uncompensated, vec![]);
+    assert_valid("HYPOT", &result.creature);
+    assert_output_on_every_probe("HYPOT", &result.creature, 0, expected);
+    // The sign matters: a plain `w·μ` fold would have landed below the bias.
+    assert!(
+        expected > AGG_BIAS,
+        "the absolute term is added, not subtracted"
+    );
+}
+
+#[test]
+fn a_hypot_v2_output_left_with_no_inward_edge_becomes_an_absolute() {
+    // `HYPOTv2` computes `sqrt(Σ(bias + w·a)²)`, so one term is worth
+    // `|bias + w·a|` — and with no term at all it is `0` and its bias is never
+    // read. `ABSOLUTE` over the folded bias is the closest form.
+    let json = aggregate_output_json("HYPOTv2");
+    let before = creature(&json);
+    let result = pruned(
+        &before,
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&mean_only(AGG_MEAN)),
+    );
+
+    let folded_bias = AGG_BIAS + AGG_WEIGHT * AGG_MEAN;
+    assert_close(
+        "HYPOTv2 fold",
+        neuron(&result.creature, "output-0").bias,
+        folded_bias,
+    );
+    assert_eq!(
+        neuron(&result.creature, "output-0").squash.as_deref(),
+        Some("ABSOLUTE"),
+        "HYPOTv2 is rewritten to the form that reads its bias"
+    );
+    assert_eq!(result.uncompensated, vec![]);
+    assert_valid("HYPOTv2", &result.creature);
+    assert_output_on_every_probe("HYPOTv2", &result.creature, 0, folded_bias.abs());
+
+    // The assumption the rewrite rests on, asserted rather than assumed: the
+    // forward pass clamps `HYPOTv2` and `ABSOLUTE` identically, so the
+    // replacement cannot answer a value the original would have bounded away.
+    for value in [-4.0f32, -0.95, 0.0, 0.95, 4.0, f32::NAN, f32::INFINITY] {
+        let hypot = apply_limit_range(SquashType::HypotenuseV2, value);
+        let absolute = apply_limit_range(SquashType::Absolute, value);
+        assert_eq!(
+            hypot.to_bits(),
+            absolute.to_bits(),
+            "the two forms clamp {value} differently"
+        );
+    }
+}
+
+#[test]
+fn a_hidden_aggregate_left_with_no_inward_edge_becomes_a_support_constant() {
+    let before = creature(HIDDEN_AGGREGATE_LAST_EDGE_JSON);
+    let result = pruned(
+        &before,
+        &key("h-1", "h-agg", SynapseType::Standard),
+        Some(&mean_only(AGG_MEAN)),
+    );
+
+    // The fold lands first: a zero-edge `MINIMUM` is worth its bias.
+    let folded = AGG_BIAS + AGG_WEIGHT * AGG_MEAN;
+    // Then cleanup folds that fixed value into the outward weights and leaves
+    // a bias-1 support constant behind.
+    let support = neuron(&result.creature, "h-agg");
+    assert_eq!(
+        support.neuron_type, "constant",
+        "h-agg is support structure"
+    );
+    assert_close("support bias", support.bias, 1.0);
+    assert_within(
+        "the folded value moved into the outward weight",
+        weight(&result.creature, "h-agg", "output-0"),
+        3.0 * folded,
+        STRUCTURAL_FOLD_TOL,
+    );
+    assert!(
+        result.folded_neurons.iter().any(|u| u == "h-agg"),
+        "the fold is reported"
+    );
+    assert_eq!(result.uncompensated, vec![]);
+    assert_valid("hidden aggregate", &result.creature);
+
+    // The output reads the observation plus that constant term.
+    for probe in probe_inputs(result.creature.input) {
+        let got = f64::from(outputs(&result.creature, &probe)[0]);
+        let expected = f64::from(probe[0]) + 3.0 * folded;
+        assert!(
+            (got - expected).abs() <= 1e-6 * (1.0 + expected.abs()),
+            "hidden aggregate: output on {probe:?} is {got}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn a_bare_aggregate_with_no_statistic_is_still_reported_uncompensated() {
+    // Being foldable is not the same as having something to fold: a varying
+    // source with no statistic supplied leaves the target named, not guessed
+    // at.
+    let json = aggregate_output_json("MINIMUM");
+    let before = creature(&json);
+    let result = pruned(
+        &before,
+        &key("h-1", "output-0", SynapseType::Standard),
+        None,
+    );
+
+    assert_eq!(result.bias_folds, vec![]);
+    assert_eq!(result.uncompensated.len(), 1);
+    let entry = &result.uncompensated[0];
+    assert_eq!(entry.target_uuid, "output-0");
+    assert_eq!(entry.reason, UncompensatedReason::NoStatistics);
+    assert_eq!(entry.squash, "MINIMUM");
+    assert_close(
+        "the bias is untouched",
+        neuron(&result.creature, "output-0").bias,
+        AGG_BIAS,
+    );
+    assert_eq!(result.transform, TransformClass::Approximate);
+    assert_valid("bare aggregate, no statistic", &result.creature);
+}
+
+#[test]
+fn a_bare_aggregate_folds_a_structurally_fixed_source_exactly() {
+    // A constant source needs no statistic and admits none: the term is
+    // `w · bias` on every record, so the fold is exact even though the target
+    // aggregates.
+    let before = creature(
+        r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+  "neurons":[
+    {"type":"constant","uuid":"c-1","bias":0.5},
+    {"type":"output","uuid":"output-0","bias":0.25,"squash":"MAXIMUM"},
+    {"type":"output","uuid":"output-1","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":-2.0,"fromUUID":"c-1","toUUID":"output-0"},
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"output-1"}
+  ]
+}"#,
+    );
+    // A supplied mean must not override the structural value.
+    let result = pruned(
+        &before,
+        &key("c-1", "output-0", SynapseType::Standard),
+        Some(&mean_only(9.0)),
+    );
+
+    assert_within(
+        "the exact fold",
+        neuron(&result.creature, "output-0").bias,
+        0.25 + -2.0 * 0.5,
+        STRUCTURAL_FOLD_TOL,
+    );
+    assert!(result.bias_folds[0].exact, "a structural fold is exact");
+    assert_eq!(result.transform, TransformClass::Exact);
+    assert_same_function("bare aggregate, constant source", &before, &result.creature);
+    assert_valid("bare aggregate, constant source", &result.creature);
+}
+
+#[test]
+fn a_bare_aggregate_reports_the_residual_its_form_can_justify() {
+    // A summing aggregate's term is `W·a`, so the mean fold leaves the same
+    // `W² σ²` every other linear fold reports.
+    let variance = 0.04;
+    let stats = PruneStats {
+        mean_activation: AGG_MEAN,
+        variance: Some(variance),
+        proxy: None,
+    };
+    let json = aggregate_output_json("MEAN");
+    let summing = pruned(
+        &creature(&json),
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&stats),
+    );
+    assert_close(
+        "the summing residual",
+        summing.bias_folds[0]
+            .residual_variance
+            .expect("a supplied variance yields a residual"),
+        AGG_WEIGHT * AGG_WEIGHT * variance,
+    );
+
+    // `HYPOTv2` folds `W·μ` into a bias the squash then takes the magnitude
+    // of, exactly as `LOGISTIC` squashes the point-wise path's sum, so its
+    // residual keeps the same shape.
+    let json = aggregate_output_json("HYPOTv2");
+    let hypot_v2 = pruned(
+        &creature(&json),
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&stats),
+    );
+    assert_close(
+        "the HYPOTv2 residual",
+        hypot_v2.bias_folds[0]
+            .residual_variance
+            .expect("a supplied variance yields a residual"),
+        AGG_WEIGHT * AGG_WEIGHT * variance,
+    );
+
+    // `HYPOT` is the exception: what folds is the magnitude `|W·μ|`, whose
+    // residual is `Var(|W·a|)` — a number the caller's `σ²` does not describe,
+    // so none is claimed rather than one that cannot be justified.
+    let json = aggregate_output_json("HYPOT");
+    let hypot = pruned(
+        &creature(&json),
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&stats),
+    );
+    assert_eq!(
+        hypot.bias_folds[0].residual_variance, None,
+        "HYPOT claimed a linear residual for a magnitude fold"
+    );
+
+    // A structurally fixed source leaves nothing over under any form.
+    let exact = pruned(
+        &creature(LAST_EDGE_FROM_CONSTANT_JSON),
+        &key("c-1", "output-0", SynapseType::Standard),
+        None,
+    );
+    assert_eq!(exact.bias_folds[0].residual_variance, Some(0.0));
 }

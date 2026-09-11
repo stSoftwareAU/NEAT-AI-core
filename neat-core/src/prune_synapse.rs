@@ -15,7 +15,7 @@
 //!     F -- yes --> S{"statistics supplied?"}
 //!     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
 //!     S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
-//!     X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
+//!     X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate with edges left gets neither,<br/>one with none takes the fold"]
 //!     C --> V["an aggregate left with one edge —<br/>rewrite it to the point-wise squash<br/>that computes the same number"]
 //!     V --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
 //!     R -- fails --> E["Err(Cleanup)"]
@@ -91,14 +91,22 @@
 //!   source: the only edge it could carry the share on is the one just
 //!   removed, so the share lands nowhere and the whole prune is refused with
 //!   [`PruneError::MissingProxyEdge`] rather than half-applied;
-//! - where the target **aggregates** — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`,
-//!   or an `IF` reading one role's sum — no bias fold stands in for the term,
-//!   so none is attempted and the target is named on
-//!   [`PruneResult::uncompensated`] with the role it lost. That entry carries
-//!   the magnitude of what went on
+//! - where the target **aggregates** and the cut leaves it something to
+//!   aggregate — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one
+//!   role's sum — no bias fold stands in for the term, so none is attempted
+//!   and the target is named on [`PruneResult::uncompensated`] with the role it
+//!   lost. That entry carries the magnitude of what went on
 //!   [`UncompensatedTarget::dropped_mean`] — `w · μ`, or `w · a` where the
 //!   creature fixes the source — so the caller's scorer can judge the loss. No
-//!   magnitude refuses a prune (Ockham #197).
+//!   magnitude refuses a prune (Ockham #197);
+//! - where the cut leaves an aggregate with **no inward edge at all**, the
+//!   forward pass reads it from its bias alone, so it takes the fold after all
+//!   — `bias += W·μ`, or `bias += |W·μ|` for `HYPOT`, whose term is a
+//!   magnitude, or `bias += W·μ` **with the squash rewritten to `ABSOLUTE`**
+//!   for `HYPOTv2`, which never reads its bias with nothing to square
+//!   (Ockham #196). `prune_neuron::fold_policy` is the one rule both
+//!   entry points ask. An `IF` is excluded whatever it is left with: what it
+//!   lost is a role, and [`IfRepair`] owns that.
 //!
 //! A shortfall normally ends any
 //! [`TransformClass::Exact`](crate::prune_neuron::TransformClass::Exact) claim,
@@ -114,8 +122,9 @@ use crate::prune_cleanup::{
     CleanupOptions, IfRepair, SynapseKey, canonical_role, cleanup_creature_with, fixed_activation,
 };
 use crate::prune_neuron::{
-    BiasFold, PruneError, PruneResult, PruneStats, UncompensatedReason, UncompensatedTarget,
-    WeightShare, add_to_edge, check_proxy, check_stats, compensate, dropped_mean, target_squash,
+    BiasFold, PruneError, PruneResult, PruneStats, TargetOutcome, UncompensatedReason,
+    UncompensatedTarget, WeightShare, add_to_bias, add_to_edge, check_proxy, check_stats,
+    compensate, dropped_mean, fold_bare_aggregate, fold_policy, inward_edge_count, target_squash,
     transform_class,
 };
 use crate::prune_rewrite::convert_single_edge_aggregates;
@@ -218,7 +227,7 @@ pub fn prune_synapse(
     let mut weight_shares = Vec::new();
     let mut uncompensated = Vec::new();
 
-    if squash.is_aggregate() {
+    if !fold_policy(squash, inward_edge_count(&cut, &key.to_uuid)) {
         uncompensated.push(UncompensatedTarget {
             target_uuid: key.to_uuid.clone(),
             role: wanted,
@@ -227,6 +236,21 @@ pub fn prune_synapse(
             reason: UncompensatedReason::AggregateTarget,
             dropped_mean: dropped_mean(invariant_value, effective_stats, weight_sum),
         });
+    } else if squash.is_aggregate() {
+        // The cut left the aggregate with nothing to aggregate, so it takes
+        // the fold its empty forward-pass form implies (Ockham #196).
+        match fold_bare_aggregate(
+            &mut cut,
+            &key.to_uuid,
+            wanted,
+            squash,
+            weight_sum,
+            invariant_value,
+            effective_stats,
+        )? {
+            TargetOutcome::Folded(fold) => bias_folds.push(fold),
+            TargetOutcome::Uncompensated(entry) => uncompensated.push(entry),
+        }
     } else if let Some(compensation) = compensate(invariant_value, effective_stats, weight_sum) {
         // A share of exactly zero moves nothing — an uncorrelated survivor
         // predicts none of what went — so the edge it would land on need not
@@ -242,11 +266,7 @@ pub fn prune_synapse(
             });
         }
 
-        for neuron in &mut cut.neurons {
-            if neuron.uuid == key.to_uuid {
-                neuron.bias += compensation.bias_delta;
-            }
-        }
+        add_to_bias(&mut cut, &key.to_uuid, compensation.bias_delta)?;
         bias_folds.push(BiasFold {
             target_uuid: key.to_uuid.clone(),
             weight_sum,

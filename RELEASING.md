@@ -207,6 +207,52 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.18.0` — a target left with no inward edge takes the bias fold (Ockham #196)
+
+No public item changed: this is a **documented behaviour** bump, the kind
+[What counts as breaking](#what-counts-as-breaking) lists last. A caller that
+reads `PruneResult` gets different — better — answers for one shape of request,
+so it is signalled rather than slipped out on a patch.
+
+`prune_neuron` and `prune_synapse` used to refuse a bias fold to **every**
+aggregate target (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, `HYPOTv2`, `IF`),
+naming it on `PruneResult::uncompensated` with
+`UncompensatedReason::AggregateTarget`. That is right only while the target
+still has terms to aggregate. Once the cut leaves it with **no inward edge**,
+the forward pass reads it from its bias alone, so the fold is the closest
+creature there is and is now applied:
+
+| Squash | one inward term | no inward term | the fold |
+|---|---|---|---|
+| `MINIMUM` / `MAXIMUM` / `MEAN` | `W·a + bias` | `bias` | `bias += W·μ` |
+| `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` |
+| `HYPOTv2` | `\|bias + W·a\|` | `0`, bias never read | `bias += W·μ`, **squash rewritten to `ABSOLUTE`** |
+
+`IF` is excluded whatever it is left with — what it lost is a role, and
+`IfRepair` owns that repair.
+
+**Migration** — none compiles differently. What moves is the content of a
+result a caller already handles:
+
+- such a target now appears on `PruneResult::bias_folds` instead of
+  `PruneResult::uncompensated`, so a caller counting uncompensated targets to
+  decide whether to accept a candidate sees fewer of them;
+- `PruneResult::transform` can now be `Exact` for a removal that used to be
+  `Approximate`, where the source's value was fixed by the creature;
+- a `HYPOTv2` target left bare comes back declaring `ABSOLUTE`. The two forms
+  share the `[0, f32::MAX]` activation range, so nothing the original could
+  produce is clamped away by the replacement;
+- where such a target is left bare and **no** statistics were supplied, the
+  `PruneResult::uncompensated` entry now carries
+  `UncompensatedReason::NoStatistics` where it carried
+  `UncompensatedReason::AggregateTarget`. The target is still reported; only
+  the reason changed, because what is missing is now the number rather than the
+  permission. This reaches the JSON and WASM surface as `"NO_STATISTICS"` in
+  place of `"AGGREGATE_TARGET"`, so a consumer that switches on the reason code
+  needs the new arm.
+
+`IF` is unaffected on every point above: it is excluded whatever it is left
+with, and still reports `AggregateTarget` per role.
 ### `0.16.0` — the pruning report gains fields, and a single-edge aggregate is rewritten (Ockham #197)
 
 Two breaking shapes, both in the pruning surface:
