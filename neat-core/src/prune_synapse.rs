@@ -99,15 +99,24 @@
 //!   [`UncompensatedTarget::dropped_mean`] — `w · μ`, or `w · a` where the
 //!   creature fixes the source — so the caller's scorer can judge the loss. No
 //!   magnitude refuses a prune (Ockham #197).
+//!
+//! A shortfall normally ends any
+//! [`TransformClass::Exact`](crate::prune_neuron::TransformClass::Exact) claim,
+//! and one shape is the exception: an `IF` whose condition **the creature
+//! itself decided the same way before and after the cut** never read the term
+//! that went, so the flatten costs nothing. `prune_neuron::transform_class`
+//! (Ockham #198) is the single home of that whole rule, and both entry points
+//! ask it in the same terms, so a synapse removal and the neuron removal that
+//! takes the same term away can never disagree about what it cost.
 
 use crate::creature::{CreatureExport, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
     CleanupOptions, IfRepair, SynapseKey, canonical_role, cleanup_creature_with, fixed_activation,
 };
 use crate::prune_neuron::{
-    BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
-    UncompensatedTarget, WeightShare, add_to_edge, check_proxy, check_stats, compensate,
-    dropped_mean, target_squash,
+    BiasFold, PruneError, PruneResult, PruneStats, UncompensatedReason, UncompensatedTarget,
+    WeightShare, add_to_edge, check_proxy, check_stats, compensate, dropped_mean, target_squash,
+    transform_class,
 };
 use crate::prune_rewrite::convert_single_edge_aggregates;
 use crate::squash::SquashType;
@@ -272,14 +281,13 @@ pub fn prune_synapse(
         },
     )?;
 
-    // Exact means the term the removal took away was replaced by something
-    // that computes the same number on every record. The `IF` rewrites are
-    // exact by construction, so they cannot spoil the label; the downgrade
-    // clause is defence in depth against a future policy change quietly
-    // calling a flattened creature exact.
-    let exact = uncompensated.is_empty()
-        && bias_folds.iter().all(|f| f.exact)
-        && outcome.downgraded_if_neurons.is_empty();
+    // The `IF` rewrites are exact by construction, so they cannot spoil the
+    // label. What can is a term the removal took away and nothing replaced,
+    // and `transform_class` (Ockham #198) is the single home of that rule —
+    // asked here in the same terms `prune_neuron` asks it, so a synapse
+    // removal and the neuron removal that takes the same term away can never
+    // disagree about what it cost.
+    let transform = transform_class(creature, &outcome, &bias_folds, &uncompensated)?;
 
     Ok(PruneResult {
         creature: outcome.creature,
@@ -295,11 +303,7 @@ pub fn prune_synapse(
         weight_shares,
         uncompensated,
         converted_neurons,
-        transform: if exact {
-            TransformClass::Exact
-        } else {
-            TransformClass::Approximate
-        },
+        transform,
         passes: outcome.passes,
     })
 }

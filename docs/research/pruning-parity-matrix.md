@@ -174,7 +174,7 @@ be run against end to end. `neat-core/tests/prune_neuron.rs` grades it:
 | Case | Graded by |
 |---|---|
 | `CASCADE_ORPHAN_FEEDERS` | structural equality with the capture — `prune_neuron(before, "h-x")` **is** `after` |
-| `IF_REPAIR_COALESCES_ROLES` | structural equality with the capture |
+| `IF_REPAIR_COALESCES_ROLES` | **not** structural equality any more (Ockham #198): `prune_neuron` asks cleanup for `IfRepair::Rewrite`, so the `IF` is flattened onto the arm the emptied condition always takes rather than downgraded to the capture's `IDENTITY` sum of both arms. It is graded on the numbers instead — the zero-weight twin of the cut, activated on five probe records — and `neat-core/tests/prune_cleanup.rs` still grades the capture byte for byte through `cleanup_creature`'s untouched `IfRepair::Downgrade` default |
 | `MEMETIC_DROPPED_ON_REMOVAL` | structural equality on the neurons and synapses; the record is **pruned**, not dropped (the divergence above) |
 | `CONSTANT_BIAS_FOLD` | its request removes a *constant*, which `prune_neuron` protects, so the fold is graded on the hidden-neuron twin: an `IDENTITY` neuron that sums nothing is worth `0.5` on every record just as that constant is, on the same weight into the same target, and produces the capture's `after` |
 
@@ -245,6 +245,12 @@ through the same requests in `wasm-bundle.yml`. Regenerate the record with
   capture. `RepairInvalidIfNeurons.ts`'s `indx <= 2` skip is likewise not
   reproduced — cleanup is gated on the structural leg, which has no such
   exemption.
+- **The `IF` repair.** TypeScript downgrades an `IF` short a role to the
+  `IDENTITY` sum of everything still reaching it, which is not what the `IF`
+  computed. The fixture captures that; Ockham #198 **decided for the prune**:
+  both `prune_neuron` and `prune_synapse` ask for `IfRepair::Rewrite` and get
+  the closest creature that computes the same number on every record. The
+  capture keeps `cleanup_creature`'s default policy as its caller.
 - **Memetic pruning.** TypeScript drops the record wholesale; this crate
   already owns the finer-grained inverse of validation rule 31
   (see README, "Pruning — rule 31's inverse"). The fixture captures the

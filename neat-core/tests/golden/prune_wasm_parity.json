@@ -687,7 +687,7 @@
         {
           "fromUUID": "h-a",
           "toUUID": "if-1",
-          "type": "standard"
+          "type": "positive"
         }
       ],
       "creature": {
@@ -724,7 +724,7 @@
           {
             "fromUUID": "h-a",
             "toUUID": "if-1",
-            "weight": -1.0
+            "weight": -3.0
           },
           {
             "fromUUID": "if-1",
@@ -733,9 +733,6 @@
           }
         ]
       },
-      "downgradedIfNeurons": [
-        "if-1"
-      ],
       "ok": true,
       "passes": 2,
       "removedNeuron": "h-cond",
@@ -749,6 +746,12 @@
           "fromUUID": "h-cond",
           "toUUID": "if-1",
           "type": "condition"
+        }
+      ],
+      "staticIfNeurons": [
+        {
+          "branch": "negative",
+          "uuid": "if-1"
         }
       ],
       "transform": "approximate",

@@ -834,12 +834,20 @@ constants apart, and never trades correctness for the constant budget.
 
 The inexact `IF` repair above is a **policy**, not a fixed rule.
 `cleanup_creature` keeps TypeScript parity (`IfRepair::Downgrade`), which is what
-the `prune_fixtures.rs` captures record and what Issue #590's neuron removal
-uses. `cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a
-caller ask for `IfRepair::Rewrite` instead — the exact rewrites synapse pruning
-uses, described under [Synapse pruning](#synapse-pruning-issue-591). Under that
-policy `CleanupOutcome::downgraded_if_neurons` is always empty and
-`static_if_neurons` / `restored_if_roles` carry the rewrites that replaced it.
+the `prune_fixtures.rs` captures record and what
+`neat-core/tests/prune_cleanup.rs` grades against them.
+`cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a caller
+ask for `IfRepair::Rewrite` instead — the exact rewrites described under
+[Synapse pruning](#synapse-pruning-issue-591). Under that policy
+`CleanupOutcome::downgraded_if_neurons` is always empty and `static_if_neurons` /
+`restored_if_roles` carry the rewrites that replaced it.
+
+**Both pruning entry points ask for `IfRepair::Rewrite`** — synapse pruning from
+the start (Issue #591), neuron pruning since Ockham #198 — so an `IF` short a
+role is rewritten exactly whichever way the caller asked for the removal, and
+`PruneResult::downgraded_if_neurons` is always empty. The downgrade stays as the
+`cleanup_creature` default so the parity captures keep a caller that reproduces
+them.
 
 #### Constants are support nodes
 
@@ -883,7 +891,7 @@ flowchart TD
     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
     S -- ok --> X["cut the neuron and<br/>every edge naming it"]
     X --> F["compensate each target:<br/>structural value, or the<br/>caller's mean and proxy"]
-    F --> L["cleanup_creature — cascade,<br/>fold, canonicalise, validate"]
+    F --> L["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
     L -- fails --> E["Err(Cleanup)"]
     L -- passes --> R["Ok(PruneResult) —<br/>Exact or Approximate"]
 ```
@@ -994,8 +1002,33 @@ though a bad one is still *refused*, so the same request cannot succeed here and
 fail on every other neuron. "Same number" means to the `f32` precision the
 forward pass itself works in: the folded value is the very value that pass would
 have produced, but the fold re-associates the sum.
-Everything else is `Approximate` — including an `IF` that lost a role, which can
-no longer branch at all.
+There is one further route to the label, and it is a proof about an `IF` rather
+than a fold (Ockham #198). A shortfall named on `uncompensated` normally ends any
+`Exact` claim, but where the rewrite flattened an `IF` **onto the arm the
+caller's own creature always took** — because that creature decided its condition
+itself, and the cut left the decision where it was — the term the removal took
+away was never read: a condition term only picks an arm, and a term out of the
+arm the pick discards is read on no record at all. `shortfall_costs_nothing` is
+the single home of that proof and both entry points ask it, so a neuron removal
+and the synapse removal that takes the same term away can never disagree.
+Everything else is `Approximate` — including an `IF` whose condition varied, so
+that the arm it now flattens onto is not the arm the forward pass used to read.
+
+#### An `IF` short a role is rewritten, not downgraded (Ockham #198)
+
+Removing a neuron can leave an `IF` without a `condition`, a `positive` or a
+negative arm. `prune_neuron` asks cleanup for `IfRepair::Rewrite`, the same exact
+repair `prune_synapse` uses and tabled under
+[Synapse pruning](#synapse-pruning-issue-591): the `IF` is flattened onto the arm
+a statically decided condition always takes, or given back the emptied arm on a
+zero-weight support edge. It never asks for the downgrade, so a neuron prune and
+a synapse prune that break the same `IF` come back as the same creature, and
+`PruneResult::downgraded_if_neurons` is always empty.
+
+The **output** case is the one worth naming: an output carrying the `IF` squash
+can never be removed or reordered, because the declared target width is the
+fleet's contract (Issue #550), so the repair happens in place — the output keeps
+its position and the declared width never moves.
 
 **The memetic record is pruned, not dropped** — Issue #590's call on the choice
 `docs/research/pruning-parity-matrix.md` left open. TypeScript drops `memetic`
@@ -1067,8 +1100,9 @@ left to be discovered. `downgraded_if_neurons` is correspondingly always empty
 for a synapse prune. Neither rewrite is a compensation: they restore what the
 creature already computed once the requested edge was gone, so
 `PruneResult::transform` still grades only the loss of the term itself.
-`cleanup_creature` keeps the TypeScript-parity `IfRepair::Downgrade` default, so
-Issue #590's neuron removal is unchanged.
+`cleanup_creature` keeps the TypeScript-parity `IfRepair::Downgrade` default for
+the captures; `prune_neuron` asks for this same `IfRepair::Rewrite` policy
+(Ockham #198), so the two entry points repair an `IF` identically.
 
 #### What the removal cost
 

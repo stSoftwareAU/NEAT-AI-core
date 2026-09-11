@@ -19,12 +19,19 @@
 //! **How a case is graded depends on the case**, and the per-case table in
 //! `docs/research/pruning-parity-matrix.md` is the record. Where this crate's
 //! canonical form coincides with the capture, `prune(before, request) == after`
-//! holds byte for byte. Where the documented constant-support divergence
-//! applies — the capture keeps a folded value in a constant's *bias*, this
-//! crate keeps it in the reading edges' weights — the two are graded on the
-//! numbers they produce instead, by compiling and activating both. Claiming
-//! byte equality everywhere would be claiming a parity this crate deliberately
-//! does not have.
+//! holds byte for byte. Where a documented divergence applies the two are
+//! graded on the numbers they produce instead, by compiling and activating
+//! both. Claiming byte equality everywhere would be claiming a parity this
+//! crate deliberately does not have. Two divergences are documented:
+//!
+//! - the constant-support form — the capture keeps a folded value in a
+//!   constant's *bias*, this crate keeps it in the reading edges' weights;
+//! - the `IF` repair — the capture downgrades an `IF` short a role to an
+//!   `IDENTITY` sum, and both pruning entry points ask cleanup for the exact
+//!   [`crate::prune_cleanup::IfRepair::Rewrite`] instead (Ockham #198).
+//!   [`crate::prune_cleanup::cleanup_creature`]'s default policy is what still
+//!   reproduces the capture byte for byte, in
+//!   `neat-core/tests/prune_cleanup.rs`.
 //!
 //! The fixtures themselves stay pinned by `neat-core/tests/prune_parity.rs`,
 //! which checks every documented rule below against the captured pair.
@@ -365,6 +372,13 @@ pub const EDGE_ROLE_IDENTITY: PruneCase = PruneCase {
 /// its inward roles are stripped — and because `IDENTITY` sums every inward
 /// row regardless of role, `h-a`'s `positive` (`2.0`) and `negative` (`-3.0`)
 /// rows become **one** untyped row of `-1.0` rather than a duplicate pair.
+///
+/// This is the TypeScript behaviour, and it is the one case the pruning entry
+/// points deliberately do **not** reproduce: both ask cleanup for
+/// [`crate::prune_cleanup::IfRepair::Rewrite`], which flattens the `IF` onto
+/// the arm an emptied condition always takes instead (Ockham #198). The
+/// capture's caller is [`crate::prune_cleanup::cleanup_creature`]'s untouched
+/// default policy.
 pub const IF_REPAIR_COALESCES_ROLES: PruneCase = PruneCase {
     name: "if_repair_coalesces_roles",
     rule: "an IF missing a required role is downgraded to IDENTITY, roles stripped, coalesced rows summed",

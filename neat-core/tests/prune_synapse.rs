@@ -20,6 +20,9 @@
 //! - **the TypeScript captures** in [`neat_core::PRUNE_PARITY_CASES`] — NEAT-AI's
 //!   own output for the same removals (Issue #588).
 
+#[path = "common/prune_if.rs"]
+mod prune_if;
+
 use neat_core::prune_fixtures::{
     CASCADE_ORPHAN_FEEDERS, CONSTANT_MOVES_INTO_PREFIX, EDGE_ROLE_IDENTITY,
     EDGE_SOURCE_BECOMES_DEAD, EDGE_TARGET_BECOMES_CONSTANT,
@@ -32,6 +35,7 @@ use neat_core::{
     compile_creature, creature_validate, parse_creature_json, prune_synapse,
     validate_creature_topology,
 };
+use prune_if::{IF_STATIC_CONDITION_JSON, OUTPUT_IF_JSON};
 
 const OPTIONS: ValidateOptions = ValidateOptions {
     neurons: None,
@@ -1269,6 +1273,111 @@ fn an_output_left_with_nothing_to_sum_still_comes_back_valid() {
     assert_eq!(result.creature.output, 1, "the declared width moved");
     assert!(has_neuron(&result.creature, "output-0"));
     assert_valid("an_output_left_with_nothing_to_sum", &result.creature);
+}
+
+#[test]
+fn a_condition_edge_that_never_moved_the_branch_is_cut_exactly() {
+    // `h-c2`'s term is the creature's own, and the condition is positive with
+    // it and without it, so nothing the forward pass reads moves. The shortfall
+    // is still reported — no fold happened — but it cost nothing, which is the
+    // same reading `prune_neuron` takes of the same term (Ockham #198).
+    let before = creature(IF_STATIC_CONDITION_JSON);
+    let result = pruned(&before, &key("h-c2", "if-1", SynapseType::Condition), None);
+
+    assert_same_function("static_condition_kept", &before, &result.creature);
+    assert_eq!(
+        result.transform,
+        TransformClass::Exact,
+        "a condition term that never moved the branch costs nothing"
+    );
+    assert_eq!(
+        result.uncompensated.len(),
+        1,
+        "the shortfall is still reported: {:?}",
+        result.uncompensated
+    );
+    assert_eq!(result.uncompensated[0].target_uuid, "if-1");
+    assert!(result.downgraded_if_neurons.is_empty());
+    assert_valid("static_condition_kept", &result.creature);
+}
+
+#[test]
+fn a_condition_edge_that_flips_the_branch_is_only_approximate() {
+    // The other condition edge of the same creature: `+0.5` becomes `-0.5`, so
+    // the forward pass reads the negative arm where it read the positive one.
+    let before = creature(IF_STATIC_CONDITION_JSON);
+    let result = pruned(&before, &key("h-c1", "if-1", SynapseType::Condition), None);
+
+    assert_different_function("static_condition_flipped", &before, &result.creature);
+    assert_eq!(
+        result.transform,
+        TransformClass::Approximate,
+        "a cut that flips the branch is not exact, however fixed the term was"
+    );
+    assert_valid("static_condition_flipped", &result.creature);
+}
+
+#[test]
+fn an_output_carrying_the_if_squash_is_rewritten_in_place() {
+    // Corner case 6, the synapse half. The declared target width is the fleet's
+    // contract, so an output can never be removed or reordered — an `IF` output
+    // short a role is repaired where it stands.
+    let before = creature(OUTPUT_IF_JSON);
+
+    // The condition edge goes: the condition is empty, so it settles at 0,
+    // which is not > 0, and the output flattens onto its negative arm.
+    let flattened = pruned(
+        &before,
+        &key("h-cond", "output-0", SynapseType::Condition),
+        None,
+    );
+    assert_eq!(flattened.static_if_neurons.len(), 1);
+    assert_eq!(flattened.static_if_neurons[0].uuid, "output-0");
+    assert_eq!(flattened.static_if_neurons[0].branch, SynapseType::Negative);
+    assert!(flattened.downgraded_if_neurons.is_empty());
+    assert_eq!(
+        flattened.creature.output, before.output,
+        "the declared target width moved"
+    );
+    assert_eq!(
+        flattened
+            .creature
+            .neurons
+            .iter()
+            .filter(|n| n.neuron_type == "output")
+            .count(),
+        1,
+        "the output block lost or gained a neuron"
+    );
+    let condition_twin = with_edge_zeroed(&before, "h-cond", "output-0", Some("condition"));
+    assert_same_function("output_if_flattened", &condition_twin, &flattened.creature);
+    assert_valid("output_if_flattened", &flattened.creature);
+
+    // A branch edge goes instead: the condition still varies, so the output
+    // still has to branch and the emptied arm is given back on a zero-weight
+    // support edge.
+    let restored = pruned(
+        &before,
+        &key("h-p", "output-0", SynapseType::Positive),
+        None,
+    );
+    assert!(restored.static_if_neurons.is_empty());
+    assert!(restored.downgraded_if_neurons.is_empty());
+    assert_eq!(restored.restored_if_roles.len(), 1);
+    assert_eq!(restored.restored_if_roles[0].to_uuid, "output-0");
+    assert_eq!(restored.restored_if_roles[0].role, SynapseType::Positive);
+    assert_eq!(
+        neuron(&restored.creature, "output-0").squash.as_deref(),
+        Some("IF"),
+        "a varying condition still branches, so the output keeps its squash"
+    );
+    assert_eq!(
+        restored.creature.output, before.output,
+        "the declared target width moved"
+    );
+    let branch_twin = with_edge_zeroed(&before, "h-p", "output-0", Some("positive"));
+    assert_same_function("output_if_restored", &branch_twin, &restored.creature);
+    assert_valid("output_if_restored", &restored.creature);
 }
 
 // --- aggregates the cut leaves with inward edges (Ockham #197) ---------------

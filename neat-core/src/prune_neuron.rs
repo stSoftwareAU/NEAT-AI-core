@@ -3,7 +3,9 @@
 //! [`prune_neuron`] is the shared answer to "remove this hidden neuron and give
 //! me back something I can score". It cuts the requested neuron out, optionally
 //! compensates the targets that read it using the **caller's** statistics, runs
-//! the Issue #589 [`cleanup_creature`] fixed point over the wreckage, and
+//! the Issue #589 [`cleanup_creature_with`]
+//! fixed point over the wreckage under
+//! [`IfRepair::Rewrite`], and
 //! validates the stable result before returning it. A successful call never
 //! returns an invalid creature.
 //!
@@ -16,7 +18,7 @@
 //!     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
 //!     S -- ok --> X["cut the neuron and<br/>every edge naming it"]
 //!     X --> F["compensate each target:<br/>structural value, or the<br/>caller's mean and proxy"]
-//!     F --> L["cleanup_creature — cascade,<br/>fold, canonicalise, validate"]
+//!     F --> L["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
 //!     L -- fails --> E["Err(Cleanup)"]
 //!     L -- passes --> R["Ok(PruneResult) —<br/>Exact or Approximate"]
 //! ```
@@ -36,18 +38,23 @@
 //! [`PruneResult::transform`] is the honest label on what came back:
 //!
 //! - [`TransformClass::Exact`] — the pruned creature computes the **same number
-//!   on every record**. Two cases reach it, both provable from the creature
-//!   alone: nothing read the neuron, or the neuron had no inward edge, so it
-//!   activated to one value on every record and that value folds into each
-//!   target's bias. No statistic can buy this label, and a supplied mean never
-//!   overrides the structural value. "Same number" means to the precision the
-//!   forward pass works in: the folded value *is* the `f32` activation the
-//!   pass would have produced for a neuron with nothing to sum, but the fold
-//!   re-associates the sum, so the two agree to `f32` rounding rather than bit
-//!   for bit.
-//! - [`TransformClass::Approximate`] — everything else. A neuron whose
-//!   activation varies is gone, and the mean fold only replaces it *on
-//!   average*; an `IF` that lost a role can no longer branch at all.
+//!   on every record**. **Three** cases reach it, each provable from the
+//!   creature alone: nothing read the neuron; the neuron had no inward edge, so
+//!   it activated to one value on every record and that value folds into each
+//!   target's bias; or every shortfall the removal left is one the `IF` rewrite
+//!   proves cost nothing, which is the third case and is spelled out under
+//!   "An `IF` short a role is rewritten, not downgraded" below. No statistic can
+//!   buy this label, and a supplied mean never overrides the structural value.
+//!   "Same number" means to the precision the forward pass works in: the folded
+//!   value *is* the `f32` activation the pass would have produced for a neuron
+//!   with nothing to sum, but the fold re-associates the sum, so the two agree
+//!   to `f32` rounding rather than bit for bit.
+//! - [`TransformClass::Approximate`] — everything else, and it is the honest
+//!   answer far more often than not. A neuron whose activation varies is gone
+//!   and the mean fold only replaces it *on average*; an `IF` still branching on
+//!   a condition that varies lost a term the forward pass reads; an `IF` lost a
+//!   condition term that moved which arm the forward pass reads; a target lost a
+//!   term with no statistic to stand in for it.
 //!
 //! # The compensation, spelled out
 //!
@@ -100,23 +107,49 @@
 //! caller's half of the Issue #587 boundary. Statistics this crate cannot make
 //! sense of are a different matter and still refuse outright.
 //!
+//! # An `IF` short a role is rewritten, not downgraded
+//!
+//! Removing a neuron can leave an `IF` without a `condition`, a `positive` or a
+//! negative arm. This entry point asks cleanup for
+//! [`IfRepair::Rewrite`] — the
+//! exact repair [`crate::prune_synapse::prune_synapse`] already used (Ockham
+//! #198) — so what comes back is the closest creature that computes the **same
+//! number on every record**: the `IDENTITY` sum of the arm a statically decided
+//! condition always takes, or a zero-weight support edge giving back the arm the
+//! removal emptied. It never asks for the TypeScript-parity downgrade, so
+//! [`PruneResult::downgraded_if_neurons`] is always empty here and
+//! [`PruneResult::static_if_neurons`] / [`PruneResult::restored_if_roles`] carry
+//! what happened instead.
+//! [`crate::prune_cleanup::cleanup_creature`]'s own default
+//! policy is unchanged, and [`crate::prune_fixtures`]'s captures still have a
+//! caller that reproduces them.
+//!
+//! Rewriting exactly is not the same as costing nothing. The rewrite reads the
+//! creature the **cut** left behind, so an `IF` whose condition the removal
+//! emptied flattens onto the arm an empty condition takes — which is the arm the
+//! original creature took only when the original decided its condition the same
+//! way. `shortfall_costs_nothing` is where that is proved, and it is the only
+//! route by which an aggregate shortfall still reaches
+//! [`TransformClass::Exact`]: a condition term the creature itself fixed, whose
+//! loss leaves the branch where it was, was never read for anything else.
+//!
 //! # The memetic record is pruned, not dropped
 //!
 //! TypeScript drops `memetic` wholesale on every removal because its content
 //! hash no longer describes the creature. This crate owns the finer-grained
 //! inverse of validation rule 31 (`CreatureExport::prune_memetic`,
-//! NEAT-AI-Lamarck#197) and [`cleanup_creature`] applies it, so what comes back
-//! keeps every entry that still names live structure and loses exactly the
-//! dangling ones. That is Issue #590's call on the choice the parity matrix
-//! left open: the fine-tuning history a caller measured is worth more than a
-//! blunt reset, and rule 31 is satisfied either way.
+//! NEAT-AI-Lamarck#197) and cleanup applies it, so what comes back keeps every
+//! entry that still names live structure and loses exactly the dangling ones.
+//! That is Issue #590's call on the choice the parity matrix left open: the
+//! fine-tuning history a caller measured is worth more than a blunt reset, and
+//! rule 31 is satisfied either way.
 
 use std::collections::HashMap;
 
 use crate::creature::{CreatureExport, parse_squash_name, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
-    CleanupError, StaticIfRewrite, SynapseKey, cleanup_creature, fixed_activation,
-    is_observation_uuid,
+    CleanupError, CleanupOptions, CleanupOutcome, IfRepair, StaticIfRewrite, SynapseKey,
+    cleanup_creature_with, fixed_activation, is_observation_uuid, static_condition_branch,
 };
 use crate::prune_rewrite::{SquashConversion, convert_single_edge_aggregates};
 use crate::squash::SquashType;
@@ -288,9 +321,15 @@ pub struct PruneResult {
     /// Hidden neurons the cascade folded into constant support.
     pub folded_neurons: Vec<String>,
     /// `IF` neurons downgraded to `IDENTITY` because a role went with the
-    /// removal — the one cleanup rewrite that is not exact. Always empty for
-    /// [`crate::prune_synapse::prune_synapse`], which asks for the exact
-    /// rewrites below instead.
+    /// removal — the one cleanup rewrite that is not exact.
+    ///
+    /// **Always empty.** Both entry points ask cleanup for
+    /// [`IfRepair::Rewrite`] and take
+    /// the exact rewrites below instead (Issue #591 for the synapse path,
+    /// Ockham #198 for the neuron path). The field stays because
+    /// [`crate::prune_cleanup::cleanup_creature`]'s own
+    /// default policy still downgrades for the TypeScript-parity captures, and
+    /// a non-empty list here would mean a caller had gone back to it.
     pub downgraded_if_neurons: Vec<String>,
     /// `IF` neurons the removal left with a condition the creature itself
     /// decides, flattened to the branch that survives (Issue #591).
@@ -638,22 +677,19 @@ pub fn prune_neuron(
     // label below.
     let converted_neurons = convert_single_edge_aggregates(&mut cut, &touched_targets)?;
 
-    let outcome = cleanup_creature(&cut)?;
+    // `IfRepair::Rewrite`, the same policy `prune_synapse` asks for: an `IF`
+    // the removal left short of a role is rewritten into the closest form that
+    // computes the same number on every record, never blanket-downgraded to
+    // `IDENTITY`. `cleanup_creature`'s own default is untouched, so the
+    // TypeScript-parity captures still have a caller that reproduces them.
+    let outcome = cleanup_creature_with(
+        &cut,
+        CleanupOptions {
+            if_repair: IfRepair::Rewrite,
+        },
+    )?;
 
-    // Exact means every term the removal took away was replaced by something
-    // that computes the same number on every record: nothing may be left
-    // uncompensated, every fold must be structural, and no `IF` may have been
-    // downgraded — that repair is cleanup's one inexact rewrite.
-    //
-    // The `IF` clause is defence in depth rather than a branch a caller can
-    // reach today: every route to a downgrade runs through an `IF` that the
-    // removed neuron fed, and an `IF` is an aggregate, so `uncompensated` is
-    // already non-empty. It stays because the two rules are independent —
-    // widening what counts as compensable must not quietly start calling a
-    // downgraded creature exact.
-    let exact = uncompensated.is_empty()
-        && bias_folds.iter().all(|f| f.exact)
-        && outcome.downgraded_if_neurons.is_empty();
+    let transform = transform_class(creature, &outcome, &bias_folds, &uncompensated)?;
 
     Ok(PruneResult {
         creature: outcome.creature,
@@ -669,13 +705,101 @@ pub fn prune_neuron(
         weight_shares,
         uncompensated,
         converted_neurons,
-        transform: if exact {
-            TransformClass::Exact
-        } else {
-            TransformClass::Approximate
-        },
+        transform,
         passes: outcome.passes,
     })
+}
+
+/// How faithful the whole rewrite was, from what it left behind.
+///
+/// `Exact` means every term the removal took away was replaced by something
+/// that computes the same number on every record: every fold must be
+/// structural, every shortfall must be one the `IF` rewrite proves cost
+/// nothing, and no `IF` may have been downgraded.
+///
+/// The downgrade clause is defence in depth rather than a branch a caller can
+/// reach: both entry points ask for [`IfRepair::Rewrite`], which never fills
+/// [`crate::prune_cleanup::CleanupOutcome::downgraded_if_neurons`] at all. It
+/// stays because the rules are independent — a future policy change must not
+/// quietly start calling a downgraded creature exact.
+///
+/// This is the **one** home of that conjunction. `prune_neuron` and
+/// [`crate::prune_synapse::prune_synapse`] both ask it rather than restating
+/// it, so a rule added here can never reach one entry point and not the other.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when a condition source of a shortfall's
+/// target declares a squash name this crate does not know.
+pub(crate) fn transform_class(
+    before: &CreatureExport,
+    outcome: &CleanupOutcome,
+    bias_folds: &[BiasFold],
+    uncompensated: &[UncompensatedTarget],
+) -> Result<TransformClass, CleanupError> {
+    let mut exact = bias_folds.iter().all(|f| f.exact) && outcome.downgraded_if_neurons.is_empty();
+    for target in uncompensated {
+        exact = exact && shortfall_costs_nothing(before, &outcome.static_if_neurons, target)?;
+    }
+    Ok(if exact {
+        TransformClass::Exact
+    } else {
+        TransformClass::Approximate
+    })
+}
+
+/// Did this shortfall cost the creature nothing at all?
+///
+/// A target named on [`PruneResult::uncompensated`] got no fold, which is
+/// normally the end of any exactness claim. One shape is the exception, and it
+/// is provable from the creature alone: an `IF` whose condition **the creature
+/// itself decided both before and after the cut, the same way**.
+///
+/// The condition's only job is to pick an arm. When [`static_condition_branch`]
+/// answers the same arm for the creature the caller handed in and for the one
+/// cleanup flattened, the pick never moved, so a condition term the removal
+/// took away was never read for anything else — and a term it took out of the
+/// arm the pick *discards* was never read at all. Both cost nothing, and the
+/// flattened `IDENTITY` computes what the `IF` computed on every record.
+///
+/// A term the removal took out of the **surviving** arm is a real loss, and so
+/// is every other shortfall: a point-wise target left without statistics, a
+/// non-`IF` aggregate, an `IF` the rewrite could not flatten because its
+/// condition still varies. All of those answer `false`.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when a condition source of the target
+/// declares a squash name this crate does not know.
+pub(crate) fn shortfall_costs_nothing(
+    before: &CreatureExport,
+    static_if_neurons: &[StaticIfRewrite],
+    target: &UncompensatedTarget,
+) -> Result<bool, CleanupError> {
+    if target.squash != squash_name_from(SquashType::If) {
+        return Ok(false);
+    }
+    // Not flattened means the `IF` still branches on a condition that varies,
+    // so the term it lost is a term the forward pass still reads.
+    let Some(rewrite) = static_if_neurons
+        .iter()
+        .find(|r| r.uuid == target.target_uuid)
+    else {
+        return Ok(false);
+    };
+    // Flattened, but was the arm it settled on the arm the caller's creature
+    // always took? Only the caller's creature can answer that, and only when
+    // it decided the condition itself.
+    if static_condition_branch(before, &target.target_uuid)? != Some(rewrite.branch) {
+        return Ok(false);
+    }
+    // The arm that survives is the one the flatten kept — an untyped edge
+    // belongs to the positive arm, the same reading the flatten takes.
+    let survives = match rewrite.branch {
+        SynapseType::Negative => target.role == SynapseType::Negative,
+        _ => matches!(target.role, SynapseType::Positive | SynapseType::Standard),
+    };
+    Ok(!survives)
 }
 
 /// What one target's compensation came to.
@@ -796,7 +920,7 @@ fn structural_activation(creature: &CreatureExport, uuid: &str) -> Result<Option
 /// The squash a target activates with, by UUID.
 ///
 /// A constant emits its bias whatever it declares, so it reads as `IDENTITY` —
-/// the same reading [`cleanup_creature`] takes, and a constant can never be a
+/// the same reading cleanup takes, and a constant can never be a
 /// target anyway.
 pub(crate) fn target_squash(
     creature: &CreatureExport,
@@ -831,7 +955,7 @@ pub(crate) fn squash_of(neuron: &crate::creature::NeuronExport) -> Result<Squash
 /// tell roles apart: an `IF` holds a sum per role, every other squash sums
 /// whatever reaches it, so two roles into one of those are the same term
 /// written twice and are summed here. That is the same reading
-/// [`cleanup_creature`] takes of an edge's identity, so a compensation and a
+/// cleanup takes of an edge's identity, so a compensation and a
 /// canonicalisation can never disagree about what one term is.
 fn outward_keys(
     creature: &CreatureExport,

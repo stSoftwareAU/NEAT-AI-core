@@ -483,7 +483,6 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
         "cascadeNeurons",
         "cascadeSynapses",
         "foldedNeurons",
-        "downgradedIfNeurons",
         "staticIfNeurons",
         "restoredIfRoles",
         "biasFolds",
@@ -495,6 +494,25 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
                 .as_array()
                 .is_some_and(|a| !a.is_empty())),
             "no golden case carries a non-empty {payload}"
+        );
+    }
+
+    // `downgradedIfNeurons` is the exception, and it is asserted the other way
+    // round: both JSON entry points ask cleanup for `IfRepair::Rewrite`
+    // (Ockham #198), so no request this ABI accepts can fill that list and no
+    // golden case may carry one. A case that started filling it would mean an
+    // entry point had quietly gone back to the inexact repair.
+    //
+    // Satisfied by absence, so on its own it would let the field be renamed or
+    // deleted unnoticed. `a_downgraded_if_list_still_crosses_under_its_wire_name`
+    // is the positive half that keeps the key pinned.
+    for recorded in &golden {
+        assert!(
+            recorded.response["downgradedIfNeurons"]
+                .as_array()
+                .is_none_or(|a| a.is_empty()),
+            "{}: an ABI entry point downgraded an IF instead of rewriting it",
+            recorded.name
         );
     }
 
@@ -511,6 +529,42 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
             "the golden record is missing the {required} case"
         );
     }
+}
+
+#[test]
+fn a_downgraded_if_list_still_crosses_under_its_wire_name() {
+    // No request this ABI accepts fills `downgraded_if_neurons` any more
+    // (Ockham #198), so the golden record can only assert it is *absent* — an
+    // assertion a rename or a deletion would also satisfy. This is the half
+    // that cannot be satisfied by absence: a filled response must serialise
+    // under `downgradedIfNeurons` and read back as what it was.
+    let filled = PruneResponse {
+        ok: true,
+        downgraded_if_neurons: vec!["if-1".to_string()],
+        ..PruneResponse::default()
+    };
+    let wire: serde_json::Value = serde_json::to_value(&filled).expect("the response serialises");
+    assert_eq!(
+        wire["downgradedIfNeurons"],
+        serde_json::json!(["if-1"]),
+        "the downgraded-IF list lost its wire name: {wire}"
+    );
+    assert_eq!(
+        answer(&serde_json::to_string(&filled).expect("the response serialises")),
+        filled,
+        "the downgraded-IF list did not survive the round trip"
+    );
+
+    // And empty stays skipped, which is why every golden case omits it.
+    let empty = serde_json::to_value(PruneResponse {
+        ok: true,
+        ..PruneResponse::default()
+    })
+    .expect("the response serialises");
+    assert!(
+        empty.get("downgradedIfNeurons").is_none(),
+        "an empty list must be skipped, not written: {empty}"
+    );
 }
 
 /// `h-agg` is a `MINIMUM` reading `input-1` and `h-x`, so removing `h-x` leaves
