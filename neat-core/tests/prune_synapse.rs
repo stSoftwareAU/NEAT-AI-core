@@ -27,11 +27,13 @@ use neat_core::prune_fixtures::{
     CASCADE_ORPHAN_FEEDERS, CONSTANT_MOVES_INTO_PREFIX, EDGE_ROLE_IDENTITY,
     EDGE_SOURCE_BECOMES_DEAD, EDGE_TARGET_BECOMES_CONSTANT,
 };
+use neat_core::range::{apply_get_range, apply_limit_range};
 use neat_core::{
     CleanupError, CleanupOptions, CreatureExport, IfRepair, ProxyStats, PruneError, PruneResult,
-    PruneStats, SynapseKey, SynapseType, TransformClass, UncompensatedReason, ValidateOptions,
-    cleanup_creature, cleanup_creature_with, compile_creature, creature_validate,
-    parse_creature_json, prune_synapse, validate_creature_topology,
+    PruneStats, SquashConversion, SquashType, SynapseKey, SynapseType, TransformClass,
+    UncompensatedReason, ValidateOptions, cleanup_creature, cleanup_creature_with,
+    compile_creature, creature_validate, parse_creature_json, prune_synapse,
+    validate_creature_topology,
 };
 use prune_if::{IF_STATIC_CONDITION_JSON, OUTPUT_IF_JSON};
 
@@ -49,6 +51,11 @@ const ACTIVATION_TOL: f32 = 1e-5;
 /// `f64` slack for a fold derived in the test: `0.3 + 2.0 * 0.6` is the same
 /// number by two different orders of operations only to within an ulp or two.
 const FOLD_TOL: f64 = 1e-12;
+
+/// Relative slack for a rewrite that must compute the **same** number: the two
+/// arms of the forward pass it is measured across agree to `f32` rounding, and
+/// nothing looser is being claimed (Ockham #197).
+const CONVERSION_TOL: f32 = 1e-6;
 
 /// Slack for a fold of a **structural** activation, which is whatever the
 /// forward pass computes — and it computes in `f32`.
@@ -370,6 +377,16 @@ fn outputs(creature: &CreatureExport, inputs: &[f32]) -> Vec<f32> {
 
 /// Assert two creatures are the same function of the inputs.
 fn assert_same_function(name: &str, left: &CreatureExport, right: &CreatureExport) {
+    assert_same_function_within(name, ACTIVATION_TOL, left, right);
+}
+
+/// [`assert_same_function`] at a caller's own relative tolerance.
+fn assert_same_function_within(
+    name: &str,
+    tol: f32,
+    left: &CreatureExport,
+    right: &CreatureExport,
+) {
     assert_eq!(left.input, right.input, "{name}: observation width moved");
     assert_eq!(left.output, right.output, "{name}: target width moved");
     for probe in probe_inputs(left.input) {
@@ -377,7 +394,7 @@ fn assert_same_function(name: &str, left: &CreatureExport, right: &CreatureExpor
         let b = outputs(right, &probe);
         for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
             assert!(
-                (x - y).abs() <= ACTIVATION_TOL * (1.0 + x.abs()),
+                (x - y).abs() <= tol * (1.0 + x.abs()),
                 "{name}: output {i} moved on {probe:?}: {x} vs {y}"
             );
         }
@@ -1361,4 +1378,598 @@ fn an_output_carrying_the_if_squash_is_rewritten_in_place() {
     let branch_twin = with_edge_zeroed(&before, "h-p", "output-0", Some("positive"));
     assert_same_function("output_if_restored", &branch_twin, &restored.creature);
     assert_valid("output_if_restored", &restored.creature);
+}
+
+// --- aggregates the cut leaves with inward edges (Ockham #197) ---------------
+
+/// The aggregate fixture, parameterised by the squash `h-agg` declares and the
+/// bias it carries.
+///
+/// `h-1` feeds both `h-agg` and the output, so cutting `h-1 → h-agg` leaves
+/// `h-agg` with exactly **one** inward edge (`input-1 → h-agg` at `0.75`) and
+/// leaves `h-1` itself alive. Every source is an `IDENTITY`, so what the
+/// creature computes is plain arithmetic a test can derive.
+fn aggregate_json(squash: &str, bias: f64) -> String {
+    format!(
+        r#"{{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+      "neurons":[
+        {{"type":"hidden","uuid":"h-1","bias":0.1,"squash":"IDENTITY"}},
+        {{"type":"hidden","uuid":"h-agg","bias":{bias},"squash":"{squash}"}},
+        {{"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}}
+      ],
+      "synapses":[
+        {{"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"}},
+        {{"weight":0.75,"fromUUID":"input-1","toUUID":"h-agg"}},
+        {{"weight":0.5,"fromUUID":"h-1","toUUID":"h-agg"}},
+        {{"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}},
+        {{"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}}
+      ]
+    }}"#
+    )
+}
+
+/// The same fixture with a third inward edge into `h-agg`, so cutting
+/// `h-1 → h-agg` leaves **two** and nothing is rewritten.
+fn aggregate_three_edges_json(squash: &str, bias: f64) -> String {
+    format!(
+        r#"{{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+      "neurons":[
+        {{"type":"hidden","uuid":"h-1","bias":0.1,"squash":"IDENTITY"}},
+        {{"type":"hidden","uuid":"h-agg","bias":{bias},"squash":"{squash}"}},
+        {{"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}}
+      ],
+      "synapses":[
+        {{"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"}},
+        {{"weight":0.75,"fromUUID":"input-1","toUUID":"h-agg"}},
+        {{"weight":0.25,"fromUUID":"input-0","toUUID":"h-agg"}},
+        {{"weight":0.5,"fromUUID":"h-1","toUUID":"h-agg"}},
+        {{"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}},
+        {{"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}}
+      ]
+    }}"#
+    )
+}
+
+/// `h-agg` is fed by a constant and by `h-1`, so the cut leaves it one edge
+/// whose source the creature itself fixes.
+fn aggregate_constant_fed_json(squash: &str) -> String {
+    format!(
+        r#"{{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {{"type":"constant","uuid":"c-1","bias":1.0}},
+        {{"type":"hidden","uuid":"h-1","bias":0.1,"squash":"IDENTITY"}},
+        {{"type":"hidden","uuid":"h-agg","bias":0.2,"squash":"{squash}"}},
+        {{"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}}
+      ],
+      "synapses":[
+        {{"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"}},
+        {{"weight":0.75,"fromUUID":"c-1","toUUID":"h-agg"}},
+        {{"weight":0.5,"fromUUID":"h-1","toUUID":"h-agg"}},
+        {{"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}},
+        {{"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}}
+      ]
+    }}"#
+    )
+}
+
+/// The creature the cut leaves, built **by hand** and still declaring the
+/// aggregate squash.
+///
+/// This is the oracle for every conversion: the claim is that a single-edge
+/// aggregate and its point-wise replacement are the same function, so the
+/// replacement is graded against the aggregate form itself — reached here by a
+/// plain `retain`, never by the code under test. The two sides run down
+/// *different* arms of the forward pass, so a fault in either moves one of them.
+fn cut_by_hand(json: &str, from: &str, to: &str) -> CreatureExport {
+    let mut twin = creature(json);
+    let before = twin.synapses.len();
+    twin.synapses
+        .retain(|s| !(s.from_uuid == from && s.to_uuid == to));
+    assert_eq!(before - 1, twin.synapses.len(), "no {from} -> {to} to cut");
+    twin
+}
+
+/// The same creature with one neuron's squash rewritten — used to show that a
+/// conversion the rules refuse would genuinely have changed the answer.
+fn with_squash(creature: &CreatureExport, uuid: &str, squash: &str) -> CreatureExport {
+    let mut twin = creature.clone();
+    let target = twin
+        .neurons
+        .iter_mut()
+        .find(|n| n.uuid == uuid)
+        .unwrap_or_else(|| panic!("no neuron {uuid}"));
+    target.squash = Some(squash.to_string());
+    twin
+}
+
+fn squash_of(creature: &CreatureExport, uuid: &str) -> String {
+    neuron(creature, uuid)
+        .squash
+        .clone()
+        .unwrap_or_else(|| "IDENTITY".to_string())
+}
+
+/// What `aggregate_json`'s output computes once `h-agg` is left with the one
+/// `input-1 → h-agg` edge, derived from the documented forward-pass arms.
+///
+/// `h-1` is `IDENTITY(x0 + 0.1)`, the output sums `2·h-1 + 1·h-agg + 0.3`, and
+/// the aggregate's own one-term value is whichever arm its squash takes.
+fn expected_single_edge_output(squash: &str, bias: f64, probe: &[f32]) -> f64 {
+    let x0 = f64::from(probe[0]);
+    let x1 = f64::from(probe[1]);
+    let term = 0.75 * x1;
+    let aggregate = match squash {
+        // The extreme of one term is that term; a mean over one term is it too.
+        "MINIMUM" | "MAXIMUM" | "MEAN" => term + bias,
+        // `HYPOT` takes the root of the sum of squares and *then* adds its bias.
+        "HYPOT" => term.abs() + bias,
+        // `HYPOTv2` squares `bias + w·a`, so the bias is inside the root.
+        "HYPOTv2" => (bias + term).abs(),
+        other => panic!("no derivation for {other}"),
+    };
+    0.3 + 2.0 * (x0 + 0.1) + aggregate
+}
+
+/// Assert the creature computes the derived number on every probe record.
+fn assert_computes(name: &str, creature: &CreatureExport, expected: impl Fn(&[f32]) -> f64) {
+    for probe in probe_inputs(creature.input) {
+        let actual = f64::from(outputs(creature, &probe)[0]);
+        let want = expected(&probe);
+        assert_within(
+            &format!("{name} on {probe:?}"),
+            actual,
+            want,
+            1e-6 * want.abs().max(1.0),
+        );
+    }
+}
+
+#[test]
+fn a_minimum_maximum_or_mean_left_with_one_edge_becomes_identity() {
+    for squash in ["MINIMUM", "MAXIMUM", "MEAN"] {
+        let json = aggregate_json(squash, 0.2);
+        let result = pruned(
+            &creature(&json),
+            &key("h-1", "h-agg", SynapseType::Standard),
+            None,
+        );
+
+        assert_valid(squash, &result.creature);
+        assert_eq!(
+            squash_of(&result.creature, "h-agg"),
+            "IDENTITY",
+            "{squash} left with one edge was not rewritten"
+        );
+        assert_eq!(
+            result.converted_neurons,
+            vec![SquashConversion {
+                uuid: "h-agg".to_string(),
+                from: squash,
+                to: "IDENTITY",
+            }],
+            "{squash}: the conversion was not reported"
+        );
+        assert_close(
+            &format!("{squash}: the bias is untouched"),
+            neuron(&result.creature, "h-agg").bias,
+            0.2,
+        );
+        assert_same_function_within(
+            squash,
+            CONVERSION_TOL,
+            &result.creature,
+            &cut_by_hand(&json, "h-1", "h-agg"),
+        );
+        assert_computes(squash, &result.creature, |probe| {
+            expected_single_edge_output(squash, 0.2, probe)
+        });
+    }
+}
+
+#[test]
+fn a_hypot_at_zero_bias_and_a_hypot_v2_become_absolute() {
+    for (squash, bias) in [("HYPOT", 0.0), ("HYPOTv2", -0.35)] {
+        let json = aggregate_json(squash, bias);
+        let result = pruned(
+            &creature(&json),
+            &key("h-1", "h-agg", SynapseType::Standard),
+            None,
+        );
+
+        assert_valid(squash, &result.creature);
+        assert_eq!(
+            squash_of(&result.creature, "h-agg"),
+            "ABSOLUTE",
+            "{squash} left with one edge was not rewritten"
+        );
+        assert_eq!(
+            result.converted_neurons,
+            vec![SquashConversion {
+                uuid: "h-agg".to_string(),
+                from: squash,
+                to: "ABSOLUTE",
+            }],
+            "{squash}: the conversion was not reported"
+        );
+        assert_close(
+            &format!("{squash}: the bias is carried over unchanged"),
+            neuron(&result.creature, "h-agg").bias,
+            bias,
+        );
+        assert_same_function_within(
+            squash,
+            CONVERSION_TOL,
+            &result.creature,
+            &cut_by_hand(&json, "h-1", "h-agg"),
+        );
+        assert_computes(squash, &result.creature, |probe| {
+            expected_single_edge_output(squash, bias, probe)
+        });
+    }
+}
+
+#[test]
+fn a_hypot_with_a_non_zero_bias_keeps_its_squash() {
+    let json = aggregate_json("HYPOT", 0.2);
+    let result = pruned(
+        &creature(&json),
+        &key("h-1", "h-agg", SynapseType::Standard),
+        None,
+    );
+
+    assert_valid("hypot_with_bias", &result.creature);
+    assert_eq!(
+        squash_of(&result.creature, "h-agg"),
+        "HYPOT",
+        "a HYPOT that adds a non-zero bias was rewritten anyway"
+    );
+    assert!(
+        result.converted_neurons.is_empty(),
+        "{:?}",
+        result.converted_neurons
+    );
+    assert_computes("hypot_with_bias", &result.creature, |probe| {
+        expected_single_edge_output("HYPOT", 0.2, probe)
+    });
+
+    // Why it is kept: `HYPOT` adds its bias to `|w·a|` where `ABSOLUTE` folds it
+    // inside, so the rewrite would have changed the answer.
+    let kept = cut_by_hand(&json, "h-1", "h-agg");
+    assert_different_function(
+        "ABSOLUTE is not HYPOT at a non-zero bias",
+        &kept,
+        &with_squash(&kept, "h-agg", "ABSOLUTE"),
+    );
+}
+
+#[test]
+fn an_if_left_with_one_edge_is_never_converted() {
+    // Rule 12 wants one edge of each role and `IfRepair` owns what to do when
+    // the removal leaves an `IF` short of that, so this module keeps its hands
+    // off: an `IF` reads its condition sum to pick a branch and a point-wise
+    // squash cannot stand in for that.
+    let before = creature(IF_JSON);
+    let result = pruned(&before, &key("h-a", "if-1", SynapseType::Negative), None);
+
+    assert!(
+        result.converted_neurons.is_empty(),
+        "an IF was converted: {:?}",
+        result.converted_neurons
+    );
+    assert_valid("if_is_never_converted", &result.creature);
+}
+
+#[test]
+fn a_converted_target_folds_its_last_edge_exactly() {
+    // Step one leaves `h-agg` with the constant's edge alone, which the
+    // conversion turns into an `IDENTITY` sum.
+    let json = aggregate_constant_fed_json("MINIMUM");
+    let first = pruned(
+        &creature(&json),
+        &key("h-1", "h-agg", SynapseType::Standard),
+        None,
+    );
+    assert_eq!(squash_of(&first.creature, "h-agg"), "IDENTITY");
+
+    // Step two removes that last edge. Its source is a constant, so the term is
+    // the creature's own to prove — and now that the target sums rather than
+    // aggregates, it folds into the bias exactly.
+    let second = pruned(
+        &first.creature,
+        &key("c-1", "h-agg", SynapseType::Standard),
+        None,
+    );
+
+    assert!(
+        second.uncompensated.is_empty(),
+        "the fold was refused: {:?}",
+        second.uncompensated
+    );
+    assert_eq!(second.bias_folds.len(), 1);
+    assert!(second.bias_folds[0].exact, "{:?}", second.bias_folds[0]);
+    assert_eq!(second.transform, TransformClass::Exact);
+    assert_same_function_within(
+        "the last edge folds exactly",
+        CONVERSION_TOL,
+        &first.creature,
+        &second.creature,
+    );
+    assert_valid("a_converted_target_folds", &second.creature);
+}
+
+#[test]
+fn an_aggregate_left_with_two_edges_keeps_its_squash_and_reports_the_dropped_term() {
+    let json = aggregate_three_edges_json("MEAN", 0.2);
+    let stats = mean_only(0.6);
+    let result = pruned(
+        &creature(&json),
+        &key("h-1", "h-agg", SynapseType::Standard),
+        Some(&stats),
+    );
+
+    assert_valid("two_edges", &result.creature);
+    assert_eq!(
+        squash_of(&result.creature, "h-agg"),
+        "MEAN",
+        "an aggregate still reducing two terms was rewritten"
+    );
+    assert!(
+        result.converted_neurons.is_empty(),
+        "{:?}",
+        result.converted_neurons
+    );
+    assert!(result.bias_folds.is_empty(), "an aggregate takes no fold");
+    assert_close(
+        "the aggregate's bias is untouched",
+        neuron(&result.creature, "h-agg").bias,
+        0.2,
+    );
+
+    assert_eq!(result.uncompensated.len(), 1);
+    let entry = &result.uncompensated[0];
+    assert_eq!(entry.target_uuid, "h-agg");
+    assert_eq!(entry.reason, UncompensatedReason::AggregateTarget);
+    assert_eq!(entry.squash, "MEAN");
+    assert_close("the weight it carried", entry.weight_sum, 0.5);
+    // `w · μ` — what the scorer is being asked to judge, not a refusal.
+    assert_close(
+        "the dropped term's magnitude",
+        entry
+            .dropped_mean
+            .expect("a supplied mean names a magnitude"),
+        0.5 * 0.6,
+    );
+    assert_eq!(result.transform, TransformClass::Approximate);
+
+    // The term really is gone: a `MEAN` over two terms is not a `MEAN` over
+    // three, so the creature no longer computes what it did.
+    assert_different_function(
+        "the dropped term changed the answer",
+        &creature(&json),
+        &result.creature,
+    );
+}
+
+#[test]
+fn the_dropped_term_magnitude_is_reported_only_where_a_number_proves_it() {
+    // No statistic, and a source the creature cannot fix: there is no number,
+    // and none is invented.
+    let bare = pruned(
+        &creature(ORDINARY_JSON),
+        &key("h-1", "output-0", SynapseType::Standard),
+        None,
+    );
+    assert_eq!(bare.uncompensated.len(), 1);
+    assert_eq!(
+        bare.uncompensated[0].reason,
+        UncompensatedReason::NoStatistics
+    );
+    assert_eq!(bare.uncompensated[0].dropped_mean, None);
+    assert_close(
+        "the bias is untouched",
+        neuron(&bare.creature, "output-0").bias,
+        0.3,
+    );
+
+    // A source the creature itself fixes names the magnitude with no statistic
+    // at all: the constant is worth `1.0` on every record and carried `0.75`.
+    let fixed = pruned(
+        &creature(&aggregate_three_edges_json("MINIMUM", 0.2)),
+        &key("input-1", "h-agg", SynapseType::Standard),
+        None,
+    );
+    assert_eq!(fixed.uncompensated.len(), 1);
+    assert_eq!(
+        fixed.uncompensated[0].reason,
+        UncompensatedReason::AggregateTarget
+    );
+    assert_eq!(
+        fixed.uncompensated[0].dropped_mean, None,
+        "an observation neuron varies with the record"
+    );
+
+    let constant = pruned(
+        &creature(&aggregate_constant_fed_json("MINIMUM")),
+        &key("c-1", "h-agg", SynapseType::Standard),
+        None,
+    );
+    assert_eq!(constant.uncompensated.len(), 1);
+    assert_eq!(
+        constant.uncompensated[0].reason,
+        UncompensatedReason::AggregateTarget
+    );
+    assert_close(
+        "w · the value the creature fixes",
+        constant.uncompensated[0]
+            .dropped_mean
+            .expect("a fixed source names a magnitude"),
+        0.75 * 1.0,
+    );
+}
+
+#[test]
+fn no_dropped_magnitude_refuses_a_prune() {
+    // `|w · μ| = 1e9` is an enormous shortfall for a creature whose other terms
+    // are fractions, and it is still answered: the scorer judges, this crate
+    // reports. Nothing here is a numeric bound.
+    let huge = mean_only(5e8);
+
+    let folded = pruned(
+        &creature(ORDINARY_JSON),
+        &key("h-1", "output-0", SynapseType::Standard),
+        Some(&huge),
+    );
+    assert_within(
+        "the whole fold lands in the bias",
+        neuron(&folded.creature, "output-0").bias,
+        0.3 + 2.0 * 5e8,
+        1e-6,
+    );
+
+    let aggregate = pruned(
+        &creature(&aggregate_three_edges_json("MEAN", 0.2)),
+        &key("h-1", "h-agg", SynapseType::Standard),
+        Some(&huge),
+    );
+    let dropped = aggregate.uncompensated[0]
+        .dropped_mean
+        .expect("a supplied mean names a magnitude");
+    assert_within(
+        "the reported magnitude",
+        dropped,
+        0.5 * 5e8,
+        1e-12 * 0.5 * 5e8,
+    );
+    assert_eq!(aggregate.transform, TransformClass::Approximate);
+}
+
+#[test]
+fn unusable_statistics_still_refuse_an_aggregate_prune() {
+    // No magnitude refuses a prune, but statistics this crate cannot make sense
+    // of still do — on an aggregate target exactly as anywhere else.
+    let before = creature(&aggregate_three_edges_json("MEAN", 0.2));
+    let edge = key("h-1", "h-agg", SynapseType::Standard);
+
+    match prune_synapse(&before, &edge, Some(&mean_only(f64::INFINITY))) {
+        Err(PruneError::NonFiniteStatistic { field, .. }) => assert_eq!(field, "mean_activation"),
+        other => panic!("an infinite mean was not refused: {other:?}"),
+    }
+    let negative = PruneStats {
+        mean_activation: 0.6,
+        variance: Some(-1.0),
+        proxy: None,
+    };
+    match prune_synapse(&before, &edge, Some(&negative)) {
+        Err(PruneError::NegativeVariance { variance, .. }) => {
+            assert_close("the refused variance", variance, -1.0)
+        }
+        other => panic!("a negative variance was not refused: {other:?}"),
+    }
+    let inconsistent = PruneStats {
+        mean_activation: 0.6,
+        variance: Some(0.01),
+        proxy: Some(ProxyStats {
+            uuid: "h-1".to_string(),
+            mean_activation: 0.5,
+            variance: 0.01,
+            covariance: 1.0,
+        }),
+    };
+    match prune_synapse(&before, &edge, Some(&inconsistent)) {
+        Err(PruneError::InconsistentCovariance { uuid, .. }) => assert_eq!(uuid, "h-1"),
+        other => panic!("an impossible covariance was not refused: {other:?}"),
+    }
+    let unknown_proxy = PruneStats {
+        mean_activation: 0.6,
+        variance: None,
+        proxy: Some(ProxyStats {
+            uuid: "no-such-neuron".to_string(),
+            mean_activation: 0.5,
+            variance: 0.01,
+            covariance: 0.001,
+        }),
+    };
+    match prune_synapse(&before, &edge, Some(&unknown_proxy)) {
+        Err(PruneError::UnknownProxy { uuid }) => assert_eq!(uuid, "no-such-neuron"),
+        other => panic!("an unknown proxy was not refused: {other:?}"),
+    }
+}
+
+#[test]
+fn the_replacement_clamps_to_the_bounds_the_rules_rely_on() {
+    // The guard inside `prune_rewrite` reads `apply_get_range`, so asserting one
+    // range against the other would move both sides of the comparison when that
+    // table changes. The independent oracle is the documented bound *literals*:
+    // `F32_LARGE` either side for the unbounded squashes, and a `0` floor for
+    // `ABSOLUTE` and `HYPOTv2`.
+    const LARGE: f32 = 3.4028235e38;
+    for squash in [
+        SquashType::Minimum,
+        SquashType::Maximum,
+        SquashType::Mean,
+        SquashType::Identity,
+        SquashType::Hypotenuse,
+    ] {
+        assert_eq!(
+            apply_get_range(squash),
+            (-LARGE, LARGE),
+            "{squash:?} is documented as unbounded either side"
+        );
+    }
+    for squash in [SquashType::Absolute, SquashType::HypotenuseV2] {
+        assert_eq!(
+            apply_get_range(squash),
+            (0.0, LARGE),
+            "{squash:?} is documented as floored at zero"
+        );
+    }
+}
+
+#[test]
+fn the_replacement_clamps_every_converted_activation_the_same_way() {
+    // A conversion is only exact if the forward pass's own output clamp treats
+    // the replacement as it treated the aggregate, so the rule table is only
+    // allowed to name a replacement that clamps identically.
+    let probes = [
+        -3.3e38_f32,
+        -2.5,
+        2.5,
+        3.3e38,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NAN,
+    ];
+    for (from, to) in [
+        (SquashType::Minimum, SquashType::Identity),
+        (SquashType::Maximum, SquashType::Identity),
+        (SquashType::Mean, SquashType::Identity),
+        (SquashType::HypotenuseV2, SquashType::Absolute),
+    ] {
+        for value in probes {
+            assert_eq!(
+                apply_limit_range(from, value).to_bits(),
+                apply_limit_range(to, value).to_bits(),
+                "{from:?} -> {to:?} clamps {value} differently"
+            );
+        }
+    }
+
+    // `HYPOT → ABSOLUTE` is the one rule whose replacement clamps more tightly
+    // — `ABSOLUTE` floors at `0` — which is exactly why it is taken only at
+    // bias `0`, where the activation is `|w·a|` and the floor cannot bite.
+    for value in [0.0_f32, 2.5, 3.3e38, f32::INFINITY, f32::NAN] {
+        assert_eq!(
+            apply_limit_range(SquashType::Hypotenuse, value).to_bits(),
+            apply_limit_range(SquashType::Absolute, value).to_bits(),
+            "HYPOT -> ABSOLUTE clamps the non-negative {value} differently"
+        );
+    }
+    assert_ne!(
+        apply_limit_range(SquashType::Hypotenuse, -2.5).to_bits(),
+        apply_limit_range(SquashType::Absolute, -2.5).to_bits(),
+        "the ABSOLUTE floor is what the bias-0 condition protects"
+    );
 }

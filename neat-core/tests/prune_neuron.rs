@@ -27,8 +27,8 @@ use neat_core::prune_fixtures::{
 };
 use neat_core::{
     CreatureExport, ProtectedKind, ProxyStats, PruneError, PruneResult, PruneStats,
-    StaticIfRewrite, SynapseType, TransformClass, UncompensatedReason, ValidateOptions,
-    compile_creature, creature_validate, parse_creature_json, prune_neuron,
+    SquashConversion, StaticIfRewrite, SynapseType, TransformClass, UncompensatedReason,
+    ValidateOptions, compile_creature, creature_validate, parse_creature_json, prune_neuron,
     validate_creature_topology,
 };
 use prune_if::{IF_STATIC_CONDITION_JSON, OUTPUT_IF_JSON};
@@ -53,6 +53,11 @@ const FOLD_TOL: f64 = 1e-12;
 /// the surviving arm's own weights, so the only difference between the two
 /// creatures is which arm the forward pass reads.
 const REWRITE_TOL: f32 = 1e-6;
+
+/// Relative slack for a rewrite that must compute the **same** number: the two
+/// forward-pass arms it is measured across agree to `f32` rounding, and nothing
+/// looser is being claimed (Ockham #197).
+const CONVERSION_TOL: f32 = 1e-6;
 
 /// Slack for a fold of a **structural** activation. That value is whatever the
 /// forward pass computes, and the forward pass computes in `f32`, so the
@@ -317,7 +322,7 @@ fn assert_same_function(name: &str, left: &CreatureExport, right: &CreatureExpor
     assert_same_function_within(name, ACTIVATION_TOL, left, right);
 }
 
-/// [`assert_same_function`] at a tolerance the caller chooses.
+/// [`assert_same_function`] at a caller's own relative tolerance.
 fn assert_same_function_within(
     name: &str,
     tol: f32,
@@ -1480,4 +1485,233 @@ fn an_exact_prune_is_always_the_same_function_of_the_inputs() {
         exact_seen >= 3,
         "the sweep must actually arm the exact branch, saw {exact_seen}"
     );
+}
+
+// --- aggregates the removal leaves with inward edges (Ockham #197) -----------
+
+/// `h-1` feeds `h-agg` and the output; `h-agg` also reads `input-1`, so
+/// removing `h-1` leaves the aggregate with exactly **one** inward edge.
+///
+/// Every source is an `IDENTITY`, so what the creature computes is plain
+/// arithmetic a test can derive.
+fn single_edge_aggregate_json(squash: &str, bias: f64) -> String {
+    format!(
+        r#"{{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+      "neurons":[
+        {{"type":"hidden","uuid":"h-1","bias":0.1,"squash":"IDENTITY"}},
+        {{"type":"hidden","uuid":"h-agg","bias":{bias},"squash":"{squash}"}},
+        {{"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}}
+      ],
+      "synapses":[
+        {{"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"}},
+        {{"weight":0.75,"fromUUID":"input-1","toUUID":"h-agg"}},
+        {{"weight":0.5,"fromUUID":"h-1","toUUID":"h-agg"}},
+        {{"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}},
+        {{"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}}
+      ]
+    }}"#
+    )
+}
+
+/// The creature the removal leaves, built **by hand** and still declaring the
+/// aggregate squash — the oracle a conversion is graded against.
+///
+/// `h-1` and every edge naming it go; `h-agg` keeps `input-1 → h-agg`. Reached
+/// by a plain `retain`, never by the code under test, and it runs down a
+/// *different* forward-pass arm than the converted creature does.
+fn removal_by_hand(json: &str, uuid: &str) -> CreatureExport {
+    let mut twin = creature(json);
+    twin.neurons.retain(|n| n.uuid != uuid);
+    twin.synapses
+        .retain(|s| s.from_uuid != uuid && s.to_uuid != uuid);
+    twin
+}
+
+fn squash_of(creature: &CreatureExport, uuid: &str) -> String {
+    neuron(creature, uuid)
+        .squash
+        .clone()
+        .unwrap_or_else(|| "IDENTITY".to_string())
+}
+
+#[test]
+fn an_aggregate_the_removal_leaves_with_one_edge_becomes_point_wise() {
+    // The same table `prune_synapse` is graded on, reached through the neuron
+    // entry point: both halves of the request surface run the conversion.
+    for (squash, bias, expected) in [
+        ("MINIMUM", 0.2, "IDENTITY"),
+        ("MAXIMUM", 0.2, "IDENTITY"),
+        ("MEAN", 0.2, "IDENTITY"),
+        ("HYPOT", 0.0, "ABSOLUTE"),
+        ("HYPOTv2", -0.35, "ABSOLUTE"),
+    ] {
+        let json = single_edge_aggregate_json(squash, bias);
+        let result = pruned(&creature(&json), "h-1", None);
+
+        assert_valid(squash, &result.creature);
+        assert_eq!(
+            squash_of(&result.creature, "h-agg"),
+            expected,
+            "{squash} left with one edge was not rewritten"
+        );
+        assert_eq!(
+            result.converted_neurons,
+            vec![SquashConversion {
+                uuid: "h-agg".to_string(),
+                from: squash,
+                to: expected,
+            }],
+            "{squash}: the conversion was not reported"
+        );
+        assert_close(
+            &format!("{squash}: the bias is carried over unchanged"),
+            neuron(&result.creature, "h-agg").bias,
+            bias,
+        );
+        assert_same_function_within(
+            squash,
+            CONVERSION_TOL,
+            &result.creature,
+            &removal_by_hand(&json, "h-1"),
+        );
+    }
+}
+
+#[test]
+fn a_hypot_adding_a_non_zero_bias_survives_a_neuron_removal_unrewritten() {
+    let json = single_edge_aggregate_json("HYPOT", 0.2);
+    let result = pruned(&creature(&json), "h-1", None);
+
+    assert_eq!(
+        squash_of(&result.creature, "h-agg"),
+        "HYPOT",
+        "a HYPOT that adds a non-zero bias was rewritten anyway"
+    );
+    assert!(
+        result.converted_neurons.is_empty(),
+        "{:?}",
+        result.converted_neurons
+    );
+    assert_same_function_within(
+        "hypot at a non-zero bias",
+        CONVERSION_TOL,
+        &result.creature,
+        &removal_by_hand(&json, "h-1"),
+    );
+}
+
+#[test]
+fn the_dropped_term_magnitude_crosses_with_the_uncompensated_target() {
+    // `h-agg` reads `input-1` and `h-1`, so removing `h-1` costs it `0.5 · a`
+    // and the caller's mean is what says how much that was worth.
+    let json = single_edge_aggregate_json("MEAN", 0.2);
+    let supplied = pruned(&creature(&json), "h-1", Some(&mean_only(0.6)));
+
+    let entry = supplied
+        .uncompensated
+        .iter()
+        .find(|u| u.target_uuid == "h-agg")
+        .expect("the aggregate is named");
+    assert_eq!(entry.reason, UncompensatedReason::AggregateTarget);
+    assert_close(
+        "the dropped term's magnitude",
+        entry
+            .dropped_mean
+            .expect("a supplied mean names a magnitude"),
+        0.5 * 0.6,
+    );
+
+    // Without a statistic there is no number, and none is invented.
+    let bare = pruned(&creature(&json), "h-1", None);
+    let entry = bare
+        .uncompensated
+        .iter()
+        .find(|u| u.target_uuid == "h-agg")
+        .expect("the aggregate is named");
+    assert_eq!(entry.dropped_mean, None);
+
+    // A neuron the creature itself fixes names the magnitude with no statistic:
+    // `ZERO_INWARD_JSON`'s `h-1` sums nothing, so `w · LOGISTIC(0.4)` is the
+    // creature's own to prove.
+    let logistic = 1.0 / (1.0 + (-0.4f64).exp());
+    let fixed = pruned(&creature(ZERO_INWARD_AGGREGATE_JSON), "h-1", None);
+    let entry = fixed
+        .uncompensated
+        .iter()
+        .find(|u| u.target_uuid == "h-agg")
+        .expect("the aggregate is named");
+    assert_eq!(entry.reason, UncompensatedReason::AggregateTarget);
+    assert_within(
+        "w · the value the creature fixes",
+        entry
+            .dropped_mean
+            .expect("a fixed source names a magnitude"),
+        0.5 * logistic,
+        STRUCTURAL_FOLD_TOL,
+    );
+
+    // Reporting a magnitude is not a licence to return something invalid, and
+    // reporting is all that happened: the creature the caller gets back is the
+    // one the aggregate form of the same cut computes.
+    assert_valid("supplied_mean", &supplied.creature);
+    assert_valid("bare", &bare.creature);
+    assert_valid("fixed", &fixed.creature);
+    assert_same_function_within(
+        "reporting the magnitude changed nothing else",
+        CONVERSION_TOL,
+        &bare.creature,
+        &removal_by_hand(&json, "h-1"),
+    );
+}
+
+/// `h-1` has nothing to sum, so it activates to `LOGISTIC(0.4)` on every record
+/// — and it feeds an aggregate, which takes no fold for it.
+const ZERO_INWARD_AGGREGATE_JSON: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.4,"squash":"LOGISTIC"},
+    {"type":"hidden","uuid":"h-agg","bias":0.2,"squash":"MEAN"},
+    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":0.75,"fromUUID":"input-0","toUUID":"h-agg"},
+    {"weight":0.25,"fromUUID":"input-1","toUUID":"h-agg"},
+    {"weight":0.5,"fromUUID":"h-1","toUUID":"h-agg"},
+    {"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}
+  ]
+}"#;
+
+#[test]
+fn an_aggregate_left_reducing_two_terms_keeps_its_squash() {
+    let result = pruned(&creature(ZERO_INWARD_AGGREGATE_JSON), "h-1", None);
+
+    assert_eq!(
+        squash_of(&result.creature, "h-agg"),
+        "MEAN",
+        "an aggregate still reducing two terms was rewritten"
+    );
+    assert!(
+        result.converted_neurons.is_empty(),
+        "{:?}",
+        result.converted_neurons
+    );
+    assert_eq!(result.transform, TransformClass::Approximate);
+    assert_valid("two_terms_left", &result.creature);
+}
+
+#[test]
+fn no_dropped_magnitude_refuses_a_neuron_removal() {
+    // `|W · μ| = 1.2e9` against a creature whose other terms are fractions is
+    // still answered: the scorer judges the loss, this crate reports it.
+    let huge = mean_only(6e8);
+    let result = pruned(&creature(TWO_TARGETS_JSON), "h-1", Some(&huge));
+
+    assert_within(
+        "the whole fold lands in the bias",
+        neuron(&result.creature, "output-0").bias,
+        0.3 + 2.0 * 6e8,
+        1e-6,
+    );
+    assert_eq!(result.transform, TransformClass::Approximate);
 }

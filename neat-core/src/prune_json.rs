@@ -50,7 +50,11 @@
 //! ```json
 //! { "ok": true, "creature": <CreatureExport>, "transform": "exact", "passes": 2,
 //!   "removedNeuron": "h-1", "removedSynapses": [ … ], "cascadeNeurons": [ … ],
-//!   "biasFolds": [ … ], "weightShares": [ … ], "uncompensated": [ … ] }
+//!   "biasFolds": [ … ], "weightShares": [ … ],
+//!   "uncompensated": [ { "targetUUID": "h-agg", "type": "standard",
+//!                        "weightSum": 0.5, "squash": "MEAN",
+//!                        "reason": "AGGREGATE_TARGET", "droppedMean": 0.3 } ],
+//!   "convertedNeurons": [ { "uuid": "h-agg", "from": "MINIMUM", "to": "IDENTITY" } ] }
 //! ```
 //!
 //! ```json
@@ -106,6 +110,7 @@ use crate::prune_neuron::{
     BiasFold, ProxyStats, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
     UncompensatedTarget, WeightShare, prune_neuron,
 };
+use crate::prune_rewrite::SquashConversion;
 use crate::prune_synapse::prune_synapse;
 use crate::synapse_type::SynapseType;
 
@@ -314,6 +319,11 @@ pub struct UncompensatedJson {
     pub squash: String,
     /// `"NO_STATISTICS"` or `"AGGREGATE_TARGET"`.
     pub reason: String,
+    /// Magnitude of the term the target lost — `weight_sum · μ`, or
+    /// `weight_sum · a` where the creature fixes the source's activation.
+    /// Absent where neither statistic nor structure proves one (Ockham #197).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped_mean: Option<f64>,
 }
 
 impl From<&UncompensatedTarget> for UncompensatedJson {
@@ -328,6 +338,29 @@ impl From<&UncompensatedTarget> for UncompensatedJson {
                 UncompensatedReason::AggregateTarget => "AGGREGATE_TARGET",
             }
             .to_string(),
+            dropped_mean: target.dropped_mean,
+        }
+    }
+}
+
+/// An aggregate rewritten to the point-wise squash that computes the same
+/// number, on the wire (Ockham #197).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct SquashConversionJson {
+    /// Wire UUID of the neuron whose squash was rewritten.
+    pub uuid: String,
+    /// The aggregate squash it declared.
+    pub from: String,
+    /// The point-wise squash it declares now.
+    pub to: String,
+}
+
+impl From<&SquashConversion> for SquashConversionJson {
+    fn from(conversion: &SquashConversion) -> Self {
+        Self {
+            uuid: conversion.uuid.clone(),
+            from: conversion.from.to_string(),
+            to: conversion.to.to_string(),
         }
     }
 }
@@ -436,6 +469,10 @@ pub struct PruneResponse {
     /// Targets that carried the removal with nothing folded back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uncompensated: Vec<UncompensatedJson>,
+    /// Aggregates the cut left with one inward edge, rewritten to the
+    /// point-wise squash that computes the same number.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub converted_neurons: Vec<SquashConversionJson>,
     /// Why no creature came back — present only when not `ok`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<PruneFailureJson>,
@@ -461,6 +498,7 @@ impl PruneResponse {
             bias_folds,
             weight_shares,
             uncompensated,
+            converted_neurons,
             transform,
             passes,
         } = result;
@@ -487,6 +525,7 @@ impl PruneResponse {
             bias_folds: bias_folds.iter().map(Into::into).collect(),
             weight_shares: weight_shares.iter().map(Into::into).collect(),
             uncompensated: uncompensated.iter().map(Into::into).collect(),
+            converted_neurons: converted_neurons.iter().map(Into::into).collect(),
             failure: None,
         }
     }
@@ -796,6 +835,40 @@ mod golden {
             response: serde_json::Value::Null,
         });
 
+        // An aggregate the cut leaves with one inward edge, rewritten to the
+        // point-wise squash that computes the same number — and, because the
+        // caller supplied a mean, the magnitude of the term it still lost
+        // (Ockham #197). The widest new payload the wire carries.
+        let aggregates = crate::creature::parse_creature_json(SINGLE_EDGE_AGGREGATE)
+            .expect("the golden fixture parses");
+        cases.push(PruneGoldenCase {
+            name: "single_edge_aggregate_converted".to_string(),
+            note: "a MINIMUM left with one edge becomes IDENTITY, and the dropped term is named"
+                .to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({
+                "creature": aggregates,
+                "uuid": "h-x",
+                "stats": { "meanActivation": 0.5 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // The same creature's `MEAN` keeps two terms, so it keeps its squash and
+        // the report is the dropped magnitude alone.
+        cases.push(PruneGoldenCase {
+            name: "aggregate_keeps_its_squash_with_two_edges".to_string(),
+            note: "a MEAN still reducing two terms keeps its squash and reports what it lost"
+                .to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": aggregates,
+                "synapse": { "fromUUID": "h-x", "toUUID": "h-mean" },
+                "stats": { "meanActivation": 0.5 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
         // A refusal — understood, and answered `malformed: false`.
         let protected = crate::prune_fixtures::CASCADE_ORPHAN_FEEDERS.before();
         cases.push(PruneGoldenCase {
@@ -861,6 +934,28 @@ mod golden {
         {"weight":2.0,"fromUUID":"h-p","toUUID":"if-1","type":"positive"},
         {"weight":-2.0,"fromUUID":"h-n","toUUID":"if-1","type":"negative"},
         {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+      ]
+    }"#;
+
+    /// `h-agg` is a `MINIMUM` reading `input-1` and `h-x`, so removing `h-x`
+    /// leaves it a single term; `h-mean` reads three sources and keeps two.
+    const SINGLE_EDGE_AGGREGATE: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-x","bias":0.1,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"h-agg","bias":0.2,"squash":"MINIMUM"},
+        {"type":"hidden","uuid":"h-mean","bias":0.3,"squash":"MEAN"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-x"},
+        {"weight":0.75,"fromUUID":"input-1","toUUID":"h-agg"},
+        {"weight":0.5,"fromUUID":"h-x","toUUID":"h-agg"},
+        {"weight":0.75,"fromUUID":"input-0","toUUID":"h-mean"},
+        {"weight":0.25,"fromUUID":"input-1","toUUID":"h-mean"},
+        {"weight":2.0,"fromUUID":"h-x","toUUID":"h-mean"},
+        {"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"},
+        {"weight":1.0,"fromUUID":"h-mean","toUUID":"output-0"}
       ]
     }"#;
 

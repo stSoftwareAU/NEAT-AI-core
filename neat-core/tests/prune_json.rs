@@ -566,3 +566,78 @@ fn a_downgraded_if_list_still_crosses_under_its_wire_name() {
         "an empty list must be skipped, not written: {empty}"
     );
 }
+
+/// `h-agg` is a `MINIMUM` reading `input-1` and `h-x`, so removing `h-x` leaves
+/// it one edge; `h-mean` reads three sources and keeps two.
+const AGGREGATE_WIRE_JSON: &str = r#"{"input":2,"output":1,"forwardOnly":true,
+    "neurons":[
+      {"type":"hidden","uuid":"h-x","bias":0.1,"squash":"IDENTITY"},
+      {"type":"hidden","uuid":"h-agg","bias":0.2,"squash":"MINIMUM"},
+      {"type":"hidden","uuid":"h-mean","bias":0.3,"squash":"MEAN"},
+      {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}],
+    "synapses":[
+      {"weight":1.0,"fromUUID":"input-0","toUUID":"h-x"},
+      {"weight":0.75,"fromUUID":"input-1","toUUID":"h-agg"},
+      {"weight":0.5,"fromUUID":"h-x","toUUID":"h-agg"},
+      {"weight":0.75,"fromUUID":"input-0","toUUID":"h-mean"},
+      {"weight":0.25,"fromUUID":"input-1","toUUID":"h-mean"},
+      {"weight":2.0,"fromUUID":"h-x","toUUID":"h-mean"},
+      {"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"},
+      {"weight":1.0,"fromUUID":"h-mean","toUUID":"output-0"}]}"#;
+
+#[test]
+fn a_conversion_and_a_dropped_magnitude_both_cross_the_wire() {
+    let creature = parse_creature_json(AGGREGATE_WIRE_JSON).expect("fixture parses");
+    let response = answer(&prune_neuron_json(
+        &serde_json::json!({
+            "creature": creature, "uuid": "h-x", "stats": { "meanActivation": 0.5 },
+        })
+        .to_string(),
+    ));
+
+    assert!(response.ok, "{:?}", response.failure);
+    assert_eq!(
+        response.converted_neurons.len(),
+        1,
+        "{:?}",
+        response.converted_neurons
+    );
+    let conversion = &response.converted_neurons[0];
+    assert_eq!(conversion.uuid, "h-agg");
+    assert_eq!(conversion.from, "MINIMUM");
+    assert_eq!(conversion.to, "IDENTITY");
+
+    // `MEAN` keeps two terms, so it keeps its squash and reports what it lost.
+    let mean = response
+        .uncompensated
+        .iter()
+        .find(|u| u.target_uuid == "h-mean")
+        .expect("the MEAN target is named");
+    assert_eq!(mean.squash, "MEAN");
+    let dropped = mean
+        .dropped_mean
+        .expect("a supplied mean names a magnitude");
+    assert!((dropped - 2.0 * 0.5).abs() < 1e-12, "{dropped}");
+}
+
+#[test]
+fn a_report_with_no_conversion_and_no_magnitude_omits_both_keys() {
+    let creature = parse_creature_json(AGGREGATE_WIRE_JSON).expect("fixture parses");
+    let json =
+        prune_neuron_json(&serde_json::json!({ "creature": creature, "uuid": "h-x" }).to_string());
+
+    assert!(!json.contains("droppedMean"), "{json}");
+    // The `MINIMUM` is still converted, so the key is present here — what must
+    // not appear is an empty list.
+    assert!(!json.contains("[]"), "empty lists are omitted: {json}");
+
+    let bare = prune_synapse_json(
+        &serde_json::json!({
+            "creature": creature,
+            "synapse": { "fromUUID": "input-0", "toUUID": "h-mean" },
+        })
+        .to_string(),
+    );
+    assert!(!bare.contains("convertedNeurons"), "{bare}");
+    assert!(!bare.contains("droppedMean"), "{bare}");
+}
