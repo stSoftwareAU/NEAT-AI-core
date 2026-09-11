@@ -41,8 +41,8 @@ Both resolution sites read the two endpoints against **one** table for exactly
 that reason:
 
 - `compile_creature` resolves sources through `uuid_to_index` and groups
-  destinations by the same key space (`neat-core/src/creature.rs:860`,
-  `:895-902`);
+  destinations by the same key space (`neat-core/src/creature.rs:870`,
+  `:906-912`);
 - `creature_validate` resolves both ends through one `resolve`
   (`neat-core/src/creature_validate.rs:1238`).
 
@@ -58,10 +58,10 @@ replaced.
 
 | Item | Location |
 |------|----------|
-|`creature::SynapseExport`|`creature.rs:159`|
-|`creature::MemeticWeightRowExport` (both `Option<String>`)|`creature.rs:331`|
-|`creature::CreatureError::DuplicateSynapse`|`creature.rs:421`|
-|`creature::CreatureError::TypedDuplicateSynapse`|`creature.rs:436`|
+|`creature::SynapseExport`|`creature.rs:169`|
+|`creature::MemeticWeightRowExport` (both `Option<String>`)|`creature.rs:341`|
+|`creature::CreatureError::DuplicateSynapse`|`creature.rs:431`|
+|`creature::CreatureError::TypedDuplicateSynapse`|`creature.rs:446`|
 |`prune_json::SynapseKeyJson`|`prune_json.rs:187`|
 |`prune_json::WeightShareJson`|`prune_json.rs:285`|
 |`prune_cleanup::SynapseKey`|`prune_cleanup.rs:146`|
