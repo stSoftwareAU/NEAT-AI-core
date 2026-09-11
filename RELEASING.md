@@ -253,6 +253,7 @@ result a caller already handles:
 
 `IF` is unaffected on every point above: it is excluded whatever it is left
 with, and still reports `AggregateTarget` per role.
+
 ### `0.16.0` — the pruning report gains fields, and a single-edge aggregate is rewritten (Ockham #197)
 
 Two breaking shapes, both in the pruning surface:
@@ -298,7 +299,7 @@ for target in &result.uncompensated {
 A consumer that only reads `PruneResult` field by field — which is every
 registered consumer today — needs no change.
 
-### `0.16.0` — `prune_neuron` rewrites an `IF` short a role (Ockham #198)
+### `0.17.0` — `prune_neuron` rewrites an `IF` short a role (Ockham #198)
 
 No public item moved: this is a **documented runtime behaviour** change callers
 rely on.

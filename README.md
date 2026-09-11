@@ -1239,6 +1239,19 @@ correlated-survivor statistics payload), each with the answer **native** gives
 it. Regenerate it with
 `UPDATE_PRUNE_GOLDEN=1 cargo test -p neat-core --test prune_json`.
 
+It also carries a named case for **every corner case the pruning guarantee is
+stated in** (Ockham #201), so no shape of rewrite reaches a caller over WASM
+ungraded: the last edge into an output from a hidden, constant or observation
+source; one removal leaving two outputs bare and one leaving only one of
+several; an **output** carrying `IF` repaired in place; a removal with no
+statistics at all; the one-edge conversions to `IDENTITY` and to `ABSOLUTE`; an
+aggregate still reducing two terms, reporting `droppedMean`; every aggregate
+squash left with no inward edge, `HYPOTv2` among them; and a three-deep hidden
+chain collapsing on one cut. `neat-core/tests/prune_json.rs` drives each of
+them through the JSON entry point *and* the native call and asserts the two
+answer the same `PruneResponse`, which is what `impl From<&PruneResult> for
+PruneResponse` is public for.
+
 | Gate | Where | What it proves |
 |---|---|---|
 | `neat-core/tests/prune_json.rs` | `cargo test` | the native ABI answers exactly what the native call answers, and still answers the record |
