@@ -207,6 +207,49 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.19.0` — `CreatureError::UnknownTargetUuid` (Issue #682)
+
+Two breaking counts, both on `compile_creature`'s destination handling:
+
+1. **`CreatureError` gains a variant.** The enum is not `#[non_exhaustive]`, so a
+   downstream exhaustive `match` on it stops compiling until it handles
+   `UnknownTargetUuid(String)`.
+2. **Documented runtime behaviour.** A creature carrying a synapse whose
+   `toUUID` names no neuron in `neurons` used to **compile**; it is now refused.
+
+`compile_creature` resolved a synapse's source through the UUID map and refused
+an unresolvable one with `CreatureError::UnknownSourceUuid`, while its
+destination had no check at all: synapses are grouped by `toUUID` and read back
+per listed neuron, so a destination the creature does not carry was never looked
+up. The edge was **silently dropped** — `Ok`, with a compiled network one synapse
+smaller than the creature declared, in the one function that turns a creature
+into the network the fleet scores. The check now runs over the whole synapse
+list before the neuron walk, so the variant names the first offending row in
+declaration order, and it is what speaks when both endpoints of a row dangle.
+
+Three shapes of edge are covered: a typo, a transposed `fromUUID`/`toUUID` pair,
+and an edge pointing at an **input** neuron — `input-N` resolves as a *source*
+but is never a listed neuron, so it can never be a destination. Nothing on the
+JSON wire changed, and a creature whose every `toUUID` names a listed neuron —
+every creature this crate and NEAT-AI emit — compiles byte-identically to
+`0.18.x`.
+
+**Migration** — add an arm (or a `_ =>` catch-all) for the new variant, and stop
+sending an edge you expected to be ignored:
+
+```rust
+match err {
+    // … existing arms …
+    CreatureError::UnknownTargetUuid(uuid) => {
+        eprintln!("synapse targets {uuid}, which is not a listed neuron");
+    }
+}
+```
+
+A creature that earns the new error was never compiled the way it read: the edge
+was already absent from the scored network, so the refusal names a defect that
+was previously silent rather than removing a working capability.
+
 ### `0.18.0` — a target left with no inward edge takes the bias fold (Ockham #196)
 
 No public item changed: this is a **documented behaviour** bump, the kind

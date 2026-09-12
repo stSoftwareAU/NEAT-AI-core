@@ -624,6 +624,40 @@ flowchart LR
     V --> C
 ```
 
+### Both endpoints of a synapse must resolve (Issue #682)
+
+`compile_creature` resolved a synapse's **source** through the UUID map and
+refused an unresolvable one with `CreatureError::UnknownSourceUuid`. Its
+**destination** had no check at all: synapses are grouped by `toUUID` and read
+back **per listed neuron**, so a `toUUID` naming no entry in `neurons` was never
+looked up — the edge was **silently dropped** and `compile_creature` returned
+`Ok` with a network one synapse smaller than the creature declared. The creature
+and the network the fleet scores then disagreed with nothing saying so, in the
+one function that turns a creature into that network.
+
+The destination now earns the mirror variant,
+`CreatureError::UnknownTargetUuid(String)`, raised over the whole synapse list
+before the neuron walk, so it names the first offending row in **declaration
+order** rather than whichever a hash map yielded. Three shapes of edge are
+covered: a typo, a transposed `fromUUID`/`toUUID` pair, and an edge pointing at
+an **input** neuron — `input-N` resolves as a *source* but is never a listed
+neuron, so it can never be a destination. Every neighbouring route already
+refused the same input loudly (`creature_validate` reports a dangling `toUUID`;
+`cleanup_creature_with` has `CleanupError::UnknownEndpoint` and
+`CleanupError::SynapseTargetsInput`), which is what made the compile path the
+outlier. A creature whose every `toUUID` names a listed neuron — every creature
+this crate and NEAT-AI emit — compiles exactly as before.
+
+```mermaid
+flowchart LR
+    J["creature JSON"] --> R["compile_creature"]
+    R --> S{"every toUUID a listed neuron?"}
+    S -. "no — typo, transposed pair,<br/>or an input target" .-> X["Err(UnknownTargetUuid)<br/>fail loud"]
+    S -- "yes" --> F{"every fromUUID resolves?"}
+    F -. "no" .-> Z["Err(UnknownSourceUuid)"]
+    F -- "yes" --> C["CompiledNetwork<br/>one synapse per declared edge"]
+```
+
 ### Creature weights parse to the exact `f64`
 
 `serde_json`'s **default** number parser is a fast approximation that can land
