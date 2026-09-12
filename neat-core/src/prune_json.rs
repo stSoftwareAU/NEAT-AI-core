@@ -100,6 +100,19 @@
 //! them, committed at [`GOLDEN_PATH`]. `neat-core/tests/prune_json.rs` grades
 //! the native side against it and `scripts/check_wasm_prune_parity.ts` drives
 //! the built bundle through the same requests in CI.
+//!
+//! The record carries a named case for **every corner case the pruning
+//! guarantee is stated in** (Ockham #201) — the zero-edge folds under every
+//! squash including the `HYPOTv2` rewrite, the one-edge conversions to
+//! `IDENTITY` and to `ABSOLUTE`, an aggregate still reducing two terms with
+//! its `droppedMean`, an output carrying `IF` repaired in place, a three-deep
+//! chain collapsing on one cut, and a removal with no statistics at all — so a
+//! shape that stopped crossing the wire correctly fails a gate rather than
+//! reaching a host. Each is driven through the JSON entry point *and* the
+//! native call by `neat-core/tests/prune_json.rs`, which compares the two
+//! whole through [`PruneResponse`]'s `From<&PruneResult>` — pinning the round
+//! trip — and asserts the numbers the documented forward-pass forms require
+//! beside it, which is the half that can catch a fault in the rewrite itself.
 
 use serde::{Deserialize, Serialize};
 
@@ -478,13 +491,24 @@ pub struct PruneResponse {
     pub failure: Option<PruneFailureJson>,
 }
 
-impl PruneResponse {
-    /// The answer for a successful rewrite.
-    ///
-    /// The result is **destructured**, not read field by field: a field added
-    /// to [`PruneResult`] then fails to compile here rather than silently
-    /// never reaching the wire.
-    fn from_result(result: &PruneResult) -> Self {
+/// The answer for a successful rewrite.
+///
+/// Public so a caller — and `neat-core/tests/prune_json.rs` — can write down
+/// what the wire *should* say for a native result and compare the two whole
+/// (Ockham #201). What that comparison pins is the **round trip**: a field
+/// this type can hold but the wire cannot carry back — a `skip_serializing_if`
+/// that drops a filled list, a `Serialize`/`Deserialize` rename that does not
+/// agree with itself, a number that does not survive JSON — fails it. It is
+/// not a check on the rewrite: both sides of it run this same conversion, so a
+/// fault in the rewrite moves both. That is what the derived-value assertions
+/// beside each corner case, and the committed golden record the built wasm
+/// bundle is compared against, are for.
+///
+/// The result is **destructured**, not read field by field: a field added to
+/// [`PruneResult`] then fails to compile here rather than silently never
+/// reaching the wire.
+impl From<&PruneResult> for PruneResponse {
+    fn from(result: &PruneResult) -> Self {
         let PruneResult {
             creature,
             removed_neuron,
@@ -529,7 +553,9 @@ impl PruneResponse {
             failure: None,
         }
     }
+}
 
+impl PruneResponse {
     /// The answer for a request that was understood and refused.
     fn from_error(error: &PruneError) -> Self {
         let code = match error {
@@ -624,7 +650,7 @@ fn neuron_response(request: &str) -> PruneResponse {
 
     let stats = request.stats.map(PruneStats::from);
     match prune_neuron(&request.creature, &request.uuid, stats.as_ref()) {
-        Ok(result) => PruneResponse::from_result(&result),
+        Ok(result) => PruneResponse::from(&result),
         Err(error) => PruneResponse::from_error(&error),
     }
 }
@@ -667,7 +693,7 @@ fn synapse_response(request: &str) -> PruneResponse {
 
     let stats = request.stats.map(PruneStats::from);
     match prune_synapse(&request.creature, &key, stats.as_ref()) {
-        Ok(result) => PruneResponse::from_result(&result),
+        Ok(result) => PruneResponse::from(&result),
         Err(error) => PruneResponse::from_error(&error),
     }
 }
@@ -782,8 +808,7 @@ mod golden {
         // An `IF` branch the removal empties while its condition still varies:
         // cleanup gives the role back a zero-weight support edge, which is the
         // one response payload no captured fixture reaches (Issue #591).
-        let branch = crate::creature::parse_creature_json(EMPTIED_IF_BRANCH)
-            .expect("the golden fixture parses");
+        let branch = fixture(EMPTIED_IF_BRANCH);
         cases.push(PruneGoldenCase {
             name: "restored_if_role".to_string(),
             note: "an IF branch the removal empties is given back a zero-weight support edge"
@@ -813,8 +838,7 @@ mod golden {
 
         // The correlated-survivor remedy, which is the widest statistics payload
         // the wire carries.
-        let correlated = crate::creature::parse_creature_json(CORRELATED_SURVIVOR)
-            .expect("the golden fixture parses");
+        let correlated = fixture(CORRELATED_SURVIVOR);
         cases.push(PruneGoldenCase {
             name: "proxy_compensation".to_string(),
             note: "the correlated-survivor remedy: a weight share and the residual it leaves"
@@ -839,8 +863,7 @@ mod golden {
         // point-wise squash that computes the same number — and, because the
         // caller supplied a mean, the magnitude of the term it still lost
         // (Ockham #197). The widest new payload the wire carries.
-        let aggregates = crate::creature::parse_creature_json(SINGLE_EDGE_AGGREGATE)
-            .expect("the golden fixture parses");
+        let aggregates = fixture(SINGLE_EDGE_AGGREGATE);
         cases.push(PruneGoldenCase {
             name: "single_edge_aggregate_converted".to_string(),
             note: "a MINIMUM left with one edge becomes IDENTITY, and the dropped term is named"
@@ -865,6 +888,162 @@ mod golden {
                 "creature": aggregates,
                 "synapse": { "fromUUID": "h-x", "toUUID": "h-mean" },
                 "stats": { "meanActivation": 0.5 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // --- corner cases 1-12 across the wire (Ockham #201) ----------------
+        //
+        // The shapes `prune_neuron.rs` / `prune_synapse.rs` grade natively,
+        // recorded here so the wasm bundle is graded on them too. Each case is
+        // driven through the JSON entry point *and* the native call by
+        // `neat-core/tests/prune_json.rs`, which asserts the two answers are
+        // the same `PruneResponse`.
+
+        // (1) The last edge into an output, from a hidden source the caller
+        // measured: the term folds into the output's bias.
+        cases.push(PruneGoldenCase {
+            name: "last_edge_into_output_folds_a_mean".to_string(),
+            note: "an output left with nothing to sum takes the caller's mean into its bias"
+                .to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": fixture(LAST_EDGE_INTO_OUTPUT),
+                "synapse": { "fromUUID": "h-1", "toUUID": "output-0" },
+                "stats": { "meanActivation": 0.6 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (2) The same, from a source the creature itself fixes: the fold is
+        // `w · b` and no statistic is involved, so the label is exact. The
+        // pre-existing `constant_edge_folds_exactly` case grades the same fold
+        // into a target that keeps its other edges; this one is the **bare**
+        // target the corner case is about.
+        cases.push(PruneGoldenCase {
+            name: "last_edge_from_a_constant_folds_exactly".to_string(),
+            note: "an output left with nothing to sum folds a constant source exactly".to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": fixture(LAST_EDGE_FROM_CONSTANT),
+                "synapse": { "fromUUID": "c-1", "toUUID": "output-0" },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (3) The same, from an observation the caller measured — an
+        // `input-N` source is an ordinary candidate.
+        cases.push(PruneGoldenCase {
+            name: "last_edge_from_an_observation_folds_a_mean".to_string(),
+            note: "an edge out of input-N is a candidate, and folds like any other".to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": fixture(LAST_EDGE_FROM_INPUT),
+                "synapse": { "fromUUID": "input-0", "toUUID": "output-0" },
+                "stats": { "meanActivation": 0.6 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (4) One removal, two outputs left bare: a fold per target.
+        cases.push(PruneGoldenCase {
+            name: "sole_source_of_two_outputs_folds_into_both".to_string(),
+            note: "removing the only source of two outputs folds into each of their biases"
+                .to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({
+                "creature": fixture(SOLE_SOURCE_OF_TWO_OUTPUTS),
+                "uuid": "h-1",
+                "stats": { "meanActivation": 0.6 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (5) Several outputs, only one of which loses its last edge — the
+        // other keeps reading its own observation.
+        cases.push(PruneGoldenCase {
+            name: "one_output_of_several_loses_its_last_edge".to_string(),
+            note: "only the output left with nothing to sum goes constant; the others do not"
+                .to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({
+                "creature": fixture(ONE_OUTPUT_LOSES_ITS_LAST_EDGE),
+                "uuid": "h-1",
+                "stats": { "meanActivation": 0.6 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (6) The **output** itself carries the `IF` squash, so a role it
+        // loses is repaired in place rather than by removing the neuron.
+        cases.push(PruneGoldenCase {
+            name: "output_if_rewritten_in_place".to_string(),
+            note: "an output carrying IF that loses its condition is rewritten, never downgraded"
+                .to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": fixture(OUTPUT_IF),
+                "synapse": { "fromUUID": "h-cond", "toUUID": "output-0", "type": "condition" },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (7) No statistic at all: the rewrite still happens and the target
+        // that got nothing is named, rather than the request being refused.
+        cases.push(PruneGoldenCase {
+            name: "no_statistic_prunes_uncompensated".to_string(),
+            note: "a removal with no statistics prunes anyway and names what went uncompensated"
+                .to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({
+                "creature": fixture(CORRELATED_SURVIVOR),
+                "uuid": "h-x",
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (9) The other half of the one-edge conversion table: `HYPOTv2` reads
+        // one term as `|bias + w·a|`, which is what `ABSOLUTE` computes.
+        cases.push(PruneGoldenCase {
+            name: "single_edge_hypot_v2_becomes_absolute".to_string(),
+            note: "a HYPOTv2 left with one edge becomes ABSOLUTE, bias unchanged".to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({
+                "creature": fixture(SINGLE_EDGE_HYPOT_V2),
+                "uuid": "h-x",
+                "stats": { "meanActivation": 0.5 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (11) Every aggregate squash left with **no** inward edge, in one
+        // request: the four that read their bias take `W·μ` (`HYPOT` the
+        // magnitude of it), and `HYPOTv2` takes it with its squash rewritten
+        // to `ABSOLUTE` (Ockham #196).
+        cases.push(PruneGoldenCase {
+            name: "zero_edge_aggregate_outputs_fold".to_string(),
+            note: "an aggregate left with no inward edge takes the fold, HYPOTv2 as an ABSOLUTE"
+                .to_string(),
+            op: PruneOp::Neuron,
+            request: serde_json::json!({
+                "creature": fixture(ZERO_EDGE_AGGREGATES),
+                "uuid": "h-1",
+                "stats": { "meanActivation": 0.6 },
+            }),
+            response: serde_json::Value::Null,
+        });
+
+        // (12) One cut, a three-deep hidden chain stranded: every level goes,
+        // and the output keeps the observation it still reads.
+        cases.push(PruneGoldenCase {
+            name: "three_deep_chain_collapses".to_string(),
+            note: "one removal strands a three-deep hidden chain and every level of it goes"
+                .to_string(),
+            op: PruneOp::Synapse,
+            request: serde_json::json!({
+                "creature": fixture(THREE_DEEP_CHAIN),
+                "synapse": { "fromUUID": "h-3", "toUUID": "output-0" },
+                "stats": { "meanActivation": 0.6 },
             }),
             response: serde_json::Value::Null,
         });
@@ -956,6 +1135,181 @@ mod golden {
         {"weight":2.0,"fromUUID":"h-x","toUUID":"h-mean"},
         {"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"},
         {"weight":1.0,"fromUUID":"h-mean","toUUID":"output-0"}
+      ]
+    }"#;
+
+    /// Parse a fixture this module owns, failing loudly rather than letting a
+    /// record be built from half a creature.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the fixture does not parse. These are consts of this
+    /// module, so that is a defect in the record rather than a runtime
+    /// condition.
+    fn fixture(json: &str) -> crate::creature::CreatureExport {
+        crate::creature::parse_creature_json(json).expect("the golden fixture parses")
+    }
+
+    /// Corner case (1): `h-1` is `output-0`'s only source, so cutting that
+    /// edge leaves the output with nothing to sum.
+    const LAST_EDGE_INTO_OUTPUT: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+        {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"}
+      ]
+    }"#;
+
+    /// Corner case (2): a constant is `output-0`'s only source, so the cut
+    /// leaves the output bare and what it lost is the value the creature
+    /// itself fixes — an **exact** fold, with no statistic involved.
+    /// `output-1` keeps the observation edge so the creature still reads its
+    /// input.
+    const LAST_EDGE_FROM_CONSTANT: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+      "neurons":[
+        {"type":"constant","uuid":"c-1","bias":0.5},
+        {"type":"output","uuid":"output-0","bias":0.25,"squash":"IDENTITY"},
+        {"type":"output","uuid":"output-1","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":0.2,"fromUUID":"c-1","toUUID":"output-0"},
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"output-1"}
+      ]
+    }"#;
+
+    /// Corner case (3): `input-0` feeds both outputs directly, so cutting one
+    /// edge leaves that output bare while the other goes on reading the
+    /// observation.
+    const LAST_EDGE_FROM_INPUT: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+      "neurons":[
+        {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
+        {"type":"output","uuid":"output-1","bias":0.1,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.5,"fromUUID":"input-0","toUUID":"output-0"},
+        {"weight":0.5,"fromUUID":"input-0","toUUID":"output-1"}
+      ]
+    }"#;
+
+    /// Corner case (4): `h-1` is the only source of **both** outputs.
+    const SOLE_SOURCE_OF_TWO_OUTPUTS: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":2,
+      "neurons":[
+        {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
+        {"type":"output","uuid":"output-1","bias":-0.2,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+        {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
+        {"weight":-0.5,"fromUUID":"h-1","toUUID":"output-1"}
+      ]
+    }"#;
+
+    /// Corner case (5): `h-1` feeds both outputs, but only `output-0` has
+    /// nothing else — `output-1` keeps its own observation edge.
+    const ONE_OUTPUT_LOSES_ITS_LAST_EDGE: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":2,
+      "neurons":[
+        {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"},
+        {"type":"output","uuid":"output-1","bias":-0.2,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+        {"weight":1.0,"fromUUID":"input-1","toUUID":"output-1"},
+        {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
+        {"weight":-0.5,"fromUUID":"h-1","toUUID":"output-1"}
+      ]
+    }"#;
+
+    /// Corner case (6): the **output** carries the `IF` squash. The declared
+    /// target width means it can never be removed, so a role it loses has to
+    /// be repaired in place.
+    const OUTPUT_IF: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-cond","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"h-p","bias":0.2,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"h-n","bias":0.3,"squash":"LOGISTIC"},
+        {"type":"output","uuid":"output-0","bias":0.05,"squash":"IF"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-cond"},
+        {"weight":1.0,"fromUUID":"input-1","toUUID":"h-p"},
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-n"},
+        {"weight":1.0,"fromUUID":"h-cond","toUUID":"output-0","type":"condition"},
+        {"weight":2.0,"fromUUID":"h-p","toUUID":"output-0","type":"positive"},
+        {"weight":-3.0,"fromUUID":"h-n","toUUID":"output-0","type":"negative"}
+      ]
+    }"#;
+
+    /// Corner case (9): `h-agg` is a `HYPOTv2` reading `input-1` and `h-x`, so
+    /// removing `h-x` leaves it a single term to read as `|bias + w·a|`.
+    const SINGLE_EDGE_HYPOT_V2: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-x","bias":0.1,"squash":"IDENTITY"},
+        {"type":"hidden","uuid":"h-agg","bias":-0.35,"squash":"HYPOTv2"},
+        {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-x"},
+        {"weight":0.75,"fromUUID":"input-1","toUUID":"h-agg"},
+        {"weight":0.5,"fromUUID":"h-x","toUUID":"h-agg"},
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"},
+        {"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}
+      ]
+    }"#;
+
+    /// Corner case (11): `h-1` is the only source of one output per aggregate
+    /// squash, so a single removal leaves **every** aggregate form with
+    /// nothing to aggregate. The weight is negative, so the `HYPOT` forms —
+    /// which read the term as a magnitude — answer a different number from the
+    /// summing ones and a fold that confused the two would show.
+    const ZERO_EDGE_AGGREGATES: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":5,
+      "neurons":[
+        {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"output","uuid":"output-0","bias":0.25,"squash":"MINIMUM"},
+        {"type":"output","uuid":"output-1","bias":0.25,"squash":"MAXIMUM"},
+        {"type":"output","uuid":"output-2","bias":0.25,"squash":"MEAN"},
+        {"type":"output","uuid":"output-3","bias":0.25,"squash":"HYPOT"},
+        {"type":"output","uuid":"output-4","bias":0.25,"squash":"HYPOTv2"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+        {"weight":-2.0,"fromUUID":"h-1","toUUID":"output-0"},
+        {"weight":-2.0,"fromUUID":"h-1","toUUID":"output-1"},
+        {"weight":-2.0,"fromUUID":"h-1","toUUID":"output-2"},
+        {"weight":-2.0,"fromUUID":"h-1","toUUID":"output-3"},
+        {"weight":-2.0,"fromUUID":"h-1","toUUID":"output-4"}
+      ]
+    }"#;
+
+    /// Corner case (12): `input-0 → h-1 → h-2 → h-3 → output-0` is the only
+    /// thing keeping the chain alive, so cutting its last edge strands all
+    /// three levels at once. `output-0` keeps the observation it also reads.
+    const THREE_DEEP_CHAIN: &str = r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"h-2","bias":0.2,"squash":"LOGISTIC"},
+        {"type":"hidden","uuid":"h-3","bias":0.3,"squash":"LOGISTIC"},
+        {"type":"output","uuid":"output-0","bias":0.05,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+        {"weight":1.5,"fromUUID":"h-1","toUUID":"h-2"},
+        {"weight":-0.5,"fromUUID":"h-2","toUUID":"h-3"},
+        {"weight":2.0,"fromUUID":"h-3","toUUID":"output-0"},
+        {"weight":1.0,"fromUUID":"input-0","toUUID":"output-0"}
       ]
     }"#;
 

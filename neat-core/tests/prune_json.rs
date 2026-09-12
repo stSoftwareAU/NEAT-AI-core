@@ -11,9 +11,9 @@ use neat_core::prune_json::{
     PruneOp, PruneResponse, read_golden, reason, run_golden_case, write_golden,
 };
 use neat_core::{
-    PRUNE_PARITY_CASES, PruneRequest, PruneStats, SynapseKey, SynapseType, ValidateOptions,
-    creature_validate, parse_creature_json, prune_golden_cases, prune_neuron, prune_neuron_json,
-    prune_synapse, prune_synapse_json,
+    CreatureExport, NeuronExport, PRUNE_PARITY_CASES, ProxyStats, PruneGoldenCase, PruneRequest,
+    PruneStats, SynapseKey, SynapseType, ValidateOptions, creature_validate, parse_creature_json,
+    prune_golden_cases, prune_neuron, prune_neuron_json, prune_synapse, prune_synapse_json,
 };
 
 const OPTIONS: ValidateOptions = ValidateOptions {
@@ -488,6 +488,9 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
         "biasFolds",
         "weightShares",
         "uncompensated",
+        // Ockham #197's rewrite report: a record that stopped carrying one
+        // would leave the wasm bundle ungraded on every conversion.
+        "convertedNeurons",
     ] {
         assert!(
             golden.iter().any(|c| c.response[payload]
@@ -516,17 +519,59 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
         );
     }
 
-    // The IF/typed edge cases and the cascade this milestone is about.
+    // `droppedMean` rides inside an `uncompensated` entry rather than at the
+    // top level, so a non-empty `uncompensated` alone does not reach it: a
+    // record whose every entry had dropped its magnitude would grade the
+    // Ockham #197 report on nothing.
+    assert!(
+        golden.iter().any(|c| c.response["uncompensated"]
+            .as_array()
+            .is_some_and(|entries| entries
+                .iter()
+                .any(|entry| entry.get("droppedMean").is_some()))),
+        "no golden case carries an uncompensated target with a droppedMean"
+    );
+
+    // The IF/typed edge cases and the cascade this milestone is about, then
+    // the twelve corner cases the pruning guarantee is stated in (Ockham
+    // #201). A record that stopped carrying one of these would leave that
+    // shape ungraded on the built bundle.
     for required in [
         "if_repair_coalesces_roles",
         "edge_role_identity",
         "cascade_orphan_feeders",
         "static_if_rewrite",
         "restored_if_role",
+        "last_edge_into_output_folds_a_mean",
+        "last_edge_from_a_constant_folds_exactly",
+        "last_edge_from_an_observation_folds_a_mean",
+        "sole_source_of_two_outputs_folds_into_both",
+        "one_output_of_several_loses_its_last_edge",
+        "output_if_rewritten_in_place",
+        "no_statistic_prunes_uncompensated",
+        "single_edge_aggregate_converted",
+        "single_edge_hypot_v2_becomes_absolute",
+        "aggregate_keeps_its_squash_with_two_edges",
+        "zero_edge_aggregate_outputs_fold",
+        "three_deep_chain_collapses",
     ] {
         assert!(
             golden.iter().any(|c| c.name == required),
             "the golden record is missing the {required} case"
+        );
+    }
+
+    // Both halves of the one-edge conversion table, and the one squash a
+    // zero-edge fold rewrites: a record carrying only `IDENTITY` conversions
+    // would let the `ABSOLUTE` arm go ungraded.
+    for (from, to) in [("MINIMUM", "IDENTITY"), ("HYPOTv2", "ABSOLUTE")] {
+        assert!(
+            golden.iter().any(|c| c.response["convertedNeurons"]
+                .as_array()
+                .is_some_and(|list| list
+                    .iter()
+                    .any(|conversion| conversion["from"] == from && conversion["to"] == to))),
+            "no golden case converts {from} to {to}"
         );
     }
 }
@@ -640,4 +685,467 @@ fn a_report_with_no_conversion_and_no_magnitude_omits_both_keys() {
     );
     assert!(!bare.contains("convertedNeurons"), "{bare}");
     assert!(!bare.contains("droppedMean"), "{bare}");
+}
+
+// --- corner cases 1-12 across the JSON boundary (Ockham #201) ---------------
+//
+// `prune_neuron.rs` and `prune_synapse.rs` grade what each of these shapes
+// *means*. What is graded here is that asking for it over JSON — the surface
+// NEAT-AI's `WasmPruneNeuron.ts` calls, and the one Ockham's native calls
+// mirror — answers exactly what the native call answers, comes back `ok`, and
+// carries a creature `creature_validate` accepts.
+//
+// Each case is a named entry of `prune_golden_cases`, so the request a test
+// drives and the request the wasm bundle is graded on in CI are the same
+// bytes, and there is one home for every fixture.
+//
+// Two oracles, deliberately: the wire/native comparison **shares** the rewrite
+// — that is the claim, since this module is a translation layer and nothing
+// else — so each test also asserts the numbers the documented forward-pass
+// forms require (`W · μ` into a bias, `|W · μ|` for a `HYPOT`, the squash a
+// conversion lands on), derived in the test rather than read back out of the
+// answer. A fault in the rewrite moves both sides of the first assertion and
+// exactly one side of the second.
+
+/// The golden case carrying `name`, or a loud failure naming what is there.
+fn golden_case(name: &str) -> PruneGoldenCase {
+    let cases = prune_golden_cases();
+    cases
+        .into_iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| {
+            panic!(
+                "no golden case named {name}; the record carries: {}",
+                prune_golden_cases()
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+}
+
+/// The statistics a golden request carries, read back into the native type.
+///
+/// # Panics
+///
+/// Panics on a `stats` object this ABI would not accept. The requests are
+/// built in `prune_json::prune_golden_cases`, so that is a defect in the
+/// record rather than a runtime condition, and it must fail loudly rather than
+/// silently grade the native call against *no* statistics.
+fn request_stats(request: &serde_json::Value) -> Option<PruneStats> {
+    let stats = request.get("stats")?;
+    let number = |value: &serde_json::Value, key: &str| {
+        value[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("golden stats key {key} is not a number: {value}"))
+    };
+    Some(PruneStats {
+        mean_activation: number(stats, "meanActivation"),
+        variance: stats.get("variance").map(|v| {
+            v.as_f64()
+                .unwrap_or_else(|| panic!("golden variance is not a number: {v}"))
+        }),
+        proxy: stats.get("proxy").map(|proxy| ProxyStats {
+            uuid: proxy["uuid"]
+                .as_str()
+                .unwrap_or_else(|| panic!("golden proxy names no uuid: {proxy}"))
+                .to_string(),
+            mean_activation: number(proxy, "meanActivation"),
+            variance: number(proxy, "variance"),
+            covariance: number(proxy, "covariance"),
+        }),
+    })
+}
+
+/// The role a golden synapse request names, in the wire spelling the ABI
+/// accepts.
+fn request_role(synapse: &serde_json::Value) -> SynapseType {
+    match synapse.get("type").and_then(serde_json::Value::as_str) {
+        None | Some("standard") => SynapseType::Standard,
+        Some("condition") => SynapseType::Condition,
+        Some("negative") => SynapseType::Negative,
+        Some("positive") => SynapseType::Positive,
+        Some(other) => panic!("golden request names an unknown role: {other}"),
+    }
+}
+
+/// What the **native** call answers for a golden case, written down in the
+/// wire shape so the two can be compared whole.
+///
+/// # Panics
+///
+/// Panics when the case's request is not one this helper can make natively, or
+/// when the native call refuses it. Both are defects in a record whose cases
+/// are meant to succeed.
+fn native_answer(case: &PruneGoldenCase) -> PruneResponse {
+    let creature: CreatureExport = serde_json::from_value(case.request["creature"].clone())
+        .unwrap_or_else(|e| panic!("{}: the golden creature does not parse: {e}", case.name));
+    let stats = request_stats(&case.request);
+    let result = match case.op {
+        PruneOp::Neuron => {
+            let uuid = case.request["uuid"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{}: a neuron case names no uuid", case.name));
+            prune_neuron(&creature, uuid, stats.as_ref())
+        }
+        PruneOp::Synapse => {
+            let synapse = &case.request["synapse"];
+            let key = SynapseKey {
+                from_uuid: synapse["fromUUID"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{}: a synapse case names no source", case.name))
+                    .to_string(),
+                to_uuid: synapse["toUUID"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{}: a synapse case names no target", case.name))
+                    .to_string(),
+                role: request_role(synapse),
+            };
+            prune_synapse(&creature, &key, stats.as_ref())
+        }
+    };
+    PruneResponse::from(
+        &result.unwrap_or_else(|e| panic!("{}: the native call refused it: {e}", case.name)),
+    )
+}
+
+/// Drive the named golden case through the JSON entry point and assert the
+/// boundary changed nothing: the same `PruneResponse` the native call builds,
+/// `ok: true`, and a creature the core validator accepts.
+fn crosses_unchanged(name: &str) -> PruneResponse {
+    let case = golden_case(name);
+    let wire = answer(&run_golden_case(&case));
+
+    assert!(wire.ok, "{name}: refused over the wire: {:?}", wire.failure);
+    assert_eq!(
+        wire,
+        native_answer(&case),
+        "{name}: the JSON boundary changed the answer"
+    );
+
+    let creature = wire
+        .creature
+        .clone()
+        .expect("an ok answer carries a creature");
+    creature_validate(&creature, &OPTIONS).unwrap_or_else(|failure| {
+        panic!(
+            "{name}: the wire answered a creature the validator rejects: {} ({})",
+            failure.message, failure.reason
+        )
+    });
+    wire
+}
+
+/// The bias the answer gives `uuid`.
+fn bias_of(creature: &CreatureExport, uuid: &str) -> f64 {
+    neuron_of(creature, uuid).bias
+}
+
+/// The squash the answer gives `uuid`, defaulted the way the wire shape does.
+fn squash_of(creature: &CreatureExport, uuid: &str) -> String {
+    neuron_of(creature, uuid)
+        .squash
+        .clone()
+        .unwrap_or_else(|| "IDENTITY".to_string())
+}
+
+fn neuron_of<'a>(creature: &'a CreatureExport, uuid: &str) -> &'a NeuronExport {
+    creature
+        .neurons
+        .iter()
+        .find(|n| n.uuid == uuid)
+        .unwrap_or_else(|| panic!("the answer carries no neuron {uuid}"))
+}
+
+/// Assert a fold landed on `target` and moved its bias by `delta`.
+fn assert_fold(response: &PruneResponse, target: &str, delta: f64) {
+    let fold = response
+        .bias_folds
+        .iter()
+        .find(|f| f.target_uuid == target)
+        .unwrap_or_else(|| panic!("no fold for {target}: {:?}", response.bias_folds));
+    assert!(
+        (fold.delta - delta).abs() < 1e-12,
+        "{target}: folded {} where {delta} was owed",
+        fold.delta
+    );
+}
+
+#[test]
+fn corner_case_1_the_last_edge_into_an_output_folds_the_callers_mean() {
+    let response = crosses_unchanged("last_edge_into_output_folds_a_mean");
+    let creature = response.creature.clone().expect("ok");
+
+    // `W · μ` = 2.0 · 0.6 on top of the output's own 0.3.
+    assert_fold(&response, "output-0", 2.0 * 0.6);
+    assert!((bias_of(&creature, "output-0") - (0.3 + 1.2)).abs() < 1e-12);
+    assert_eq!(response.transform.as_deref(), Some("approximate"));
+    // The source kept no outward edge, so the cascade took it.
+    assert!(
+        response.cascade_neurons.contains(&"h-1".to_string()),
+        "{:?}",
+        response.cascade_neurons
+    );
+}
+
+#[test]
+fn corner_case_2_the_last_edge_from_a_constant_folds_exactly() {
+    let response = crosses_unchanged("last_edge_from_a_constant_folds_exactly");
+    let creature = response.creature.clone().expect("ok");
+
+    // A constant is worth its own bias on every record, so `w · b` is the
+    // whole of what went: no statistic is involved and the label says exact.
+    assert_eq!(response.transform.as_deref(), Some("exact"));
+    assert_fold(&response, "output-0", 0.2 * 0.5);
+    assert!((bias_of(&creature, "output-0") - (0.25 + 0.1)).abs() < 1e-12);
+    assert!(response.bias_folds[0].exact, "{:?}", response.bias_folds);
+    // The corner case is the **bare** target: the constant was its only
+    // source, and the cut took the constant with it.
+    assert!(
+        !creature.synapses.iter().any(|s| s.to_uuid == "output-0"),
+        "output-0 still has something to sum, so this is not the zero-edge case"
+    );
+    assert!(
+        !creature.neurons.iter().any(|n| n.uuid == "c-1"),
+        "the constant kept no outward edge, so the cascade should have taken it"
+    );
+}
+
+#[test]
+fn corner_case_3_the_last_edge_from_an_observation_folds_the_callers_mean() {
+    let response = crosses_unchanged("last_edge_from_an_observation_folds_a_mean");
+    let creature = response.creature.clone().expect("ok");
+
+    assert_fold(&response, "output-0", 1.5 * 0.6);
+    assert!((bias_of(&creature, "output-0") - (0.3 + 0.9)).abs() < 1e-12);
+    // The other output keeps the observation it reads, untouched.
+    assert!((bias_of(&creature, "output-1") - 0.1).abs() < 1e-12);
+    assert!(
+        creature
+            .synapses
+            .iter()
+            .any(|s| s.from_uuid == "input-0" && s.to_uuid == "output-1"),
+        "the untouched output lost its observation edge"
+    );
+}
+
+#[test]
+fn corner_case_4_the_sole_source_of_two_outputs_folds_into_both() {
+    let response = crosses_unchanged("sole_source_of_two_outputs_folds_into_both");
+    let creature = response.creature.clone().expect("ok");
+
+    assert_eq!(response.bias_folds.len(), 2, "one fold per target");
+    assert_fold(&response, "output-0", 2.0 * 0.6);
+    assert_fold(&response, "output-1", -0.5 * 0.6);
+    assert!((bias_of(&creature, "output-0") - 1.5).abs() < 1e-12);
+    assert!((bias_of(&creature, "output-1") - -0.5).abs() < 1e-12);
+    assert!(
+        response.uncompensated.is_empty(),
+        "{:?}",
+        response.uncompensated
+    );
+}
+
+#[test]
+fn corner_case_5_only_the_output_that_loses_its_last_edge_goes_bare() {
+    let response = crosses_unchanged("one_output_of_several_loses_its_last_edge");
+    let creature = response.creature.clone().expect("ok");
+
+    assert_fold(&response, "output-0", 2.0 * 0.6);
+    assert_fold(&response, "output-1", -0.5 * 0.6);
+    assert!(
+        !creature.synapses.iter().any(|s| s.to_uuid == "output-0"),
+        "output-0 should have nothing left to sum"
+    );
+    assert!(
+        creature
+            .synapses
+            .iter()
+            .any(|s| s.from_uuid == "input-1" && s.to_uuid == "output-1"),
+        "output-1 lost the observation it still reads"
+    );
+}
+
+#[test]
+fn corner_case_6_an_output_carrying_if_is_rewritten_in_place() {
+    let response = crosses_unchanged("output_if_rewritten_in_place");
+    let creature = response.creature.clone().expect("ok");
+
+    // The condition is empty, so it settles at 0 — not `> 0` — and the output
+    // flattens onto its negative arm. The exact repair, never the downgrade.
+    assert_eq!(
+        response.static_if_neurons.len(),
+        1,
+        "{:?}",
+        response.static_if_neurons
+    );
+    assert_eq!(response.static_if_neurons[0].uuid, "output-0");
+    assert_eq!(response.static_if_neurons[0].branch, "negative");
+    assert!(
+        response.downgraded_if_neurons.is_empty(),
+        "the wire downgraded an IF instead of rewriting it"
+    );
+    // The declared target width is the fleet's contract: an output is repaired
+    // where it stands, never removed or reordered.
+    assert_eq!(creature.output, 1);
+    assert_eq!(
+        creature
+            .neurons
+            .iter()
+            .filter(|n| n.neuron_type == "output")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn corner_case_7_a_prune_with_no_statistic_reports_what_went_uncompensated() {
+    let response = crosses_unchanged("no_statistic_prunes_uncompensated");
+    let creature = response.creature.clone().expect("ok");
+
+    // No statistic is not a refusal: what cannot be compensated is named.
+    assert!(response.bias_folds.is_empty(), "{:?}", response.bias_folds);
+    let entry = &response.uncompensated[0];
+    assert_eq!(entry.target_uuid, "output-0");
+    assert_eq!(entry.reason, "NO_STATISTICS");
+    assert!(
+        entry.dropped_mean.is_none(),
+        "no statistic and no fixed value proves no magnitude"
+    );
+    assert_eq!(response.transform.as_deref(), Some("approximate"));
+    assert!(
+        (bias_of(&creature, "output-0") - 0.0).abs() < 1e-12,
+        "the target's bias moved with nothing to move it by"
+    );
+}
+
+#[test]
+fn corner_case_8_an_aggregate_left_with_one_edge_becomes_identity() {
+    let response = crosses_unchanged("single_edge_aggregate_converted");
+    let creature = response.creature.clone().expect("ok");
+
+    assert_eq!(
+        response.converted_neurons.len(),
+        1,
+        "{:?}",
+        response.converted_neurons
+    );
+    let conversion = &response.converted_neurons[0];
+    assert_eq!(conversion.uuid, "h-agg");
+    assert_eq!(conversion.from, "MINIMUM");
+    assert_eq!(conversion.to, "IDENTITY");
+    assert_eq!(squash_of(&creature, "h-agg"), "IDENTITY");
+    // Reducing one term is that term, so the bias is carried over untouched.
+    assert!((bias_of(&creature, "h-agg") - 0.2).abs() < 1e-12);
+}
+
+#[test]
+fn corner_case_9_a_hypot_v2_left_with_one_edge_becomes_absolute() {
+    let response = crosses_unchanged("single_edge_hypot_v2_becomes_absolute");
+    let creature = response.creature.clone().expect("ok");
+
+    let conversion = &response.converted_neurons[0];
+    assert_eq!(conversion.uuid, "h-agg");
+    assert_eq!(conversion.from, "HYPOTv2");
+    assert_eq!(conversion.to, "ABSOLUTE");
+    assert_eq!(squash_of(&creature, "h-agg"), "ABSOLUTE");
+    // `|bias + w·a|` is what both forms compute with one term, so the bias
+    // stays where it was.
+    assert!((bias_of(&creature, "h-agg") - -0.35).abs() < 1e-12);
+}
+
+#[test]
+fn corner_case_10_an_aggregate_left_with_two_edges_reports_the_dropped_term() {
+    let response = crosses_unchanged("aggregate_keeps_its_squash_with_two_edges");
+    let creature = response.creature.clone().expect("ok");
+
+    // Still reducing two terms, so no point-wise form says the same thing.
+    assert!(
+        response.converted_neurons.is_empty(),
+        "{:?}",
+        response.converted_neurons
+    );
+    assert_eq!(squash_of(&creature, "h-mean"), "MEAN");
+    let entry = &response.uncompensated[0];
+    assert_eq!(entry.target_uuid, "h-mean");
+    assert_eq!(entry.reason, "AGGREGATE_TARGET");
+    let dropped = entry
+        .dropped_mean
+        .expect("a supplied mean names the magnitude that went");
+    assert!((dropped - 2.0 * 0.5).abs() < 1e-12, "{dropped}");
+    assert_eq!(response.transform.as_deref(), Some("approximate"));
+}
+
+#[test]
+fn corner_case_11_every_aggregate_left_with_no_inward_edge_takes_the_fold() {
+    let response = crosses_unchanged("zero_edge_aggregate_outputs_fold");
+    let creature = response.creature.clone().expect("ok");
+
+    // Nothing left to aggregate is a point-wise reading again, so each output
+    // takes the term the removal cost it — in the shape its own empty
+    // forward-pass form implies.
+    let summed: f64 = -2.0 * 0.6;
+    for (uuid, squash, delta) in [
+        ("output-0", "MINIMUM", summed),
+        ("output-1", "MAXIMUM", summed),
+        ("output-2", "MEAN", summed),
+        // `HYPOT` reads one term as `|w·a|`, so a magnitude is what folds.
+        ("output-3", "HYPOT", summed.abs()),
+        // `HYPOTv2` never reads its bias with nothing to square, so the fold
+        // only means something with the squash rewritten (Ockham #196).
+        ("output-4", "ABSOLUTE", summed),
+    ] {
+        assert_fold(&response, uuid, delta);
+        assert_eq!(squash_of(&creature, uuid), squash, "{uuid}: squash");
+        assert!(
+            (bias_of(&creature, uuid) - (0.25 + delta)).abs() < 1e-12,
+            "{uuid}: bias is {}",
+            bias_of(&creature, uuid)
+        );
+    }
+    assert!(
+        response.uncompensated.is_empty(),
+        "a bare aggregate went uncompensated: {:?}",
+        response.uncompensated
+    );
+    // The one squash that moved is **reported**, and only that one: a caller
+    // reading the report must never have to discover a rewrite by diffing the
+    // creature it got back against the one it sent.
+    assert_eq!(
+        response.converted_neurons.len(),
+        1,
+        "{:?}",
+        response.converted_neurons
+    );
+    let conversion = &response.converted_neurons[0];
+    assert_eq!(conversion.uuid, "output-4");
+    assert_eq!(conversion.from, "HYPOTv2");
+    assert_eq!(conversion.to, "ABSOLUTE");
+}
+
+#[test]
+fn corner_case_12_one_cut_collapses_a_three_deep_hidden_chain() {
+    let response = crosses_unchanged("three_deep_chain_collapses");
+    let creature = response.creature.clone().expect("ok");
+
+    for uuid in ["h-1", "h-2", "h-3"] {
+        assert!(
+            response.cascade_neurons.contains(&uuid.to_string()),
+            "{uuid} was left behind: {:?}",
+            response.cascade_neurons
+        );
+        assert!(
+            !creature.neurons.iter().any(|n| n.uuid == uuid),
+            "{uuid} is still in the answer"
+        );
+    }
+    assert_fold(&response, "output-0", 2.0 * 0.6);
+    assert!(
+        creature
+            .synapses
+            .iter()
+            .any(|s| s.from_uuid == "input-0" && s.to_uuid == "output-0"),
+        "the output lost the observation it still reads"
+    );
 }

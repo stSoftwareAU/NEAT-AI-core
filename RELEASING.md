@@ -207,6 +207,97 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.18.0` — a target left with no inward edge takes the bias fold (Ockham #196)
+
+No public item changed: this is a **documented behaviour** bump, the kind
+[What counts as breaking](#what-counts-as-breaking) lists last. A caller that
+reads `PruneResult` gets different — better — answers for one shape of request,
+so it is signalled rather than slipped out on a patch.
+
+`prune_neuron` and `prune_synapse` used to refuse a bias fold to **every**
+aggregate target (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, `HYPOTv2`, `IF`),
+naming it on `PruneResult::uncompensated` with
+`UncompensatedReason::AggregateTarget`. That is right only while the target
+still has terms to aggregate. Once the cut leaves it with **no inward edge**,
+the forward pass reads it from its bias alone, so the fold is the closest
+creature there is and is now applied:
+
+| Squash | one inward term | no inward term | the fold |
+|---|---|---|---|
+| `MINIMUM` / `MAXIMUM` / `MEAN` | `W·a + bias` | `bias` | `bias += W·μ` |
+| `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` |
+| `HYPOTv2` | `\|bias + W·a\|` | `0`, bias never read | `bias += W·μ`, **squash rewritten to `ABSOLUTE`** |
+
+`IF` is excluded whatever it is left with — what it lost is a role, and
+`IfRepair` owns that repair.
+
+**Migration** — none compiles differently. What moves is the content of a
+result a caller already handles:
+
+- such a target now appears on `PruneResult::bias_folds` instead of
+  `PruneResult::uncompensated`, so a caller counting uncompensated targets to
+  decide whether to accept a candidate sees fewer of them;
+- `PruneResult::transform` can now be `Exact` for a removal that used to be
+  `Approximate`, where the source's value was fixed by the creature;
+- a `HYPOTv2` target left bare comes back declaring `ABSOLUTE`, and the rewrite
+  is named on `PruneResult::converted_neurons` (`convertedNeurons` on the
+  wire), exactly as the single-edge conversion is — so a caller reading the
+  report sees every squash that moved. The two forms share the
+  `[0, f32::MAX]` activation range, so nothing the original could produce is
+  clamped away by the replacement;
+- where such a target is left bare and **no** statistics were supplied, the
+  `PruneResult::uncompensated` entry now carries
+  `UncompensatedReason::NoStatistics` where it carried
+  `UncompensatedReason::AggregateTarget`. The target is still reported; only
+  the reason changed, because what is missing is now the number rather than the
+  permission. This reaches the JSON and WASM surface as `"NO_STATISTICS"` in
+  place of `"AGGREGATE_TARGET"`, so a consumer that switches on the reason code
+  needs the new arm.
+
+`IF` is unaffected on every point above: it is excluded whatever it is left
+with, and still reports `AggregateTarget` per role.
+
+### `0.17.0` — `prune_neuron` rewrites an `IF` short a role (Ockham #198)
+
+No public item moved: this is a **documented runtime behaviour** change callers
+rely on.
+
+`prune_neuron` ran cleanup under the TypeScript-parity `IfRepair::Downgrade`
+policy, so an `IF` the removal left short of a role came back as the `IDENTITY`
+sum of everything still reaching it — cleanup's one inexact rewrite — and was
+named on `PruneResult::downgraded_if_neurons`. It now asks for
+`IfRepair::Rewrite`, the exact repair `prune_synapse` has used since Issue #591:
+the `IF` is flattened onto the arm a statically decided condition always takes,
+or given back the emptied arm on a zero-weight support edge.
+
+Two consequences reach a caller:
+
+- **the creature is different.** For the shape `prune_fixtures`'s
+  `IF_REPAIR_COALESCES_ROLES` captures, the old answer summed both arms into one
+  untyped row; the new answer keeps the arm the forward pass would have read and
+  drops the other. A caller grading `prune_neuron` byte-for-byte against that
+  capture must re-grade on the numbers, or drive `cleanup_creature` — whose
+  default policy is **unchanged** — to reproduce it.
+- **`downgraded_if_neurons` is now always empty**, on both entry points and on
+  the JSON/WASM `downgradedIfNeurons` key. `staticIfNeurons` and
+  `restoredIfRoles` carry what happened instead. That key is serialised with
+  `skip_serializing_if = "Vec::is_empty"`, so in practice it is **no longer
+  emitted at all**: a consumer that requires it to be present will not find it,
+  and must treat its absence as normal. The field itself stays, so the shape
+  stays parseable and a future policy change that reinstated the downgrade would
+  cross the wire rather than be dropped in silence.
+
+`PruneResult::transform` also reaches `Exact` in one shape it could not before:
+an `IF` whose condition **the creature itself decided the same way before and
+after the cut** never read the term the removal took away, so the shortfall it is
+still named for costs nothing. Both entry points ask the same predicate, so a
+neuron removal and the synapse removal that takes the same term away agree.
+
+**Migration** — nothing to compile. A caller that asserted on
+`downgradedIfNeurons` should read `staticIfNeurons` / `restoredIfRoles`; a caller
+that compared a neuron prune to the `IF_REPAIR_COALESCES_ROLES` capture should
+compare activations, or call `cleanup_creature` for the parity form.
+
 ### `0.16.0` — the pruning report gains fields, and a single-edge aggregate is rewritten (Ockham #197)
 
 Two breaking shapes, both in the pruning surface:
@@ -251,47 +342,6 @@ for target in &result.uncompensated {
 
 A consumer that only reads `PruneResult` field by field — which is every
 registered consumer today — needs no change.
-
-### `0.16.0` — `prune_neuron` rewrites an `IF` short a role (Ockham #198)
-
-No public item moved: this is a **documented runtime behaviour** change callers
-rely on.
-
-`prune_neuron` ran cleanup under the TypeScript-parity `IfRepair::Downgrade`
-policy, so an `IF` the removal left short of a role came back as the `IDENTITY`
-sum of everything still reaching it — cleanup's one inexact rewrite — and was
-named on `PruneResult::downgraded_if_neurons`. It now asks for
-`IfRepair::Rewrite`, the exact repair `prune_synapse` has used since Issue #591:
-the `IF` is flattened onto the arm a statically decided condition always takes,
-or given back the emptied arm on a zero-weight support edge.
-
-Two consequences reach a caller:
-
-- **the creature is different.** For the shape `prune_fixtures`'s
-  `IF_REPAIR_COALESCES_ROLES` captures, the old answer summed both arms into one
-  untyped row; the new answer keeps the arm the forward pass would have read and
-  drops the other. A caller grading `prune_neuron` byte-for-byte against that
-  capture must re-grade on the numbers, or drive `cleanup_creature` — whose
-  default policy is **unchanged** — to reproduce it.
-- **`downgraded_if_neurons` is now always empty**, on both entry points and on
-  the JSON/WASM `downgradedIfNeurons` key. `staticIfNeurons` and
-  `restoredIfRoles` carry what happened instead. That key is serialised with
-  `skip_serializing_if = "Vec::is_empty"`, so in practice it is **no longer
-  emitted at all**: a consumer that requires it to be present will not find it,
-  and must treat its absence as normal. The field itself stays, so the shape
-  stays parseable and a future policy change that reinstated the downgrade would
-  cross the wire rather than be dropped in silence.
-
-`PruneResult::transform` also reaches `Exact` in one shape it could not before:
-an `IF` whose condition **the creature itself decided the same way before and
-after the cut** never read the term the removal took away, so the shortfall it is
-still named for costs nothing. Both entry points ask the same predicate, so a
-neuron removal and the synapse removal that takes the same term away agree.
-
-**Migration** — nothing to compile. A caller that asserted on
-`downgradedIfNeurons` should read `staticIfNeurons` / `restoredIfRoles`; a caller
-that compared a neuron prune to the `IF_REPAIR_COALESCES_ROLES` capture should
-compare activations, or call `cleanup_creature` for the parity form.
 
 ### `0.15.0` — `NetworkError::InvalidInputCount` (Issue #601)
 
