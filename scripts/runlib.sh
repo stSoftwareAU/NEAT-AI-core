@@ -11,26 +11,36 @@
 #
 #   * resolves the single workspace member — the root crate, or the one
 #     `[workspace] members` entry — and fails loud on zero or more than one;
-#   * installs the bin target named after the crate (`-` → `_`) to
-#     `$CARGO_HOME/bin/<bin>` and a `cdylib` target to
-#     `$CARGO_HOME/lib/lib<crate>.{so,dylib}` (CARGO_HOME defaults to
-#     `~/.cargo`). A crate carrying both targets installs both;
+#   * installs the bin target named after the crate to `$CARGO_HOME/bin/<crate>`
+#     and a `cdylib` target to `$CARGO_HOME/lib/lib<crate>.{so,dylib}`, both
+#     with `-` → `_` in the crate name (CARGO_HOME defaults to `~/.cargo`). A
+#     crate carrying both targets installs both. The installed names come from
+#     the *crate*, never from the cargo target name, so the skip below looks
+#     the artefacts up under the same names the install wrote;
 #   * writes the stamp `.<crate>.version` — the crate semver — beside every
 #     artefact it installs, and writes it *last*;
 #   * runs **no** `cargo` command at all when artefact and stamp already match,
 #     printing exactly one stderr line `[<crate>] already installed v<x>`.
 #     There is no force flag: delete the stamp to force a rebuild;
 #   * removes the checkout's `target/` after a successful install and names the
-#     path removed and the bytes freed on stderr. A failed build keeps
-#     `target/` and leaves the installed artefact and its stamp untouched;
+#     path removed and the bytes freed on stderr; a build directory outside the
+#     checkout (a shared `CARGO_TARGET_DIR`) is kept, and that is reported. Any
+#     failure keeps `target/` and leaves the installed artefacts and their
+#     stamps untouched — every artefact is staged and moved into place only
+#     once all of them are ready;
 #   * honours the caller's RUSTFLAGS unchanged and sets no flags of its own;
 #   * prints the installed bin path — or the lib path when there is no bin —
 #     on stdout, and nothing else on stdout.
 #
 # The toolchain is a precondition, not something this script installs: with
-# `cargo` or `rustup` missing it exits non-zero naming https://rustup.rs. MSRV
-# comes from `rust-version` in the crate manifest when present; a
+# `cargo`, `rustup` or `jq` missing it exits non-zero naming what to install.
+# MSRV comes from `rust-version` in the crate manifest when present; a
 # `rust-toolchain.toml` is honoured by rustup itself.
+#
+# Run it as a subprocess — `path="$(./scripts/runlib.sh)"`. It can also be
+# sourced, but note that sourcing applies `set -euo pipefail` to the calling
+# shell, prepends `$CARGO_HOME/bin` to its PATH, and that any failure exits
+# that shell rather than returning to it.
 set -euo pipefail
 
 _runlib_die() {
@@ -171,28 +181,18 @@ _runlib_lib_extension() {
   esac
 }
 
-# Path of the already-installed bin artefact for crate $2 under $1, if any.
-_runlib_installed_bin_path() {
-  local bin_dir="$1" crate="$2" candidate
-  for candidate in "$bin_dir/$crate" "$bin_dir/${crate//-/_}"; do
-    if [[ -x "$candidate" && ! -d "$candidate" ]]; then
-      printf '%s' "$candidate"
-      return 0
-    fi
-  done
-  return 0
+# Installed basenames. Both derive from the *crate* name with `-` -> `_`, never
+# from the cargo target name: the skip path knows only the crate, so a crate
+# whose `[lib] name` differs from its package name would otherwise be installed
+# under one name and looked up under another — and rebuild on every run forever.
+_runlib_bin_basename() {
+  printf '%s' "${1//-/_}"
 }
 
-# Path of the already-installed cdylib artefact for crate $2 under $1, if any.
-_runlib_installed_lib_path() {
-  local lib_dir="$1" crate="${2//-/_}" candidate
-  for candidate in "$lib_dir/lib$crate.so" "$lib_dir/lib$crate.dylib"; do
-    if [[ -f "$candidate" ]]; then
-      printf '%s' "$candidate"
-      return 0
-    fi
-  done
-  return 0
+_runlib_lib_basename() {
+  local extension
+  extension="$(_runlib_lib_extension)"
+  printf 'lib%s.%s' "${1//-/_}" "$extension"
 }
 
 # Returns 0 when semver $1 >= semver $2.
@@ -205,56 +205,105 @@ _runlib_version_ge() {
   for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
     x="${a[i]:-0}"
     y="${b[i]:-0}"
+    # A non-numeric component (a build-metadata tail, a typo in `rust-version`)
+    # must not become an arithmetic crash under `set -u`.
+    case "$x" in ''|*[!0-9]*) x=0 ;; esac
+    case "$y" in ''|*[!0-9]*) y=0 ;; esac
     if ((10#$x > 10#$y)); then return 0; fi
     if ((10#$x < 10#$y)); then return 1; fi
   done
   return 0
 }
 
-# The artefact-and-stamp fast path. Prints the `already installed` line and the
-# installed path and returns 0 when nothing needs building; returns non-zero —
-# silently — otherwise. Runs no cargo command on either branch.
-_runlib_try_skip() {
-  local repo_root="$1" root_manifest="$2"
-  local manifest crate version bin_dir lib_dir bin_stamp lib_stamp
-  local bin_path lib_path found=0
+# Sets RUNLIB_EXPECTS_BIN / RUNLIB_EXPECTS_LIB from manifest $1 alone, for the
+# fast path. Deliberately conservative: it claims a target only where cargo is
+# certain to produce one, because an over-claimed target would make every run
+# rebuild for ever, and an under-claimed one only costs one `cargo metadata`.
+_runlib_expected_shape() {
+  local manifest="$1" crate_underscored="$2" manifest_dir crate_types
+  manifest_dir="$(dirname "$manifest")"
+  RUNLIB_EXPECTS_BIN=0
+  RUNLIB_EXPECTS_LIB=0
 
-  manifest="$(_runlib_fast_member_manifest "$repo_root")" || return 1
-  crate="$(_runlib_crate_field "$manifest" "$root_manifest" name)"
-  version="$(_runlib_crate_field "$manifest" "$root_manifest" version)"
-  [[ -n "$crate" && -n "$version" ]] || return 1
+  # A cdylib is never implicit — it exists only where `[lib] crate-type` says so.
+  crate_types="$(_runlib_toml_value "$manifest" lib crate-type)"
+  case "$crate_types" in
+    *cdylib*) RUNLIB_EXPECTS_LIB=1 ;;
+  esac
 
+  # An explicit `[[bin]]` table, or `autobins`, can rename or suppress the
+  # binary cargo would otherwise name after the package, so the claim is made
+  # only for the two unambiguous auto-discovered shapes.
+  if ! grep -qE '^[[:space:]]*\[\[bin\]\]' "$manifest" &&
+    ! grep -qE '^[[:space:]]*autobins[[:space:]]*=' "$manifest"; then
+    if [[ -f "$manifest_dir/src/main.rs" ||
+      -f "$manifest_dir/src/bin/${crate_underscored}.rs" ]]; then
+      RUNLIB_EXPECTS_BIN=1
+    fi
+  fi
+  return 0
+}
+
+# True when the stamp in directory $1 matches version $3 for crate $2 and the
+# artefact $4 it stands for is still there. A stamp deleted beside a surviving
+# artefact is the documented way to force a rebuild, so it reads as "not
+# current" rather than as "nothing was ever installed here".
+_runlib_stamp_current() {
+  local dir="$1" crate="$2" version="$3" artefact="$4" stamp
+  stamp="$dir/.${crate}.version"
+  [[ -f "$stamp" ]] || return 1
+  [[ -e "$artefact" ]] || return 1
+  [[ "$(cat "$stamp")" == "$version" ]] || return 1
+  return 0
+}
+
+# Prints the already-installed line and the installed path and returns 0 when
+# *every* artefact the crate's shape calls for is present with a matching
+# stamp; returns non-zero — silently — otherwise. Runs no cargo command.
+#
+# Checking the whole shape is what stops a crate that ships both a bin and a
+# cdylib from reporting "already installed" once one half has been removed.
+_runlib_report_current() {
+  local crate="$1" version="$2" expects_bin="$3" expects_lib="$4"
+  local bin_dir lib_dir bin_path lib_path
   bin_dir="$(_runlib_cargo_home)/bin"
   lib_dir="$(_runlib_cargo_home)/lib"
-  bin_stamp="$bin_dir/.${crate}.version"
-  lib_stamp="$lib_dir/.${crate}.version"
-  bin_path="$(_runlib_installed_bin_path "$bin_dir" "$crate")"
-  lib_path="$(_runlib_installed_lib_path "$lib_dir" "$crate")"
+  bin_path="$bin_dir/$(_runlib_bin_basename "$crate")"
+  lib_path="$lib_dir/$(_runlib_lib_basename "$crate")"
 
-  # A stamp deleted beside a surviving artefact is the documented way to force
-  # a rebuild, so it must not be read as "nothing installed here".
-  if [[ -f "$bin_stamp" ]]; then
-    [[ -n "$bin_path" ]] || return 1
-    [[ "$(cat "$bin_stamp")" == "$version" ]] || return 1
-    found=1
-  elif [[ -n "$bin_path" ]]; then
-    return 1
+  # An undetermined shape claims nothing: rebuilding costs a build, reporting a
+  # half-installed tree as complete costs a fleet host the wrong artefact.
+  [[ "$expects_bin" -eq 1 || "$expects_lib" -eq 1 ]] || return 1
+
+  if [[ "$expects_bin" -eq 1 ]]; then
+    _runlib_stamp_current "$bin_dir" "$crate" "$version" "$bin_path" || return 1
   fi
-  if [[ -f "$lib_stamp" ]]; then
-    [[ -n "$lib_path" ]] || return 1
-    [[ "$(cat "$lib_stamp")" == "$version" ]] || return 1
-    found=1
-  elif [[ -n "$lib_path" ]]; then
-    return 1
+  if [[ "$expects_lib" -eq 1 ]]; then
+    _runlib_stamp_current "$lib_dir" "$crate" "$version" "$lib_path" || return 1
   fi
-  [[ "$found" -eq 1 ]] || return 1
 
   printf '[%s] already installed v%s\n' "$crate" "$version" >&2
-  if [[ -n "$bin_path" ]]; then
+  if [[ "$expects_bin" -eq 1 ]]; then
     printf '%s\n' "$bin_path"
   else
     printf '%s\n' "$lib_path"
   fi
+  return 0
+}
+
+# The fast path: resolve the crate from the manifests alone and report an
+# up-to-date install without running cargo at all. Returns non-zero — silently
+# — whenever the repository shape is anything but the two unambiguous ones,
+# leaving `cargo metadata` on the build path to be the authority.
+_runlib_try_skip() {
+  local repo_root="$1" root_manifest="$2" manifest crate version
+  manifest="$(_runlib_fast_member_manifest "$repo_root")" || return 1
+  crate="$(_runlib_crate_field "$manifest" "$root_manifest" name)"
+  version="$(_runlib_crate_field "$manifest" "$root_manifest" version)"
+  [[ -n "$crate" && -n "$version" ]] || return 1
+  _runlib_expected_shape "$manifest" "${crate//-/_}"
+  _runlib_report_current "$crate" "$version" \
+    "$RUNLIB_EXPECTS_BIN" "$RUNLIB_EXPECTS_LIB" || return 1
   return 0
 }
 
@@ -301,13 +350,27 @@ _runlib_install_file() {
 }
 
 # Remove the checkout's build directory and report what that freed.
+#
+# Only the checkout's own directory is removed. `CARGO_TARGET_DIR` (or
+# `[build] target-dir`) can point cargo at a cache shared with other checkouts,
+# and deleting that would destroy builds this script never made — so a target
+# directory outside the repository is kept, and the fact is reported rather
+# than passed over in silence.
 _runlib_remove_target() {
-  local crate="$1" target_dir="$2" kilobytes bytes
+  local crate="$1" target_dir="$2" repo_root="$3" kilobytes bytes
   [[ -d "$target_dir" ]] || return 0
   [[ "$target_dir" == /* ]] ||
     _runlib_die "refusing to remove the relative target directory '$target_dir'"
   [[ "$target_dir" != "/" ]] ||
     _runlib_die "refusing to remove '/' as a target directory"
+  case "$target_dir" in
+    "$repo_root"/*) : ;;
+    *)
+      printf '[%s] kept %s (outside the checkout %s)\n' \
+        "$crate" "$target_dir" "$repo_root" >&2
+      return 0
+      ;;
+  esac
   # `du -sk` is the portable reading — macOS bash 3.2 has no `du -b`.
   kilobytes="$(du -sk "$target_dir" | awk 'NR == 1 { print $1 }')"
   if [[ ! "$kilobytes" =~ ^[0-9]+$ ]]; then
@@ -324,11 +387,18 @@ _runlib_remove_target() {
 _runlib_macos_fixups() {
   local lib_path="$1" lib_file="$2"
   [[ "$(uname -s)" == "Darwin" ]] || return 0
-  install_name_tool -id "@rpath/$lib_file" "$lib_path" >&2 ||
-    _runlib_die "install_name_tool failed on $lib_path"
-  codesign --force --sign - --timestamp=none "$lib_path" >&2 ||
-    _runlib_die "codesign failed on $lib_path"
+  install_name_tool -id "@rpath/$lib_file" "$lib_path" >&2 || return 1
+  codesign --force --sign - --timestamp=none "$lib_path" >&2 || return 1
   return 0
+}
+
+# Discard every staged artefact, then die. Nothing has been moved into place at
+# this point, so the previously installed artefacts and their stamps survive.
+_runlib_abort_staged() {
+  local message="$1"
+  shift
+  rm -f "$@"
+  _runlib_die "$message"
 }
 
 runlib_install() {
@@ -378,6 +448,17 @@ runlib_install() {
 
   _runlib_check_msrv "$manifest" "$root_manifest"
 
+  # Cargo has now named the shape authoritatively, so the up-to-date check runs
+  # again over it. The fast path above declines every repository layout it
+  # cannot read unambiguously (a globbed `members` entry, say); without this
+  # second check those layouts would rebuild on every single invocation.
+  local expects_bin=0 expects_lib=0
+  if [[ -n "$bin_name" ]]; then expects_bin=1; fi
+  if [[ -n "$lib_name" ]]; then expects_lib=1; fi
+  if _runlib_report_current "$crate" "$version" "$expects_bin" "$expects_lib"; then
+    return 0
+  fi
+
   local -a build_args
   build_args=(build --release --package "$crate")
   if [[ -n "$lib_name" ]]; then
@@ -389,38 +470,59 @@ runlib_install() {
   # RUSTFLAGS is the caller's: this script neither sets nor edits it.
   cargo "${build_args[@]}" >&2
 
-  local bin_dir lib_dir release_dir installed_bin="" installed_lib=""
+  local bin_dir lib_dir release_dir bin_file lib_file
+  local staged_bin="" staged_lib="" installed_bin="" installed_lib=""
   bin_dir="$(_runlib_cargo_home)/bin"
   lib_dir="$(_runlib_cargo_home)/lib"
   release_dir="$target_dir/release"
+  bin_file="$(_runlib_bin_basename "$crate")"
+  lib_file="$(_runlib_lib_basename "$crate")"
 
+  # Everything is staged first and moved into place only once every artefact is
+  # ready: a crate that ships both a bin and a cdylib must not leave the new
+  # binary installed beside the old library when the library step fails.
   if [[ -n "$bin_name" ]]; then
     local built_bin="$release_dir/$bin_name"
     [[ -f "$built_bin" ]] || _runlib_die "the build produced no binary at $built_bin"
     mkdir -p "$bin_dir"
-    _runlib_install_file "$built_bin" "$bin_dir/$bin_name"
-    chmod +x "$bin_dir/$bin_name"
-    installed_bin="$bin_dir/$bin_name"
+    staged_bin="$bin_dir/$bin_file.runlib.$$"
+    cp "$built_bin" "$staged_bin" ||
+      _runlib_abort_staged "could not stage $built_bin" "$staged_bin"
+    chmod +x "$staged_bin"
   fi
 
   if [[ -n "$lib_name" ]]; then
-    local lib_file lib_extension
+    local built_lib="" candidate built_file lib_extension
     lib_extension="$(_runlib_lib_extension)"
-    lib_file="lib${lib_name//-/_}.${lib_extension}"
-    local built_lib="" candidate
+    built_file="lib${lib_name//-/_}.${lib_extension}"
     # A cdylib lands in target/release/, and in target/release/deps/ on the
     # toolchains that only hard-link the former.
-    for candidate in "$release_dir/$lib_file" "$release_dir/deps/$lib_file"; do
+    for candidate in "$release_dir/$built_file" "$release_dir/deps/$built_file"; do
       if [[ -f "$candidate" ]]; then
         built_lib="$candidate"
         break
       fi
     done
     [[ -n "$built_lib" ]] ||
-      _runlib_die "the build produced no $lib_file in $release_dir or $release_dir/deps"
+      _runlib_abort_staged \
+        "the build produced no $built_file in $release_dir or $release_dir/deps" \
+        "$staged_bin"
     mkdir -p "$lib_dir"
-    _runlib_install_file "$built_lib" "$lib_dir/$lib_file"
-    _runlib_macos_fixups "$lib_dir/$lib_file" "$lib_file"
+    staged_lib="$lib_dir/$lib_file.runlib.$$"
+    cp "$built_lib" "$staged_lib" ||
+      _runlib_abort_staged "could not stage $built_lib" "$staged_bin" "$staged_lib"
+    _runlib_macos_fixups "$staged_lib" "$lib_file" ||
+      _runlib_abort_staged "macOS signing failed for $lib_file" "$staged_bin" "$staged_lib"
+  fi
+
+  if [[ -n "$staged_bin" ]]; then
+    mv -f "$staged_bin" "$bin_dir/$bin_file" ||
+      _runlib_abort_staged "could not install $bin_dir/$bin_file" "$staged_bin" "$staged_lib"
+    installed_bin="$bin_dir/$bin_file"
+  fi
+  if [[ -n "$staged_lib" ]]; then
+    mv -f "$staged_lib" "$lib_dir/$lib_file" ||
+      _runlib_abort_staged "could not install $lib_dir/$lib_file" "$staged_lib"
     installed_lib="$lib_dir/$lib_file"
   fi
 
@@ -433,7 +535,7 @@ runlib_install() {
     printf '%s\n' "$version" > "$lib_dir/.${crate}.version"
   fi
 
-  _runlib_remove_target "$crate" "$target_dir"
+  _runlib_remove_target "$crate" "$target_dir" "$repo_root"
 
   if [[ -n "$installed_bin" ]]; then
     printf '%s\n' "$installed_bin"
