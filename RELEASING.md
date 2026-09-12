@@ -729,3 +729,12 @@ A release ships **source**, not a compiled artefact: this repo's
 its own builds only, because cargo takes profiles from the crate being built. A
 consumer that wants the same optimisation must declare it in its own manifest —
 see [Build profiles](README.md#build-profiles-issue-546) in the README.
+
+## Canonical sibling scripts
+
+`scripts/runlib.sh` — the build → install → clean helper every NEAT-AI Rust
+sibling runs — has its single home in this repository (Issue #680). Siblings
+copy it from `Develop` unchanged; behaviour changes are made here and re-copied
+outward, never edited downstream, so a fleet host cannot end up installing an
+artefact a forked copy produced. The contract it implements is documented once,
+in [Canonical `runlib.sh`](README.md#canonical-runlibsh-issue-680).
