@@ -114,6 +114,7 @@ safe-fall-back invariants; see
 | `RELEASING.md` | Single source of truth for the versioning/release policy (Issue #251) — semver, what counts as breaking, and `v<version>` tags/releases on `Develop`. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
+| `scripts/runlib.sh` | Canonical build → install → clean helper for the NEAT-AI Rust siblings (Issue #680). It lives here and is copied byte-for-byte downstream — see [Canonical `runlib.sh`](#canonical-runlibsh-issue-680). Gated by `tests/scripts/runlib.bats`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). `bats` is required, not optional: it is the only gate that *runs* the shell scripts (`bash -n` and shellcheck only read them), so a missing binary — or a missing/empty `tests/scripts` suite — fails the run rather than warning and continuing (Issue #631). Install with `brew install bats-core` or `sudo apt-get install -y bats`. |
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
 | `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). Exits non-zero only when the tree it produced must not be kept — see [Dependency updates](#dependency-updates-two-channels). |
@@ -193,6 +194,69 @@ values and then splices the live `[profile.*]` tables into a throwaway crate to
 check the flags **cargo itself** passes rustc (`-C debuginfo=line-tables-only`;
 `-C opt-level=3 -C lto=fat -C codegen-units=1`), and fails if any build input
 under `.cargo/`, `scripts/` or `.github/workflows/` pins `target-cpu=native`.
+
+### Canonical `runlib.sh` (Issue #680)
+
+`scripts/runlib.sh` is the one build → install → clean helper the NEAT-AI Rust
+siblings run, and it lives **here**. Every sibling copies this file
+byte-for-byte into its own `scripts/runlib.sh`; behaviour changes are made on
+`Develop` in this repository and re-copied outward, never edited downstream. A
+downstream edit forks the contract silently — the next copy overwrites it, and
+the divergence surfaces only when a fleet host installs the wrong artefact.
+
+Run it as a subprocess from a sibling's repository root and take the path off
+stdout:
+
+```bash
+artefact="$(./scripts/runlib.sh)"   # stdout is the installed path, and nothing else
+```
+
+It is also sourceable (`. scripts/runlib.sh` then `runlib_install`), but
+sourcing applies `set -euo pipefail` to the calling shell, prepends
+`$CARGO_HOME/bin` to its `PATH`, clears any `EXIT`/`INT`/`TERM` trap the caller
+had set, and turns any failure into an `exit` of that shell rather than a
+return — the subprocess form above is the contract.
+
+| Step | Behaviour |
+|------|-----------|
+| Resolve | The single workspace member — the root crate, or the one `[workspace] members` entry — via `cargo metadata --no-deps`. Zero members, or more than one, fails loud. The skip below must decide without running cargo at all, so it reads the crate name, version and declared target shape straight from the manifests. Anything it cannot read unambiguously — a globbed `members` entry, a `crate-type` array split over several lines, an explicit `[[bin]]` table or `autobins` — makes it decline outright and fall through to `cargo metadata`, which is always the authority. Declining is the safe direction: a target the reader failed to notice would otherwise let a half-installed crate report itself complete. |
+| Skip | With every artefact the crate's shape calls for present, and `.<crate>.version` matching the crate semver beside each, it runs **no** `cargo` command and prints one stderr line, `[<crate>] already installed v<x>`. The whole shape is checked, so a crate shipping both a bin and a cdylib does not report "already installed" once one half has been removed. There is no force flag: delete the stamp to force a rebuild. |
+| Install | The bin target named after the crate to `$CARGO_HOME/bin/<crate>`; a `cdylib` target to `$CARGO_HOME/lib/lib<crate>.{so,dylib}` — both with `-` → `_` in the crate name. A crate carrying both installs both. The installed names come from the **crate**, never from the cargo target name, so a crate whose `[lib] name` differs from its package name is not installed under one name and looked up under another. `CARGO_HOME` defaults to `~/.cargo`. |
+| Stamp | `.<crate>.version` is written beside every installed artefact, and written **last** — until it exists, a half-finished install still reads as "needs building". |
+| Clean | `target/` is removed after a successful install, with one stderr line naming the path removed and the bytes freed. The measurement is `du -sk` taken before the removal — the portable reading, macOS bash 3.2 included. A build directory **outside** the checkout (a shared `CARGO_TARGET_DIR`) holds other checkouts' builds, so it is kept and the fact reported rather than passed over. |
+| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. |
+
+It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
+`cargo metadata` and `rustc` is what the MSRV gate reads. `rustup` itself is
+never invoked, so a distro-packaged toolchain is fine — a missing one still
+points at <https://rustup.rs>. Two things it deliberately does **not** do. It never edits
+`RUSTFLAGS`: the caller's value reaches `cargo` unchanged and it sets no
+defaults of its own, so `-C target-cpu=native` stays consumer-owned exactly as
+above. And it never installs a toolchain over the network — a missing `cargo`
+or `rustup` exits non-zero naming <https://rustup.rs>. MSRV comes from
+`rust-version` in the crate manifest when present; a `rust-toolchain.toml` is
+rustup's own business.
+
+```mermaid
+flowchart TD
+    A["runlib.sh, from the repository root"] --> B{"artefact and stamp match<br/>the crate semver?"}
+    B -- "yes" --> C["one stderr line: already installed<br/>print the path, run no cargo"]
+    B -- "no" --> D["cargo metadata --no-deps:<br/>single member, targets, MSRV"]
+    D --> K{"shape complete and<br/>stamped at this version?"}
+    K -- "yes" --> C
+    K -- "no" --> E["cargo build --release"]
+    E -- "fails or an artefact is missing" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
+    E -- "succeeds" --> G["stage every artefact,<br/>then move them all into CARGO_HOME"]
+    G --> H["write the version stamps last"]
+    H --> I["remove the checkout's target/,<br/>report the bytes freed"]
+    I --> J["print the installed path"]
+```
+
+`tests/scripts/runlib.bats` is the gate. It runs the real script against fixture
+crates with a `cargo` shim on `PATH`, so the skip, the rebuild triggers, the bin
+/ cdylib / both shapes, the failure path and the `target/` removal are asserted
+as observable outcomes — the shim records every invocation, which is what makes
+"runs no `cargo` command" an assertion rather than an inference.
 
 ## Cargo features
 
