@@ -357,6 +357,18 @@ pub enum CreatureError {
     UnknownSquash(String),
     /// A synapse referenced a source neuron UUID that does not exist.
     UnknownSourceUuid(String),
+    /// A synapse's `toUUID` named no neuron in [`CreatureExport::neurons`]
+    /// (Issue #682).
+    ///
+    /// [`compile_creature`] reads its grouped synapses back **per listed
+    /// neuron**, so a destination the creature does not carry was never looked
+    /// up: the edge was silently dropped and the compiled network was one
+    /// synapse smaller than the creature declared, with `Ok` returned. This is
+    /// the mirror of [`CreatureError::UnknownSourceUuid`] and covers a typo, a
+    /// transposed `fromUUID`/`toUUID` pair, and an edge pointing at an **input**
+    /// neuron — `input-N` resolves as a *source* but is never a listed neuron,
+    /// so it can never be a destination.
+    UnknownTargetUuid(String),
     /// The declared output count did not match the number of output neurons found.
     OutputCountMismatch {
         /// Output count declared by `CreatureExport::output`.
@@ -448,6 +460,9 @@ impl std::fmt::Display for CreatureError {
             CreatureError::UnknownSquash(name) => write!(f, "Unknown squash function: {name}"),
             CreatureError::UnknownSourceUuid(uuid) => {
                 write!(f, "Unknown source neuron UUID: {uuid}")
+            }
+            CreatureError::UnknownTargetUuid(uuid) => {
+                write!(f, "Unknown target neuron UUID: {uuid}")
             }
             CreatureError::OutputCountMismatch { expected, found } => {
                 write!(f, "Expected {expected} output neurons, found {found}")
@@ -848,6 +863,16 @@ pub fn creature_to_json_pretty(creature: &CreatureExport) -> Result<String, Crea
 /// (Issue #622). A repeated `(fromUUID, toUUID, type)` triple is then rejected
 /// by [`validate_no_duplicate_synapses`] rather than summed, because TypeScript
 /// keeps only one copy of it (Issues #556, #577).
+///
+/// **Both endpoints of every synapse must resolve.** A `fromUUID` naming no
+/// neuron is [`CreatureError::UnknownSourceUuid`] and a `toUUID` naming no
+/// neuron in [`CreatureExport::neurons`] is
+/// [`CreatureError::UnknownTargetUuid`] (Issue #682) — the destination check
+/// runs over the whole synapse list before the neuron walk, so it is what
+/// speaks when both endpoints of a row dangle. A destination is a *listed*
+/// neuron and never an input: `input-N` resolves as a source only. Until #682
+/// the destination had no check at all, and an edge naming one the creature did
+/// not carry was silently dropped from the compiled network.
 pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, CreatureError> {
     validate_creature_width(creature)?;
     validate_no_duplicate_synapses(creature)?;
@@ -890,6 +915,23 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
     // silently truncating `from_index` during compilation.
     if num_neurons > MAX_NODE_COUNT {
         return Err(CreatureError::TooManyNodes { count: num_neurons });
+    }
+
+    // Issue #682 - give the destination the same typed refusal the source gets
+    // below. The groups built next are read back *per listed neuron*, so a
+    // `toUUID` naming none of them is never looked up: the edge used to vanish
+    // from the compiled network while this function returned `Ok`. Walk
+    // `creature.synapses` in declaration order rather than the map, so the UUID
+    // reported is the first offending row and not whichever a hash map yielded.
+    let listed_neurons: HashSet<&str> = creature
+        .neurons
+        .iter()
+        .map(|neuron| neuron.uuid.as_str())
+        .collect();
+    for synapse in &creature.synapses {
+        if !listed_neurons.contains(synapse.to_uuid.as_str()) {
+            return Err(CreatureError::UnknownTargetUuid(synapse.to_uuid.clone()));
+        }
     }
 
     // Group synapses by destination neuron UUID for ordered construction
