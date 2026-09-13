@@ -833,6 +833,103 @@ TOML
   [ "$(cat "$OUT")" = "$build_path" ]
 }
 
+# One `[[bin]]` table that names the crate is unambiguous — it is the shape
+# every sibling shipping a CLI writes (NEAT-AI-Backpropagation #152) — so the
+# fast path reads it and the skip costs no cargo call at all. Declining here
+# made "runs no cargo command at all" untrue for most of the family.
+@test "a single [[bin]] table naming the crate skips without invoking cargo at all" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+  local build_path
+  build_path="$(cat "$OUT")"
+
+  cat > "${REPO}/Cargo.toml" <<'TOML'
+[package]
+name = "demo_both"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "demo_both"
+path = "src/main.rs"
+
+[lib]
+name = "demo_both"
+crate-type = ["cdylib"]
+TOML
+  : > "$RUNLIB_SHIM_LOG"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ "$(cargo_invocations)" -eq 0 ]
+  run grep -F "already installed v1.0.0" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "$build_path" ]
+}
+
+# A table naming something else is still ambiguous: cargo can autodiscover a
+# second binary named after the package beside it, so the reader must decline
+# and let `cargo metadata` name the shape.
+@test "a [[bin]] table naming another binary still falls through to cargo metadata" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+
+  cat > "${REPO}/Cargo.toml" <<'TOML'
+[package]
+name = "demo_both"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "demo_helper"
+path = "src/bin/demo_helper.rs"
+
+[lib]
+name = "demo_both"
+crate-type = ["cdylib"]
+TOML
+  : > "$RUNLIB_SHIM_LOG"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ "$(cargo_invocations)" -gt 0 ]
+  run grep -F "already installed v1.0.0" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+# Two tables name two binaries, and only one of them can be the crate's — the
+# single-line reader cannot tell which, so it declines.
+@test "several [[bin]] tables still fall through to cargo metadata" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+
+  cat > "${REPO}/Cargo.toml" <<'TOML'
+[package]
+name = "demo_both"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "demo_both"
+path = "src/main.rs"
+
+[[bin]]
+name = "demo_helper"
+path = "src/bin/demo_helper.rs"
+
+[lib]
+name = "demo_both"
+crate-type = ["cdylib"]
+TOML
+  : > "$RUNLIB_SHIM_LOG"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ "$(cargo_invocations)" -gt 0 ]
+  run grep -F "already installed v1.0.0" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
 # --- the checkout reached through a symlink is still the checkout -----------
 
 # `$PWD` is the logical path; cargo reports `target_directory` canonicalised.
