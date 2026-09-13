@@ -213,20 +213,23 @@ artefact="$(./scripts/runlib.sh)"   # stdout is the installed path, and nothing 
 
 It is also sourceable (`. scripts/runlib.sh` then `runlib_install`), but
 sourcing applies `set -euo pipefail` to the calling shell, prepends
-`$CARGO_HOME/bin` to its `PATH`, and turns any failure into an `exit` of that
-shell rather than a return — the subprocess form above is the contract.
+`$CARGO_HOME/bin` to its `PATH`, clears any `EXIT`/`INT`/`TERM` trap the caller
+had set, and turns any failure into an `exit` of that shell rather than a
+return — the subprocess form above is the contract.
 
 | Step | Behaviour |
 |------|-----------|
-| Resolve | The single workspace member — the root crate, or the one `[workspace] members` entry — via `cargo metadata --no-deps`. Zero members, or more than one, fails loud. The skip below must decide without running cargo at all, so it reads the crate name, version and declared target shape straight from the manifests; a layout it cannot read unambiguously (a globbed `members` entry, say) simply falls through to `cargo metadata`, which is always the authority. |
+| Resolve | The single workspace member — the root crate, or the one `[workspace] members` entry — via `cargo metadata --no-deps`. Zero members, or more than one, fails loud. The skip below must decide without running cargo at all, so it reads the crate name, version and declared target shape straight from the manifests. Anything it cannot read unambiguously — a globbed `members` entry, a `crate-type` array split over several lines, an explicit `[[bin]]` table or `autobins` — makes it decline outright and fall through to `cargo metadata`, which is always the authority. Declining is the safe direction: a target the reader failed to notice would otherwise let a half-installed crate report itself complete. |
 | Skip | With every artefact the crate's shape calls for present, and `.<crate>.version` matching the crate semver beside each, it runs **no** `cargo` command and prints one stderr line, `[<crate>] already installed v<x>`. The whole shape is checked, so a crate shipping both a bin and a cdylib does not report "already installed" once one half has been removed. There is no force flag: delete the stamp to force a rebuild. |
 | Install | The bin target named after the crate to `$CARGO_HOME/bin/<crate>`; a `cdylib` target to `$CARGO_HOME/lib/lib<crate>.{so,dylib}` — both with `-` → `_` in the crate name. A crate carrying both installs both. The installed names come from the **crate**, never from the cargo target name, so a crate whose `[lib] name` differs from its package name is not installed under one name and looked up under another. `CARGO_HOME` defaults to `~/.cargo`. |
 | Stamp | `.<crate>.version` is written beside every installed artefact, and written **last** — until it exists, a half-finished install still reads as "needs building". |
 | Clean | `target/` is removed after a successful install, with one stderr line naming the path removed and the bytes freed. The measurement is `du -sk` taken before the removal — the portable reading, macOS bash 3.2 included. A build directory **outside** the checkout (a shared `CARGO_TARGET_DIR`) holds other checkouts' builds, so it is kept and the fact reported rather than passed over. |
-| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. |
+| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. |
 
-It needs `cargo`, `rustup` and `jq` on the host; `jq` is what reads
-`cargo metadata`. Two things it deliberately does **not** do. It never edits
+It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
+`cargo metadata` and `rustc` is what the MSRV gate reads. `rustup` itself is
+never invoked, so a distro-packaged toolchain is fine — a missing one still
+points at <https://rustup.rs>. Two things it deliberately does **not** do. It never edits
 `RUSTFLAGS`: the caller's value reaches `cargo` unchanged and it sets no
 defaults of its own, so `-C target-cpu=native` stays consumer-owned exactly as
 above. And it never installs a toolchain over the network — a missing `cargo`

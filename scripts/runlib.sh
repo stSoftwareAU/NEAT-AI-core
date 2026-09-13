@@ -33,14 +33,16 @@
 #     on stdout, and nothing else on stdout.
 #
 # The toolchain is a precondition, not something this script installs: with
-# `cargo`, `rustup` or `jq` missing it exits non-zero naming what to install.
+# `cargo`, `rustc` or `jq` missing it exits non-zero naming what to install
+# (rustup.rs for the toolchain). `rustup` itself is never invoked here.
 # MSRV comes from `rust-version` in the crate manifest when present; a
 # `rust-toolchain.toml` is honoured by rustup itself.
 #
 # Run it as a subprocess — `path="$(./scripts/runlib.sh)"`. It can also be
 # sourced, but note that sourcing applies `set -euo pipefail` to the calling
-# shell, prepends `$CARGO_HOME/bin` to its PATH, and that any failure exits
-# that shell rather than returning to it.
+# shell, prepends `$CARGO_HOME/bin` to its PATH, clears any EXIT/INT/TERM trap
+# the caller had set, and that any failure exits that shell rather than
+# returning to it.
 set -euo pipefail
 
 _runlib_die() {
@@ -215,31 +217,44 @@ _runlib_version_ge() {
   return 0
 }
 
-# Sets RUNLIB_EXPECTS_BIN / RUNLIB_EXPECTS_LIB from manifest $1 alone, for the
-# fast path. Deliberately conservative: it claims a target only where cargo is
-# certain to produce one, because an over-claimed target would make every run
-# rebuild for ever, and an under-claimed one only costs one `cargo metadata`.
+# Sets _RUNLIB_EXPECTS_BIN / _RUNLIB_EXPECTS_LIB from manifest $1 alone, for
+# the fast path, and returns non-zero when the manifest does not determine the
+# shape beyond doubt.
+#
+# Declining is the whole point. An *under*-claimed target is not the cheap
+# mistake it looks like: `_runlib_report_current` only checks the targets it
+# was told to expect, so an unread cdylib makes a half-installed both-crate
+# report "already installed" and a fleet host keeps a missing library for ever.
+# Every shape this reader cannot decode therefore falls through to
+# `cargo metadata`, which is the authority — one metadata call, never a wrong
+# answer.
 _runlib_expected_shape() {
   local manifest="$1" crate_underscored="$2" manifest_dir crate_types
   manifest_dir="$(dirname "$manifest")"
-  RUNLIB_EXPECTS_BIN=0
-  RUNLIB_EXPECTS_LIB=0
+  _RUNLIB_EXPECTS_BIN=0
+  _RUNLIB_EXPECTS_LIB=0
 
-  # A cdylib is never implicit — it exists only where `[lib] crate-type` says so.
+  # A cdylib is never implicit — it exists only where `[lib] crate-type` says
+  # so. `_runlib_toml_value` reads a single line, so an array split over
+  # several lines arrives as a bare `[`: unreadable, not absent.
   crate_types="$(_runlib_toml_value "$manifest" lib crate-type)"
   case "$crate_types" in
-    *cdylib*) RUNLIB_EXPECTS_LIB=1 ;;
+    *'['*']'*) : ;;
+    *'['*) return 1 ;;
+  esac
+  case "$crate_types" in
+    *cdylib*) _RUNLIB_EXPECTS_LIB=1 ;;
   esac
 
   # An explicit `[[bin]]` table, or `autobins`, can rename or suppress the
-  # binary cargo would otherwise name after the package, so the claim is made
-  # only for the two unambiguous auto-discovered shapes.
-  if ! grep -qE '^[[:space:]]*\[\[bin\]\]' "$manifest" &&
-    ! grep -qE '^[[:space:]]*autobins[[:space:]]*=' "$manifest"; then
-    if [[ -f "$manifest_dir/src/main.rs" ||
-      -f "$manifest_dir/src/bin/${crate_underscored}.rs" ]]; then
-      RUNLIB_EXPECTS_BIN=1
-    fi
+  # binary cargo would otherwise name after the package.
+  if grep -qE '^[[:space:]]*\[\[bin\]\]' "$manifest" ||
+    grep -qE '^[[:space:]]*autobins[[:space:]]*=' "$manifest"; then
+    return 1
+  fi
+  if [[ -f "$manifest_dir/src/main.rs" ||
+    -f "$manifest_dir/src/bin/${crate_underscored}.rs" ]]; then
+    _RUNLIB_EXPECTS_BIN=1
   fi
   return 0
 }
@@ -252,7 +267,9 @@ _runlib_stamp_current() {
   local dir="$1" crate="$2" version="$3" artefact="$4" stamp
   stamp="$dir/.${crate}.version"
   [[ -f "$stamp" ]] || return 1
-  [[ -e "$artefact" ]] || return 1
+  # `-f`, not `-e`: a *directory* left at the artefact path is corruption, and
+  # `-e` would let it read as a valid install for ever.
+  [[ -f "$artefact" ]] || return 1
   [[ "$(cat "$stamp")" == "$version" ]] || return 1
   return 0
 }
@@ -301,9 +318,9 @@ _runlib_try_skip() {
   crate="$(_runlib_crate_field "$manifest" "$root_manifest" name)"
   version="$(_runlib_crate_field "$manifest" "$root_manifest" version)"
   [[ -n "$crate" && -n "$version" ]] || return 1
-  _runlib_expected_shape "$manifest" "${crate//-/_}"
+  _runlib_expected_shape "$manifest" "${crate//-/_}" || return 1
   _runlib_report_current "$crate" "$version" \
-    "$RUNLIB_EXPECTS_BIN" "$RUNLIB_EXPECTS_LIB" || return 1
+    "$_RUNLIB_EXPECTS_BIN" "$_RUNLIB_EXPECTS_LIB" || return 1
   return 0
 }
 
@@ -313,8 +330,11 @@ _runlib_require_toolchain() {
   export PATH
   command -v cargo >/dev/null 2>&1 ||
     _runlib_die "cargo not found — install the Rust toolchain from https://rustup.rs and re-run"
-  command -v rustup >/dev/null 2>&1 ||
-    _runlib_die "rustup not found — install the Rust toolchain from https://rustup.rs and re-run"
+  # `rustc`, not `rustup`: this script never invokes rustup — rustup's own
+  # shims do — but it does read `rustc --version` for the MSRV gate. Demanding
+  # rustup rejected a perfectly good distro-packaged toolchain.
+  command -v rustc >/dev/null 2>&1 ||
+    _runlib_die "rustc not found — install the Rust toolchain from https://rustup.rs and re-run"
   command -v jq >/dev/null 2>&1 ||
     _runlib_die "jq not found — install jq (it parses \`cargo metadata\`) and re-run"
 }
@@ -322,30 +342,23 @@ _runlib_require_toolchain() {
 # MSRV gate. `rust-version` in the crate manifest is the single source of
 # truth; a `rust-toolchain.toml` is rustup's business, not this script's.
 _runlib_check_msrv() {
-  local manifest="$1" root_manifest="$2" msrv rust_version
+  local manifest="$1" root_manifest="$2" msrv rust_version reported
   msrv="$(_runlib_crate_field "$manifest" "$root_manifest" rust-version)"
   [[ -n "$msrv" ]] || return 0
-  rust_version="$(rustc --version 2>/dev/null |
+  # Captured in its own `if`, and stderr kept: under `set -euo pipefail` a
+  # `x="$(rustc … 2>/dev/null | sed …)"` assignment aborts the whole script on
+  # a failing rustc, which made the guard below unreachable dead code for the
+  # very case it was written for — a rustup shim with no default toolchain
+  # then produced an empty stdout and a bare status with no diagnostic at all.
+  if ! reported="$(rustc --version 2>&1)"; then
+    _runlib_die "cannot read the rustc version (rustc said: ${reported:-nothing}); this crate needs Rust >= $msrv"
+  fi
+  rust_version="$(printf '%s\n' "$reported" |
     sed -n 's/^rustc \([0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\{0,1\}\).*/\1/p')"
   [[ -n "$rust_version" ]] ||
-    _runlib_die "cannot read the rustc version; this crate needs Rust >= $msrv"
+    _runlib_die "cannot read the rustc version from '${reported}'; this crate needs Rust >= $msrv"
   _runlib_version_ge "$rust_version" "$msrv" ||
     _runlib_die "rustc $rust_version is below the crate MSRV $msrv — run: rustup update stable"
-  return 0
-}
-
-# Copy $1 over $2 through a temporary in the destination directory, so a
-# half-written artefact never replaces a working one.
-_runlib_install_file() {
-  local source="$1" dest="$2" temp="$2.runlib.$$"
-  if ! cp "$source" "$temp"; then
-    rm -f "$temp"
-    _runlib_die "could not copy $source to $dest"
-  fi
-  if ! mv -f "$temp" "$dest"; then
-    rm -f "$temp"
-    _runlib_die "could not install $dest"
-  fi
   return 0
 }
 
@@ -357,12 +370,23 @@ _runlib_install_file() {
 # directory outside the repository is kept, and the fact is reported rather
 # than passed over in silence.
 _runlib_remove_target() {
-  local crate="$1" target_dir="$2" repo_root="$3" kilobytes bytes
+  local crate="$1" target_dir="$2" repo_root="$3" kilobytes bytes resolved
   [[ -d "$target_dir" ]] || return 0
   [[ "$target_dir" == /* ]] ||
     _runlib_die "refusing to remove the relative target directory '$target_dir'"
   [[ "$target_dir" != "/" ]] ||
     _runlib_die "refusing to remove '/' as a target directory"
+  # `$PWD` is the *logical* path while cargo reports `target_directory`
+  # canonicalised, so comparing them literally made the checkout's own target/
+  # look "outside" whenever any component was a symlink — on macOS
+  # (/tmp -> /private/tmp) that is every run under /tmp. Resolve both sides
+  # first; `cd … && pwd -P` is the portable reading, with no GNU `realpath`.
+  if resolved="$(cd "$target_dir" 2>/dev/null && pwd -P)"; then
+    target_dir="$resolved"
+  fi
+  if resolved="$(cd "$repo_root" 2>/dev/null && pwd -P)"; then
+    repo_root="$resolved"
+  fi
   case "$target_dir" in
     "$repo_root"/*) : ;;
     *)
@@ -392,12 +416,62 @@ _runlib_macos_fixups() {
   return 0
 }
 
-# Discard every staged artefact, then die. Nothing has been moved into place at
-# this point, so the previously installed artefacts and their stamps survive.
+# Every staging temporary this run has created, for the cleanup trap below.
+_RUNLIB_TEMPS=()
+
+_runlib_track_temp() {
+  _RUNLIB_TEMPS+=("$1")
+}
+
+# Remove them all. Armed as a trap around the staging block so an interrupt —
+# or a `set -e` abort between staging and the commit — cannot leave
+# `.runlib.<pid>` files accumulating under CARGO_HOME with nothing to reap
+# them. The bash 3.2-safe expansion keeps an empty array legal under `set -u`.
+_runlib_cleanup_temps() {
+  local path
+  for path in ${_RUNLIB_TEMPS[@]+"${_RUNLIB_TEMPS[@]}"}; do
+    [[ -n "$path" ]] || continue
+    rm -f "$path"
+  done
+  _RUNLIB_TEMPS=()
+}
+
+# Move a staged artefact onto its final path, and prove it landed there.
+#
+# `mv -f file dir` moves the file *into* an existing directory and still exits
+# 0, so a directory left at the install path would otherwise be stamped,
+# followed by the target/ removal, and printed on stdout as a successful
+# install. Refuse that up front and confirm a regular file afterwards: an `mv`
+# that did not complain is not evidence the artefact is installed.
+_runlib_commit() {
+  local staged="$1" dest="$2"
+  [[ ! -d "$dest" ]] || return 1
+  mv -f "$staged" "$dest" || return 1
+  [[ -f "$dest" ]] || return 1
+  return 0
+}
+
+# Put a backed-up artefact back where it was. Best effort by definition — the
+# run is already failing — but a failure to restore is still reported, never
+# swallowed.
+_runlib_restore() {
+  local backup="$1" dest="$2"
+  [[ -n "$backup" && -f "$backup" ]] || return 0
+  mv -f "$backup" "$dest" ||
+    printf 'runlib: could not restore %s from %s\n' "$dest" "$backup" >&2
+  return 0
+}
+
+# Discard every staged artefact and backup named, then die. Empty arguments are
+# skipped: a cdylib-only crate stages no binary, and `rm -f ''` is an error on
+# some BSD userlands.
 _runlib_abort_staged() {
-  local message="$1"
+  local message="$1" path
   shift
-  rm -f "$@"
+  for path in "$@"; do
+    [[ -n "$path" ]] || continue
+    rm -f "$path"
+  done
   _runlib_die "$message"
 }
 
@@ -481,14 +555,17 @@ runlib_install() {
   # Everything is staged first and moved into place only once every artefact is
   # ready: a crate that ships both a bin and a cdylib must not leave the new
   # binary installed beside the old library when the library step fails.
+  trap _runlib_cleanup_temps EXIT INT TERM
   if [[ -n "$bin_name" ]]; then
     local built_bin="$release_dir/$bin_name"
     [[ -f "$built_bin" ]] || _runlib_die "the build produced no binary at $built_bin"
     mkdir -p "$bin_dir"
     staged_bin="$bin_dir/$bin_file.runlib.$$"
+    _runlib_track_temp "$staged_bin"
     cp "$built_bin" "$staged_bin" ||
       _runlib_abort_staged "could not stage $built_bin" "$staged_bin"
-    chmod +x "$staged_bin"
+    chmod +x "$staged_bin" ||
+      _runlib_abort_staged "could not make $staged_bin executable" "$staged_bin"
   fi
 
   if [[ -n "$lib_name" ]]; then
@@ -509,22 +586,40 @@ runlib_install() {
         "$staged_bin"
     mkdir -p "$lib_dir"
     staged_lib="$lib_dir/$lib_file.runlib.$$"
+    _runlib_track_temp "$staged_lib"
     cp "$built_lib" "$staged_lib" ||
       _runlib_abort_staged "could not stage $built_lib" "$staged_bin" "$staged_lib"
     _runlib_macos_fixups "$staged_lib" "$lib_file" ||
       _runlib_abort_staged "macOS signing failed for $lib_file" "$staged_bin" "$staged_lib"
   fi
 
+  # The binary is committed before the library, so the previous binary is kept
+  # aside until the library is in place too. Without that, a library step that
+  # failed after the binary landed left exactly the new-bin/old-lib pair this
+  # staging exists to prevent.
+  local backup_bin=""
   if [[ -n "$staged_bin" ]]; then
-    mv -f "$staged_bin" "$bin_dir/$bin_file" ||
-      _runlib_abort_staged "could not install $bin_dir/$bin_file" "$staged_bin" "$staged_lib"
+    if [[ -f "$bin_dir/$bin_file" ]]; then
+      backup_bin="$bin_dir/$bin_file.runlib-prev.$$"
+      _runlib_track_temp "$backup_bin"
+      cp -p "$bin_dir/$bin_file" "$backup_bin" ||
+        _runlib_abort_staged "could not back up $bin_dir/$bin_file" \
+          "$staged_bin" "$staged_lib" "$backup_bin"
+    fi
+    _runlib_commit "$staged_bin" "$bin_dir/$bin_file" ||
+      _runlib_abort_staged "could not install $bin_dir/$bin_file" \
+        "$staged_bin" "$staged_lib" "$backup_bin"
     installed_bin="$bin_dir/$bin_file"
   fi
   if [[ -n "$staged_lib" ]]; then
-    mv -f "$staged_lib" "$lib_dir/$lib_file" ||
-      _runlib_abort_staged "could not install $lib_dir/$lib_file" "$staged_lib"
+    if ! _runlib_commit "$staged_lib" "$lib_dir/$lib_file"; then
+      _runlib_restore "$backup_bin" "$bin_dir/$bin_file"
+      _runlib_abort_staged "could not install $lib_dir/$lib_file" \
+        "$staged_lib" "$backup_bin"
+    fi
     installed_lib="$lib_dir/$lib_file"
   fi
+  [[ -z "$backup_bin" ]] || rm -f "$backup_bin"
 
   # The stamps go last: until they are written, a half-finished install still
   # reads as "needs building" rather than as an up-to-date one.
@@ -536,6 +631,10 @@ runlib_install() {
   fi
 
   _runlib_remove_target "$crate" "$target_dir" "$repo_root"
+
+  # Everything is committed and stamped; nothing is left to reap.
+  _RUNLIB_TEMPS=()
+  trap - EXIT INT TERM
 
   if [[ -n "$installed_bin" ]]; then
     printf '%s\n' "$installed_bin"

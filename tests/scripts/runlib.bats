@@ -172,6 +172,26 @@ invoke() {
   ( cd "$REPO" && "$SCRIPT" > "$OUT" 2> "$ERR" )
 }
 
+# A PATH carrying the coreutils the script needs and no Rust toolchain at all.
+#
+# The toolchain fixtures used to fall back to "/usr/bin:/bin" and skip
+# themselves when a system cargo was found there — which is most CI images, so
+# the assertion quietly never ran. Symlinking a known set of utilities into a
+# scratch directory makes the absence of cargo/rustc a property of the fixture
+# rather than of the host, so these tests always execute.
+minimal_path() {
+  local dir="${WORK}/minimal-bin" tool resolved
+  if [ ! -d "$dir" ]; then
+    mkdir -p "$dir"
+    for tool in bash env awk grep sed cat cp mv rm mkdir chmod dirname uname du ls; do
+      resolved="$(command -v "$tool" 2>/dev/null || true)"
+      [ -n "$resolved" ] || continue
+      ln -sf "$resolved" "${dir}/${tool}"
+    done
+  fi
+  printf '%s' "$dir"
+}
+
 cargo_invocations() {
   if [ -f "$RUNLIB_SHIM_LOG" ]; then wc -l < "$RUNLIB_SHIM_LOG" | tr -d ' '; else echo 0; fi
 }
@@ -475,11 +495,8 @@ JSON
 # --- toolchain preconditions ------------------------------------------------
 
 @test "a missing cargo exits non-zero naming rustup.rs and installs nothing" {
-  if PATH="/usr/bin:/bin" command -v cargo >/dev/null 2>&1; then
-    skip "a system cargo on the minimal PATH would defeat this fixture"
-  fi
   make_crate "demo_app" "1.2.3" bin
-  run env PATH="/usr/bin:/bin" CARGO_HOME="$CARGO_HOME" \
+  run env PATH="$(minimal_path)" CARGO_HOME="$CARGO_HOME" \
     bash -c 'cd "$0" && "$1" 2>&1' "$REPO" "$SCRIPT"
   [ "$status" -ne 0 ]
   [[ "$output" == *"https://rustup.rs"* ]]
@@ -721,4 +738,241 @@ SHIM
   run invoke
   [ "$status" -eq 0 ]
   [ -x "${CARGO_HOME}/bin/demo_app" ]
+}
+
+# --- a manifest shape the fast reader cannot decode must never report installed
+
+# `_runlib_expected_shape` reads one line per key, so a `crate-type` array split
+# over several lines is unreadable. Under-claiming the cdylib on the skip path
+# is not "conservative": it makes a half-installed both-crate report as
+# complete. The fast path must decline the shape and let `cargo metadata` rule.
+@test "a multi-line crate-type array with the library missing rebuilds instead of reporting installed" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+
+  # Re-write the manifest with the array split across lines — an ordinary
+  # rustfmt-style manifest the single-line reader cannot see the whole of.
+  cat > "${REPO}/Cargo.toml" <<'TOML'
+[package]
+name = "demo_both"
+version = "1.0.0"
+edition = "2024"
+
+[lib]
+name = "demo_both"
+crate-type = [
+  "cdylib",
+]
+TOML
+  rm -f "${CARGO_HOME}/lib/libdemo_both.$(lib_ext)"
+  : > "$RUNLIB_SHIM_LOG"
+  run invoke
+  [ "$status" -eq 0 ]
+  run grep -F "already installed" "$ERR"
+  [ "$status" -ne 0 ]
+  [ -f "${CARGO_HOME}/lib/libdemo_both.$(lib_ext)" ]
+}
+
+# An explicit `[[bin]]` table can rename or suppress the binary, so the fast
+# reader cannot know the shape. Declining is what keeps stdout stable: the
+# build run and the next skip run must name the same artefact.
+@test "an explicit [[bin]] table with the binary missing rebuilds instead of reporting installed" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+  local first_path
+  first_path="$(cat "$OUT")"
+
+  cat > "${REPO}/Cargo.toml" <<'TOML'
+[package]
+name = "demo_both"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "demo_both"
+path = "src/main.rs"
+
+[lib]
+name = "demo_both"
+crate-type = ["cdylib"]
+TOML
+  rm -f "${CARGO_HOME}/bin/demo_both" "${CARGO_HOME}/bin/.demo_both.version"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_both" ]
+  [ "$(cat "$OUT")" = "$first_path" ]
+}
+
+@test "an explicit [[bin]] table still names the bin path on a skip, not the lib path" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+  local build_path
+  build_path="$(cat "$OUT")"
+
+  cat > "${REPO}/Cargo.toml" <<'TOML'
+[package]
+name = "demo_both"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "demo_both"
+path = "src/main.rs"
+
+[lib]
+name = "demo_both"
+crate-type = ["cdylib"]
+TOML
+  run invoke
+  [ "$status" -eq 0 ]
+  run grep -F "already installed v1.0.0" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "$build_path" ]
+}
+
+# --- the checkout reached through a symlink is still the checkout -----------
+
+# `$PWD` is the logical path; cargo reports `target_directory` canonicalised.
+# Comparing them literally made the checkout's own target/ classify as
+# "outside" and survive — on macOS (/tmp -> /private/tmp) that is every run.
+@test "a symlinked checkout still has its own target/ removed" {
+  make_crate "demo_app" "1.2.3" bin
+  local link="${WORK}/link"
+  ln -s "$REPO" "$link"
+  run bash -c 'cd "$0" && "$1" > "$2" 2> "$3"' "$link" "$SCRIPT" "$OUT" "$ERR"
+  [ "$status" -eq 0 ]
+  run grep -F "removed" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -d "${TARGET_DIR}" ]
+}
+
+# --- a toolchain that cannot be read fails loud, never silently -------------
+
+# `rustc --version 2>/dev/null | sed ...` under `set -euo pipefail` aborted the
+# assignment, so the _runlib_die beneath it was unreachable and the caller got
+# an empty stdout with a bare status. A rustup shim with no default toolchain
+# is an ordinary host state, so this must name the fault.
+@test "a rustc that cannot report its version fails loud rather than silently" {
+  write_manifest "demo_app" "1.2.3" bin 'rust-version = "1.92.0"'
+  write_metadata "demo_app" "1.2.3" bin
+  mkdir -p "${REPO}/target"
+  cat > "${SHIM_DIR}/rustc" <<'SHIM'
+#!/usr/bin/env bash
+echo "error: rustup could not choose a version of rustc to run" >&2
+exit 1
+SHIM
+  chmod +x "${SHIM_DIR}/rustc"
+  run invoke
+  [ "$status" -ne 0 ]
+  [ ! -s "$OUT" ]
+  run grep -F "cannot read the rustc version" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+}
+
+@test "a rustc whose version string is unparsable fails loud" {
+  write_manifest "demo_app" "1.2.3" bin 'rust-version = "1.92.0"'
+  write_metadata "demo_app" "1.2.3" bin
+  mkdir -p "${REPO}/target"
+  cat > "${SHIM_DIR}/rustc" <<'SHIM'
+#!/usr/bin/env bash
+echo "some other toolchain wrapper"
+SHIM
+  chmod +x "${SHIM_DIR}/rustc"
+  run invoke
+  [ "$status" -ne 0 ]
+  run grep -F "rustc version" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+# rustup is never invoked by the script; rustc is. Requiring the one it does
+# not use rejected a working distro-packaged toolchain.
+@test "a toolchain without rustup still installs, since the script never runs rustup" {
+  make_crate "demo_app" "1.2.3" bin
+  rm -f "${SHIM_DIR}/rustup"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+}
+
+@test "a missing rustc exits non-zero naming rustup.rs and installs nothing" {
+  make_crate "demo_app" "1.2.3" bin
+  rm -f "${SHIM_DIR}/rustc"
+  # The shim dir supplies cargo; the minimal PATH supplies the coreutils and
+  # no toolchain, so the host's own rustc cannot stand in for the removed shim.
+  run env PATH="${SHIM_DIR}:$(minimal_path)" CARGO_HOME="$CARGO_HOME" \
+    RUNLIB_SHIM_LOG="$RUNLIB_SHIM_LOG" RUNLIB_SHIM_METADATA="$RUNLIB_SHIM_METADATA" \
+    RUNLIB_SHIM_ARTEFACTS="$RUNLIB_SHIM_ARTEFACTS" \
+    RUNLIB_SHIM_RUSTFLAGS="$RUNLIB_SHIM_RUSTFLAGS" \
+    bash -c 'cd "$0" && "$1" 2>&1' "$REPO" "$SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"https://rustup.rs"* ]]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+}
+
+# --- an install that did not land is not a success --------------------------
+
+# `mv -f file dir/` moves the file *into* the directory and exits 0, so the
+# script stamped, cleaned target/ and printed a path that was a directory.
+@test "a directory sitting at the install path fails loud instead of being installed into" {
+  make_crate "demo_lib" "1.0.0" cdylib
+  mkdir -p "${CARGO_HOME}/lib/libdemo_lib.$(lib_ext)"
+  run invoke
+  [ "$status" -ne 0 ]
+  [ ! -s "$OUT" ]
+  [ -d "${TARGET_DIR}" ]
+  [ ! -f "${CARGO_HOME}/lib/.demo_lib.version" ]
+}
+
+# The same corruption must not then read as a valid install for ever: a
+# directory satisfies `-e`, which is why the skip path needs `-f`.
+@test "a directory at the artefact path never reads as an installed artefact" {
+  make_crate "demo_lib" "1.0.0" cdylib
+  mkdir -p "${CARGO_HOME}/lib/libdemo_lib.$(lib_ext)"
+  printf '1.0.0\n' > "${CARGO_HOME}/lib/.demo_lib.version"
+  run invoke
+  [ "$status" -ne 0 ]
+  run grep -F "already installed" "$ERR"
+  [ "$status" -ne 0 ]
+}
+
+# --- all-or-nothing means the old binary comes back -------------------------
+
+# The bin was committed, then the lib mv failed: the previously installed
+# binary had already been overwritten, which is the state the header comment
+# and the README both say is impossible.
+@test "a library that cannot be installed restores the previously installed binary" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+  cp "${CARGO_HOME}/bin/demo_both" "${WORK}/bin-v1"
+
+  make_crate "demo_both" "2.0.0" both
+  # A directory at the library's install path makes the second commit fail
+  # after the binary's has already succeeded.
+  rm -f "${CARGO_HOME}/lib/libdemo_both.$(lib_ext)"
+  mkdir -p "${CARGO_HOME}/lib/libdemo_both.$(lib_ext)"
+  run invoke
+  [ "$status" -ne 0 ]
+  run cmp -s "${WORK}/bin-v1" "${CARGO_HOME}/bin/demo_both"
+  [ "$status" -eq 0 ]
+  [ "$(cat "${CARGO_HOME}/bin/.demo_both.version")" = "1.0.0" ]
+  [ -d "${TARGET_DIR}" ]
+}
+
+@test "no staging temporary survives a failed install in either directory" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+  make_crate "demo_both" "2.0.0" both
+  rm -f "${CARGO_HOME}/lib/libdemo_both.$(lib_ext)"
+  mkdir -p "${CARGO_HOME}/lib/libdemo_both.$(lib_ext)"
+  run invoke
+  [ "$status" -ne 0 ]
+  run bash -c 'ls "$1"/*.runlib.* "$2"/*.runlib.* 2>/dev/null' _ \
+    "${CARGO_HOME}/bin" "${CARGO_HOME}/lib"
+  [ "$status" -ne 0 ]
 }
