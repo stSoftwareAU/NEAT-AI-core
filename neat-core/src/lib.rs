@@ -45,6 +45,9 @@ pub mod safe_zone;
 pub mod score_scan;
 pub mod simd;
 pub mod squash;
+// Issue #673 — crate-internal: the one declarative per-variant data list behind
+// `range` and `safe_zone`. Not part of the published surface.
+mod squash_profile;
 pub mod squash_simd;
 pub mod synapse_type;
 pub mod topological_backprop;

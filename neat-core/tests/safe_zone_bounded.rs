@@ -1,5 +1,5 @@
-//! Behavioural coverage for the bounded safe-zone rule shared by twelve
-//! `SquashType` arms of `apply_safe_zone_adjustment` (Issue #442).
+//! Behavioural coverage for the bounded safe-zone rule shared by fourteen
+//! `SquashType` arms of `apply_safe_zone_adjustment` (Issue #442, #673).
 //!
 //! Each arm below differs only in its safe band `[safe_min, safe_max]` and the
 //! fade width either side of it. These tests assert the observable factor
@@ -22,6 +22,10 @@ const BOUNDED_ARMS: &[(SquashType, f32, f32, f32)] = &[
     (SquashType::Exponential, -10.0, 30.0, 10.0),
     (SquashType::LogSigmoid, -20.0, 20.0, 10.0),
     (SquashType::Isru, -10.0, 10.0, 10.0),
+    // Issue #673: these two carried a hand-inlined copy of the same rule until
+    // their bands moved into the one declarative `squash_profile` list.
+    (SquashType::Gaussian, -3.0, 3.0, 3.0),
+    (SquashType::BipolarSigmoid, -4.0, 4.0, 4.0),
 ];
 
 /// A weight comfortably inside the `[1e-3, 1e3]` guard band.
