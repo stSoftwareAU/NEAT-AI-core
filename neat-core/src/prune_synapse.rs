@@ -15,7 +15,7 @@
 //!     F -- yes --> S{"statistics supplied?"}
 //!     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
 //!     S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
-//!     X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
+//!     X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate with edges left gets neither,<br/>one with none takes the fold"]
 //!     C --> V["an aggregate left with one edge —<br/>rewrite it to the point-wise squash<br/>that computes the same number"]
 //!     V --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
 //!     R -- fails --> E["Err(Cleanup)"]
@@ -91,25 +91,43 @@
 //!   source: the only edge it could carry the share on is the one just
 //!   removed, so the share lands nowhere and the whole prune is refused with
 //!   [`PruneError::MissingProxyEdge`] rather than half-applied;
-//! - where the target **aggregates** — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`,
-//!   or an `IF` reading one role's sum — no bias fold stands in for the term,
-//!   so none is attempted and the target is named on
-//!   [`PruneResult::uncompensated`] with the role it lost. That entry carries
-//!   the magnitude of what went on
+//! - where the target **aggregates** and the cut leaves it something to
+//!   aggregate — `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one
+//!   role's sum — no bias fold stands in for the term, so none is attempted
+//!   and the target is named on [`PruneResult::uncompensated`] with the role it
+//!   lost. That entry carries the magnitude of what went on
 //!   [`UncompensatedTarget::dropped_mean`] — `w · μ`, or `w · a` where the
 //!   creature fixes the source — so the caller's scorer can judge the loss. No
-//!   magnitude refuses a prune (Ockham #197).
+//!   magnitude refuses a prune (Ockham #197);
+//! - where the cut leaves an aggregate with **no inward edge at all**, the
+//!   forward pass reads it from its bias alone, so it takes the fold after all
+//!   — `bias += W·μ`, or `bias += |W·μ|` for `HYPOT`, whose term is a
+//!   magnitude, or `bias += W·μ` **with the squash rewritten to `ABSOLUTE`**
+//!   for `HYPOTv2`, which never reads its bias with nothing to square
+//!   (Ockham #196). `prune_neuron::fold_policy` is the one rule both
+//!   entry points ask. An `IF` is excluded whatever it is left with: what it
+//!   lost is a role, and [`IfRepair`] owns that.
+//!
+//! A shortfall normally ends any
+//! [`TransformClass::Exact`](crate::prune_neuron::TransformClass::Exact) claim,
+//! and one shape is the exception: an `IF` whose condition **the creature
+//! itself decided the same way before and after the cut** never read the term
+//! that went, so the flatten costs nothing. `prune_neuron::transform_class`
+//! (Ockham #198) is the single home of that whole rule, and both entry points
+//! ask it in the same terms, so a synapse removal and the neuron removal that
+//! takes the same term away can never disagree about what it cost.
 
 use crate::creature::{CreatureExport, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
     CleanupOptions, IfRepair, SynapseKey, canonical_role, cleanup_creature_with, fixed_activation,
 };
 use crate::prune_neuron::{
-    BiasFold, PruneError, PruneResult, PruneStats, TransformClass, UncompensatedReason,
-    UncompensatedTarget, WeightShare, add_to_edge, check_proxy, check_stats, compensate,
-    dropped_mean, target_squash,
+    BiasFold, PruneError, PruneResult, PruneStats, TargetOutcome, UncompensatedReason,
+    UncompensatedTarget, WeightShare, add_to_bias, add_to_edge, check_proxy, check_stats,
+    compensate, dropped_mean, fold_bare_aggregate, fold_policy, inward_edge_count, target_squash,
+    transform_class,
 };
-use crate::prune_rewrite::convert_single_edge_aggregates;
+use crate::prune_rewrite::{SquashConversion, convert_single_edge_aggregates};
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
 
@@ -208,8 +226,11 @@ pub fn prune_synapse(
     let mut bias_folds = Vec::new();
     let mut weight_shares = Vec::new();
     let mut uncompensated = Vec::new();
+    // Both rewrites a request can perform land here: the zero-edge fold's
+    // `HYPOTv2 → ABSOLUTE` and the single-edge conversion below.
+    let mut converted_neurons: Vec<SquashConversion> = Vec::new();
 
-    if squash.is_aggregate() {
+    if !fold_policy(squash, inward_edge_count(&cut, &key.to_uuid)) {
         uncompensated.push(UncompensatedTarget {
             target_uuid: key.to_uuid.clone(),
             role: wanted,
@@ -218,6 +239,24 @@ pub fn prune_synapse(
             reason: UncompensatedReason::AggregateTarget,
             dropped_mean: dropped_mean(invariant_value, effective_stats, weight_sum),
         });
+    } else if squash.is_aggregate() {
+        // The cut left the aggregate with nothing to aggregate, so it takes
+        // the fold its empty forward-pass form implies (Ockham #196).
+        match fold_bare_aggregate(
+            &mut cut,
+            &key.to_uuid,
+            wanted,
+            squash,
+            weight_sum,
+            invariant_value,
+            effective_stats,
+        )? {
+            TargetOutcome::Folded(fold, conversion) => {
+                bias_folds.push(fold);
+                converted_neurons.extend(conversion);
+            }
+            TargetOutcome::Uncompensated(entry) => uncompensated.push(entry),
+        }
     } else if let Some(compensation) = compensate(invariant_value, effective_stats, weight_sum) {
         // A share of exactly zero moves nothing — an uncorrelated survivor
         // predicts none of what went — so the edge it would land on need not
@@ -233,11 +272,7 @@ pub fn prune_synapse(
             });
         }
 
-        for neuron in &mut cut.neurons {
-            if neuron.uuid == key.to_uuid {
-                neuron.bias += compensation.bias_delta;
-            }
-        }
+        add_to_bias(&mut cut, &key.to_uuid, compensation.bias_delta)?;
         bias_folds.push(BiasFold {
             target_uuid: key.to_uuid.clone(),
             weight_sum,
@@ -262,8 +297,10 @@ pub fn prune_synapse(
     // rewritten to the point-wise squash that computes the same number before
     // cleanup sees it (Ockham #197). The cut moves the inward count of the
     // requested target and nothing else, so that is the one target examined.
-    let converted_neurons =
-        convert_single_edge_aggregates(&mut cut, std::slice::from_ref(&key.to_uuid))?;
+    converted_neurons.extend(convert_single_edge_aggregates(
+        &mut cut,
+        std::slice::from_ref(&key.to_uuid),
+    )?);
 
     let outcome = cleanup_creature_with(
         &cut,
@@ -272,14 +309,13 @@ pub fn prune_synapse(
         },
     )?;
 
-    // Exact means the term the removal took away was replaced by something
-    // that computes the same number on every record. The `IF` rewrites are
-    // exact by construction, so they cannot spoil the label; the downgrade
-    // clause is defence in depth against a future policy change quietly
-    // calling a flattened creature exact.
-    let exact = uncompensated.is_empty()
-        && bias_folds.iter().all(|f| f.exact)
-        && outcome.downgraded_if_neurons.is_empty();
+    // The `IF` rewrites are exact by construction, so they cannot spoil the
+    // label. What can is a term the removal took away and nothing replaced,
+    // and `transform_class` (Ockham #198) is the single home of that rule —
+    // asked here in the same terms `prune_neuron` asks it, so a synapse
+    // removal and the neuron removal that takes the same term away can never
+    // disagree about what it cost.
+    let transform = transform_class(creature, &outcome, &bias_folds, &uncompensated)?;
 
     Ok(PruneResult {
         creature: outcome.creature,
@@ -295,11 +331,7 @@ pub fn prune_synapse(
         weight_shares,
         uncompensated,
         converted_neurons,
-        transform: if exact {
-            TransformClass::Exact
-        } else {
-            TransformClass::Approximate
-        },
+        transform,
         passes: outcome.passes,
     })
 }
