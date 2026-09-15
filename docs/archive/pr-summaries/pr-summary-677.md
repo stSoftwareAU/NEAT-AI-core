@@ -1,102 +1,131 @@
+# Bound the unmaintained `tinytemplate` with the existing orphan-containment gate (Issue #677)
+
 ## Summary
 
-The finding is right about the crate and wrong about the cure. `tinytemplate`
-is unmaintained — 1.2.1 published 2021-03-04, nothing since, with "Project
-dead?", "Maintenance?" and an unanswered CVE report still open upstream — but
-it cannot be dropped by turning off `criterion`'s `html_reports` feature:
-`criterion 0.8.2` declares `tinytemplate` as a **non-optional** dependency, so
-no feature selection removes it. Making that change would have cost the
-developer local HTML benchmark reports and left the resolved graph identical.
+`tinytemplate` is unmaintained — `1.2.1` published 2021-03-04, nothing since,
+with *"Project dead?"*, *"Maintenance?"* and a `CVE-2023-38497` report all still
+open and unanswered upstream — and it is in this repository's resolved graph.
 
-What *is* defensible is the boundary the finding itself uses to justify
-`severity:low`: `tinytemplate` reaches `cargo test`/`cargo bench` on a
-developer's machine and never the library, the wasm bundle or anything this
-repository ships. Nothing held that boundary — RustSec files no advisory for
-the crate (so `cargo audit` is silent) and `cargo deny` can only ban a crate
-the graph can do without. This change makes the boundary a gate:
-`tests/scripts/unmaintained_crate_exceptions.bats` walks the graph cargo
-resolves, for every lockfile in the tree, and fails if a tolerated
-unmaintained crate is reachable from a workspace member through a normal or
-build edge. It fails again the moment `criterion` stops forcing the crate, so
-the exception is deleted rather than inherited forever. SECURITY.md carries the
-row and the exit condition; `neat-core/Cargo.toml` points at it from the
-`criterion` line that causes it. Closes #677.
+**The mitigation the finding suggested does not work.** Dropping `criterion`'s
+`html_reports` feature removes nothing: `criterion 0.8.2` declares
+`tinytemplate` as a plain, non-optional dependency, and `html_reports` carries
+an **empty** feature list, so the feature controls whether the reports are
+*rendered*, not whether the crate is *resolved*. Verified against the graph
+cargo actually resolves:
+
+```
+$ cargo metadata --format-version 1 --locked | …
+criterion 0.8.2
+  page_size     optional= False kind= None target= None
+  tinytemplate  optional= False kind= None target= None
+ features html_reports: []
+```
+
+Turning the feature off would therefore cost the local HTML benchmark reports
+and leave the crate exactly where it was. So the exposure is **bounded** rather
+than removed, using the mechanism already in the tree.
+
+**This reuses the Issue #676 gate instead of adding a second one.** #676 landed
+on `milestone/scan-20260911` while this branch was in flight, covering the same
+class of finding — `winapi`, also forced in by `criterion` — with `deny.toml`
+`[bans]` wrappers, `tests/cargo_orphan_containment_test.ts`, and a SECURITY.md
+section. An earlier commit on this branch had invented a parallel `bats` suite
+for the identical concern; merging the base collapsed the two into one gate.
+`tinytemplate` is now a third wrapper entry, not a second mechanism.
+
+Closes #677.
 
 ## Evidence
 
-Backend change with no web interface to screenshot. The evidence is the
-resolved dependency graph, the new gate, and the mutation record below.
+Backend/dependency-policy change with no web interface, so no screenshot
+applies. The evidence is the gate behaving as claimed in both directions.
 
-**The premise, checked rather than assumed** — `criterion 0.8.2`'s own
-manifest, as cargo reports it:
+**The ban fires on any path other than `criterion`** — the wrapper temporarily
+pointed at a crate that is not the real parent, which is what a second path into
+`tinytemplate` would look like to `cargo deny`:
 
 ```
-$ cargo metadata --format-version 1 | jq '… criterion → tinytemplate'
-criterion 0.8.2 -> tinytemplate optional= False kind= None
-
-$ cargo tree -p neat-core -e normal -i tinytemplate
-warning: nothing to print.          # never on a shipped path
-
-$ cargo tree -p neat-core -e normal,dev -i tinytemplate
-tinytemplate v1.2.1
-└── criterion v0.8.2
-    [dev-dependencies]
-    └── neat-core v0.20.1
+$ cargo deny check bans     # { crate = "tinytemplate", wrappers = ["iai"] }
+warning[unmatched-wrapper]: direct parent 'criterion = 0.8.2' of banned crate
+  'tinytemplate = 1.2.1' was not marked as a wrapper
+error[banned]: crate 'tinytemplate = 1.2.1' is explicitly banned
 ```
 
-`optional = false` is why the suggested fix cannot work, and
-`html_reports = []` in criterion's feature table is a plain flag that gates
-report *generation*, not the dependency. No RustSec advisory exists for the
-crate either — the vendored advisory database holds no `tinytemplate` entry,
-and `cargo deny check advisories` is green.
+**And passes on the real chain:**
+
+```
+$ cargo deny check bans
+bans ok
+```
+
+**The Deno gate is red without the policy** — with the `deny.toml` entry removed
+and nothing else changed:
+
+```
+$ deno test --allow-read tests/cargo_orphan_containment_test.ts
+deny.toml pins both wrapper chains so cargo deny fails on a new path => FAILED
+  [Diff] Actual / Expected
+  +   [ "criterion" ]
+  -   undefined
+FAILED | 7 passed | 1 failed
+```
+
+**Green with it, and the full gate passes:**
+
+```
+$ deno test --allow-read tests/cargo_orphan_containment_test.ts
+ok | 8 passed | 0 failed
+
+$ ./quality.sh < /dev/null
+✅ All quality checks passed!
+```
 
 ```mermaid
-flowchart TD
-    W["neat-core<br/>workspace member"] -->|normal| S["serde, serde_json …<br/>shipped: library, wasm bundle"]
-    W -->|dev| C["criterion 0.8.2"]
-    C -->|"non-optional —<br/>no feature drops it"| T["tinytemplate 1.2.1<br/>unmaintained"]
-    G{{"unmaintained_crate_exceptions.bats"}} -.->|"red if reachable<br/>via a normal/build edge"| T
-    G -.->|"red once criterion<br/>stops forcing it"| C
+flowchart LR
+    Core["neat-core<br/>[dev-dependencies]"] --> Crit[criterion 0.8]
+    Crit --> PS[page_size 0.6]
+    PS -->|"cfg(windows)"| Win["winapi 0.3.9<br/>unmaintained — #676"]
+    Crit --> TT["tinytemplate 1.2.1<br/>unmaintained — #677"]
+    Other["any other crate"] -.->|new path| TT
+    TT --> Bans["cargo deny check bans<br/>deny.toml wrappers"]
+    Win --> Bans
+    PS --> Bans
+    Bans -->|second path| Fail["build fails"]
+    Bans -->|chain unchanged| Pass[bans ok]
 ```
 
-**Full gate:** `./quality.sh` → `✅ All quality checks passed!` in 75s
-(shellcheck, `bash -n`, 644 bats tests, codespell, Mermaid, Deno gates, clippy,
-`cargo test`, doctests, `cargo deny`, release build).
+## Scope — what was deliberately left out
+
+Two things were reverted from this branch when the base was merged, because
+neither is what #677 asks for:
+
+- A parallel `tests/scripts/unmaintained_crate_exceptions.bats` suite. It gated
+  the same invariant the #676 Deno gate already gates; keeping both would have
+  left two competing sources of truth for one policy.
+- A `version-increment` re-lock CI step and a lockfile-freshness `bats` gate.
+  These addressed a genuine but **pre-existing** defect on the base branch —
+  `wasm-bench/Cargo.lock` still names `neat-core 0.20.1` while the workspace is
+  at `0.21.0`, because the auto-bump re-locks the root lockfile only. That is a
+  CI-job change with its own blast radius, so it is filed as **#695** rather
+  than folded in here.
 
 ## Test Plan
 
-Added `tests/scripts/unmaintained_crate_exceptions.bats` (4 tests). The
-tolerated-crate list is defined once, in `setup()`, and read by every test and
-by the SECURITY.md cross-check, so an exception cannot be half-removed.
+Extended `tests/cargo_orphan_containment_test.ts` (7 → 8 tests), run by
+`quality.sh` and the CI `typescript-gate` job:
 
-- **every unmaintained-crate exception stays off the shipped path** — sweeps
-  every manifest that resolves its own lockfile (root workspace and
-  `wasm-bench`, discovered from the lockfiles rather than hard-coded) and fails
-  if the crate is reachable from a workspace member through a normal or build
-  edge.
-- **the shipped-graph reader tells a shipped crate from a dev-only one** — the
-  oracle for that sweep: `serde` must be in the shipped set, `criterion` must
-  not, and `criterion` must still be in the full resolved graph. A reader that
-  returned nothing would pass the sweep on every graph; this fails it.
-- **every unmaintained-crate exception is still forced by its carrier** — the
-  exception is only defensible while `criterion` leaves no choice, so this
-  reads the carrier's declared dependency and fails when it becomes optional or
-  disappears, naming the crate to drop.
-- **SECURITY.md documents every unmaintained-crate exception** — the list and
-  the "Unmaintained transitive crates" section stay in step.
+- **Added** `Cargo.lock reaches tinytemplate through criterion and nothing else`
+  — fails if the committed lockfile grows a second dependent.
+- **Extended** `deny.toml pins both wrapper chains so cargo deny fails on a new
+  path` — now also asserts `tinytemplate` is denied except through `criterion`.
+  Confirmed red with the entry removed (output above).
+- **Extended** `criterion is declared as a dev-dependency only, so neither crate
+  ships` — unchanged assertion, renamed because it now guards two crates.
 
-Graph reads use `cargo metadata --locked`: a test must never rewrite a
-committed lockfile, and a stale lockfile fails loudly instead of being silently
-repaired mid-suite.
+No test was commented out, removed or weakened. The two deleted `bats` files
+were added earlier **on this branch** and never existed on the base.
 
-**Mutation evidence** — each assertion was driven red before being trusted,
-and every mutation reverted:
-
-| Mutation | Test | Result |
-| --- | --- | --- |
-| `criterion` moved from `[dev-dependencies]` to `[dependencies]` | stays off the shipped path | red — `./Cargo.toml ships the unmaintained crate tinytemplate` |
-| exception list points at `rayon` (an *optional* criterion edge) | still forced by its carrier | red — `criterion 0.8.2 no longer requires rayon unconditionally — drop rayon and delete the exception` |
-| `shipped_crates` gutted to print nothing | tells a shipped crate from a dev-only one | red — the `serde` assertion fails |
-| SECURITY.md section absent (its pre-change state) | SECURITY.md documents every exception | red — `SECURITY.md has no 'Unmaintained transitive crates' section` |
-
-No existing test was modified or removed; the suite went from 640 to 644 tests.
+Documentation updated in the same change: SECURITY.md *"Orphaned transitive
+crates"* now covers both crates and both exit conditions, and the README row,
+`quality.sh` comment and CI step name that named only `winapi` were corrected
+along with the moved section anchor.
