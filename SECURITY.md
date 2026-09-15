@@ -210,28 +210,69 @@ into all three channels and add it to the table above in the same change.
 is missing from this table, or while the table names a lockfile `security.yml`
 does not audit.
 
-## Unmaintained transitive crates
+### Orphaned transitive crates (Issues #676, #677)
 
-A crate can be sound, pinned and audited and still be *unmaintained* — no
-release for years, its issue queue unanswered. `cargo audit` only sees that
-once RustSec files an advisory, and `cargo deny` can only ban a crate the graph
-can do without. Neither helps when a maintained dependency forces an
-unmaintained one on us, so those exceptions are recorded here and fenced by
-`tests/scripts/unmaintained_crate_exceptions.bats`.
+An audit covers *known advisories*; it says nothing about a crate whose
+maintainers have stopped answering. Two such crates are in this graph, and
+neither is a choice made here — both arrive through `criterion`, the benchmark
+harness `neat-core` declares as a dev-dependency.
 
-The fence is the same one that sets the severity: an unmaintained crate is
-tolerable while it reaches `cargo test`/`cargo bench` on a developer's machine
-and nothing else. The test walks the graph cargo resolves and fails if the
-crate is reachable from a workspace member through a normal or build edge —
-that is, if it has been promoted onto a path this repository ships.
+[`winapi`](https://crates.io/crates/winapi) is the legacy raw-FFI Windows
+bindings crate — last release `0.3.9` on 2020-06-26, superseded by
+`windows-sys`. It arrives as `winapi ← page_size ← criterion`, and **no version
+or feature choice in this repository removes that edge**: criterion `0.8.x`
+declares `page_size ^0.6` as a plain, non-optional, non-target-gated
+dependency, and every published `page_size` release (`0.1.0` through the
+current `0.6.0`) depends on `winapi` rather than `windows-sys`.
 
-| Crate | Carrier | Why it cannot be removed | Exit condition |
-| --- | --- | --- | --- |
-| `tinytemplate` 1.2.1 (published 2021-03-04; "Project dead?" and an unanswered CVE report open upstream) | `criterion` (dev-dependency of `neat-core`, benchmark harness) | `criterion 0.8.2` declares `tinytemplate` non-optional, so no feature selection drops it. Turning off `html_reports` changes nothing but the loss of local HTML reports (Issue #677) | `criterion` makes the dependency optional or drops it |
+[`tinytemplate`](https://crates.io/crates/tinytemplate) is the templating engine
+criterion renders its local HTML benchmark reports with — last release `1.2.1`
+on 2021-03-04, with the upstream issues *"Project dead?"* (2023-07-11),
+*"Maintenance?"* (2021-08-24) and a `CVE-2023-38497` report (2023-08-06) all
+still open and unanswered. It arrives as `tinytemplate ← criterion`, one edge
+shorter than the `winapi` chain and just as unremovable: criterion `0.8.2`
+declares `tinytemplate` as a plain, non-optional dependency, and its
+`html_reports` feature carries an **empty** feature list. Turning that feature
+off — the mitigation the finding suggested — stops the HTML reports being
+rendered and leaves the crate resolved exactly as before, so the feature stays
+on and the exposure is bounded instead.
 
-An exception ends by deletion, not by decay: the test asserts each carrier
-still forces its crate unconditionally, so the run that makes the dependency
-optional upstream turns the gate red and the row — and the crate — go with it.
+What *is* controlled is the blast radius, and it is pinned rather than assumed:
+
+- `criterion` is a **dev-dependency** of `neat-core`, so neither crate reaches
+  the published library or the wasm bundles.
+- `page_size`'s `winapi` edge is `cfg(windows)`-gated, so it is not even
+  compiled by the Linux and macOS gates.
+- `deny.toml` `[bans]` denies all three crates except through their one
+  legitimate wrapper (`winapi` through `page_size`, `page_size` through
+  `criterion`, `tinytemplate` through `criterion`), so `cargo deny check` — run
+  by `quality.sh` and the CI `deny` job — **fails the build** the moment a
+  second path into any of them appears.
+- `tests/cargo_orphan_containment_test.ts` fails if that policy is dropped from
+  `deny.toml`, if `Cargo.lock` grows a new dependent of any of the three, or if
+  `criterion` stops being a dev-dependency.
+
+```mermaid
+flowchart LR
+    Core["neat-core<br/>[dev-dependencies]"] --> Crit[criterion 0.8]
+    Crit --> PS[page_size 0.6]
+    PS -->|"cfg(windows)"| Win["winapi 0.3.9<br/>unmaintained"]
+    Crit --> TT["tinytemplate 1.2.1<br/>unmaintained"]
+    Other["any other crate"] -.->|new path| Win
+    Other -.->|new path| PS
+    Other -.->|new path| TT
+    Win --> Bans["cargo deny check bans<br/>deny.toml wrappers"]
+    PS --> Bans
+    TT --> Bans
+    Bans -->|second path| Fail["build fails"]
+    Bans -->|chain unchanged| Pass[bans ok]
+```
+
+Each edge disappears with no source change here once criterion drops the
+dependency upstream — or, for `winapi`, once `page_size` migrates to
+`windows-sys`: re-bump, then delete that crate's `deny.toml` entry and the
+wrapper assertion that names it. Until then these are tracked, bounded
+exposures, not unnoticed ones.
 
 ## Emergency quarantine override
 

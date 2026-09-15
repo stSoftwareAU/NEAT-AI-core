@@ -188,21 +188,6 @@ jobs:
           ./bump-deps.sh --quarantine-hours "${VIBE_BUMP_QUARANTINE_HOURS}" --skip-build
           cargo outdated -R || true
 
-      # PR #693 — the bump above rewrites `[workspace.package].version`, which is
-      # the version `neat-core` resolves to. bump-deps.sh re-locks the root
-      # lockfile only, so every lockfile outside the root workspace that records
-      # `neat-core` through a path dependency (`wasm-bench/Cargo.lock`) keeps the
-      # old version and fails every later `--locked` read. `--workspace` re-locks
-      # the local path packages and preserves remote versions, so the release-age
-      # quarantine that chose them is untouched.
-      - name: Re-lock sibling lockfiles for the bumped version
-        run: |
-          set -euo pipefail
-          while IFS= read -r lock; do
-            echo "Re-locking $lock"
-            cargo update --manifest-path "$(dirname "$lock")/Cargo.toml" --workspace
-          done < <(find . -name Cargo.lock -not -path './target/*' -not -path './.git/*' -not -path './Cargo.lock')
-
       - name: Commit version and dependency changes
         # Issue #483 — the PAT is supplied just-in-time to this one step and
         # pushed through an explicit remote URL, so it never touches disk.
@@ -594,6 +579,20 @@ jobs:
           set -euo pipefail
           deno test --allow-read --allow-write --allow-run=deno \
             tests/deno_supply_chain_test.ts < /dev/null
+
+      # Issues #676, #677 — the orphaned transitive crates `winapi`
+      # (unmaintained since 2020, superseded by windows-sys) and `tinytemplate`
+      # (unmaintained since 2021) reach this graph only as
+      # `winapi <- page_size <- criterion` and `tinytemplate <- criterion`,
+      # dev-dependency edges no feature or version choice here removes.
+      # `deny.toml` bounds them with `[bans]` wrappers, which the `deny` job
+      # enforces against the real graph; this step is what fails if that policy
+      # is dropped from `deny.toml`, if `Cargo.lock` grows a second path into
+      # any of those crates, or if criterion stops being a dev-dependency.
+      - name: Cargo orphan-containment gate (winapi, tinytemplate wrapper chains)
+        run: |
+          set -euo pipefail
+          deno test --allow-read tests/cargo_orphan_containment_test.ts < /dev/null
 
   scripts-and-spelling:
     name: Scripts & spelling
