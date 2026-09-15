@@ -28,6 +28,21 @@ confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
+# Issue #676 — orphan containment for the `winapi ← page_size ← criterion`
+# chain. `winapi` is unmaintained (0.3.9, 2020-06-26; superseded by
+# `windows-sys`) and is not a choice made here: criterion 0.8.x declares
+# `page_size ^0.6` as a plain non-optional dependency, and every published
+# page_size release depends on `winapi`. Neither edge is removable from this
+# manifest, so the exposure is *bounded* instead — these wrappers fail
+# `cargo deny check bans` the moment a second path appears, which is the only
+# way a dev-only, Windows-only crate could reach the shipped library or the wasm
+# bundle. Delete both entries once criterion drops page_size, or page_size
+# migrates to `windows-sys`; `tests/cargo_orphan_containment_test.ts` is what
+# reports the shape changing.
+deny = [
+    { crate = "winapi", wrappers = ["page_size"] },
+    { crate = "page_size", wrappers = ["criterion"] },
+]
 wildcards = "allow"
 highlight = "lowest-version"
 
