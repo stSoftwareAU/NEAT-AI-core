@@ -112,7 +112,7 @@ safe-fall-back invariants; see
 | `neat-core/` | Shared computation library; **140+** unit tests in `src/**/*.rs` plus integration tests in `neat-core/tests/` (>350 total). |
 | `Cargo.toml` | Virtual workspace root; `[workspace.package]` holds semver for release automation. |
 | `RELEASING.md` | Single source of truth for the versioning/release policy (Issue #251) — semver, what counts as breaking, and `v<version>` tags/releases on `Develop`. |
-| `deny.toml` | `cargo deny` (licences, advisories, bans). |
+| `deny.toml` | `cargo deny` (licences, advisories, bans). The `[bans]` wrappers bound the unmaintained `winapi ← page_size ← criterion` chain to its one dev-dependency path — see [Orphaned transitive crates](SECURITY.md#orphaned-transitive-crates-issue-676); `tests/cargo_orphan_containment_test.ts` is the gate that fails if the policy or the chain changes. |
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `scripts/runlib.sh` | Canonical build → install → clean helper for the NEAT-AI Rust siblings (Issue #680). It lives here and is copied byte-for-byte downstream — see [Canonical `runlib.sh`](#canonical-runlibsh-issue-680). Gated by `tests/scripts/runlib.bats`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). `bats` is required, not optional: it is the only gate that *runs* the shell scripts (`bash -n` and shellcheck only read them), so a missing binary — or a missing/empty `tests/scripts` suite — fails the run rather than warning and continuing (Issue #631). Install with `brew install bats-core` or `sudo apt-get install -y bats`. |

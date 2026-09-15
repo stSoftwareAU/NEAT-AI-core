@@ -580,6 +580,19 @@ jobs:
           deno test --allow-read --allow-write --allow-run=deno \
             tests/deno_supply_chain_test.ts < /dev/null
 
+      # Issue #676 — the orphaned transitive crate `winapi` (unmaintained since
+      # 2020, superseded by windows-sys) reaches this graph only as
+      # `winapi <- page_size <- criterion`, a dev-dependency edge no feature or
+      # version choice here removes. `deny.toml` bounds it with `[bans]`
+      # wrappers, which the `deny` job enforces against the real graph; this
+      # step is what fails if that policy is dropped from `deny.toml`, if
+      # `Cargo.lock` grows a second path into either crate, or if criterion
+      # stops being a dev-dependency.
+      - name: Cargo orphan-containment gate (winapi wrapper chain)
+        run: |
+          set -euo pipefail
+          deno test --allow-read tests/cargo_orphan_containment_test.ts < /dev/null
+
   scripts-and-spelling:
     name: Scripts & spelling
     runs-on: ubuntu-latest

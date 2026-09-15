@@ -210,6 +210,51 @@ into all three channels and add it to the table above in the same change.
 is missing from this table, or while the table names a lockfile `security.yml`
 does not audit.
 
+### Orphaned transitive crates (Issue #676)
+
+An audit covers *known advisories*; it says nothing about a crate whose
+maintainers have stopped answering. One such crate is in this graph:
+[`winapi`](https://crates.io/crates/winapi), the legacy raw-FFI Windows
+bindings crate — last release `0.3.9` on 2020-06-26, superseded by
+`windows-sys`. Nothing here chooses it. It arrives as
+`winapi ← page_size ← criterion`, and **no version or feature choice in this
+repository removes that edge**: criterion `0.8.x` declares `page_size ^0.6` as a
+plain, non-optional, non-target-gated dependency, and every published
+`page_size` release (`0.1.0` through the current `0.6.0`) depends on `winapi`
+rather than `windows-sys`.
+
+What *is* controlled is the blast radius, and it is pinned rather than assumed:
+
+- `criterion` is a **dev-dependency** of `neat-core`, so the crate reaches
+  neither the published library nor the wasm bundles.
+- `page_size`'s `winapi` edge is `cfg(windows)`-gated, so it is not even
+  compiled by the Linux and macOS gates.
+- `deny.toml` `[bans]` denies both crates except through their one legitimate
+  wrapper (`winapi` through `page_size`, `page_size` through `criterion`), so
+  `cargo deny check` — run by `quality.sh` and the CI `deny` job — **fails the
+  build** the moment a second path into either crate appears.
+- `tests/cargo_orphan_containment_test.ts` fails if that policy is dropped from
+  `deny.toml`, if `Cargo.lock` grows a new dependent of either crate, or if
+  `criterion` stops being a dev-dependency.
+
+```mermaid
+flowchart LR
+    Core["neat-core<br/>[dev-dependencies]"] --> Crit[criterion 0.8]
+    Crit --> PS[page_size 0.6]
+    PS -->|"cfg(windows)"| Win["winapi 0.3.9<br/>unmaintained"]
+    Other["any other crate"] -.->|new path| Win
+    Other -.->|new path| PS
+    Win --> Bans["cargo deny check bans<br/>deny.toml wrappers"]
+    PS --> Bans
+    Bans -->|second path| Fail["build fails"]
+    Bans -->|chain unchanged| Pass[bans ok]
+```
+
+The edge disappears with no source change here once criterion drops
+`page_size`, or `page_size` migrates to `windows-sys`: re-bump, then delete the
+two `deny.toml` entries and the wrapper assertions that name them. Until then
+this is a tracked, bounded exposure, not an unnoticed one.
+
 ## Emergency quarantine override
 
 This is the single authoritative home for the emergency override / out-of-cycle
