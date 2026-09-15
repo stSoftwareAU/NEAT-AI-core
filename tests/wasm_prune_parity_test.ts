@@ -92,6 +92,62 @@ Deno.test("the golden record reaches both entry points and both answer shapes", 
     golden.some((c) => (c.response.restoredIfRoles?.length ?? 0) > 0),
     "no restored IF role recorded",
   );
+  // The aggregate rewrite report (Ockham #197) and the magnitude a dropped
+  // term carries. `droppedMean` rides inside an `uncompensated` entry, so a
+  // non-empty `uncompensated` alone does not reach it.
+  assert(
+    golden.some((c) => (c.response.convertedNeurons?.length ?? 0) > 0),
+    "no squash conversion recorded — every convertedNeurons shape would go ungraded",
+  );
+  assert(
+    golden.some((c) =>
+      (c.response.uncompensated ?? []).some((entry: Record<string, unknown>) =>
+        entry.droppedMean !== undefined
+      )
+    ),
+    "no dropped-term magnitude recorded — droppedMean would go ungraded",
+  );
+  // Both arms of the one-edge conversion table: a record carrying only the
+  // IDENTITY arm would leave the ABSOLUTE one ungraded.
+  for (const [from, to] of [["MINIMUM", "IDENTITY"], ["HYPOTv2", "ABSOLUTE"]]) {
+    assert(
+      golden.some((c) =>
+        (c.response.convertedNeurons ?? []).some((
+          conversion: Record<string, unknown>,
+        ) => conversion.from === from && conversion.to === to)
+      ),
+      `no golden case converts ${from} to ${to}`,
+    );
+  }
+});
+
+Deno.test("the golden record carries every corner case the pruning guarantee is stated in", () => {
+  // Ockham #201: the twelve shapes `prune_neuron` / `prune_synapse` are graded
+  // on natively, each driven through the JSON entry points the wasm bundle
+  // exports. A record that stopped naming one would silently stop grading it.
+  const required = [
+    "last_edge_into_output_folds_a_mean",
+    "last_edge_from_a_constant_folds_exactly",
+    "last_edge_from_an_observation_folds_a_mean",
+    "sole_source_of_two_outputs_folds_into_both",
+    "one_output_of_several_loses_its_last_edge",
+    "output_if_rewritten_in_place",
+    "no_statistic_prunes_uncompensated",
+    "single_edge_aggregate_converted",
+    "single_edge_hypot_v2_becomes_absolute",
+    "aggregate_keeps_its_squash_with_two_edges",
+    "zero_edge_aggregate_outputs_fold",
+    "three_deep_chain_collapses",
+  ];
+  for (const name of required) {
+    const testCase = golden.find((c) => c.name === name);
+    assert(testCase, `the golden record is missing the ${name} case`);
+    assertEquals(
+      testCase.response.ok,
+      true,
+      `${name}: a corner case must answer with a creature`,
+    );
+  }
 });
 
 Deno.test("every successful answer carries the creature and the transform label", () => {

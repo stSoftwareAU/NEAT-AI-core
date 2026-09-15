@@ -114,6 +114,7 @@ safe-fall-back invariants; see
 | `RELEASING.md` | Single source of truth for the versioning/release policy (Issue #251) — semver, what counts as breaking, and `v<version>` tags/releases on `Develop`. |
 | `deny.toml` | `cargo deny` (licences, advisories, bans). |
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
+| `scripts/runlib.sh` | Canonical build → install → clean helper for the NEAT-AI Rust siblings (Issue #680). It lives here and is copied byte-for-byte downstream — see [Canonical `runlib.sh`](#canonical-runlibsh-issue-680). Gated by `tests/scripts/runlib.bats`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). `bats` is required, not optional: it is the only gate that *runs* the shell scripts (`bash -n` and shellcheck only read them), so a missing binary — or a missing/empty `tests/scripts` suite — fails the run rather than warning and continuing (Issue #631). Install with `brew install bats-core` or `sudo apt-get install -y bats`. |
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
 | `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). Exits non-zero only when the tree it produced must not be kept — see [Dependency updates](#dependency-updates-two-channels). |
@@ -193,6 +194,69 @@ values and then splices the live `[profile.*]` tables into a throwaway crate to
 check the flags **cargo itself** passes rustc (`-C debuginfo=line-tables-only`;
 `-C opt-level=3 -C lto=fat -C codegen-units=1`), and fails if any build input
 under `.cargo/`, `scripts/` or `.github/workflows/` pins `target-cpu=native`.
+
+### Canonical `runlib.sh` (Issue #680)
+
+`scripts/runlib.sh` is the one build → install → clean helper the NEAT-AI Rust
+siblings run, and it lives **here**. Every sibling copies this file
+byte-for-byte into its own `scripts/runlib.sh`; behaviour changes are made on
+`Develop` in this repository and re-copied outward, never edited downstream. A
+downstream edit forks the contract silently — the next copy overwrites it, and
+the divergence surfaces only when a fleet host installs the wrong artefact.
+
+Run it as a subprocess from a sibling's repository root and take the path off
+stdout:
+
+```bash
+artefact="$(./scripts/runlib.sh)"   # stdout is the installed path, and nothing else
+```
+
+It is also sourceable (`. scripts/runlib.sh` then `runlib_install`), but
+sourcing applies `set -euo pipefail` to the calling shell, prepends
+`$CARGO_HOME/bin` to its `PATH`, clears any `EXIT`/`INT`/`TERM` trap the caller
+had set, and turns any failure into an `exit` of that shell rather than a
+return — the subprocess form above is the contract.
+
+| Step | Behaviour |
+|------|-----------|
+| Resolve | The single workspace member — the root crate, or the one `[workspace] members` entry — via `cargo metadata --no-deps`. Zero members, or more than one, fails loud. The skip below must decide without running cargo at all, so it reads the crate name, version and declared target shape straight from the manifests. Anything it cannot read unambiguously — a globbed `members` entry, a `crate-type` array split over several lines, an explicit `[[bin]]` table or `autobins` — makes it decline outright and fall through to `cargo metadata`, which is always the authority. Declining is the safe direction: a target the reader failed to notice would otherwise let a half-installed crate report itself complete. |
+| Skip | With every artefact the crate's shape calls for present, and `.<crate>.version` matching the crate semver beside each, it runs **no** `cargo` command and prints one stderr line, `[<crate>] already installed v<x>`. The whole shape is checked, so a crate shipping both a bin and a cdylib does not report "already installed" once one half has been removed. There is no force flag: delete the stamp to force a rebuild. |
+| Install | The bin target named after the crate to `$CARGO_HOME/bin/<crate>`; a `cdylib` target to `$CARGO_HOME/lib/lib<crate>.{so,dylib}` — both with `-` → `_` in the crate name. A crate carrying both installs both. The installed names come from the **crate**, never from the cargo target name, so a crate whose `[lib] name` differs from its package name is not installed under one name and looked up under another. `CARGO_HOME` defaults to `~/.cargo`. |
+| Stamp | `.<crate>.version` is written beside every installed artefact, and written **last** — until it exists, a half-finished install still reads as "needs building". |
+| Clean | `target/` is removed after a successful install, with one stderr line naming the path removed and the bytes freed. The measurement is `du -sk` taken before the removal — the portable reading, macOS bash 3.2 included. A build directory **outside** the checkout (a shared `CARGO_TARGET_DIR`) holds other checkouts' builds, so it is kept and the fact reported rather than passed over. |
+| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. |
+
+It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
+`cargo metadata` and `rustc` is what the MSRV gate reads. `rustup` itself is
+never invoked, so a distro-packaged toolchain is fine — a missing one still
+points at <https://rustup.rs>. Two things it deliberately does **not** do. It never edits
+`RUSTFLAGS`: the caller's value reaches `cargo` unchanged and it sets no
+defaults of its own, so `-C target-cpu=native` stays consumer-owned exactly as
+above. And it never installs a toolchain over the network — a missing `cargo`
+or `rustup` exits non-zero naming <https://rustup.rs>. MSRV comes from
+`rust-version` in the crate manifest when present; a `rust-toolchain.toml` is
+rustup's own business.
+
+```mermaid
+flowchart TD
+    A["runlib.sh, from the repository root"] --> B{"artefact and stamp match<br/>the crate semver?"}
+    B -- "yes" --> C["one stderr line: already installed<br/>print the path, run no cargo"]
+    B -- "no" --> D["cargo metadata --no-deps:<br/>single member, targets, MSRV"]
+    D --> K{"shape complete and<br/>stamped at this version?"}
+    K -- "yes" --> C
+    K -- "no" --> E["cargo build --release"]
+    E -- "fails or an artefact is missing" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
+    E -- "succeeds" --> G["stage every artefact,<br/>then move them all into CARGO_HOME"]
+    G --> H["write the version stamps last"]
+    H --> I["remove the checkout's target/,<br/>report the bytes freed"]
+    I --> J["print the installed path"]
+```
+
+`tests/scripts/runlib.bats` is the gate. It runs the real script against fixture
+crates with a `cargo` shim on `PATH`, so the skip, the rebuild triggers, the bin
+/ cdylib / both shapes, the failure path and the `target/` removal are asserted
+as observable outcomes — the shim records every invocation, which is what makes
+"runs no `cargo` command" an assertion rather than an inference.
 
 ## Cargo features
 
@@ -624,6 +688,40 @@ flowchart LR
     V --> C
 ```
 
+### Both endpoints of a synapse must resolve (Issue #682)
+
+`compile_creature` resolved a synapse's **source** through the UUID map and
+refused an unresolvable one with `CreatureError::UnknownSourceUuid`. Its
+**destination** had no check at all: synapses are grouped by `toUUID` and read
+back **per listed neuron**, so a `toUUID` naming no entry in `neurons` was never
+looked up — the edge was **silently dropped** and `compile_creature` returned
+`Ok` with a network one synapse smaller than the creature declared. The creature
+and the network the fleet scores then disagreed with nothing saying so, in the
+one function that turns a creature into that network.
+
+The destination now earns the mirror variant,
+`CreatureError::UnknownTargetUuid(String)`, raised over the whole synapse list
+before the neuron walk, so it names the first offending row in **declaration
+order** rather than whichever a hash map yielded. Three shapes of edge are
+covered: a typo, a transposed `fromUUID`/`toUUID` pair, and an edge pointing at
+an **input** neuron — `input-N` resolves as a *source* but is never a listed
+neuron, so it can never be a destination. Every neighbouring route already
+refused the same input loudly (`creature_validate` reports a dangling `toUUID`;
+`cleanup_creature_with` has `CleanupError::UnknownEndpoint` and
+`CleanupError::SynapseTargetsInput`), which is what made the compile path the
+outlier. A creature whose every `toUUID` names a listed neuron — every creature
+this crate and NEAT-AI emit — compiles exactly as before.
+
+```mermaid
+flowchart LR
+    J["creature JSON"] --> R["compile_creature"]
+    R --> S{"every toUUID a listed neuron?"}
+    S -. "no — typo, transposed pair,<br/>or an input target" .-> X["Err(UnknownTargetUuid)<br/>fail loud"]
+    S -- "yes" --> F{"every fromUUID resolves?"}
+    F -. "no" .-> Z["Err(UnknownSourceUuid)"]
+    F -- "yes" --> C["CompiledNetwork<br/>one synapse per declared edge"]
+```
+
 ### Creature weights parse to the exact `f64`
 
 `serde_json`'s **default** number parser is a fast approximation that can land
@@ -834,12 +932,20 @@ constants apart, and never trades correctness for the constant budget.
 
 The inexact `IF` repair above is a **policy**, not a fixed rule.
 `cleanup_creature` keeps TypeScript parity (`IfRepair::Downgrade`), which is what
-the `prune_fixtures.rs` captures record and what Issue #590's neuron removal
-uses. `cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a
-caller ask for `IfRepair::Rewrite` instead — the exact rewrites synapse pruning
-uses, described under [Synapse pruning](#synapse-pruning-issue-591). Under that
-policy `CleanupOutcome::downgraded_if_neurons` is always empty and
-`static_if_neurons` / `restored_if_roles` carry the rewrites that replaced it.
+the `prune_fixtures.rs` captures record and what
+`neat-core/tests/prune_cleanup.rs` grades against them.
+`cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a caller
+ask for `IfRepair::Rewrite` instead — the exact rewrites described under
+[Synapse pruning](#synapse-pruning-issue-591). Under that policy
+`CleanupOutcome::downgraded_if_neurons` is always empty and `static_if_neurons` /
+`restored_if_roles` carry the rewrites that replaced it.
+
+**Both pruning entry points ask for `IfRepair::Rewrite`** — synapse pruning from
+the start (Issue #591), neuron pruning since Ockham #198 — so an `IF` short a
+role is rewritten exactly whichever way the caller asked for the removal, and
+`PruneResult::downgraded_if_neurons` is always empty. The downgrade stays as the
+`cleanup_creature` default so the parity captures keep a caller that reproduces
+them.
 
 #### Constants are support nodes
 
@@ -883,7 +989,7 @@ flowchart TD
     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
     S -- ok --> X["cut the neuron and<br/>every edge naming it"]
     X --> F["compensate each target:<br/>structural value, or the<br/>caller's mean and proxy"]
-    F --> L["cleanup_creature — cascade,<br/>fold, canonicalise, validate"]
+    F --> L["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
     L -- fails --> E["Err(Cleanup)"]
     L -- passes --> R["Ok(PruneResult) —<br/>Exact or Approximate"]
 ```
@@ -915,13 +1021,61 @@ they are refused too rather than turned into a negative residual variance.
 
 **Where a bias fold means nothing, it is not attempted.** A point-wise squash
 computes `squash(bias + Σ w·a)`, so `W · μ` in the bias stands where the removed
-term was. An aggregate does not — `MINIMUM` takes the smallest inward term,
-`MEAN` divides by its inward count, `HYPOT` squares each term, and an `IF` reads
-its condition sum to pick a branch — so those targets are named on
-`PruneResult::uncompensated` instead, with the same entry recording a target
-left bare because no statistics were supplied at all. The entry is per
-**readable key**, not per target: an `IF` fed on two roles is reported once per
-role, because it never sums its arms into the single term a total would imply.
+term was. An aggregate that still has terms to aggregate does not — `MINIMUM`
+takes the smallest inward term, `MEAN` divides by its inward count, `HYPOT`
+squares each term, and an `IF` reads its condition sum to pick a branch — so
+those targets are named on `PruneResult::uncompensated` instead, with the same
+entry recording a target left bare because no statistics were supplied at all.
+The entry is per **readable key**, not per target: an `IF` fed on two roles is
+reported once per role, because it never sums its arms into the single term a
+total would imply.
+
+#### A target left with no inward edge takes the fold (Ockham #196)
+
+Once the cut leaves a target with **nothing** inward, the forward pass stops
+reading a set of terms and evaluates the neuron from its bias alone
+(`prune_cleanup::zero_inward_activation`) — a point-wise reading again — so the
+fold is the closest creature there is rather than a number nobody can justify.
+`prune_neuron::fold_policy(target_squash, remaining_inward_edges)` is the single
+rule, asked by **both** entry points so a neuron removal and a synapse removal
+can never disagree about what a target is owed. The shape of the fold follows
+the empty form:
+
+| Squash | one inward term | no inward term | the fold |
+|---|---|---|---|
+| point-wise (`IDENTITY`, `LOGISTIC`, …) | `squash(bias + W·a)` | `squash(bias)` | `bias += W·μ`, whatever it is left with |
+| `MINIMUM` / `MAXIMUM` / `MEAN` | `W·a + bias` | `bias` | `bias += W·μ` |
+| `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` — the term is a magnitude |
+| `HYPOTv2` | `\|bias + W·a\|` | `0`, the bias never read | `bias += W·μ` **and the squash becomes `ABSOLUTE`** |
+
+`HYPOTv2` is the one squash a **zero-edge fold** rewrites — the single-edge
+conversion table above rewrites four more, and both report what they did on
+`PruneResult::converted_neurons` (`convertedNeurons` on the wire). Its bias
+lives inside a per-synapse square, so with no synapse left the forward pass
+answers
+`0` and a bias fold alone would change nothing; `ABSOLUTE` over the folded bias
+computes `|bias + W·μ|`, which is what `HYPOTv2` computed with the term still
+there. The two forms share the `[0, f32::MAX]` activation range, so the
+replacement cannot answer a value the original would have clamped away.
+
+An `IF` is excluded whatever it is left with: rule 12 means an `IF` short an
+edge is short a **role**, and `IfRepair` owns that repair, not a number. Where
+an aggregate is left bare and no statistics were supplied it is still reported,
+now with `UncompensatedReason::NoStatistics` rather than `AggregateTarget` —
+what is missing is the number, not the permission.
+
+No correlated survivor helps a bare **aggregate** — a share can only land on an
+edge into it, and there is none — so the fold there is mean-only and a supplied
+proxy goes unused. It is still *checked*: a proxy that is not a number, not a
+survivor, or not consistent with the variances refuses the whole prune as it
+always did. A **point-wise** target left bare is unchanged by this rule and
+still takes the ordinary path, so a proxy with a non-zero share into it is
+refused with `PruneError::MissingProxyEdge` — there is no edge left to carry
+it.
+
+A **hidden** aggregate left bare takes the fold first and then meets cleanup's
+own `fold_zero_inward_hidden`, which moves that now-fixed value into its outward
+weights exactly and leaves a bias-1 support constant behind.
 
 #### An aggregate that keeps its edges (Ockham #197)
 
@@ -994,8 +1148,33 @@ though a bad one is still *refused*, so the same request cannot succeed here and
 fail on every other neuron. "Same number" means to the `f32` precision the
 forward pass itself works in: the folded value is the very value that pass would
 have produced, but the fold re-associates the sum.
-Everything else is `Approximate` — including an `IF` that lost a role, which can
-no longer branch at all.
+There is one further route to the label, and it is a proof about an `IF` rather
+than a fold (Ockham #198). A shortfall named on `uncompensated` normally ends any
+`Exact` claim, but where the rewrite flattened an `IF` **onto the arm the
+caller's own creature always took** — because that creature decided its condition
+itself, and the cut left the decision where it was — the term the removal took
+away was never read: a condition term only picks an arm, and a term out of the
+arm the pick discards is read on no record at all. `shortfall_costs_nothing` is
+the single home of that proof and both entry points ask it, so a neuron removal
+and the synapse removal that takes the same term away can never disagree.
+Everything else is `Approximate` — including an `IF` whose condition varied, so
+that the arm it now flattens onto is not the arm the forward pass used to read.
+
+#### An `IF` short a role is rewritten, not downgraded (Ockham #198)
+
+Removing a neuron can leave an `IF` without a `condition`, a `positive` or a
+negative arm. `prune_neuron` asks cleanup for `IfRepair::Rewrite`, the same exact
+repair `prune_synapse` uses and tabled under
+[Synapse pruning](#synapse-pruning-issue-591): the `IF` is flattened onto the arm
+a statically decided condition always takes, or given back the emptied arm on a
+zero-weight support edge. It never asks for the downgrade, so a neuron prune and
+a synapse prune that break the same `IF` come back as the same creature, and
+`PruneResult::downgraded_if_neurons` is always empty.
+
+The **output** case is the one worth naming: an output carrying the `IF` squash
+can never be removed or reordered, because the declared target width is the
+fleet's contract (Issue #550), so the repair happens in place — the output keeps
+its position and the declared width never moves.
 
 **The memetic record is pruned, not dropped** — Issue #590's call on the choice
 `docs/research/pruning-parity-matrix.md` left open. TypeScript drops `memetic`
@@ -1027,7 +1206,7 @@ flowchart TD
     F -- yes --> S{"statistics supplied?"}
     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
     S -- ok --> X["cut that one triple —<br/>never the rest of the pair"]
-    X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate gets neither"]
+    X --> C["compensate the target:<br/>structural value, or the<br/>caller's mean and proxy;<br/>an aggregate with edges left gets neither,<br/>one with none takes the fold"]
     C --> R["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
     R -- fails --> E["Err(Cleanup)"]
     R -- passes --> O["Ok(PruneResult) —<br/>Exact or Approximate"]
@@ -1067,8 +1246,9 @@ left to be discovered. `downgraded_if_neurons` is correspondingly always empty
 for a synapse prune. Neither rewrite is a compensation: they restore what the
 creature already computed once the requested edge was gone, so
 `PruneResult::transform` still grades only the loss of the term itself.
-`cleanup_creature` keeps the TypeScript-parity `IfRepair::Downgrade` default, so
-Issue #590's neuron removal is unchanged.
+`cleanup_creature` keeps the TypeScript-parity `IfRepair::Downgrade` default for
+the captures; `prune_neuron` asks for this same `IfRepair::Rewrite` policy
+(Ockham #198), so the two entry points repair an `IF` identically.
 
 #### What the removal cost
 
@@ -1079,7 +1259,8 @@ activation, so the same compensation table as Issue #590 applies with `W = w`:
 |---|---|
 | the creature fixes `a` (a constant, or a source with nothing to sum) | `target.bias += w · a`, exactly; no statistic is needed and a supplied mean never overrides it — `TransformClass::Exact` |
 | `a` varies and `PruneStats` are supplied | `w · μ` folds into the bias, and a supplied correlated survivor takes `β · w` on its own edge |
-| the target aggregates (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost and the magnitude of what went on `dropped_mean` ([above](#an-aggregate-that-keeps-its-edges-ockham-197)) |
+| the target aggregates and the cut leaves it something to aggregate (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, or an `IF` reading one role's sum) | no fold stands in for the term, so none is attempted and the target is named on `PruneResult::uncompensated` with the **role** it lost and the magnitude of what went on `dropped_mean` ([above](#an-aggregate-that-keeps-its-edges-ockham-197)) |
+| the cut leaves the target with **no inward edge at all** | the forward pass reads it from its bias alone, so it takes the fold after all — see [A target left with no inward edge takes the fold](#a-target-left-with-no-inward-edge-takes-the-fold-ockham-196). `IF` is still excluded |
 
 `PruneResult::removed_neuron` is `None` for a synapse prune and
 `removed_synapses` carries the one requested triple; for `prune_neuron` it is
@@ -1158,6 +1339,24 @@ only a boundary has (a refusal, a malformed payload, a static-`IF` rewrite, the
 correlated-survivor statistics payload), each with the answer **native** gives
 it. Regenerate it with
 `UPDATE_PRUNE_GOLDEN=1 cargo test -p neat-core --test prune_json`.
+
+It also carries a named case for **every corner case the pruning guarantee is
+stated in** (Ockham #201), so no shape of rewrite reaches a caller over WASM
+ungraded: the last edge into an output from a hidden, constant or observation
+source; one removal leaving two outputs bare and one leaving only one of
+several; an **output** carrying `IF` repaired in place; a removal with no
+statistics at all; the one-edge conversions to `IDENTITY` and to `ABSOLUTE`; an
+aggregate still reducing two terms, reporting `droppedMean`; every aggregate
+squash left with no inward edge, `HYPOTv2` among them; and a three-deep hidden
+chain collapsing on one cut. `neat-core/tests/prune_json.rs` drives each of
+them through the JSON entry point *and* the native call and asserts the two
+answer the same `PruneResponse` — which is what `impl From<&PruneResult> for
+PruneResponse` is public for — then asserts the numbers the documented
+forward-pass forms require. The first half pins the **round trip** (both sides
+run the same conversion, so a fault in the rewrite moves both); the second is
+what catches a rewrite that answers the wrong number, and the record compared
+against the built bundle is what catches a bundle that answers something else
+entirely.
 
 | Gate | Where | What it proves |
 |---|---|---|

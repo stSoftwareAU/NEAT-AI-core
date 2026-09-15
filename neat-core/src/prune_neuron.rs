@@ -3,7 +3,9 @@
 //! [`prune_neuron`] is the shared answer to "remove this hidden neuron and give
 //! me back something I can score". It cuts the requested neuron out, optionally
 //! compensates the targets that read it using the **caller's** statistics, runs
-//! the Issue #589 [`cleanup_creature`] fixed point over the wreckage, and
+//! the Issue #589 [`cleanup_creature_with`]
+//! fixed point over the wreckage under
+//! [`IfRepair::Rewrite`], and
 //! validates the stable result before returning it. A successful call never
 //! returns an invalid creature.
 //!
@@ -16,7 +18,7 @@
 //!     S -- "yes, and not numbers" --> N["Err(NonFiniteStatistic /<br/>NegativeVariance / DegenerateProxy)"]
 //!     S -- ok --> X["cut the neuron and<br/>every edge naming it"]
 //!     X --> F["compensate each target:<br/>structural value, or the<br/>caller's mean and proxy"]
-//!     F --> L["cleanup_creature — cascade,<br/>fold, canonicalise, validate"]
+//!     F --> L["cleanup (IfRepair::Rewrite) —<br/>exact IF rewrites, cascade,<br/>fold, canonicalise, validate"]
 //!     L -- fails --> E["Err(Cleanup)"]
 //!     L -- passes --> R["Ok(PruneResult) —<br/>Exact or Approximate"]
 //! ```
@@ -36,18 +38,23 @@
 //! [`PruneResult::transform`] is the honest label on what came back:
 //!
 //! - [`TransformClass::Exact`] — the pruned creature computes the **same number
-//!   on every record**. Two cases reach it, both provable from the creature
-//!   alone: nothing read the neuron, or the neuron had no inward edge, so it
-//!   activated to one value on every record and that value folds into each
-//!   target's bias. No statistic can buy this label, and a supplied mean never
-//!   overrides the structural value. "Same number" means to the precision the
-//!   forward pass works in: the folded value *is* the `f32` activation the
-//!   pass would have produced for a neuron with nothing to sum, but the fold
-//!   re-associates the sum, so the two agree to `f32` rounding rather than bit
-//!   for bit.
-//! - [`TransformClass::Approximate`] — everything else. A neuron whose
-//!   activation varies is gone, and the mean fold only replaces it *on
-//!   average*; an `IF` that lost a role can no longer branch at all.
+//!   on every record**. **Three** cases reach it, each provable from the
+//!   creature alone: nothing read the neuron; the neuron had no inward edge, so
+//!   it activated to one value on every record and that value folds into each
+//!   target's bias; or every shortfall the removal left is one the `IF` rewrite
+//!   proves cost nothing, which is the third case and is spelled out under
+//!   "An `IF` short a role is rewritten, not downgraded" below. No statistic can
+//!   buy this label, and a supplied mean never overrides the structural value.
+//!   "Same number" means to the precision the forward pass works in: the folded
+//!   value *is* the `f32` activation the pass would have produced for a neuron
+//!   with nothing to sum, but the fold re-associates the sum, so the two agree
+//!   to `f32` rounding rather than bit for bit.
+//! - [`TransformClass::Approximate`] — everything else, and it is the honest
+//!   answer far more often than not. A neuron whose activation varies is gone
+//!   and the mean fold only replaces it *on average*; an `IF` still branching on
+//!   a condition that varies lost a term the forward pass reads; an `IF` lost a
+//!   condition term that moved which arm the forward pass reads; a target lost a
+//!   term with no statistic to stand in for it.
 //!
 //! # The compensation, spelled out
 //!
@@ -75,12 +82,13 @@
 //!
 //! A point-wise squash computes `squash(bias + Σ w·a)`, so moving `W · μ` into
 //! the bias puts the mean term back where the removed one was. An **aggregate**
-//! does not: a `MINIMUM` takes the smallest inward term, a `MEAN` divides by its
-//! inward **count**, a `HYPOT` squares each term, and an `IF` reads its
-//! condition sum to choose a branch. Folding into their bias would be a number
-//! the caller could not justify, so no fold is attempted there and the target is
-//! named on [`PruneResult::uncompensated`] instead — reported, never silent.
-//! The same entry records a target left uncompensated because no statistics were
+//! that still has something to aggregate does not: a `MINIMUM` takes the
+//! smallest inward term, a `MEAN` divides by its inward **count**, a `HYPOT`
+//! squares each term, and an `IF` reads its condition sum to choose a branch.
+//! Folding into their bias would be a number the caller could not justify, so
+//! no fold is attempted there and the target is named on
+//! [`PruneResult::uncompensated`] instead — reported, never silent. The same
+//! entry records a target left uncompensated because no statistics were
 //! supplied at all.
 //!
 //! # What an aggregate that keeps its edges answers with (Ockham #197)
@@ -100,23 +108,88 @@
 //! caller's half of the Issue #587 boundary. Statistics this crate cannot make
 //! sense of are a different matter and still refuse outright.
 //!
+//! # An aggregate left with **no** inward edge takes the fold (Ockham #196)
+//!
+//! `fold_policy` is the single rule, asked by this module and by
+//! [`mod@crate::prune_synapse`] alike. Once the cut leaves an aggregate with
+//! nothing to aggregate, the forward pass stops reading a set of terms and
+//! evaluates the neuron from its bias alone
+//! (`prune_cleanup::zero_inward_activation`) — a point-wise reading
+//! again — so the fold is the closest creature there is rather than a number
+//! nobody can justify. The shape of the fold follows the empty form:
+//!
+//! | Squash | one inward term | no inward term | the fold |
+//! |---|---|---|---|
+//! | `MINIMUM` / `MAXIMUM` / `MEAN` | `W·a + bias` | `bias` | `bias += W·μ` |
+//! | `HYPOT` | `\|W·a\| + bias` | `bias` | `bias += \|W·μ\|` — the term is a magnitude |
+//! | `HYPOTv2` | `\|bias + W·a\|` | `0`, the bias never read | `bias += W·μ` **and the squash becomes `ABSOLUTE`** |
+//!
+//! `HYPOTv2` is the one squash a **zero-edge fold** rewrites — the single-edge
+//! conversion table above rewrites four more, and both report what they did on
+//! [`PruneResult::converted_neurons`], so a caller never has to discover a
+//! squash it did not send in. With no inward edge its bias lives inside a
+//! per-synapse square
+//! that no longer exists, so the forward pass answers `0` and a bias fold alone
+//! would change nothing; `ABSOLUTE` over the folded bias computes
+//! `\|bias + W·μ\|`, which is what `HYPOTv2` computed with the term still
+//! there. The two forms share an activation range — both `[0, f32::MAX]` — so
+//! the replacement cannot answer a value the original would have clamped away.
+//!
+//! An `IF` is excluded whatever it is left with: rule 12 means an `IF` short an
+//! edge is short a **role**, and repairing that is
+//! [`crate::prune_cleanup::IfRepair`]'s job, not a number's.
+//!
+//! No correlated survivor helps an **aggregate** target with no inward edge — a
+//! share can only land on an edge into that target, and there is none — so the
+//! fold there is mean-only and a supplied proxy goes unused. It is still
+//! *checked*: a proxy that is not a number, not a survivor, or not consistent
+//! with the variances refuses the whole prune as it always did. A **point-wise**
+//! target left bare is unchanged by Ockham #196 and still takes the ordinary
+//! path, so a proxy with a non-zero share into it is refused with
+//! [`PruneError::MissingProxyEdge`] — there is no edge left to carry it.
+//! # An `IF` short a role is rewritten, not downgraded
+//!
+//! Removing a neuron can leave an `IF` without a `condition`, a `positive` or a
+//! negative arm. This entry point asks cleanup for
+//! [`IfRepair::Rewrite`] — the
+//! exact repair [`crate::prune_synapse::prune_synapse`] already used (Ockham
+//! #198) — so what comes back is the closest creature that computes the **same
+//! number on every record**: the `IDENTITY` sum of the arm a statically decided
+//! condition always takes, or a zero-weight support edge giving back the arm the
+//! removal emptied. It never asks for the TypeScript-parity downgrade, so
+//! [`PruneResult::downgraded_if_neurons`] is always empty here and
+//! [`PruneResult::static_if_neurons`] / [`PruneResult::restored_if_roles`] carry
+//! what happened instead.
+//! [`crate::prune_cleanup::cleanup_creature`]'s own default
+//! policy is unchanged, and [`crate::prune_fixtures`]'s captures still have a
+//! caller that reproduces them.
+//!
+//! Rewriting exactly is not the same as costing nothing. The rewrite reads the
+//! creature the **cut** left behind, so an `IF` whose condition the removal
+//! emptied flattens onto the arm an empty condition takes — which is the arm the
+//! original creature took only when the original decided its condition the same
+//! way. `shortfall_costs_nothing` is where that is proved, and it is the only
+//! route by which an aggregate shortfall still reaches
+//! [`TransformClass::Exact`]: a condition term the creature itself fixed, whose
+//! loss leaves the branch where it was, was never read for anything else.
+//!
 //! # The memetic record is pruned, not dropped
 //!
 //! TypeScript drops `memetic` wholesale on every removal because its content
 //! hash no longer describes the creature. This crate owns the finer-grained
 //! inverse of validation rule 31 (`CreatureExport::prune_memetic`,
-//! NEAT-AI-Lamarck#197) and [`cleanup_creature`] applies it, so what comes back
-//! keeps every entry that still names live structure and loses exactly the
-//! dangling ones. That is Issue #590's call on the choice the parity matrix
-//! left open: the fine-tuning history a caller measured is worth more than a
-//! blunt reset, and rule 31 is satisfied either way.
+//! NEAT-AI-Lamarck#197) and cleanup applies it, so what comes back keeps every
+//! entry that still names live structure and loses exactly the dangling ones.
+//! That is Issue #590's call on the choice the parity matrix left open: the
+//! fine-tuning history a caller measured is worth more than a blunt reset, and
+//! rule 31 is satisfied either way.
 
 use std::collections::HashMap;
 
 use crate::creature::{CreatureExport, parse_squash_name, parse_synapse_type, squash_name_from};
 use crate::prune_cleanup::{
-    CleanupError, StaticIfRewrite, SynapseKey, cleanup_creature, fixed_activation,
-    is_observation_uuid,
+    CleanupError, CleanupOptions, CleanupOutcome, IfRepair, StaticIfRewrite, SynapseKey,
+    cleanup_creature_with, fixed_activation, is_observation_uuid, static_condition_branch,
 };
 use crate::prune_rewrite::{SquashConversion, convert_single_edge_aggregates};
 use crate::squash::SquashType;
@@ -205,8 +278,8 @@ pub struct BiasFold {
     pub weight_sum: f64,
     /// What was added to the target's bias.
     pub delta: f64,
-    /// True when the folded value is the neuron's activation on **every**
-    /// record, so the fold changes nothing the creature computes.
+    /// True when the folded value is what the removed term was worth on
+    /// **every** record, so the fold changes nothing the creature computes.
     pub exact: bool,
     /// Variance of what the compensation could not carry, when the caller
     /// supplied the variance it is derived from.
@@ -229,8 +302,10 @@ pub struct WeightShare {
 pub enum UncompensatedReason {
     /// No statistics were supplied, so there is no number to fold.
     NoStatistics,
-    /// The target's squash aggregates its inward terms, so a bias fold does
-    /// not stand in for the term the removal took away.
+    /// The target's squash aggregates the inward terms it **still has**, so a
+    /// bias fold does not stand in for the term the removal took away. An
+    /// aggregate the cut left with no inward edge at all is folded instead
+    /// (Ockham #196); an `IF` is never folded, because what it lost is a role.
     AggregateTarget,
 }
 
@@ -288,9 +363,15 @@ pub struct PruneResult {
     /// Hidden neurons the cascade folded into constant support.
     pub folded_neurons: Vec<String>,
     /// `IF` neurons downgraded to `IDENTITY` because a role went with the
-    /// removal — the one cleanup rewrite that is not exact. Always empty for
-    /// [`crate::prune_synapse::prune_synapse`], which asks for the exact
-    /// rewrites below instead.
+    /// removal — the one cleanup rewrite that is not exact.
+    ///
+    /// **Always empty.** Both entry points ask cleanup for
+    /// [`IfRepair::Rewrite`] and take
+    /// the exact rewrites below instead (Issue #591 for the synapse path,
+    /// Ockham #198 for the neuron path). The field stays because
+    /// [`crate::prune_cleanup::cleanup_creature`]'s own
+    /// default policy still downgrades for the TypeScript-parity captures, and
+    /// a non-empty list here would mean a caller had gone back to it.
     pub downgraded_if_neurons: Vec<String>,
     /// `IF` neurons the removal left with a condition the creature itself
     /// decides, flattened to the branch that survives (Issue #591).
@@ -575,9 +656,13 @@ pub fn prune_neuron(
     let mut bias_folds = Vec::new();
     let mut weight_shares = Vec::new();
     let mut uncompensated = Vec::new();
+    // Both rewrites a request can perform land here: the zero-edge fold's
+    // `HYPOTv2 → ABSOLUTE` below, and the single-edge conversion after the
+    // loop. One list, so a caller reads every squash that moved in one place.
+    let mut converted_neurons: Vec<SquashConversion> = Vec::new();
 
     for (target_uuid, role, squash, weight_sum) in targets {
-        if squash.is_aggregate() {
+        if !fold_policy(squash, inward_edge_count(&cut, &target_uuid)) {
             uncompensated.push(UncompensatedTarget {
                 target_uuid,
                 role,
@@ -586,6 +671,28 @@ pub fn prune_neuron(
                 reason: UncompensatedReason::AggregateTarget,
                 dropped_mean: dropped_mean(invariant_value, stats, weight_sum),
             });
+            continue;
+        }
+
+        // An aggregate the cut left with nothing to aggregate is foldable, but
+        // in the shape its empty forward-pass form implies rather than the
+        // point-wise one below.
+        if squash.is_aggregate() {
+            match fold_bare_aggregate(
+                &mut cut,
+                &target_uuid,
+                role,
+                squash,
+                weight_sum,
+                invariant_value,
+                stats,
+            )? {
+                TargetOutcome::Folded(fold, conversion) => {
+                    bias_folds.push(fold);
+                    converted_neurons.extend(conversion);
+                }
+                TargetOutcome::Uncompensated(entry) => uncompensated.push(entry),
+            }
             continue;
         }
 
@@ -617,11 +724,7 @@ pub fn prune_neuron(
             });
         }
 
-        for neuron in &mut cut.neurons {
-            if neuron.uuid == target_uuid {
-                neuron.bias += compensation.bias_delta;
-            }
-        }
+        add_to_bias(&mut cut, &target_uuid, compensation.bias_delta)?;
         bias_folds.push(BiasFold {
             target_uuid,
             weight_sum,
@@ -636,24 +739,21 @@ pub fn prune_neuron(
     // cleanup sees it — every later pass then reads a sum rather than a
     // reduction (Ockham #197). The rewrite is exact, so it cannot spoil the
     // label below.
-    let converted_neurons = convert_single_edge_aggregates(&mut cut, &touched_targets)?;
+    converted_neurons.extend(convert_single_edge_aggregates(&mut cut, &touched_targets)?);
 
-    let outcome = cleanup_creature(&cut)?;
+    // `IfRepair::Rewrite`, the same policy `prune_synapse` asks for: an `IF`
+    // the removal left short of a role is rewritten into the closest form that
+    // computes the same number on every record, never blanket-downgraded to
+    // `IDENTITY`. `cleanup_creature`'s own default is untouched, so the
+    // TypeScript-parity captures still have a caller that reproduces them.
+    let outcome = cleanup_creature_with(
+        &cut,
+        CleanupOptions {
+            if_repair: IfRepair::Rewrite,
+        },
+    )?;
 
-    // Exact means every term the removal took away was replaced by something
-    // that computes the same number on every record: nothing may be left
-    // uncompensated, every fold must be structural, and no `IF` may have been
-    // downgraded — that repair is cleanup's one inexact rewrite.
-    //
-    // The `IF` clause is defence in depth rather than a branch a caller can
-    // reach today: every route to a downgrade runs through an `IF` that the
-    // removed neuron fed, and an `IF` is an aggregate, so `uncompensated` is
-    // already non-empty. It stays because the two rules are independent —
-    // widening what counts as compensable must not quietly start calling a
-    // downgraded creature exact.
-    let exact = uncompensated.is_empty()
-        && bias_folds.iter().all(|f| f.exact)
-        && outcome.downgraded_if_neurons.is_empty();
+    let transform = transform_class(creature, &outcome, &bias_folds, &uncompensated)?;
 
     Ok(PruneResult {
         creature: outcome.creature,
@@ -669,13 +769,101 @@ pub fn prune_neuron(
         weight_shares,
         uncompensated,
         converted_neurons,
-        transform: if exact {
-            TransformClass::Exact
-        } else {
-            TransformClass::Approximate
-        },
+        transform,
         passes: outcome.passes,
     })
+}
+
+/// How faithful the whole rewrite was, from what it left behind.
+///
+/// `Exact` means every term the removal took away was replaced by something
+/// that computes the same number on every record: every fold must be
+/// structural, every shortfall must be one the `IF` rewrite proves cost
+/// nothing, and no `IF` may have been downgraded.
+///
+/// The downgrade clause is defence in depth rather than a branch a caller can
+/// reach: both entry points ask for [`IfRepair::Rewrite`], which never fills
+/// [`crate::prune_cleanup::CleanupOutcome::downgraded_if_neurons`] at all. It
+/// stays because the rules are independent — a future policy change must not
+/// quietly start calling a downgraded creature exact.
+///
+/// This is the **one** home of that conjunction. `prune_neuron` and
+/// [`crate::prune_synapse::prune_synapse`] both ask it rather than restating
+/// it, so a rule added here can never reach one entry point and not the other.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when a condition source of a shortfall's
+/// target declares a squash name this crate does not know.
+pub(crate) fn transform_class(
+    before: &CreatureExport,
+    outcome: &CleanupOutcome,
+    bias_folds: &[BiasFold],
+    uncompensated: &[UncompensatedTarget],
+) -> Result<TransformClass, CleanupError> {
+    let mut exact = bias_folds.iter().all(|f| f.exact) && outcome.downgraded_if_neurons.is_empty();
+    for target in uncompensated {
+        exact = exact && shortfall_costs_nothing(before, &outcome.static_if_neurons, target)?;
+    }
+    Ok(if exact {
+        TransformClass::Exact
+    } else {
+        TransformClass::Approximate
+    })
+}
+
+/// Did this shortfall cost the creature nothing at all?
+///
+/// A target named on [`PruneResult::uncompensated`] got no fold, which is
+/// normally the end of any exactness claim. One shape is the exception, and it
+/// is provable from the creature alone: an `IF` whose condition **the creature
+/// itself decided both before and after the cut, the same way**.
+///
+/// The condition's only job is to pick an arm. When [`static_condition_branch`]
+/// answers the same arm for the creature the caller handed in and for the one
+/// cleanup flattened, the pick never moved, so a condition term the removal
+/// took away was never read for anything else — and a term it took out of the
+/// arm the pick *discards* was never read at all. Both cost nothing, and the
+/// flattened `IDENTITY` computes what the `IF` computed on every record.
+///
+/// A term the removal took out of the **surviving** arm is a real loss, and so
+/// is every other shortfall: a point-wise target left without statistics, a
+/// non-`IF` aggregate, an `IF` the rewrite could not flatten because its
+/// condition still varies. All of those answer `false`.
+///
+/// # Errors
+///
+/// Returns [`CleanupError::Creature`] when a condition source of the target
+/// declares a squash name this crate does not know.
+pub(crate) fn shortfall_costs_nothing(
+    before: &CreatureExport,
+    static_if_neurons: &[StaticIfRewrite],
+    target: &UncompensatedTarget,
+) -> Result<bool, CleanupError> {
+    if target.squash != squash_name_from(SquashType::If) {
+        return Ok(false);
+    }
+    // Not flattened means the `IF` still branches on a condition that varies,
+    // so the term it lost is a term the forward pass still reads.
+    let Some(rewrite) = static_if_neurons
+        .iter()
+        .find(|r| r.uuid == target.target_uuid)
+    else {
+        return Ok(false);
+    };
+    // Flattened, but was the arm it settled on the arm the caller's creature
+    // always took? Only the caller's creature can answer that, and only when
+    // it decided the condition itself.
+    if static_condition_branch(before, &target.target_uuid)? != Some(rewrite.branch) {
+        return Ok(false);
+    }
+    // The arm that survives is the one the flatten kept — an untyped edge
+    // belongs to the positive arm, the same reading the flatten takes.
+    let survives = match rewrite.branch {
+        SynapseType::Negative => target.role == SynapseType::Negative,
+        _ => matches!(target.role, SynapseType::Positive | SynapseType::Standard),
+    };
+    Ok(!survives)
 }
 
 /// What one target's compensation came to.
@@ -684,7 +872,8 @@ pub(crate) struct Compensation {
     pub(crate) bias_delta: f64,
     /// Added to the proxy's edge into the target; `0.0` when there is none.
     pub(crate) share: f64,
-    /// True when the folded value is the neuron's activation on every record.
+    /// True when the folded value is what the removed term was worth on every
+    /// record.
     pub(crate) exact: bool,
     /// Variance the compensation could not carry, when it is derivable.
     pub(crate) residual_variance: Option<f64>,
@@ -749,6 +938,230 @@ pub(crate) fn dropped_mean(
     Some(weight_sum * stats?.mean_activation)
 }
 
+/// May a target carrying `target_squash` take a bias fold for the term the
+/// removal took away?
+///
+/// One rule, two callers — [`prune_neuron`] and
+/// [`crate::prune_synapse::prune_synapse`] — so a neuron removal and a synapse
+/// removal can never disagree about what a target is owed (Ockham #196).
+///
+/// - A **point-wise** squash computes `squash(bias + Σ w·a)`, so the bias is
+///   exactly where the removed term sat. Always foldable.
+/// - An **aggregate** reads its inward terms as a set — the smallest, the
+///   largest, the mean, the root of the sum of squares — and no number in its
+///   bias stands in for one of them while the set is non-empty. With
+///   `remaining_inward_edges == 0` the forward pass evaluates it from its bias
+///   alone (`prune_cleanup::zero_inward_activation`), which is a
+///   point-wise reading again, so the fold is the closest creature there is.
+/// - `IF` is never foldable, whatever it is left with: rule 12 means an `IF`
+///   short an edge is short a **role**, and that is
+///   [`crate::prune_cleanup::IfRepair`]'s repair to make, not a number's.
+pub(crate) fn fold_policy(target_squash: SquashType, remaining_inward_edges: usize) -> bool {
+    if target_squash == SquashType::If {
+        return false;
+    }
+    if target_squash.is_aggregate() {
+        return remaining_inward_edges == 0;
+    }
+    true
+}
+
+/// How many synapses still point at `uuid`.
+///
+/// Counted on the **cut** creature, because `fold_policy` asks what the
+/// target is left with, not what it started from.
+pub(crate) fn inward_edge_count(creature: &CreatureExport, uuid: &str) -> usize {
+    creature
+        .synapses
+        .iter()
+        .filter(|s| s.to_uuid == uuid)
+        .count()
+}
+
+/// What one target's compensation came to, or why it got none.
+///
+/// Both arms are reported: a fold lands on [`PruneResult::bias_folds`] and a
+/// refusal on [`PruneResult::uncompensated`], so nothing a target lost is ever
+/// silent.
+pub(crate) enum TargetOutcome {
+    /// The fold that was applied, and the squash rewrite it needed to be
+    /// readable at all — `Some` only for the `HYPOTv2` target of
+    /// [`zero_edge_rewrite`].
+    ///
+    /// The rewrite is reported for the same reason
+    /// [`crate::prune_rewrite::convert_single_edge_aggregates`] reports its
+    /// own: a caller must never have to *discover* that the squash it sent in
+    /// is not the squash it got back.
+    Folded(BiasFold, Option<SquashConversion>),
+    /// The target that got nothing, and why.
+    Uncompensated(UncompensatedTarget),
+}
+
+/// The squash a target with **no** inward edge must be rewritten to for its
+/// bias to be read at all.
+///
+/// `HYPOTv2` computes `sqrt(Σ(bias + w·a)²)`, so its bias lives inside a
+/// per-synapse square: with no synapse left the forward pass answers `0` and
+/// never reads the bias, and a fold into it would change nothing. `ABSOLUTE`
+/// over the folded bias computes `|bias + W·x|`, which is what `HYPOTv2`
+/// computed with the term still there. Every other form reads its bias with
+/// nothing inward, so none of them is rewritten.
+fn zero_edge_rewrite(squash: SquashType) -> Option<SquashType> {
+    match squash {
+        SquashType::HypotenuseV2 => Some(SquashType::Absolute),
+        _ => None,
+    }
+}
+
+/// Compensate a target the cut left with **no inward edge**, or say why it
+/// could not be — the one home of the Ockham #196 rule's *action*, as
+/// [`fold_policy`] is the one home of its decision.
+///
+/// [`prune_neuron`] and [`crate::prune_synapse::prune_synapse`] both call it,
+/// so the fold a neuron removal applies and the fold a synapse removal applies
+/// cannot drift apart.
+///
+/// `W` is the total weight the removed source carried into the target and `x`
+/// is what that source was worth — the value the creature fixes, which no
+/// statistic may override, or the mean the caller measured. The term the
+/// target lost is `W · x`, read the way that squash reads one term (see the
+/// table in the module documentation), and a supplied proxy is not used **for
+/// this target**: a share can only land on an edge into it, and the cut left
+/// none. The proxy is still *checked* — a request this crate cannot make sense
+/// of is refused whether or not the compensation would have used it.
+///
+/// `W` is a **sum** over the readable key, which is what `MINIMUM`, `MAXIMUM`
+/// and `MEAN` read: each takes `w·a` per term, so one term written as two rows
+/// is the same term twice. `HYPOT` squares each row separately, so `|W·μ|`
+/// answers for it only where the key holds one row — which is every canonical
+/// creature, a second row for a pair being a `TypedDuplicateSynapse` the
+/// shared validator rejects.
+///
+/// # Errors
+///
+/// Returns [`PruneError::Cleanup`] when `target_uuid` names no neuron of
+/// `cut` — a fold that could not land is refused rather than reported as
+/// applied.
+pub(crate) fn fold_bare_aggregate(
+    cut: &mut CreatureExport,
+    target_uuid: &str,
+    role: SynapseType,
+    squash: SquashType,
+    weight_sum: f64,
+    invariant_value: Option<f64>,
+    stats: Option<&PruneStats>,
+) -> Result<TargetOutcome, PruneError> {
+    // A share has nowhere to land here, so the proxy is dropped before the
+    // arithmetic rather than after it.
+    let mean_only = stats.map(|s| PruneStats {
+        mean_activation: s.mean_activation,
+        variance: s.variance,
+        proxy: None,
+    });
+    let Some(compensation) = compensate(invariant_value, mean_only.as_ref(), weight_sum) else {
+        return Ok(TargetOutcome::Uncompensated(UncompensatedTarget {
+            target_uuid: target_uuid.to_string(),
+            role,
+            weight_sum,
+            squash: squash_name_from(squash),
+            reason: UncompensatedReason::NoStatistics,
+            // No statistic and no structural value is exactly the case
+            // `dropped_mean` answers `None` for (Ockham #197).
+            dropped_mean: dropped_mean(invariant_value, stats, weight_sum),
+        }));
+    };
+
+    // `HYPOT` reads one term as `|w·a|`, so a **magnitude** is what folds: the
+    // residual is `Var(|W·a|)`, which the caller's `σ²` does not describe, and
+    // none is claimed rather than one that cannot be justified. `HYPOTv2` is
+    // not that case — its fold is linear in the sum, so the residual keeps the
+    // `W² σ²` shape every other fold reports, and the magnitude it is read
+    // through afterwards is the squash's, exactly as `LOGISTIC` is on the
+    // point-wise path.
+    let folds_a_magnitude = squash == SquashType::Hypotenuse;
+    let bias_delta = if folds_a_magnitude {
+        compensation.bias_delta.abs()
+    } else {
+        compensation.bias_delta
+    };
+    let residual_variance = if folds_a_magnitude && !compensation.exact {
+        None
+    } else {
+        compensation.residual_variance
+    };
+
+    add_to_bias(cut, target_uuid, bias_delta)?;
+    let conversion = match zero_edge_rewrite(squash) {
+        Some(rewrite) => {
+            set_squash(cut, target_uuid, rewrite)?;
+            Some(SquashConversion {
+                uuid: target_uuid.to_string(),
+                from: squash_name_from(squash),
+                to: squash_name_from(rewrite),
+            })
+        }
+        None => None,
+    };
+    Ok(TargetOutcome::Folded(
+        BiasFold {
+            target_uuid: target_uuid.to_string(),
+            weight_sum,
+            delta: bias_delta,
+            exact: compensation.exact,
+            residual_variance,
+        },
+        conversion,
+    ))
+}
+
+/// Add `delta` to `uuid`'s bias, or refuse.
+///
+/// The single home of that edit, so a fold that names a neuron the creature
+/// does not carry fails loudly instead of quietly moving nothing while the
+/// result claims it moved.
+///
+/// # Errors
+///
+/// Returns [`PruneError::Cleanup`] when `uuid` names no neuron.
+pub(crate) fn add_to_bias(
+    creature: &mut CreatureExport,
+    uuid: &str,
+    delta: f64,
+) -> Result<(), PruneError> {
+    neuron_mut(creature, uuid)?.bias += delta;
+    Ok(())
+}
+
+/// Rewrite `uuid`'s declared squash, or refuse.
+///
+/// # Errors
+///
+/// Returns [`PruneError::Cleanup`] when `uuid` names no neuron.
+fn set_squash(
+    creature: &mut CreatureExport,
+    uuid: &str,
+    squash: SquashType,
+) -> Result<(), PruneError> {
+    neuron_mut(creature, uuid)?.squash = Some(squash_name_from(squash).to_string());
+    Ok(())
+}
+
+/// The neuron `uuid` names, or the endpoint error cleanup would raise for it.
+fn neuron_mut<'a>(
+    creature: &'a mut CreatureExport,
+    uuid: &str,
+) -> Result<&'a mut crate::creature::NeuronExport, PruneError> {
+    creature
+        .neurons
+        .iter_mut()
+        .find(|n| n.uuid == uuid)
+        .ok_or_else(|| {
+            PruneError::Cleanup(CleanupError::UnknownEndpoint {
+                uuid: uuid.to_string(),
+            })
+        })
+}
+
 /// Refuse anything that is not a hidden neuron of this creature.
 fn classify_target(creature: &CreatureExport, uuid: &str) -> Result<(), PruneError> {
     if is_observation_uuid(creature, uuid) {
@@ -796,7 +1209,7 @@ fn structural_activation(creature: &CreatureExport, uuid: &str) -> Result<Option
 /// The squash a target activates with, by UUID.
 ///
 /// A constant emits its bias whatever it declares, so it reads as `IDENTITY` —
-/// the same reading [`cleanup_creature`] takes, and a constant can never be a
+/// the same reading cleanup takes, and a constant can never be a
 /// target anyway.
 pub(crate) fn target_squash(
     creature: &CreatureExport,
@@ -831,7 +1244,7 @@ pub(crate) fn squash_of(neuron: &crate::creature::NeuronExport) -> Result<Squash
 /// tell roles apart: an `IF` holds a sum per role, every other squash sums
 /// whatever reaches it, so two roles into one of those are the same term
 /// written twice and are summed here. That is the same reading
-/// [`cleanup_creature`] takes of an edge's identity, so a compensation and a
+/// cleanup takes of an edge's identity, so a compensation and a
 /// canonicalisation can never disagree about what one term is.
 fn outward_keys(
     creature: &CreatureExport,
