@@ -51,6 +51,10 @@ wasm-bindgen = "0.2.127"
 
 [dev-dependencies]
 tempfile = "3"
+# Issue #677 - criterion forces the unmaintained `tinytemplate` into the graph
+# (non-optional in 0.8.2, so no feature selection drops it). It is a
+# dev-dependency and stays off every shipped path; SECURITY.md "Unmaintained
+# transitive crates" records the exception and the bats gate that holds it.
 criterion = { version = "0.8", features = ["html_reports"] }
 
 # Issue #152 - opt-in Criterion harness for core hot paths. `harness = false`

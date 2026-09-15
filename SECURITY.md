@@ -210,6 +210,29 @@ into all three channels and add it to the table above in the same change.
 is missing from this table, or while the table names a lockfile `security.yml`
 does not audit.
 
+## Unmaintained transitive crates
+
+A crate can be sound, pinned and audited and still be *unmaintained* — no
+release for years, its issue queue unanswered. `cargo audit` only sees that
+once RustSec files an advisory, and `cargo deny` can only ban a crate the graph
+can do without. Neither helps when a maintained dependency forces an
+unmaintained one on us, so those exceptions are recorded here and fenced by
+`tests/scripts/unmaintained_crate_exceptions.bats`.
+
+The fence is the same one that sets the severity: an unmaintained crate is
+tolerable while it reaches `cargo test`/`cargo bench` on a developer's machine
+and nothing else. The test walks the graph cargo resolves and fails if the
+crate is reachable from a workspace member through a normal or build edge —
+that is, if it has been promoted onto a path this repository ships.
+
+| Crate | Carrier | Why it cannot be removed | Exit condition |
+| --- | --- | --- | --- |
+| `tinytemplate` 1.2.1 (published 2021-03-04; "Project dead?" and an unanswered CVE report open upstream) | `criterion` (dev-dependency of `neat-core`, benchmark harness) | `criterion 0.8.2` declares `tinytemplate` non-optional, so no feature selection drops it. Turning off `html_reports` changes nothing but the loss of local HTML reports (Issue #677) | `criterion` makes the dependency optional or drops it |
+
+An exception ends by deletion, not by decay: the test asserts each carrier
+still forces its crate unconditionally, so the run that makes the dependency
+optional upstream turns the gate red and the row — and the crate — go with it.
+
 ## Emergency quarantine override
 
 This is the single authoritative home for the emergency override / out-of-cycle
