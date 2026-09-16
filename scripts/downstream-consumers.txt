@@ -1,14 +1,24 @@
 # Registered downstream consumers of neat-core (Issue #644).
 #
-# One GitHub repository per line, `owner/name`. Each is a Cargo workspace whose
-# crate declares `neat-core = { path = "../../NEAT-AI-core/neat-core" }`, so the
-# repository name is also the sibling directory that path dependency resolves
-# through. `scripts/check-downstream-consumers.sh` compiles every entry against
-# the candidate core on every pull request: a change that stops one of them
+# One GitHub repository per line, `owner/name`. Each is a Cargo workspace that
+# depends on neat-core one of two ways: through the
+# `neat-core = { path = "../../NEAT-AI-core/neat-core" }` dependency — the
+# repository name is then also the sibling directory that path resolves
+# through — or, once it has moved, through a git-tag pin
+# `neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v<semver>" }`
+# that `scripts/family-pins.sh` moves to the latest release in the consumer's
+# own PR (Issue #681).
+#
+# `scripts/check-downstream-consumers.sh` compiles every entry against the
+# candidate core on every pull request. A path-dependency consumer resolves it
+# through the symlinked core; a git-tag consumer has a
+# `[patch."<its git url>"] neat-core = { path = "<candidate>/neat-core" }`
+# appended to the clone's root manifest, so the pin it names is overridden and
+# the candidate core is what compiles. A change that stops one of them
 # compiling cannot merge until that consumer is migrated first — see
 # RELEASING.md, "Changing or removing public API: the three-phase flow".
 #
-# Add a repository here in the same PR that gives it the path dependency. A
+# Add a repository here in the same PR that gives it the dependency. A
 # consumer that is not listed is not protected.
 stSoftwareAU/NEAT-AI-scorer
 stSoftwareAU/NEAT-AI-Backpropagation

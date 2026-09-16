@@ -136,18 +136,34 @@ per-record scoring wrappers.
 
 **The consumer list is a registry, not prose.**
 [`scripts/downstream-consumers.txt`](scripts/downstream-consumers.txt) names
-every repository that takes the `../../NEAT-AI-core/neat-core` path
-dependency.
+every repository that depends on this crate — through the
+`../../NEAT-AI-core/neat-core` path dependency, or through a git-tag pin
+`neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v<semver>" }`
+once it has moved (Issue #681).
 [`scripts/check-downstream-consumers.sh`](scripts/check-downstream-consumers.sh)
 clones each of them at `Develop` beside the candidate core and runs
 `cargo check --workspace --all-targets`; the `downstream-consumers` job in
 `ci.yml` runs it on every pull request and is a required check on `Develop`,
 and `tests/scripts/check_downstream_consumers.bats` pins the gate's own
 behaviour. A consumer that no longer compiles fails the core PR by name. A
-repository is added to the registry in the same PR that gives it the path
+repository is added to the registry in the same PR that gives it the
 dependency — an unlisted consumer is an unprotected one. Locally,
 `scripts/check-downstream-consumers.sh --workspace ..` compiles the sibling
 checkouts you already have against the core you are editing.
+
+**A git-tag pin is overridden, not trusted.** A consumer that pins a release
+would otherwise compile that release and report the candidate core green
+without ever looking at it, so in clone mode the gate appends
+`[patch."<the git url the consumer declares>"] neat-core = { path = "<candidate>/neat-core" }`
+to the clone's root manifest before `cargo check`. The patch is keyed by the
+URL that consumer actually declares; a consumer whose manifest already carries
+a `[patch]` for `neat-core` fails the gate rather than compiling a core this
+repository cannot identify. `--workspace` mode writes nothing into the sibling
+checkouts you already have — it is the local shape for consumers still on the
+path dependency. Consumers keep their pins current with
+[`scripts/family-pins.sh`](scripts/family-pins.sh), the canonical helper each
+one copies byte-for-byte and runs in its own PR — see
+[Canonical `family-pins.sh`](README.md#canonical-family-pinssh-issue-681).
 
 Why the order matters: `0.12.0` (#633) shipped phase 3 with phase 1 folded into
 the same PR and no phase 2 at all. It was signalled correctly and `version-gate`
