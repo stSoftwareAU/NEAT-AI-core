@@ -22,12 +22,17 @@ setup() {
   export RUNLIB_SHIM_LOG="${WORK}/cargo-invocations.log"
   export RUNLIB_SHIM_RUSTFLAGS="${WORK}/cargo-rustflags.log"
   export RUNLIB_SHIM_METADATA="${WORK}/metadata.json"
+  export RUNLIB_SHIM_GRAPH_METADATA="${WORK}/graph-metadata.json"
   export RUNLIB_SHIM_ARTEFACTS="${WORK}/artefacts.txt"
+  export RUNLIB_SHIM_RUSTUP_LOG="${WORK}/rustup-invocations.log"
+  export RUNLIB_SHIM_RUSTC_LOG="${WORK}/rustc-invocations.log"
+  export RUNLIB_SHIM_RUSTUP_STATE="${WORK}/rustup-state"
+  export RUNLIB_SHIM_CARGO_TOOLCHAIN="${WORK}/cargo-toolchain.log"
   OUT="${WORK}/stdout.txt"
   ERR="${WORK}/stderr.txt"
   TARGET_DIR="${REPO}/target"
 
-  mkdir -p "$REPO" "$SHIM_DIR" "$CARGO_HOME"
+  mkdir -p "$REPO" "$SHIM_DIR" "$CARGO_HOME" "$RUNLIB_SHIM_RUSTUP_STATE"
   : > "$RUNLIB_SHIM_ARTEFACTS"
   write_shims
   export PATH="${SHIM_DIR}:${PATH}"
@@ -47,10 +52,23 @@ set -euo pipefail
 echo "$*" >> "$RUNLIB_SHIM_LOG"
 case "${1:-}" in
   metadata)
-    cat "$RUNLIB_SHIM_METADATA"
+    # `--no-deps` is the single-member call; everything else is the resolved
+    # dependency graph the toolchain gate reads, served from its own fixture
+    # when a test wrote one.
+    case " $* " in
+      *" --no-deps "*) cat "$RUNLIB_SHIM_METADATA" ;;
+      *)
+        if [ -f "$RUNLIB_SHIM_GRAPH_METADATA" ]; then
+          cat "$RUNLIB_SHIM_GRAPH_METADATA"
+        else
+          cat "$RUNLIB_SHIM_METADATA"
+        fi
+        ;;
+    esac
     ;;
   build)
     echo "${RUSTFLAGS-<unset>}" > "$RUNLIB_SHIM_RUSTFLAGS"
+    echo "${RUSTUP_TOOLCHAIN-<unset>}" > "$RUNLIB_SHIM_CARGO_TOOLCHAIN"
     if [ "${RUNLIB_SHIM_BUILD_FAILS:-0}" = "1" ]; then
       echo "shim: compilation failed" >&2
       exit 1
@@ -68,13 +86,58 @@ case "${1:-}" in
     ;;
 esac
 SHIM
+  # Every rustup invocation is logged, so "no rustup call on a pass" is an
+  # assertion over an empty log. Installing a toolchain leaves a marker the
+  # rustc shim reads, which is how "the pinned toolchain was not installed
+  # until rustup installed it" is modelled without a network.
   cat > "${SHIM_DIR}/rustup" <<'SHIM'
 #!/usr/bin/env bash
+set -euo pipefail
+echo "$*" >> "$RUNLIB_SHIM_RUSTUP_LOG"
+if [ "${RUNLIB_SHIM_RUSTUP_FAILS:-0}" = "1" ]; then
+  echo "shim: rustup failed" >&2
+  exit 1
+fi
+case "${1:-}" in
+  update)
+    : > "${RUNLIB_SHIM_RUSTUP_STATE}/updated"
+    : > "${RUNLIB_SHIM_RUSTUP_STATE}/installed-${2:-}"
+    ;;
+  default)
+    : > "${RUNLIB_SHIM_RUSTUP_STATE}/installed-${2:-}"
+    ;;
+  toolchain)
+    if [ "${2:-}" = "install" ]; then
+      : > "${RUNLIB_SHIM_RUSTUP_STATE}/installed-${3:-}"
+    fi
+    ;;
+esac
 exit 0
 SHIM
+  # RUNLIB_SHIM_RUSTC_NEEDS names a toolchain this rustc cannot run without —
+  # a rustup proxy whose toolchain is not installed. RUSTUP_TOOLCHAIN is
+  # honoured as rustup's proxies honour it, and RUNLIB_SHIM_RUSTC_AFTER_UPDATE
+  # is what the toolchain reports once `rustup update` has run.
   cat > "${SHIM_DIR}/rustc" <<'SHIM'
 #!/usr/bin/env bash
-echo "rustc ${RUNLIB_SHIM_RUSTC_VERSION:-1.92.0} (0000000 2026-01-01)"
+echo "$*" >> "$RUNLIB_SHIM_RUSTC_LOG"
+state="${RUNLIB_SHIM_RUSTUP_STATE:-}"
+needs="${RUNLIB_SHIM_RUSTC_NEEDS:-}"
+if [ -n "$needs" ] && [ ! -e "${state}/installed-${needs}" ]; then
+  echo "error: toolchain '${needs}' is not installed" >&2
+  exit 1
+fi
+version="${RUNLIB_SHIM_RUSTC_VERSION:-1.92.0}"
+if [ -n "${RUNLIB_SHIM_RUSTC_AFTER_UPDATE:-}" ] && [ -e "${state}/updated" ]; then
+  version="$RUNLIB_SHIM_RUSTC_AFTER_UPDATE"
+fi
+if [ -n "${RUSTUP_TOOLCHAIN:-}" ]; then
+  version="$RUSTUP_TOOLCHAIN"
+fi
+echo "rustc ${version} (0000000 2026-01-01)"
+if [ "${1:-}" = "-vV" ]; then
+  echo "host: x86_64-unknown-linux-gnu"
+fi
 SHIM
   chmod +x "${SHIM_DIR}/cargo" "${SHIM_DIR}/rustup" "${SHIM_DIR}/rustc"
 }
@@ -194,6 +257,64 @@ minimal_path() {
 
 cargo_invocations() {
   if [ -f "$RUNLIB_SHIM_LOG" ]; then wc -l < "$RUNLIB_SHIM_LOG" | tr -d ' '; else echo 0; fi
+}
+
+rustup_invocations() {
+  if [ -f "$RUNLIB_SHIM_RUSTUP_LOG" ]; then wc -l < "$RUNLIB_SHIM_RUSTUP_LOG" | tr -d ' '; else echo 0; fi
+}
+
+rustc_invocations() {
+  if [ -f "$RUNLIB_SHIM_RUSTC_LOG" ]; then wc -l < "$RUNLIB_SHIM_RUSTC_LOG" | tr -d ' '; else echo 0; fi
+}
+
+# The `cargo metadata` reply for the *resolved* graph: one dependency package
+# per argument, carrying that `rust_version`. `null` writes a package that
+# declares none, which is what most of crates.io looks like.
+write_graph_metadata() {
+  local packages="" version index=0
+  for version in "$@"; do
+    index=$((index + 1))
+    [ -z "$packages" ] || packages="${packages},"
+    if [ "$version" = "null" ]; then
+      packages="${packages}{\"name\":\"dep${index}\",\"version\":\"1.0.0\",\"rust_version\":null}"
+    else
+      packages="${packages}{\"name\":\"dep${index}\",\"version\":\"1.0.0\",\"rust_version\":\"${version}\"}"
+    fi
+  done
+  cat > "$RUNLIB_SHIM_GRAPH_METADATA" <<JSON
+{
+  "packages": [${packages}],
+  "target_directory": "${TARGET_DIR}"
+}
+JSON
+}
+
+# `[toolchain] channel` at the repository root — a pinned sibling.
+write_toolchain_pin() {
+  cat > "${REPO}/rust-toolchain.toml" <<TOML
+[toolchain]
+channel = "$1"
+TOML
+}
+
+# A PATH carrying the shims, jq and the host utilities but **no** `rustup` at
+# all. Removing the shim alone is not enough: most CI images carry a real
+# rustup, so a test asserting "the script never reached for rustup" would
+# quietly exercise the host's one — and `rustup update stable` for real.
+shim_path_without_rustup() {
+  local dir="${WORK}/no-rustup" resolved
+  if [ ! -d "$dir" ]; then
+    mkdir -p "$dir"
+    cp "${SHIM_DIR}/cargo" "${SHIM_DIR}/rustc" "$dir/"
+    chmod +x "${dir}/cargo" "${dir}/rustc"
+    resolved="$(command -v jq 2>/dev/null || true)"
+    [ -z "$resolved" ] || ln -sf "$resolved" "${dir}/jq"
+  fi
+  printf '%s:%s' "$dir" "$(minimal_path)"
+}
+
+invoke_with_path() {
+  ( cd "$REPO" && PATH="$1" "$SCRIPT" > "$OUT" 2> "$ERR" )
 }
 
 # --- install shapes ---------------------------------------------------------
@@ -511,14 +632,19 @@ JSON
   [ ! -e "${CARGO_HOME}/bin/demo_app" ]
 }
 
+# Issue #700 made the remedy part of the gate: below the requirement with a
+# rustup to hand the script updates rather than refusing, so the refusal this
+# names is the one left — no rustup on PATH at all.
 @test "a rustc below the manifest MSRV fails loud without installing" {
   write_manifest "demo_app" "1.2.3" bin 'rust-version = "1.92.0"'
   write_metadata "demo_app" "1.2.3" bin
   mkdir -p "${REPO}/target"
   export RUNLIB_SHIM_RUSTC_VERSION="1.80.0"
-  run invoke
+  run invoke_with_path "$(shim_path_without_rustup)"
   [ "$status" -ne 0 ]
-  run grep -F "below the crate MSRV 1.92.0" "$ERR"
+  run grep -F "1.92.0" "$ERR"
+  [ "$status" -eq 0 ]
+  run grep -F "https://rustup.rs" "$ERR"
   [ "$status" -eq 0 ]
   [ ! -e "${CARGO_HOME}/bin/demo_app" ]
   [ -d "${REPO}/target" ]
@@ -540,6 +666,197 @@ JSON
   run invoke
   [ "$status" -eq 0 ]
   [ -x "${CARGO_HOME}/bin/demo_app" ]
+}
+
+# --- the dependency-graph toolchain gate (Issue #700) -----------------------
+#
+# The requirement is the highest `rust-version` across the *resolved* graph,
+# not the crate's own: the trigger was `serial_test@4.0.1 requires rustc
+# 1.93.1` stopping a Discovery build where no family crate declares
+# `rust-version` at all. The rustup shim logs every invocation, so "no rustup
+# call" and "exactly this rustup call" are assertions over that log.
+
+@test "a rustc below the graph maximum with no rustup on PATH fails loud" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.80.0" "1.93.1" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke_with_path "$(shim_path_without_rustup)"
+  [ "$status" -ne 0 ]
+  run grep -F "1.93.1" "$ERR"
+  [ "$status" -eq 0 ]
+  run grep -F "https://rustup.rs" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "a rustc equal to the graph maximum builds" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.80.0" "1.93.1" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.93.1"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "a rustc above the graph maximum builds without invoking rustup" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.98.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "the crate's own rust-version above every dependency is the requirement" {
+  write_manifest "demo_app" "1.2.3" bin 'rust-version = "1.95.0"'
+  write_metadata "demo_app" "1.2.3" bin
+  mkdir -p "${REPO}/target"
+  write_graph_metadata "1.93.1" "1.80.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.94.0"
+  run invoke_with_path "$(shim_path_without_rustup)"
+  [ "$status" -ne 0 ]
+  run grep -F "1.95.0" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+}
+
+# Lexically "1.9" sorts above "1.10"; numerically it does not, and `1.10` is
+# the same requirement as `1.10.0`.
+@test "a two-part rust_version is compared numerically, not as text" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.9" "1.10"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.9.9"
+  run invoke_with_path "$(shim_path_without_rustup)"
+  [ "$status" -ne 0 ]
+  run grep -F "1.10" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+}
+
+@test "a matching stamp runs no cargo, no rustc and no rustup at all" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.99.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.99.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  : > "$RUNLIB_SHIM_LOG"
+  : > "$RUNLIB_SHIM_RUSTC_LOG"
+  : > "$RUNLIB_SHIM_RUSTUP_LOG"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ "$(cargo_invocations)" -eq 0 ]
+  [ "$(rustc_invocations)" -eq 0 ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "a graph declaring no rust_version at all builds on any rustc" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata null null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.10.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "an unpinned crate below the requirement is updated and then builds" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  export RUNLIB_SHIM_RUSTC_AFTER_UPDATE="1.93.1"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  run grep -Fx "update stable" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "an unpinned crate still below after the update fails loud" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke
+  [ "$status" -ne 0 ]
+  run grep -F "1.93.1" "$ERR"
+  [ "$status" -eq 0 ]
+  run grep -F "https://rustup.rs" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+}
+
+@test "a pin above the requirement passes with no rustup call" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.98.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "a pin below the requirement is overridden for this run, not rewritten" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.92.0"
+  local before
+  before="$(cat "${REPO}/rust-toolchain.toml")"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  run grep -Fx "toolchain install 1.93.1" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$RUNLIB_SHIM_CARGO_TOOLCHAIN")" = "1.93.1" ]
+  [ "$(cat "${REPO}/rust-toolchain.toml")" = "$before" ]
+  # Exactly one line names the pin, the requirement and the file to bump.
+  [ "$(grep -c -e "1.92.0.*1.93.1.*rust-toolchain.toml" "$ERR")" -eq 1 ]
+}
+
+@test "a pinned toolchain that is not installed is installed before the build" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.98.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.98.0"
+  export RUNLIB_SHIM_RUSTC_NEEDS="1.98.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  run grep -Fx "toolchain install 1.98.0" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "a rustup update that fails exits non-zero naming the required version" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  export RUNLIB_SHIM_RUSTUP_FAILS="1"
+  run invoke
+  [ "$status" -ne 0 ]
+  run grep -F "1.93.1" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+}
+
+# `rust-toolchain.toml` is repository input, so what it names reaches rustup
+# only as a plain toolchain name.
+@test "a channel outside the toolchain-name allowlist is refused before rustup runs" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin 'stable; touch /tmp/runlib-pwned'
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke
+  [ "$status" -ne 0 ]
+  run grep -F "not a toolchain name" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$(rustup_invocations)" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
 }
 
 # --- RUSTFLAGS is the caller's ----------------------------------------------
@@ -993,12 +1310,15 @@ SHIM
   [ "$status" -eq 0 ]
 }
 
-# rustup is never invoked by the script; rustc is. Requiring the one it does
-# not use rejected a working distro-packaged toolchain.
-@test "a toolchain without rustup still installs, since the script never runs rustup" {
+# rustup is not a precondition; rustc is. Requiring the one the script only
+# reaches for when the toolchain is missing or too old rejected a working
+# distro-packaged toolchain (Issue #700 keeps that, and asks rustup for a
+# newer toolchain only when the graph demands one).
+@test "a satisfied toolchain without rustup still installs" {
   make_crate "demo_app" "1.2.3" bin
-  rm -f "${SHIM_DIR}/rustup"
-  run invoke
+  write_graph_metadata "1.90.0" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke_with_path "$(shim_path_without_rustup)"
   [ "$status" -eq 0 ]
   [ -x "${CARGO_HOME}/bin/demo_app" ]
 }
