@@ -2108,7 +2108,9 @@ fn twelve_identity_neurons_prune_one_by_one_without_moving_the_mean_output() {
     let original = golden_twelve_identity();
     // The oracle: an `IDENTITY` output is linear in what reaches it, so
     // replacing a hidden neuron by its own mean must leave the **mean** output
-    // exactly where it was, at every one of the twelve steps.
+    // exactly where it was, at every one of the twelve steps — and so must the
+    // Issue #688 splice that retires the relays the first step leaves behind.
+    // The oracle is asserted at all twelve steps either way.
     let baseline = mean_outputs(&original);
     let means: Vec<f64> = (0..12)
         .map(|k| sampled_mean(&original, &format!("h-{k:02}")))
@@ -2118,36 +2120,35 @@ fn twelve_identity_neurons_prune_one_by_one_without_moving_the_mean_output() {
     let mut spliced: Vec<String> = Vec::new();
     for k in 0..12 {
         let uuid = format!("h-{k:02}");
-        if !current.neurons.iter().any(|n| n.uuid == uuid) {
+        if current.neurons.iter().any(|n| n.uuid == uuid) {
+            let result = prune_neuron(&current, &uuid, Some(&mean_only(means[k])))
+                .unwrap_or_else(|e| panic!("step {k}: pruning {uuid} failed: {e}"));
+            assert_eq!(
+                result.uncompensated,
+                vec![],
+                "step {k}: a target was left uncompensated"
+            );
+            spliced.extend(result.spliced_neurons.iter().cloned());
+            current = result.creature;
+        } else {
             // Issue #688: every neuron here is a one-in, one-out `IDENTITY`
-            // relay, so the first step's cleanup splices the survivors out —
-            // exactly, and for nothing. There is no step left to take, and the
-            // mean assertion below has already been made against the creature
-            // that splice produced.
+            // relay, so an earlier step's cleanup spliced this one out. The
+            // oracle is unchanged and is still asserted below at this step —
+            // a splice that moved the mean output is exactly what that catches.
             assert!(
                 spliced.contains(&uuid),
                 "step {k}: {uuid} disappeared without being spliced"
             );
-            continue;
         }
-        let result = prune_neuron(&current, &uuid, Some(&mean_only(means[k])))
-            .unwrap_or_else(|e| panic!("step {k}: pruning {uuid} failed: {e}"));
-        spliced.extend(result.spliced_neurons.iter().cloned());
-        assert_valid(&format!("golden step {k}"), &result.creature);
-        assert_eq!(
-            result.uncompensated,
-            vec![],
-            "step {k}: a target was left uncompensated"
-        );
 
-        let after = mean_outputs(&result.creature);
+        assert_valid(&format!("golden step {k}"), &current);
+        let after = mean_outputs(&current);
         for (index, (got, want)) in after.iter().zip(baseline.iter()).enumerate() {
             assert!(
                 (got - want).abs() <= 1e-6 * (1.0 + want.abs()),
                 "step {k}: mean output {index} moved from {want} to {got}"
             );
         }
-        current = result.creature;
     }
 
     assert!(

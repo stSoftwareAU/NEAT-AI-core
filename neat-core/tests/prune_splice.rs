@@ -113,6 +113,26 @@ fn role(creature: &CreatureExport, from_uuid: &str, to_uuid: &str) -> SynapseTyp
         .unwrap_or_else(|| panic!("no synapse {from_uuid} -> {to_uuid}"))
 }
 
+/// The weight of one `(from, to, role)` triple — the readable key at an `IF`,
+/// where a pair carries a row per role.
+fn role_weight(
+    creature: &CreatureExport,
+    from_uuid: &str,
+    to_uuid: &str,
+    role: SynapseType,
+) -> f64 {
+    creature
+        .synapses
+        .iter()
+        .find(|s| {
+            s.from_uuid == from_uuid
+                && s.to_uuid == to_uuid
+                && parse_synapse_type(s.synapse_type.as_deref()) == role
+        })
+        .unwrap_or_else(|| panic!("no synapse {from_uuid} -> {to_uuid} ({role:?})"))
+        .weight
+}
+
 fn assert_close(name: &str, actual: f64, expected: f64) {
     assert!(
         (actual - expected).abs() <= 1e-9 * (1.0 + expected.abs()),
@@ -185,21 +205,26 @@ const COLLIDING_RELAY: &str = r#"{
   ]
 }"#;
 
-/// The same collision into a `MEAN`, which reads its inward **count**.
-const COLLIDING_MEAN: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-1","bias":0.0,"squash":"IDENTITY"},
-    {"type":"hidden","uuid":"h-m","bias":0.0,"squash":"MEAN"},
-    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":2.0,"fromUUID":"input-0","toUUID":"h-1"},
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-m"},
-    {"weight":3.0,"fromUUID":"h-1","toUUID":"h-m"},
-    {"weight":1.0,"fromUUID":"h-m","toUUID":"output-0"}
-  ]
-}"#;
+/// The same collision into an aggregate whose merge cleanup refuses: the
+/// rewired `input-0 → h-agg` edge lands on one the target already carries.
+fn colliding_aggregate_json(squash: &str) -> String {
+    format!(
+        r#"{{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {{"type":"hidden","uuid":"h-1","bias":0.0,"squash":"IDENTITY"}},
+        {{"type":"hidden","uuid":"h-agg","bias":0.0,"squash":"{squash}"}},
+        {{"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}}
+      ],
+      "synapses":[
+        {{"weight":2.0,"fromUUID":"input-0","toUUID":"h-1"}},
+        {{"weight":1.0,"fromUUID":"input-0","toUUID":"h-agg"}},
+        {{"weight":3.0,"fromUUID":"h-1","toUUID":"h-agg"}},
+        {{"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}}
+      ]
+    }}"#
+    )
+}
 
 /// One inward edge and bias `0` into a `MEAN`: the whole term moves.
 const ONE_EDGE_INTO_MEAN: &str = r#"{
@@ -330,6 +355,11 @@ fn a_chain_of_identity_relays_collapses_in_one_call() {
     assert!(!has_neuron(&outcome.creature, "h-1"));
     assert!(!has_neuron(&outcome.creature, "h-2"));
     assert_eq!(outcome.creature.neurons.len(), 1, "only the output is left");
+    assert_eq!(
+        outcome.creature.synapses.len(),
+        1,
+        "three relayed edges become one"
+    );
     assert_close(
         "the products multiply through the chain",
         weight(&outcome.creature, "input-0", "output-0"),
@@ -378,6 +408,8 @@ fn a_relay_bias_is_folded_into_every_summing_target() {
     let outcome = spliced(&before);
 
     assert_eq!(outcome.spliced_neurons, vec!["h-1".to_string()]);
+    assert_eq!(outcome.creature.neurons.len(), 1);
+    assert_eq!(outcome.creature.synapses.len(), 1);
     assert_close(
         "output-0 bias takes w_out · bias",
         neuron(&outcome.creature, "output-0").bias,
@@ -410,17 +442,24 @@ fn a_rewired_edge_that_collides_at_a_summing_target_merges_by_sum() {
 
 #[test]
 fn a_rewired_edge_that_would_merge_inexactly_keeps_its_relay() {
-    let before = creature(COLLIDING_MEAN);
-    let outcome = spliced(&before);
+    // Both squashes cleanup's own `merge_weights` refuses: a `MEAN` reads its
+    // inward count, a `HYPOT` squares each term, so in neither can one row say
+    // what two said.
+    for squash in ["MEAN", "HYPOT", "HYPOTv2"] {
+        let before = creature(&colliding_aggregate_json(squash));
+        let outcome = spliced(&before);
 
-    assert!(
-        outcome.spliced_neurons.is_empty(),
-        "a MEAN reads its inward count, so the merge would change it: {:?}",
-        outcome.spliced_neurons
-    );
-    assert!(has_neuron(&outcome.creature, "h-1"));
-    assert_same_function("colliding_mean", &before, &outcome.creature);
-    assert_valid("colliding_mean", &outcome.creature);
+        assert!(
+            outcome.spliced_neurons.is_empty(),
+            "{squash}: the merge would change what the target computes: {:?}",
+            outcome.spliced_neurons
+        );
+        assert!(has_neuron(&outcome.creature, "h-1"));
+        assert_eq!(outcome.creature.neurons.len(), before.neurons.len());
+        assert_eq!(outcome.creature.synapses.len(), before.synapses.len());
+        assert_same_function(squash, &before, &outcome.creature);
+        assert_valid(squash, &outcome.creature);
+    }
 }
 
 #[test]
@@ -429,6 +468,8 @@ fn one_unbiased_edge_into_an_aggregate_target_is_spliced() {
     let outcome = spliced(&before);
 
     assert_eq!(outcome.spliced_neurons, vec!["h-1".to_string()]);
+    assert_eq!(outcome.creature.neurons.len(), before.neurons.len() - 1);
+    assert_eq!(outcome.creature.synapses.len(), before.synapses.len() - 1);
     assert_close(
         "the single term moves at the product weight",
         weight(&outcome.creature, "input-0", "h-m"),
@@ -449,6 +490,8 @@ fn two_edges_into_an_aggregate_target_keep_their_relay() {
         outcome.spliced_neurons
     );
     assert!(has_neuron(&outcome.creature, "h-1"));
+    assert_eq!(outcome.creature.neurons.len(), before.neurons.len());
+    assert_eq!(outcome.creature.synapses.len(), before.synapses.len());
     assert_same_function("two_edges_into_mean", &before, &outcome.creature);
 }
 
@@ -463,6 +506,8 @@ fn a_biased_relay_into_an_aggregate_target_is_kept() {
         outcome.spliced_neurons
     );
     assert!(has_neuron(&outcome.creature, "h-1"));
+    assert_eq!(outcome.creature.neurons.len(), before.neurons.len());
+    assert_eq!(outcome.creature.synapses.len(), before.synapses.len());
     assert_same_function("biased_edge_into_mean", &before, &outcome.creature);
 }
 
@@ -472,6 +517,8 @@ fn a_rewired_edge_keeps_the_if_role_it_replaces() {
     let outcome = spliced(&before);
 
     assert_eq!(outcome.spliced_neurons, vec!["h-id".to_string()]);
+    assert_eq!(outcome.creature.neurons.len(), before.neurons.len() - 1);
+    assert_eq!(outcome.creature.synapses.len(), before.synapses.len() - 1);
     assert_eq!(
         role(&outcome.creature, "input-0", "if-1"),
         SynapseType::Negative,
@@ -484,6 +531,93 @@ fn a_rewired_edge_keeps_the_if_role_it_replaces() {
     );
     assert_same_function("relay_into_if_role", &before, &outcome.creature);
     assert_valid("relay_into_if_role", &outcome.creature);
+}
+
+/// `h-id` carries a bias into the **negative** arm of a live `IF`, and the
+/// creature already has a support constant to hang that bias on.
+const BIASED_RELAY_INTO_IF_ROLE: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"constant","uuid":"c-1","bias":1.0},
+    {"type":"hidden","uuid":"h-a","bias":0.1,"squash":"TANH"},
+    {"type":"hidden","uuid":"h-id","bias":0.4,"squash":"IDENTITY"},
+    {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
+    {"weight":2.0,"fromUUID":"input-1","toUUID":"h-id"},
+    {"weight":1.0,"fromUUID":"h-a","toUUID":"if-1","type":"condition"},
+    {"weight":1.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
+    {"weight":3.0,"fromUUID":"h-id","toUUID":"if-1","type":"negative"},
+    {"weight":0.25,"fromUUID":"c-1","toUUID":"output-0"},
+    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+  ]
+}"#;
+
+/// The same shape with no constant anywhere, so there is nothing to carry a
+/// role-scoped bias.
+const BIASED_RELAY_INTO_IF_ROLE_NO_CONSTANT: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-a","bias":0.1,"squash":"TANH"},
+    {"type":"hidden","uuid":"h-id","bias":0.4,"squash":"IDENTITY"},
+    {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
+    {"weight":2.0,"fromUUID":"input-1","toUUID":"h-id"},
+    {"weight":1.0,"fromUUID":"h-a","toUUID":"if-1","type":"condition"},
+    {"weight":1.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
+    {"weight":3.0,"fromUUID":"h-id","toUUID":"if-1","type":"negative"},
+    {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+  ]
+}"#;
+
+#[test]
+fn a_biased_relay_into_an_if_role_rides_a_support_constant() {
+    // An `IF` adds its bias to whichever branch runs, so folding a relay that
+    // feeds one arm into that bias would leak into the other. A bias-1 support
+    // constant on an edge into the same role contributes `w_out · bias` to that
+    // arm and to no other, which is exactly what the relay did.
+    let before = creature(BIASED_RELAY_INTO_IF_ROLE);
+    let outcome = spliced(&before);
+
+    assert_eq!(outcome.spliced_neurons, vec!["h-id".to_string()]);
+    assert_close(
+        "the rewired term reaches the negative arm",
+        role_weight(&outcome.creature, "input-1", "if-1", SynapseType::Negative),
+        6.0,
+    );
+    assert_close(
+        "the relay's bias rides the support constant into the same arm",
+        role_weight(&outcome.creature, "c-1", "if-1", SynapseType::Negative),
+        3.0 * 0.4,
+    );
+    assert_close(
+        "the IF's own bias is untouched",
+        neuron(&outcome.creature, "if-1").bias,
+        0.0,
+    );
+    assert_same_function("biased_relay_into_if_role", &before, &outcome.creature);
+    assert_valid("biased_relay_into_if_role", &outcome.creature);
+}
+
+#[test]
+fn a_biased_relay_into_an_if_role_is_kept_when_no_constant_can_carry_it() {
+    // Minting a constant to retire a hidden neuron trades one node for another,
+    // so the splice declines rather than grow the creature sideways.
+    let before = creature(BIASED_RELAY_INTO_IF_ROLE_NO_CONSTANT);
+    let outcome = spliced(&before);
+
+    assert!(
+        outcome.spliced_neurons.is_empty(),
+        "no constant to carry the role-scoped bias: {:?}",
+        outcome.spliced_neurons
+    );
+    assert!(has_neuron(&outcome.creature, "h-id"));
+    assert_same_function("biased_relay_no_constant", &before, &outcome.creature);
 }
 
 // --- the boundaries ---------------------------------------------------------
@@ -530,24 +664,32 @@ fn a_large_but_finite_rewired_weight_is_spliced() {
     let outcome = spliced(&before);
 
     assert_eq!(outcome.spliced_neurons, vec!["h-1".to_string()]);
-    assert!(
-        weight(&outcome.creature, "input-0", "output-0").is_finite(),
-        "the product is finite, so the splice is exact in f64"
+    assert_close(
+        "the rewired weight is the product, just inside f32's range",
+        weight(&outcome.creature, "input-0", "output-0"),
+        1e38,
     );
+    assert_eq!(outcome.creature.neurons.len(), 1);
+    assert_eq!(outcome.creature.synapses.len(), 1);
     assert_valid("magnitude_finite", &outcome.creature);
 }
 
 #[test]
 fn a_rewired_weight_that_overflows_keeps_its_relay() {
-    let before = magnitude_relay(1e200, 1e200);
-    let outcome = spliced(&before);
+    // Both overflows: past `f32`, which is what the compiled network computes
+    // in, and past `f64`, which is what the creature stores.
+    for (inward, outward) in [(1e30, 1e30), (1e200, 1e200)] {
+        let before = magnitude_relay(inward, outward);
+        let outcome = spliced(&before);
 
-    assert!(
-        outcome.spliced_neurons.is_empty(),
-        "an infinite product is not a weight: {:?}",
-        outcome.spliced_neurons
-    );
-    assert!(has_neuron(&outcome.creature, "h-1"));
+        assert!(
+            outcome.spliced_neurons.is_empty(),
+            "{inward} · {outward} is not a weight the forward pass can carry: {:?}",
+            outcome.spliced_neurons
+        );
+        assert!(has_neuron(&outcome.creature, "h-1"));
+        assert_same_function("magnitude_overflow", &before, &outcome.creature);
+    }
 }
 
 #[test]
@@ -616,6 +758,99 @@ fn a_constant_source_rewired_into_a_target_obeys_the_constant_rules() {
     );
     assert_same_function("constant_source", &before, &outcome.creature);
     assert_valid("constant_source", &outcome.creature);
+}
+
+// --- recurrent creatures ----------------------------------------------------
+
+/// `h-id` is listed **before** `h-b`, so `h-b → h-id` is a back edge: `h-id`
+/// reads the previous tick's `h-b`. Only a recurrent creature can hold one.
+const RECURRENT_RELAY: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":false,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-id","bias":0.0,"squash":"IDENTITY"},
+    {"type":"hidden","uuid":"h-b","bias":0.0,"squash":"TANH"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-b"},
+    {"weight":1.0,"fromUUID":"h-b","toUUID":"h-id"},
+    {"weight":1.0,"fromUUID":"h-id","toUUID":"output-0"}
+  ]
+}"#;
+
+/// `h-1` feeds itself, so it is on both ends of one edge.
+const SELF_FED_RELAY: &str = r#"{
+  "semanticVersion":"4.0.0","forwardOnly":false,"input":1,"output":1,
+  "neurons":[
+    {"type":"hidden","uuid":"h-1","bias":0.0,"squash":"IDENTITY"},
+    {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+  ],
+  "synapses":[
+    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
+    {"weight":0.5,"fromUUID":"h-1","toUUID":"h-1"},
+    {"weight":1.0,"fromUUID":"h-1","toUUID":"output-0"}
+  ]
+}"#;
+
+/// Activations over three successive records, without resetting between them —
+/// the only way a tick of delay is visible.
+fn successive_outputs(creature: &CreatureExport, probe: &[f32]) -> Vec<f32> {
+    let mut net = compile_creature(creature).expect("creature compiles");
+    (0..3)
+        .map(|_| net.activate(probe, creature.output)[0])
+        .collect()
+}
+
+#[test]
+fn a_relay_behind_a_back_edge_is_never_spliced() {
+    // A back edge is read one tick late. Rewiring its source straight into the
+    // relay's target would deliver the value in the same tick instead, which is
+    // a different function of the record stream — so a recurrent creature is
+    // not the splice's to rewrite.
+    let before = creature(RECURRENT_RELAY);
+    let outcome = spliced(&before);
+
+    assert!(
+        outcome.spliced_neurons.is_empty(),
+        "a back edge's delay cannot survive the rewire: {:?}",
+        outcome.spliced_neurons
+    );
+    assert!(has_neuron(&outcome.creature, "h-id"));
+    assert_eq!(
+        successive_outputs(&before, &[1.0]),
+        successive_outputs(&outcome.creature, &[1.0]),
+        "the tick of delay moved"
+    );
+}
+
+#[test]
+fn a_relay_that_feeds_itself_is_never_spliced() {
+    // The neuron is on both ends of one edge, so rewiring it would emit an edge
+    // naming the neuron the splice has just removed. It stays, and cleanup
+    // answers a creature rather than a dangling-endpoint error.
+    let before = creature(SELF_FED_RELAY);
+    let outcome = spliced(&before);
+
+    assert!(outcome.spliced_neurons.is_empty());
+    assert!(has_neuron(&outcome.creature, "h-1"));
+    assert_eq!(
+        successive_outputs(&before, &[1.0]),
+        successive_outputs(&outcome.creature, &[1.0]),
+    );
+}
+
+#[test]
+fn pruning_a_recurrent_creature_still_answers_a_creature() {
+    // Regression: both entry points now ask for the splice, so a shape the
+    // splice cannot handle must leave the prune working rather than fail it.
+    let before = creature(SELF_FED_RELAY);
+    let key = SynapseKey {
+        from_uuid: "h-1".to_string(),
+        to_uuid: "h-1".to_string(),
+        role: SynapseType::Standard,
+    };
+    let result = prune_synapse(&before, &key, None).expect("the synapse prune succeeds");
+    assert!(result.spliced_neurons.is_empty());
 }
 
 // --- the switch -------------------------------------------------------------

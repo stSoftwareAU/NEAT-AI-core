@@ -959,8 +959,8 @@ rewrite above leaves exactly that shape behind, and `Score.ts` charges a hidden
 neuron `growthCost` against a synapse's `growthCost / 10`, so retiring one is
 worth up to nine net new synapses.
 
-`CleanupOptions { splice_identity: true }` switches it on. It is **off by
-default**, so `cleanup_creature`'s parity answer is byte for byte what it always
+`CleanupOptions { splice_identity: true }` switches it on for a `forwardOnly`
+creature. It is **off by default**, so `cleanup_creature`'s parity answer is byte for byte what it always
 was; **both pruning entry points switch it on** alongside `IfRepair::Rewrite`,
 and every spliced neuron is named on `CleanupOutcome::spliced_neurons` /
 `PruneResult::spliced_neurons` (`splicedNeurons` on the wire), in removal order.
@@ -973,14 +973,19 @@ would not pay for itself:
 
 | Refusal | Why |
 |---|---|
+| a **recurrent** creature (`forwardOnly: false`), whatever the caller asked for | a back edge is read one tick late, and the rewire would deliver the value in the same tick — a different function of the record stream |
+| a relay on both ends of one edge (it feeds itself) | the rewire would emit an edge naming the neuron it has just removed; only a recurrent creature can carry one |
 | a target that does not sum its inward terms (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, `HYPOTv2`), unless the neuron has exactly one inward edge and bias `0` | those reduce their whole inward range, so two terms — or one term plus a bias — cannot become the single term one edge carries |
-| an `IF` target and a non-zero bias | an `IF` adds its bias to **whichever** branch runs, so a constant belonging to one role cannot be folded into it |
+| an `IF` target and a non-zero bias, in a creature carrying no support constant | an `IF` adds its bias to **whichever** branch runs, so the relay's constant rides a **role-scoped** edge from a bias-1 support constant instead of the target's bias; with no constant to hang it on, minting a node to retire one is no gain |
 | a rewired edge colliding with an existing one that cleanup's own `merge_weights` will not merge | a `MEAN` reads its inward count and a `HYPOT` squares each term, so one row cannot say what two said |
-| a non-finite product, bias fold or merged weight | not a weight, and not something a later pass could repair |
+| a product, bias fold or merged weight the forward pass cannot carry | the compiled network computes in `f32`, so a value past that range reaches it as an infinity however finite the `f64` export looked |
 | more than `MAX_NET_NEW_SYNAPSES_PER_SPLICE` (`9`) net new synapses | past nine, the score's 10:1 neuron-to-synapse ratio stops paying for the trade |
 
 Observation, output and constant neurons are never spliced: the declared widths
 are the fleet's contract and a constant is a support node, not a pass-through.
+The edges a splice consumed are **replaced** by the rewired ones rather than
+listed as removals, so they do not appear on `cascadeSynapses`: the creature
+that comes back is the record of what they became.
 
 #### Constants are support nodes
 

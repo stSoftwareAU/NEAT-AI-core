@@ -856,6 +856,31 @@ fn an_aggregate_target_with_an_edge_left_is_never_given_a_bias_fold() {
         0.2,
     );
     assert_eq!(result.transform, TransformClass::Approximate);
+
+    // The single-edge shape of the same refusal, which used to have its own
+    // fixture here. The target stops aggregating (Ockham #197) and the relay it
+    // becomes is spliced out (Issue #688), so its bias is read on the target it
+    // fed — but it is still the aggregate's own `0.2`, carried through by a
+    // rewrite rather than moved by a fold.
+    let one_edge = pruned(
+        &creature(&aggregate_json("MINIMUM", 0.2)),
+        &key("h-1", "h-agg", SynapseType::Standard),
+        Some(&mean_only(0.6)),
+    );
+    assert_eq!(one_edge.bias_folds, vec![], "a MINIMUM was given a fold");
+    assert_eq!(one_edge.uncompensated.len(), 1);
+    assert_eq!(one_edge.uncompensated[0].target_uuid, "h-agg");
+    assert_eq!(
+        one_edge.uncompensated[0].reason,
+        UncompensatedReason::AggregateTarget
+    );
+    assert_eq!(one_edge.uncompensated[0].squash, "MINIMUM");
+    assert_close(
+        "the aggregate's bias is carried, never folded",
+        neuron(&one_edge.creature, "output-0").bias,
+        // `h-agg`'s 0.2 at w_out 1.0, then `h-1`'s own 0.1 at w_out 2.0.
+        0.3 + 1.0 * 0.2 + 2.0 * 0.1,
+    );
 }
 
 #[test]
