@@ -491,6 +491,8 @@ fn the_golden_record_covers_the_shapes_the_wasm_bundle_is_graded_on() {
         // Ockham #197's rewrite report: a record that stopped carrying one
         // would leave the wasm bundle ungraded on every conversion.
         "convertedNeurons",
+        // Issue #688's splice report, for the same reason.
+        "splicedNeurons",
     ] {
         assert!(
             golden.iter().any(|c| c.response[payload]
@@ -1035,9 +1037,16 @@ fn corner_case_8_an_aggregate_left_with_one_edge_becomes_identity() {
     assert_eq!(conversion.uuid, "h-agg");
     assert_eq!(conversion.from, "MINIMUM");
     assert_eq!(conversion.to, "IDENTITY");
-    assert_eq!(squash_of(&creature, "h-agg"), "IDENTITY");
-    // Reducing one term is that term, so the bias is carried over untouched.
-    assert!((bias_of(&creature, "h-agg") - 0.2).abs() < 1e-12);
+    // Issue #688: what the conversion produces is an `IDENTITY` pass-through,
+    // so the splice retires it in the same call and the wire says so.
+    assert_eq!(response.spliced_neurons, vec!["h-agg".to_string()]);
+    assert!(
+        !creature.neurons.iter().any(|n| n.uuid == "h-agg"),
+        "the spliced relay is still in the answer"
+    );
+    // Reducing one term is that term, so the bias is carried over untouched —
+    // onto the target the relay fed.
+    assert!((bias_of(&creature, "output-0") - 0.2).abs() < 1e-12);
 }
 
 #[test]

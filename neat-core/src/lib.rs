@@ -111,8 +111,9 @@ pub use if_graft::{
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
 // Issue #589 — the canonical fixed-point cleanup every prune operation reuses.
 pub use prune_cleanup::{
-    CleanupError, CleanupOptions, CleanupOutcome, IfRepair, MAX_SUPPORT_CONSTANTS,
-    SUPPORT_CONSTANT_BIAS, StaticIfRewrite, SynapseKey, cleanup_creature, cleanup_creature_with,
+    CleanupError, CleanupOptions, CleanupOutcome, IfRepair, MAX_NET_NEW_SYNAPSES_PER_SPLICE,
+    MAX_SUPPORT_CONSTANTS, SUPPORT_CONSTANT_BIAS, StaticIfRewrite, SynapseKey, cleanup_creature,
+    cleanup_creature_with,
 };
 // Issue #588 — the TypeScript pruning behaviour, captured as parity fixtures.
 pub use prune_fixtures::{PRUNE_PARITY_CASES, PruneCase, PruneRequest};

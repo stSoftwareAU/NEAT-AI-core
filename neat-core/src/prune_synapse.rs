@@ -306,6 +306,10 @@ pub fn prune_synapse(
         &cut,
         CleanupOptions {
             if_repair: IfRepair::Rewrite,
+            // The same policy `prune_neuron` asks for (Ockham #688): a hidden
+            // `IDENTITY` the cut left behind is a pass-through the score
+            // charges a whole neuron for.
+            splice_identity: true,
         },
     )?;
 
@@ -327,6 +331,7 @@ pub fn prune_synapse(
         downgraded_if_neurons: outcome.downgraded_if_neurons,
         static_if_neurons: outcome.static_if_neurons,
         restored_if_roles: outcome.restored_if_roles,
+        spliced_neurons: outcome.spliced_neurons,
         bias_folds,
         weight_shares,
         uncompensated,
