@@ -81,14 +81,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- [patch] injection ------------------------------------------------------
-CORE_REPO_URL="https://github.com/stSoftwareAU/NEAT-AI-core"
+# The core's own repository URL as an ERE, with the optional `.git` suffix and
+# nothing after it: an unterminated match would also claim a future
+# NEAT-AI-core-utils and emit a [patch] cargo rejects outright.
+CORE_REPO_URL_RE='https://github[.]com/stSoftwareAU/NEAT-AI-core(\.git)?'
 
 # The distinct git URLs through which the checkout $1 declares neat-core, one
 # per line. Empty for a consumer still on the path dependency.
 consumer_core_git_urls() {
   local found
   found="$(find "$1" -name Cargo.toml -not -path '*/target/*' \
-    -exec grep -ho "git[[:space:]]*=[[:space:]]*\"${CORE_REPO_URL}[^\"]*\"" {} + 2>/dev/null || true)"
+    -exec grep -hoE "git[[:space:]]*=[[:space:]]*\"${CORE_REPO_URL_RE}\"" {} + 2>/dev/null || true)"
   [[ -n "$found" ]] || return 0
   printf '%s\n' "$found" | sed -e 's/.*"\(.*\)"/\1/' | sort -u
   return 0
@@ -123,8 +126,18 @@ EOF
     echo "❌ $entry: could not append the [patch] override to $manifest"
     return 1
   }
+  patched+=("$entry")
   echo "🩹 $entry: [patch] $count git pin(s) of neat-core → $CORE/neat-core"
   return 0
+}
+
+# True when consumer $1 had a [patch] appended, so cargo must have used it.
+was_patched() {
+  local known
+  for known in ${patched[@]+"${patched[@]}"}; do
+    [[ "$known" != "$1" ]] || return 0
+  done
+  return 1
 }
 
 # --- registry ---------------------------------------------------------------
@@ -203,6 +216,8 @@ echo "🧩 ${#entries[@]} registered downstream consumer(s), core under test: $C
 # --- materialise every consumer before checking any, so sibling-to-sibling
 # path dependencies (Forests → Rebase) resolve regardless of registry order.
 failed=()
+skipped=()
+patched=()
 for entry in "${entries[@]}"; do
   name="${entry##*/}"
   dir="$WORKSPACE/$name"
@@ -216,7 +231,8 @@ for entry in "${entries[@]}"; do
     elif ! inject_core_patch "$entry" "$dir"; then
       # The clone is there but the gate cannot point it at the candidate core,
       # so it must not be compiled and reported green against a released one.
-      rm -f "$dir/Cargo.toml"
+      # The clone is left intact for --keep to inspect; it is skipped by name.
+      skipped+=("$entry")
       failed+=("$entry ([patch] injection failed)")
     fi
   elif [[ ! -f "$dir/Cargo.toml" ]]; then
@@ -230,11 +246,26 @@ for entry in "${entries[@]}"; do
   name="${entry##*/}"
   dir="$WORKSPACE/$name"
   [[ -f "$dir/Cargo.toml" ]] || continue # reported above
+  skip=0
+  for known in ${skipped[@]+"${skipped[@]}"}; do
+    [[ "$known" != "$entry" ]] || skip=1
+  done
+  ((!skip)) || continue # reported above
   log="$LOG_DIR/$name.log"
   started=$SECONDS
   echo "🔧 $entry: cargo check --workspace --all-targets"
   if (cd "$dir" && cargo check --workspace --all-targets) >"$log" 2>&1; then
-    echo "✅ $entry compiles against this core ($((SECONDS - started))s)"
+    # A [patch] cargo did not use is the silent failure this gate cannot
+    # afford: the consumer compiled, but against the release it pins rather
+    # than against the candidate core, and reporting that green would be a
+    # pass for a core nothing looked at.
+    if was_patched "$entry" && grep -q "neat-core.*was not used in the crate graph" "$log"; then
+      echo "❌ $entry: cargo ignored the [patch] override and compiled the release it pins ($((SECONDS - started))s) — log: $log"
+      grep "was not used in the crate graph" "$log" | head -n 3 | sed 's/^/    /'
+      failed+=("$entry ([patch] not used)")
+    else
+      echo "✅ $entry compiles against this core ($((SECONDS - started))s)"
+    fi
   else
     echo "❌ $entry no longer compiles against this core ($((SECONDS - started))s) — log: $log"
     grep -E '^error' "$log" | head -n 20 | sed 's/^/    /'

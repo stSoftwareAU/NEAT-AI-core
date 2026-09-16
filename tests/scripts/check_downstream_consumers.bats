@@ -230,12 +230,13 @@ EOF
 
 # A candidate core at $WORK/candidate carrying `candidate_only()`, a symbol no
 # release has — so "the consumer compiled" is proof the candidate was used.
+# $1 is its version (default 0.15.9).
 write_candidate_core() {
   mkdir -p "$WORK/candidate/neat-core/src"
-  cat >"$WORK/candidate/neat-core/Cargo.toml" <<'TOML'
+  cat >"$WORK/candidate/neat-core/Cargo.toml" <<TOML
 [package]
 name = "neat-core"
-version = "0.15.9"
+version = "${1:-0.15.9}"
 edition = "2021"
 TOML
   printf 'pub fn candidate_only() -> u32 { 1 }\n' \
@@ -244,25 +245,33 @@ TOML
     >"$WORK/candidate/Cargo.toml"
 }
 
-# The released core the consumer pins: same crate, without `candidate_only`.
+# The released core the consumer pins: same crate, without `candidate_only`,
+# published at tag v$1 (default v0.15.9).
 publish_released_core() {
+  local version="${1:-0.15.9}"
   mkdir -p "$WORK/released/neat-core/src"
-  cat >"$WORK/released/neat-core/Cargo.toml" <<'TOML'
+  cat >"$WORK/released/neat-core/Cargo.toml" <<TOML
 [package]
 name = "neat-core"
-version = "0.15.9"
+version = "$version"
 edition = "2021"
 TOML
   printf 'pub fn released_only() -> u32 { 0 }\n' \
     >"$WORK/released/neat-core/src/lib.rs"
   printf '[workspace]\nmembers = ["neat-core"]\nresolver = "2"\n' \
     >"$WORK/released/Cargo.toml"
-  make_bare_repo "$WORK/remotes/NEAT-AI-core" main "$WORK/released" v0.15.9
+  make_bare_repo "$WORK/remotes/NEAT-AI-core" main "$WORK/released" "v$version"
 }
 
 # A consumer repository pinning neat-core by git tag, published as a bare repo
-# the gate can clone. $1 is extra text appended to its root manifest.
+# the gate can clone. $1 is extra text appended to its root manifest;
+# $PIN_DEP_LINE and $APP_BODY override the pin and the code that exercises it.
 publish_pinned_consumer() {
+  local dep_line="${PIN_DEP_LINE-}" app_body="${APP_BODY-}"
+  [ -n "$dep_line" ] ||
+    dep_line='neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.15.9" }'
+  [ -n "$app_body" ] ||
+    app_body='pub fn go() -> u32 { neat_core::candidate_only() }'
   mkdir -p "$WORK/pinned/app/src"
   cat >"$WORK/pinned/Cargo.toml" <<'TOML'
 [workspace]
@@ -270,17 +279,16 @@ members = ["app"]
 resolver = "2"
 TOML
   [ "$#" -eq 0 ] || printf '%s\n' "$1" >>"$WORK/pinned/Cargo.toml"
-  cat >"$WORK/pinned/app/Cargo.toml" <<'TOML'
+  cat >"$WORK/pinned/app/Cargo.toml" <<TOML
 [package]
 name = "app"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.15.9" }
+$dep_line
 TOML
-  printf 'pub fn go() -> u32 { neat_core::candidate_only() }\n' \
-    >"$WORK/pinned/app/src/lib.rs"
+  printf '%s\n' "$app_body" >"$WORK/pinned/app/src/lib.rs"
   make_bare_repo "$WORK/remotes/Pinned.git" Develop "$WORK/pinned"
   printf 'stSoftwareAU/Pinned\n' >"$REGISTRY"
 }
@@ -329,4 +337,25 @@ TOML
   [ "$status" -eq 0 ]
   diff "$WORK/Alpha.before" "$WORK/Alpha/Cargo.toml"
   [[ "$output" != *"🩹"* ]]
+}
+
+@test "a [patch] cargo ignored fails the gate rather than passing on the release the consumer pins" {
+  command -v cargo >/dev/null || skip "cargo is required to compile the fixture consumer"
+  use_local_family_remotes
+  # The candidate is 0.16.0 and the consumer asks for 0.15: cargo keeps the
+  # override out of the crate graph, compiles the release it pins, and exits 0.
+  # A gate that only read the exit status would call that "compiles against
+  # this core" for a core it never opened.
+  write_candidate_core 0.16.0
+  publish_released_core 0.15.9
+  PIN_DEP_LINE='neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.15.9", version = "0.15" }'
+  APP_BODY='pub fn go() -> u32 { neat_core::released_only() }'
+  export PIN_DEP_LINE APP_BODY
+  publish_pinned_consumer
+  run "$SCRIPT" --registry "$REGISTRY" --core "$WORK/candidate"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"cargo ignored the [patch] override"* ]]
+  [[ "$output" == *"was not used in the crate graph"* ]]
+  [[ "$output" == *"([patch] not used)"* ]]
+  [[ "$output" != *"✅ stSoftwareAU/Pinned compiles"* ]]
 }
