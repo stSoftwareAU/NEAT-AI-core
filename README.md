@@ -947,7 +947,8 @@ flowchart TD
     D --> C["constant support invariants:<br/>bias 1, at most three,<br/>none unreferenced"]
     C --> F["fold: hidden with no inward edge<br/>→ bias-1 support constant,<br/>squash(bias) into its weights"]
     F --> N["canonicalise: constants, hiddens,<br/>outputs; edges sorted by (from, to, role)"]
-    N --> Q{"anything change?"}
+    N --> S["splice (opt-in): hidden IDENTITY<br/>→ sources wired into targets,<br/>bias folded as w_out · bias"]
+    S --> Q{"anything change?"}
     Q -- yes --> R
     Q -- no --> M["prune the memetic record<br/>of references the edits stranded"]
     M --> V["creature_validate"]
@@ -964,8 +965,8 @@ reported as a `CleanupError`, never handed back.
 `CleanupOutcome` carries the creature plus what the cleanup cost: the neurons
 and synapses removed, the hidden neurons folded into constant support, the
 constants rescaled or merged, the `IF` neurons downgraded (or, under
-`IfRepair::Rewrite`, flattened and role-restored), and how many passes the fixed
-point took. Callers own *which* neuron or synapse to try and any
+`IfRepair::Rewrite`, flattened and role-restored), the `IDENTITY` pass-throughs
+spliced out, and how many passes the fixed point took. Callers own *which* neuron or synapse to try and any
 statistical compensation (Issues #590 / #591); cleanup owns the exact structural
 repair.
 
@@ -983,6 +984,7 @@ required role can no longer branch at all.
 | constant of value `b` → bias-1 constant | `1 · (w · b)` is the term `b · w` was |
 | two edges from one constant merged | summed at a summing target; the smaller/larger weight at `MINIMUM`/`MAXIMUM`, where a constant term is the weight itself |
 | roles stripped at a non-`IF` target | only an `IF` keeps a sum per role; anywhere else the role is unread |
+| hidden `IDENTITY` spliced out | it forwards `bias + Σ w·a` and nothing else, so each `(source → target)` pair it sat between is the one edge `w_in · w_out` and the constant it added is `w_out · bias` at each target |
 
 A `MEAN` target divides by its inward **count** and a `HYPOT` squares each term,
 so merging two edges there would change the value — cleanup refuses, keeps the
@@ -994,7 +996,7 @@ The inexact `IF` repair above is a **policy**, not a fixed rule.
 `cleanup_creature` keeps TypeScript parity (`IfRepair::Downgrade`), which is what
 the `prune_fixtures.rs` captures record and what
 `neat-core/tests/prune_cleanup.rs` grades against them.
-`cleanup_creature_with(&creature, CleanupOptions { if_repair: … })` lets a caller
+`cleanup_creature_with(&creature, CleanupOptions { if_repair: …, .. })` lets a caller
 ask for `IfRepair::Rewrite` instead — the exact rewrites described under
 [Synapse pruning](#synapse-pruning-issue-591). Under that policy
 `CleanupOutcome::downgraded_if_neurons` is always empty and `static_if_neurons` /
@@ -1006,6 +1008,44 @@ role is rewritten exactly whichever way the caller asked for the removal, and
 `PruneResult::downgraded_if_neurons` is always empty. The downgrade stays as the
 `cleanup_creature` default so the parity captures keep a caller that reproduces
 them.
+
+#### Splicing out `IDENTITY` pass-throughs (Issue #688)
+
+An `IDENTITY` hidden neuron forwards `bias + Σ w·a` and nothing else, so it can
+be removed exactly: each `(source → target)` pair it sat between becomes the one
+edge `w_in · w_out`, keeping the target-side role it replaces, and the constant
+it contributed is folded into each target's bias as `w_out · bias`. The `IF`
+rewrite above leaves exactly that shape behind, and `Score.ts` charges a hidden
+neuron `growthCost` against a synapse's `growthCost / 10`, so retiring one is
+worth up to nine net new synapses.
+
+`CleanupOptions { splice_identity: true }` switches it on for a `forwardOnly`
+creature. It is **off by default**, so `cleanup_creature`'s parity answer is byte for byte what it always
+was; **both pruning entry points switch it on** alongside `IfRepair::Rewrite`,
+and every spliced neuron is named on `CleanupOutcome::spliced_neurons` /
+`PruneResult::spliced_neurons` (`splicedNeurons` on the wire), in removal order.
+The splice runs inside the fixed point as a whole-creature sweep, so a chain of
+relays — and an `IF` a splice has just made statically decidable — collapse in
+the same call.
+
+The neuron is **kept**, not spliced, wherever the rewire would not be exact or
+would not pay for itself:
+
+| Refusal | Why |
+|---|---|
+| a **recurrent** creature (`forwardOnly: false`), whatever the caller asked for | a back edge is read one tick late, and the rewire would deliver the value in the same tick — a different function of the record stream |
+| a relay on both ends of one edge (it feeds itself) | the rewire would emit an edge naming the neuron it has just removed; only a recurrent creature can carry one |
+| a target that does not sum its inward terms (`MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, `HYPOTv2`), unless the neuron has exactly one inward edge and bias `0` | those reduce their whole inward range, so two terms — or one term plus a bias — cannot become the single term one edge carries |
+| an `IF` target and a non-zero bias, in a creature carrying no support constant | an `IF` adds its bias to **whichever** branch runs, so the relay's constant rides a **role-scoped** edge from a bias-1 support constant instead of the target's bias; with no constant to hang it on, minting a node to retire one is no gain |
+| a rewired edge colliding with an existing one that cleanup's own `merge_weights` will not merge | a `MEAN` reads its inward count and a `HYPOT` squares each term, so one row cannot say what two said |
+| a product, bias fold or merged weight the forward pass cannot carry | the compiled network computes in `f32`, so a value past that range reaches it as an infinity however finite the `f64` export looked |
+| more than `MAX_NET_NEW_SYNAPSES_PER_SPLICE` (`9`) net new synapses | past nine, the score's 10:1 neuron-to-synapse ratio stops paying for the trade |
+
+Observation, output and constant neurons are never spliced: the declared widths
+are the fleet's contract and a constant is a support node, not a pass-through.
+The edges a splice consumed are **replaced** by the rewired ones rather than
+listed as removals, so they do not appear on `cascadeSynapses`: the creature
+that comes back is the record of what they became.
 
 #### Constants are support nodes
 
@@ -1290,7 +1330,7 @@ neuron, is an ordinary candidate.
 NEAT-AI's `SubConnection.ts::#wouldBreakIfNeuron` declines to remove an edge that
 would leave an `IF` short a role, so a whole class of typed structure is
 unreachable to the mutation operators. This crate rewrites instead
-(`CleanupOptions { if_repair: IfRepair::Rewrite }`), and both rewrites compute
+(`CleanupOptions { if_repair: IfRepair::Rewrite, .. }`), and both rewrites compute
 the **same number on every record**:
 
 | What the removal left | Rewrite | Why it is exact |
@@ -1367,7 +1407,8 @@ already exchanges — a creature file goes in and a creature file comes out:
   "staticIfNeurons": [ /* … */ ], "biasFolds": [ /* … */ ], "weightShares": [ /* … */ ],
   "uncompensated": [ { "targetUUID": "h-agg", "type": "standard", "weightSum": 0.5,
                        "squash": "MEAN", "reason": "AGGREGATE_TARGET", "droppedMean": 0.3 } ],
-  "convertedNeurons": [ { "uuid": "h-agg", "from": "MINIMUM", "to": "IDENTITY" } ] }
+  "convertedNeurons": [ { "uuid": "h-agg", "from": "MINIMUM", "to": "IDENTITY" } ],
+  "splicedNeurons": [ "if-1" ] }
 { "ok": false, "failure": { "reason": "PROTECTED_NEURON",
                             "message": "Neuron output-0 is a output node and is protected from direct removal",
                             "malformed": false } }

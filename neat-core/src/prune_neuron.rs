@@ -380,6 +380,14 @@ pub struct PruneResult {
     /// removal emptied (Issue #591). Each one is a neuron the caller's creature
     /// did not name, so it is reported rather than left to be discovered.
     pub restored_if_roles: Vec<SynapseKey>,
+    /// Hidden `IDENTITY` neurons the cleanup spliced out — their sources wired
+    /// straight into their targets — in removal order (Issue #688).
+    ///
+    /// Separate from [`Self::cascade_neurons`]: a cascade neuron was structure
+    /// nothing read any more, a spliced one was a pass-through whose terms the
+    /// rewired edges now carry. Every splice is exact, so none of them moves
+    /// [`Self::transform`].
+    pub spliced_neurons: Vec<String>,
     /// The mean folds applied, one per compensated target.
     pub bias_folds: Vec<BiasFold>,
     /// The correlated-survivor shares applied.
@@ -750,6 +758,10 @@ pub fn prune_neuron(
         &cut,
         CleanupOptions {
             if_repair: IfRepair::Rewrite,
+            // Ockham #688: the rewrite above leaves an `IDENTITY` pass-through
+            // behind, and the score charges a hidden neuron ten times what it
+            // charges a synapse, so every relay that can go exactly goes.
+            splice_identity: true,
         },
     )?;
 
@@ -765,6 +777,7 @@ pub fn prune_neuron(
         downgraded_if_neurons: outcome.downgraded_if_neurons,
         static_if_neurons: outcome.static_if_neurons,
         restored_if_roles: outcome.restored_if_roles,
+        spliced_neurons: outcome.spliced_neurons,
         bias_folds,
         weight_shares,
         uncompensated,

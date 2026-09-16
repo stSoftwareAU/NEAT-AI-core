@@ -99,24 +99,6 @@ const CONSTANT_SOURCE_JSON: &str = r#"{
   ]
 }"#;
 
-/// `h-agg` is a `MINIMUM`, which reads its smallest inward term rather than a
-/// sum, so no bias fold stands in for what the removal took.
-const AGGREGATE_TARGET_JSON: &str = r#"{
-  "semanticVersion":"4.0.0","forwardOnly":true,"input":2,"output":1,
-  "neurons":[
-    {"type":"hidden","uuid":"h-1","bias":0.1,"squash":"LOGISTIC"},
-    {"type":"hidden","uuid":"h-agg","bias":0.2,"squash":"MINIMUM"},
-    {"type":"output","uuid":"output-0","bias":0.3,"squash":"IDENTITY"}
-  ],
-  "synapses":[
-    {"weight":1.0,"fromUUID":"input-0","toUUID":"h-1"},
-    {"weight":0.75,"fromUUID":"input-1","toUUID":"h-agg"},
-    {"weight":0.5,"fromUUID":"h-1","toUUID":"h-agg"},
-    {"weight":2.0,"fromUUID":"h-1","toUUID":"output-0"},
-    {"weight":1.0,"fromUUID":"h-agg","toUUID":"output-0"}
-  ]
-}"#;
-
 /// A live `IF`: `h-cond` is its only condition source, `h-a` feeds both
 /// branches, and `input-0` reaches the condition so the branch is genuinely
 /// dynamic.
@@ -840,7 +822,11 @@ fn a_supplied_mean_never_overrides_the_structural_value() {
 /// and its siblings (Ockham #196).
 #[test]
 fn an_aggregate_target_with_an_edge_left_is_never_given_a_bias_fold() {
-    let before = creature(AGGREGATE_TARGET_JSON);
+    // Two edges are left, not one: with a single edge the target stops being an
+    // aggregate at all — Ockham #197 converts it to the point-wise squash and
+    // Issue #688 then splices the relay out — and this case is about the
+    // aggregate that goes on aggregating.
+    let before = creature(&aggregate_three_edges_json("MINIMUM", 0.2));
     let stats = mean_only(0.6);
     let result = pruned(
         &before,
@@ -855,8 +841,8 @@ fn an_aggregate_target_with_an_edge_left_is_never_given_a_bias_fold() {
             .iter()
             .filter(|s| s.to_uuid == "h-agg")
             .count(),
-        1,
-        "the fixture must leave the aggregate an inward edge"
+        2,
+        "the fixture must leave the aggregate its inward edges"
     );
     assert_eq!(result.bias_folds, vec![]);
     assert_eq!(result.uncompensated.len(), 1);
@@ -870,6 +856,31 @@ fn an_aggregate_target_with_an_edge_left_is_never_given_a_bias_fold() {
         0.2,
     );
     assert_eq!(result.transform, TransformClass::Approximate);
+
+    // The single-edge shape of the same refusal, which used to have its own
+    // fixture here. The target stops aggregating (Ockham #197) and the relay it
+    // becomes is spliced out (Issue #688), so its bias is read on the target it
+    // fed — but it is still the aggregate's own `0.2`, carried through by a
+    // rewrite rather than moved by a fold.
+    let one_edge = pruned(
+        &creature(&aggregate_json("MINIMUM", 0.2)),
+        &key("h-1", "h-agg", SynapseType::Standard),
+        Some(&mean_only(0.6)),
+    );
+    assert_eq!(one_edge.bias_folds, vec![], "a MINIMUM was given a fold");
+    assert_eq!(one_edge.uncompensated.len(), 1);
+    assert_eq!(one_edge.uncompensated[0].target_uuid, "h-agg");
+    assert_eq!(
+        one_edge.uncompensated[0].reason,
+        UncompensatedReason::AggregateTarget
+    );
+    assert_eq!(one_edge.uncompensated[0].squash, "MINIMUM");
+    assert_close(
+        "the aggregate's bias is carried, never folded",
+        neuron(&one_edge.creature, "output-0").bias,
+        // `h-agg`'s 0.2 at w_out 1.0, then `h-1`'s own 0.1 at w_out 2.0.
+        0.3 + 1.0 * 0.2 + 2.0 * 0.1,
+    );
 }
 
 #[test]
@@ -946,15 +957,20 @@ fn losing_the_last_condition_leaves_the_negative_branch_and_drops_the_positive()
     let twin = with_edge_zeroed(&before, "h-cond", "if-1", Some("condition"));
     assert_same_function("last_condition_removed", &twin, &result.creature);
 
-    assert_eq!(
-        neuron(&result.creature, "if-1").squash.as_deref(),
-        Some("IDENTITY"),
-        "a statically-negative IF is an IDENTITY sum of its negative arm"
-    );
+    // The flatten makes `if-1` an `IDENTITY` sum of its negative arm, and
+    // Issue #688 splices that pass-through out: the arm reaches the output on
+    // one edge of its own weight, and `if-1`'s bias goes with it.
+    assert_eq!(result.spliced_neurons, vec!["if-1".to_string()]);
+    assert!(!has_neuron(&result.creature, "if-1"));
     assert_close(
         "the negative arm survives at its own weight",
-        weight(&result.creature, "h-a", "if-1"),
+        weight(&result.creature, "h-a", "output-0"),
         -3.0,
+    );
+    assert_close(
+        "the flattened IF's bias lands on the output it fed",
+        neuron(&result.creature, "output-0").bias,
+        0.05,
     );
     assert!(
         !has_neuron(&result.creature, "h-cond"),
@@ -1093,11 +1109,10 @@ fn a_statically_true_condition_drops_the_unreachable_branch_and_cascades() {
     let twin = with_edge_zeroed(&before, "input-0", "h-c", None);
     assert_same_function("static_if_choice", &twin, &result.creature);
 
-    assert_eq!(
-        neuron(&result.creature, "if-1").squash.as_deref(),
-        Some("IDENTITY"),
-        "a statically-decided IF no longer branches"
-    );
+    // A statically-decided `IF` no longer branches, so it is an `IDENTITY` sum
+    // of the surviving arm — which Issue #688 then splices out.
+    assert_eq!(result.spliced_neurons, vec!["if-1".to_string()]);
+    assert!(!has_neuron(&result.creature, "if-1"));
     assert!(
         !has_neuron(&result.creature, "h-n"),
         "the unreachable negative branch's only source is dead structure"
@@ -1108,7 +1123,7 @@ fn a_statically_true_condition_drops_the_unreachable_branch_and_cascades() {
     );
     assert_close(
         "the positive arm survives at its own weight",
-        weight(&result.creature, "h-p", "if-1"),
+        weight(&result.creature, "h-p", "output-0"),
         2.0,
     );
     assert_valid("a_statically_true_condition", &result.creature);
@@ -1124,13 +1139,16 @@ fn a_flattened_positive_branch_keeps_the_untyped_edges_that_feed_it() {
     let twin = with_edge_zeroed(&before, "input-0", "h-c", None);
     assert_same_function("static_if_untyped_arm", &twin, &result.creature);
 
+    // `if-1` is spliced out by Issue #688 once the flatten makes it a relay, so
+    // the untyped arm is read where it now lands: straight on the output.
+    assert_eq!(result.spliced_neurons, vec!["if-1".to_string()]);
     assert!(
-        has_edge(&result.creature, "h-p", "if-1"),
+        has_edge(&result.creature, "h-p", "output-0"),
         "the untyped positive arm was dropped with the unreachable branch"
     );
     assert_close(
         "the untyped arm survives at its own weight",
-        weight(&result.creature, "h-p", "if-1"),
+        weight(&result.creature, "h-p", "output-0"),
         2.0,
     );
     assert_valid("a_flattened_positive_branch_untyped", &result.creature);
@@ -1154,9 +1172,12 @@ fn dropping_an_unreachable_branch_cascades_through_every_level_it_strands() {
         has_neuron(&result.creature, "h-p"),
         "the taken branch stays"
     );
+    // The flattened `IF` is a relay, so Issue #688 retires it and the taken
+    // branch reaches the output directly.
+    assert_eq!(result.spliced_neurons, vec!["if-1".to_string()]);
     assert_close(
         "the positive arm survives at its own weight",
-        weight(&result.creature, "h-p", "if-1"),
+        weight(&result.creature, "h-p", "output-0"),
         2.0,
     );
     assert_valid("dropping_an_unreachable_branch", &result.creature);
@@ -1236,6 +1257,9 @@ fn the_default_cleanup_policy_still_downgrades_an_if_short_a_role() {
         &cut,
         CleanupOptions {
             if_repair: IfRepair::Rewrite,
+            // The `IF` repair policy on its own is what this case grades, so
+            // the Issue #688 splice stays off and `if-1` survives to be read.
+            splice_identity: false,
         },
     )
     .expect("the exact policy cleans up");
@@ -1557,11 +1581,6 @@ fn a_minimum_maximum_or_mean_left_with_one_edge_becomes_identity() {
 
         assert_valid(squash, &result.creature);
         assert_eq!(
-            squash_of(&result.creature, "h-agg"),
-            "IDENTITY",
-            "{squash} left with one edge was not rewritten"
-        );
-        assert_eq!(
             result.converted_neurons,
             vec![SquashConversion {
                 uuid: "h-agg".to_string(),
@@ -1570,10 +1589,22 @@ fn a_minimum_maximum_or_mean_left_with_one_edge_becomes_identity() {
             }],
             "{squash}: the conversion was not reported"
         );
+        // Issue #688: what the conversion produces is a pass-through, so the
+        // splice retires it in the same call. The conversion is still reported
+        // — it is the step that made the splice exact — and the bias it left
+        // untouched lands on the target the relay fed.
+        assert_eq!(
+            result.spliced_neurons,
+            vec!["h-1".to_string(), "h-agg".to_string()],
+            "{squash}: the converted relay was not spliced — nor was `h-1`, \
+             itself an IDENTITY the cut left relaying one edge into one target"
+        );
+        assert!(!has_neuron(&result.creature, "h-agg"));
         assert_close(
-            &format!("{squash}: the bias is untouched"),
-            neuron(&result.creature, "h-agg").bias,
-            0.2,
+            &format!("{squash}: both relay biases are carried over untouched"),
+            neuron(&result.creature, "output-0").bias,
+            // `h-agg`'s 0.2 at w_out 1.0, then `h-1`'s 0.1 at w_out 2.0.
+            0.3 + 1.0 * 0.2 + 2.0 * 0.1,
         );
         assert_same_function_within(
             squash,
@@ -1683,21 +1714,42 @@ fn an_if_left_with_one_edge_is_never_converted() {
 #[test]
 fn a_converted_target_folds_its_last_edge_exactly() {
     // Step one leaves `h-agg` with the constant's edge alone, which the
-    // conversion turns into an `IDENTITY` sum.
+    // conversion turns into an `IDENTITY` sum — and Issue #688 then splices
+    // that pass-through out, so the constant's term reaches `output-0` on one
+    // edge of `0.75 · 1.0` and carries `h-agg`'s bias with it.
     let json = aggregate_constant_fed_json("MINIMUM");
     let first = pruned(
         &creature(&json),
         &key("h-1", "h-agg", SynapseType::Standard),
         None,
     );
-    assert_eq!(squash_of(&first.creature, "h-agg"), "IDENTITY");
+    assert_eq!(
+        first.converted_neurons,
+        vec![SquashConversion {
+            uuid: "h-agg".to_string(),
+            from: "MINIMUM",
+            to: "IDENTITY",
+        }],
+        "the single-edge aggregate was not converted before the splice read it"
+    );
+    // `h-1` is an `IDENTITY` the cut leaves relaying one observation into one
+    // output, so it goes in the same sweep.
+    assert_eq!(
+        first.spliced_neurons,
+        vec!["h-1".to_string(), "h-agg".to_string()]
+    );
+    assert_close(
+        "the constant reaches the output at the product weight",
+        weight(&first.creature, "c-1", "output-0"),
+        0.75,
+    );
 
     // Step two removes that last edge. Its source is a constant, so the term is
-    // the creature's own to prove — and now that the target sums rather than
-    // aggregates, it folds into the bias exactly.
+    // the creature's own to prove — and the target sums rather than aggregates,
+    // so it folds into the bias exactly.
     let second = pruned(
         &first.creature,
-        &key("c-1", "h-agg", SynapseType::Standard),
+        &key("c-1", "output-0", SynapseType::Standard),
         None,
     );
 

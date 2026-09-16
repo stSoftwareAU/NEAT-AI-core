@@ -532,14 +532,14 @@ fn an_if_left_short_of_a_role_is_rewritten_by_the_prune() {
     let twin = with_source_zeroed(&before, "h-cond");
     assert_same_function_within("if_short_a_role", REWRITE_TOL, &twin, &result.creature);
 
-    assert_eq!(
-        neuron(&result.creature, "if-1").squash.as_deref(),
-        Some("IDENTITY"),
-        "a statically-decided IF is the IDENTITY sum of the arm it always takes"
-    );
+    // Issue #688: the flatten makes `if-1` an `IDENTITY` sum of the one arm it
+    // always takes, and an `IDENTITY` pass-through is exactly what the splice
+    // then retires — so the surviving arm reaches the output on one edge.
+    assert_eq!(result.spliced_neurons, vec!["if-1".to_string()]);
+    assert!(!has_neuron(&result.creature, "if-1"));
     assert_close(
         "the negative arm survives at its own weight",
-        weight(&result.creature, "h-a", "if-1"),
+        weight(&result.creature, "h-a", "output-0"),
         -3.0,
     );
     assert_ne!(
@@ -845,23 +845,32 @@ fn an_aggregate_target_is_reported_uncompensated_rather_than_folded() {
     // A `MINIMUM` takes the smallest of its inward terms; adding `w · mean` to
     // its bias does not replace the term the removal took away, so no fold is
     // attempted and the shortfall is named.
-    assert_close(
-        "h-agg bias",
-        neuron(&result.creature, "h-agg").bias,
-        0.2,
-        // unchanged
-    );
     assert_eq!(result.uncompensated.len(), 1);
     let shortfall = &result.uncompensated[0];
     assert_eq!(shortfall.target_uuid, "h-agg");
     assert_eq!(shortfall.reason, UncompensatedReason::AggregateTarget);
     assert_close("h-agg weight sum", shortfall.weight_sum, 0.5);
 
-    // The point-wise target is still compensated.
+    // Issue #688 changed what is left to read the refusal off. The cut leaves
+    // `h-agg` one inward edge, so it is rewritten to the point-wise squash
+    // that computes the same number (Ockham #197) and the splice then retires
+    // it — its `0.2` reaching `output-0` through the fold `w_out · bias`,
+    // untouched by any compensation, which is the refusal this case is about.
+    assert!(!has_neuron(&result.creature, "h-agg"));
+    assert_eq!(result.spliced_neurons, vec!["h-agg".to_string()]);
+    assert_eq!(
+        result.bias_folds.len(),
+        1,
+        "only the point-wise target is folded"
+    );
+    assert_eq!(result.bias_folds[0].target_uuid, "output-0");
+
+    // The point-wise target is still compensated, and carries the relay's own
+    // bias on top of the fold.
     assert_close(
         "output-0 bias",
         neuron(&result.creature, "output-0").bias,
-        0.3 + 2.0 * 0.6,
+        0.3 + 2.0 * 0.6 + 1.0 * 0.2,
     );
     assert_eq!(result.transform, TransformClass::Approximate);
     assert_valid("aggregate target", &result.creature);
@@ -1554,11 +1563,6 @@ fn an_aggregate_the_removal_leaves_with_one_edge_becomes_point_wise() {
 
         assert_valid(squash, &result.creature);
         assert_eq!(
-            squash_of(&result.creature, "h-agg"),
-            expected,
-            "{squash} left with one edge was not rewritten"
-        );
-        assert_eq!(
             result.converted_neurons,
             vec![SquashConversion {
                 uuid: "h-agg".to_string(),
@@ -1567,11 +1571,43 @@ fn an_aggregate_the_removal_leaves_with_one_edge_becomes_point_wise() {
             }],
             "{squash}: the conversion was not reported"
         );
-        assert_close(
-            &format!("{squash}: the bias is carried over unchanged"),
-            neuron(&result.creature, "h-agg").bias,
-            bias,
-        );
+
+        if expected == "IDENTITY" {
+            // Issue #688: an `IDENTITY` forwards `bias + Σ w·a` and nothing
+            // else, so the conversion is immediately followed by the splice.
+            // The report above is still what names the rewrite; the neuron it
+            // names has gone, and its bias with it into the target it fed.
+            assert_eq!(
+                result.spliced_neurons,
+                vec!["h-agg".to_string()],
+                "{squash}: the converted relay was not spliced"
+            );
+            assert!(!has_neuron(&result.creature, "h-agg"));
+            assert_close(
+                &format!("{squash}: the relay's bias lands on the target it fed"),
+                neuron(&result.creature, "output-0").bias,
+                0.3 + bias,
+            );
+        } else {
+            // `ABSOLUTE` is not a pass-through: it reads `|bias + Σ w·a|`, so
+            // there is nothing to splice and the neuron stays as converted.
+            assert!(
+                result.spliced_neurons.is_empty(),
+                "{squash}: an ABSOLUTE was spliced: {:?}",
+                result.spliced_neurons
+            );
+            assert_eq!(
+                squash_of(&result.creature, "h-agg"),
+                expected,
+                "{squash} left with one edge was not rewritten"
+            );
+            assert_close(
+                &format!("{squash}: the bias is carried over unchanged"),
+                neuron(&result.creature, "h-agg").bias,
+                bias,
+            );
+        }
+
         assert_same_function_within(
             squash,
             CONVERSION_TOL,
@@ -2072,32 +2108,47 @@ fn twelve_identity_neurons_prune_one_by_one_without_moving_the_mean_output() {
     let original = golden_twelve_identity();
     // The oracle: an `IDENTITY` output is linear in what reaches it, so
     // replacing a hidden neuron by its own mean must leave the **mean** output
-    // exactly where it was, at every one of the twelve steps.
+    // exactly where it was, at every one of the twelve steps — and so must the
+    // Issue #688 splice that retires the relays the first step leaves behind.
+    // The oracle is asserted at all twelve steps either way.
     let baseline = mean_outputs(&original);
     let means: Vec<f64> = (0..12)
         .map(|k| sampled_mean(&original, &format!("h-{k:02}")))
         .collect();
 
     let mut current = original.clone();
+    let mut spliced: Vec<String> = Vec::new();
     for k in 0..12 {
         let uuid = format!("h-{k:02}");
-        let result = prune_neuron(&current, &uuid, Some(&mean_only(means[k])))
-            .unwrap_or_else(|e| panic!("step {k}: pruning {uuid} failed: {e}"));
-        assert_valid(&format!("golden step {k}"), &result.creature);
-        assert_eq!(
-            result.uncompensated,
-            vec![],
-            "step {k}: a target was left uncompensated"
-        );
+        if current.neurons.iter().any(|n| n.uuid == uuid) {
+            let result = prune_neuron(&current, &uuid, Some(&mean_only(means[k])))
+                .unwrap_or_else(|e| panic!("step {k}: pruning {uuid} failed: {e}"));
+            assert_eq!(
+                result.uncompensated,
+                vec![],
+                "step {k}: a target was left uncompensated"
+            );
+            spliced.extend(result.spliced_neurons.iter().cloned());
+            current = result.creature;
+        } else {
+            // Issue #688: every neuron here is a one-in, one-out `IDENTITY`
+            // relay, so an earlier step's cleanup spliced this one out. The
+            // oracle is unchanged and is still asserted below at this step —
+            // a splice that moved the mean output is exactly what that catches.
+            assert!(
+                spliced.contains(&uuid),
+                "step {k}: {uuid} disappeared without being spliced"
+            );
+        }
 
-        let after = mean_outputs(&result.creature);
+        assert_valid(&format!("golden step {k}"), &current);
+        let after = mean_outputs(&current);
         for (index, (got, want)) in after.iter().zip(baseline.iter()).enumerate() {
             assert!(
                 (got - want).abs() <= 1e-6 * (1.0 + want.abs()),
                 "step {k}: mean output {index} moved from {want} to {got}"
             );
         }
-        current = result.creature;
     }
 
     assert!(

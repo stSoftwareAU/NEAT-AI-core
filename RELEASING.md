@@ -223,6 +223,60 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.22.0` — pruning splices out `IDENTITY` pass-throughs (Issue #688)
+
+Two breaking counts, both consequences of the same optimisation:
+
+1. **Documented runtime behaviour.** `prune_neuron` and `prune_synapse` now ask
+   cleanup to splice, so a `forwardOnly` creature that came back carrying a
+   hidden `IDENTITY` neuron — the shape the `IF` rewrite and the single-edge
+   aggregate conversion both leave behind — now comes back without it. Its
+   sources are wired straight into its targets at `w_in · w_out`, and its bias
+   is folded into each summing target as `w_out · bias` (at an `IF`, ridden into
+   the same role on a bias-`1` support constant, because an `IF` adds its bias
+   to whichever branch runs). A caller that reads the result by neuron UUID, or
+   reconciles a prune by counting neurons, sees a different creature.
+2. **Four public structs gain a field.** None is `#[non_exhaustive]`, so a
+   consumer that builds `CleanupOptions`, `CleanupOutcome`, `PruneResult` or
+   `PruneResponse` with a struct literal, or destructures one exhaustively,
+   stops compiling until it names the new field. Every repository in
+   `scripts/downstream-consumers.txt` was checked and none does.
+
+**Every splice computes the same number on every record** — that is what makes
+it legal at all — so the scored network does not move and `TransformClass` is
+unchanged. The splice is **off** in `cleanup_creature`'s parity default, so the
+`prune_fixtures` captures and every caller grading against them are byte for
+byte what they were, and it is off in a recurrent creature whatever the caller
+asks: a back edge is read one tick late, and the rewire would remove that delay.
+
+**Migration** — name the new field where you construct the options:
+
+```rust
+let options = CleanupOptions {
+    if_repair: IfRepair::Rewrite,
+    splice_identity: true,
+};
+```
+
+A caller that only *reads* a `PruneResult` or a `PruneResponse` needs no change:
+the new `splicedNeurons` key is omitted when empty, like every other report
+list.
+
+### `0.21.0` — no public-API or behaviour change (#698)
+
+Recorded so the log has no gap. The `Scan 20260911` milestone collected
+behaviour-preserving internal work — chiefly the `loss.rs` packed batch-scan
+parameter clump collapsed into an internal config type (Issue #671), whose PR
+states the `#[cfg_attr(wasm_bindgen)]` signatures are unchanged — and took a
+minor bump without a break to record. No migration is required.
+
+### `0.20.0` — no public-API or behaviour change (Issue #680)
+
+Recorded so the log has no gap. `scripts/runlib.sh` became the canonical
+build-install-clean helper every NEAT-AI Rust sibling copies; nothing under
+`neat-core/src` changed and the crate's surface is identical to `0.19.1`. No
+migration is required.
+
 ### `0.19.0` — `CreatureError::UnknownTargetUuid` (Issue #682)
 
 Two breaking counts, both on `compile_creature`'s destination handling:

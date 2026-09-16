@@ -703,12 +703,6 @@
           {
             "bias": 0.0,
             "squash": "IDENTITY",
-            "type": "hidden",
-            "uuid": "if-1"
-          },
-          {
-            "bias": 0.0,
-            "squash": "IDENTITY",
             "type": "output",
             "uuid": "output-0"
           }
@@ -723,13 +717,8 @@
           },
           {
             "fromUUID": "h-a",
-            "toUUID": "if-1",
-            "weight": -3.0
-          },
-          {
-            "fromUUID": "if-1",
             "toUUID": "output-0",
-            "weight": 1.0
+            "weight": -3.0
           }
         ]
       },
@@ -747,6 +736,9 @@
           "toUUID": "if-1",
           "type": "condition"
         }
+      ],
+      "splicedNeurons": [
+        "if-1"
       ],
       "staticIfNeurons": [
         {
@@ -1295,12 +1287,6 @@
           {
             "bias": 0.0,
             "squash": "IDENTITY",
-            "type": "hidden",
-            "uuid": "if-1"
-          },
-          {
-            "bias": 0.0,
-            "squash": "IDENTITY",
             "type": "output",
             "uuid": "output-0"
           }
@@ -1320,18 +1306,13 @@
           },
           {
             "fromUUID": "h-a",
-            "toUUID": "if-1",
+            "toUUID": "output-0",
             "weight": -1.0
           },
           {
             "fromUUID": "h-b",
-            "toUUID": "if-1",
-            "weight": -2.0
-          },
-          {
-            "fromUUID": "if-1",
             "toUUID": "output-0",
-            "weight": 1.0
+            "weight": -2.0
           }
         ]
       },
@@ -1343,6 +1324,9 @@
           "toUUID": "if-1",
           "type": "condition"
         }
+      ],
+      "splicedNeurons": [
+        "if-1"
       ],
       "staticIfNeurons": [
         {
@@ -1878,19 +1862,13 @@
         "input": 2,
         "neurons": [
           {
-            "bias": 0.2,
-            "squash": "IDENTITY",
-            "type": "hidden",
-            "uuid": "h-agg"
-          },
-          {
             "bias": 0.3,
             "squash": "MEAN",
             "type": "hidden",
             "uuid": "h-mean"
           },
           {
-            "bias": 0.0,
+            "bias": 0.2,
             "squash": "IDENTITY",
             "type": "output",
             "uuid": "output-0"
@@ -1906,18 +1884,13 @@
           },
           {
             "fromUUID": "input-1",
-            "toUUID": "h-agg",
-            "weight": 0.75
-          },
-          {
-            "fromUUID": "input-1",
             "toUUID": "h-mean",
             "weight": 0.25
           },
           {
-            "fromUUID": "h-agg",
+            "fromUUID": "input-1",
             "toUUID": "output-0",
-            "weight": 1.0
+            "weight": 0.75
           },
           {
             "fromUUID": "h-mean",
@@ -1927,7 +1900,7 @@
         ]
       },
       "ok": true,
-      "passes": 2,
+      "passes": 3,
       "removedNeuron": "h-x",
       "removedSynapses": [
         {
@@ -1945,6 +1918,9 @@
           "toUUID": "h-mean",
           "type": "standard"
         }
+      ],
+      "splicedNeurons": [
+        "h-agg"
       ],
       "transform": "approximate",
       "uncompensated": [

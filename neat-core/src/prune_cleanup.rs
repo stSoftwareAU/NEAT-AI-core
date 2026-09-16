@@ -200,6 +200,14 @@ pub struct CleanupOutcome {
     /// Zero-weight support edges added to give an `IF` back a branch role it
     /// lost, without changing what it computes (Issue #591).
     pub restored_if_roles: Vec<SynapseKey>,
+    /// Hidden `IDENTITY` neurons spliced out, in removal order — creature
+    /// neuron order within a pass, passes in sequence (Issue #688).
+    ///
+    /// Filled only when [`CleanupOptions::splice_identity`] is set. The edges
+    /// that named a spliced neuron are **replaced** by the rewired ones rather
+    /// than removed, so they are not listed on [`Self::removed_synapses`]; the
+    /// creature that comes back is the record of what they became.
+    pub spliced_neurons: Vec<String>,
 }
 
 /// One `IF` whose condition the creature itself decides, and the branch that
@@ -245,7 +253,28 @@ pub enum IfRepair {
 pub struct CleanupOptions {
     /// How an `IF` short a role is repaired.
     pub if_repair: IfRepair,
+    /// Splice out every hidden `IDENTITY` neuron that can go exactly
+    /// (Issue #688).
+    ///
+    /// **Off by default**, so [`cleanup_creature`]'s parity answer — the one
+    /// the [`crate::prune_fixtures`] captures are graded against — is byte for
+    /// byte what it always was. Both pruning entry points switch it on: an
+    /// `IDENTITY` neuron forwards `bias + Σ w·a` and nothing else, so the score
+    /// charges a whole hidden neuron for a pass-through the creature does not
+    /// need.
+    pub splice_identity: bool,
 }
+
+/// The most net new synapses one splice may add before it stops being worth
+/// making.
+///
+/// `Score.ts`'s `calculateScore` charges each hidden neuron `growthCost` and
+/// each synapse `growthCost / 10`, so retiring one neuron pays for up to
+/// **nine** net new synapses and the complexity penalty still falls. At ten the
+/// trade is a loss, so the splice is refused and the neuron kept — the rule is
+/// a ceiling on what a splice may spend, never a reason to leave a cheaper one
+/// unmade.
+pub const MAX_NET_NEW_SYNAPSES_PER_SPLICE: usize = 9;
 
 /// Why a cleanup produced no creature.
 ///
@@ -468,13 +497,41 @@ pub fn cleanup_creature(creature: &CreatureExport) -> Result<CleanupOutcome, Cle
 ///   ]
 /// }"#).unwrap();
 ///
-/// let options = CleanupOptions { if_repair: IfRepair::Rewrite };
+/// let options = CleanupOptions { if_repair: IfRepair::Rewrite, splice_identity: false };
 /// let outcome = cleanup_creature_with(&creature, options).unwrap();
 ///
 /// assert_eq!(outcome.static_if_neurons[0].uuid, "if-1");
 /// assert_eq!(outcome.static_if_neurons[0].branch, SynapseType::Negative);
 /// // Only the negative arm survives, at its own weight.
 /// assert_eq!(outcome.creature.synapses[1].weight, -3.0);
+/// ```
+///
+/// With [`CleanupOptions::splice_identity`] as well — what both pruning entry
+/// points ask for — the two `IDENTITY` relays the rewrite leaves behind go too,
+/// and the observation reaches the output on one edge of `1 · -3` (Issue #688):
+///
+/// ```
+/// # use neat_core::{CleanupOptions, IfRepair, cleanup_creature_with, parse_creature_json};
+/// # let creature = parse_creature_json(r#"{
+/// #   "input":1,"output":1,"forwardOnly":true,
+/// #   "neurons":[
+/// #     {"type":"hidden","uuid":"h-a","bias":0.0,"squash":"IDENTITY"},
+/// #     {"type":"hidden","uuid":"if-1","bias":0.0,"squash":"IF"},
+/// #     {"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}
+/// #   ],
+/// #   "synapses":[
+/// #     {"weight":1.0,"fromUUID":"input-0","toUUID":"h-a"},
+/// #     {"weight":2.0,"fromUUID":"h-a","toUUID":"if-1","type":"positive"},
+/// #     {"weight":-3.0,"fromUUID":"h-a","toUUID":"if-1","type":"negative"},
+/// #     {"weight":1.0,"fromUUID":"if-1","toUUID":"output-0"}
+/// #   ]
+/// # }"#).unwrap();
+/// let options = CleanupOptions { if_repair: IfRepair::Rewrite, splice_identity: true };
+/// let outcome = cleanup_creature_with(&creature, options).unwrap();
+///
+/// assert_eq!(outcome.spliced_neurons, vec!["h-a".to_string(), "if-1".to_string()]);
+/// assert_eq!(outcome.creature.neurons.len(), 1);
+/// assert_eq!(outcome.creature.synapses[0].weight, -3.0);
 /// ```
 pub fn cleanup_creature_with(
     creature: &CreatureExport,
@@ -500,6 +557,11 @@ pub fn cleanup_creature_with(
         changed |= engine.normalise_constants()?;
         changed |= engine.fold_zero_inward_hidden()?;
         changed |= engine.canonicalise()?;
+        // Last, so the splice reads canonical edges — one row per readable key,
+        // roles stripped where the target cannot tell them apart. A splice that
+        // fires re-enters the loop, where the `IF` rewrite gets its chance at a
+        // condition the splice has just made decidable.
+        changed |= engine.splice_identity_neurons()?;
 
         if !changed {
             break;
@@ -547,6 +609,7 @@ pub fn cleanup_creature_with(
         downgraded_if_neurons: engine.downgraded_if_neurons,
         static_if_neurons: engine.static_if_neurons,
         restored_if_roles: engine.restored_if_roles,
+        spliced_neurons: engine.spliced_neurons,
     })
 }
 
@@ -581,6 +644,17 @@ fn merge_rule(squash: SquashType) -> MergeRule {
         SquashType::Mean | SquashType::Hypotenuse | SquashType::HypotenuseV2 => MergeRule::Never,
         _ => MergeRule::Sum,
     }
+}
+
+/// Does this target **sum** its inward terms?
+///
+/// Asked through [`merge_rule`] — cleanup's existing answer to "can two rows
+/// into this target become one by adding their weights" — rather than a second
+/// exhaustive `match` over [`SquashType`] (Issue #673). [`MergeRule::Sum`] is
+/// every point-wise squash plus an `IF` within one role, which is exactly the
+/// set a spliced neuron's terms can be distributed into.
+fn sums_inward_terms(squash: SquashType) -> bool {
+    merge_rule(squash) == MergeRule::Sum
 }
 
 fn kind_of(neuron: &NeuronExport) -> Result<Kind, CleanupError> {
@@ -648,6 +722,23 @@ struct Engine {
     downgraded_if_neurons: Vec<String>,
     static_if_neurons: Vec<StaticIfRewrite>,
     restored_if_roles: Vec<SynapseKey>,
+    spliced_neurons: Vec<String>,
+}
+
+/// One hidden `IDENTITY` neuron's splice, worked out in full before any of it
+/// is applied.
+///
+/// Every refusal — an inexact merge, a non-finite product, too many net new
+/// synapses — is found while the plan is being built, so the creature is never
+/// left half-rewired by a splice that turns out not to qualify.
+struct SplicePlan {
+    /// The neuron that goes.
+    uuid: String,
+    /// The whole synapse list as it will be: the edges that never named the
+    /// neuron, plus the rewired ones, with collisions already merged.
+    synapses: Vec<SynapseExport>,
+    /// `w_out · bias` per target, for the targets that sum their inward terms.
+    bias_deltas: Vec<(String, f64)>,
 }
 
 impl Engine {
@@ -663,6 +754,7 @@ impl Engine {
             downgraded_if_neurons: Vec::new(),
             static_if_neurons: Vec::new(),
             restored_if_roles: Vec::new(),
+            spliced_neurons: Vec::new(),
         }
     }
 
@@ -1217,6 +1309,250 @@ impl Engine {
         Ok(())
     }
 
+    /// Splice out every hidden `IDENTITY` neuron that can go exactly
+    /// (Issue #688).
+    ///
+    /// An `IDENTITY` neuron forwards `bias + Σ w·a` and nothing else, so each
+    /// `(source → target)` pair it sits between is the single edge
+    /// `w_in · w_out`, and the constant it adds is `w_out · bias` at each
+    /// target. Rewire those and the neuron has nothing left to say. One sweep
+    /// in creature neuron order per pass; the fixed-point loop comes back for
+    /// whatever the sweep made spliceable.
+    ///
+    /// Off unless the caller asked for it — [`CleanupOptions::splice_identity`]
+    /// — so the parity captures are untouched, and off in a **recurrent**
+    /// creature whatever the caller asked for. A back edge is read one tick
+    /// late; rewiring its source straight into the relay's target would deliver
+    /// the value in the same tick instead, which is a different function of the
+    /// record stream. `forwardOnly` is every creature this fleet trains, and it
+    /// is the same boundary [`Engine::remove_dead_structure`] names for the
+    /// same reason: cleanup does not widen a rewrite past what it can prove.
+    fn splice_identity_neurons(&mut self) -> Result<bool, CleanupError> {
+        if !self.options.splice_identity || !self.creature.forward_only {
+            return Ok(false);
+        }
+
+        let mut candidates = Vec::new();
+        for neuron in &self.creature.neurons {
+            // Observation neurons are not listed here at all, and an output or
+            // a constant is never cleanup's to remove.
+            if kind_of(neuron)? == Kind::Hidden && squash_of(neuron)? == SquashType::Identity {
+                candidates.push(neuron.uuid.clone());
+            }
+        }
+
+        let mut changed = false;
+        for uuid in candidates {
+            let Some(plan) = self.plan_splice(&uuid)? else {
+                continue;
+            };
+            self.apply_splice(plan);
+            changed = true;
+        }
+        Ok(changed)
+    }
+
+    /// Work out what splicing `uuid` would do, or answer `None` because it must
+    /// stay.
+    ///
+    /// The neuron stays when any one of these holds — each of them a case where
+    /// the rewire would change what the creature computes, or cost more than
+    /// the neuron is worth:
+    ///
+    /// | Refusal | Why |
+    /// |---|---|
+    /// | a target that does not sum its inward terms, unless the neuron has exactly one inward edge and bias `0` | a `MINIMUM`/`MAXIMUM`/`MEAN`/`HYPOT` target reduces its whole range, so two terms — or one term plus a bias — cannot become the single term one edge carries |
+    /// | an `IF` target and a bias, in a creature carrying no support constant | the `IF` adds its bias to **whichever** branch runs, so the relay's constant has to ride a role-scoped edge instead of the target's bias — and minting a node to retire one is no gain |
+    /// | a rewired edge landing on an existing one that [`merge_weights`] will not merge | cleanup's own rule: a `MEAN` reads its inward count and a `HYPOT` squares each term, so one row cannot say what two said |
+    /// | a product, bias fold or merged weight the forward pass cannot carry ([`representable`]) | the compiled network computes in `f32`, so a value past that range reaches it as an infinity |
+    /// | more than [`MAX_NET_NEW_SYNAPSES_PER_SPLICE`] net new synapses | the score's 10:1 neuron-to-synapse ratio: past nine, the trade stops paying |
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CleanupError::UnknownEndpoint`] when an edge names a target
+    /// the creature does not carry, and [`CleanupError::Creature`] when a
+    /// neuron declares a squash name this crate does not know.
+    fn plan_splice(&self, uuid: &str) -> Result<Option<SplicePlan>, CleanupError> {
+        let Some(neuron) = self.creature.neurons.iter().find(|n| n.uuid == uuid) else {
+            return Ok(None);
+        };
+        let bias = neuron.bias;
+
+        let inward: Vec<SynapseExport> = self
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.to_uuid == uuid)
+            .cloned()
+            .collect();
+        let outward: Vec<SynapseExport> = self
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.from_uuid == uuid)
+            .cloned()
+            .collect();
+        // Neither end is this pass's business: a neuron with nothing inward is
+        // `fold_zero_inward_hidden`'s constant, and one with nothing outward is
+        // `remove_dead_structure`'s dead node.
+        if inward.is_empty() || outward.is_empty() {
+            return Ok(None);
+        }
+        // A neuron on **both** ends of one edge would be rewired into itself,
+        // naming a neuron the splice has just removed. Only a recurrent
+        // creature can carry such an edge, which `splice_identity_neurons`
+        // already refuses wholesale — restated here so the plan cannot depend
+        // on that gate staying where it is.
+        if inward.iter().any(|s| s.from_uuid == uuid) {
+            return Ok(None);
+        }
+
+        // Where a role-scoped bias can go, if one has to. `normalise_constants`
+        // runs before the splice in every pass, so any constant present is
+        // already worth 1 and `1 · w` is the term the weight names.
+        let support: Option<String> = self
+            .creature
+            .neurons
+            .iter()
+            .find(|n| n.neuron_type == "constant" && n.bias == SUPPORT_CONSTANT_BIAS)
+            .map(|n| n.uuid.clone());
+
+        let squashes = self.squash_map()?;
+        let mut targets: Vec<SquashType> = Vec::with_capacity(outward.len());
+        for out in &outward {
+            let Some(target_squash) = squashes.get(&out.to_uuid).copied() else {
+                return Err(CleanupError::UnknownEndpoint {
+                    uuid: out.to_uuid.clone(),
+                });
+            };
+            if !sums_inward_terms(target_squash) {
+                if inward.len() != 1 || bias != 0.0 {
+                    return Ok(None);
+                }
+            } else if target_squash == SquashType::If && bias != 0.0 && support.is_none() {
+                return Ok(None);
+            }
+            targets.push(target_squash);
+        }
+
+        let mut synapses: Vec<SynapseExport> = self
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.from_uuid != uuid && s.to_uuid != uuid)
+            .cloned()
+            .collect();
+        let removed = self.creature.synapses.len() - synapses.len();
+        let before = synapses.len();
+
+        for (out, target_squash) in outward.iter().zip(targets.iter().copied()) {
+            // Only an `IF` can tell roles apart, and the role a rewired edge
+            // plays there is the one the edge it replaces played.
+            // `canonicalise` strips it everywhere else.
+            let role = if target_squash == SquashType::If {
+                out.synapse_type.clone()
+            } else {
+                None
+            };
+
+            for feed in &inward {
+                let weight = feed.weight * out.weight;
+                if !representable(weight) {
+                    return Ok(None);
+                }
+                let rewired = SynapseExport {
+                    from_uuid: feed.from_uuid.clone(),
+                    to_uuid: out.to_uuid.clone(),
+                    weight,
+                    synapse_type: role.clone(),
+                };
+                let constant_source = self.is_support_constant(&rewired.from_uuid);
+                if plan_edge(&mut synapses, rewired, target_squash, constant_source).is_none() {
+                    return Ok(None);
+                }
+            }
+
+            // An `IF` adds its bias to whichever branch runs, so the relay's
+            // constant cannot go into the target's bias — a bias-1 support
+            // constant on an edge into the **same role** contributes
+            // `w_out · bias` to that arm and to no other, which is what the
+            // relay contributed.
+            if target_squash == SquashType::If && bias != 0.0 {
+                let weight = out.weight * bias;
+                if !representable(weight) {
+                    return Ok(None);
+                }
+                let from_uuid = support
+                    .clone()
+                    .expect("the qualification loop refused an IF target without one");
+                let carried = SynapseExport {
+                    from_uuid,
+                    to_uuid: out.to_uuid.clone(),
+                    weight,
+                    synapse_type: role.clone(),
+                };
+                if plan_edge(&mut synapses, carried, target_squash, true).is_none() {
+                    return Ok(None);
+                }
+            }
+        }
+
+        // `saturating_sub` because a splice that removes more edges than it
+        // adds is free: the rule is a ceiling, not a floor.
+        if (synapses.len() - before).saturating_sub(removed) > MAX_NET_NEW_SYNAPSES_PER_SPLICE {
+            return Ok(None);
+        }
+
+        let mut bias_deltas: Vec<(String, f64)> = Vec::new();
+        if bias != 0.0 {
+            for (out, target_squash) in outward.iter().zip(targets.iter().copied()) {
+                // An `IF` took its share on the role-scoped support edge above,
+                // and an aggregate target only ever sees a bias-`0` relay.
+                if target_squash == SquashType::If {
+                    continue;
+                }
+                let delta = out.weight * bias;
+                if !representable(delta) {
+                    return Ok(None);
+                }
+                match bias_deltas.iter_mut().find(|(t, _)| t == &out.to_uuid) {
+                    Some(entry) => entry.1 += delta,
+                    None => bias_deltas.push((out.to_uuid.clone(), delta)),
+                }
+            }
+            for (target, delta) in &bias_deltas {
+                let Some(neuron) = self.creature.neurons.iter().find(|n| &n.uuid == target) else {
+                    return Err(CleanupError::UnknownEndpoint {
+                        uuid: target.clone(),
+                    });
+                };
+                if !representable(neuron.bias + delta) {
+                    return Ok(None);
+                }
+            }
+        }
+
+        Ok(Some(SplicePlan {
+            uuid: uuid.to_string(),
+            synapses,
+            bias_deltas,
+        }))
+    }
+
+    /// Commit a plan [`Engine::plan_splice`] already proved exact.
+    fn apply_splice(&mut self, plan: SplicePlan) {
+        self.creature.synapses = plan.synapses;
+        for (target, delta) in plan.bias_deltas {
+            for neuron in &mut self.creature.neurons {
+                if neuron.uuid == target {
+                    neuron.bias += delta;
+                }
+            }
+        }
+        self.creature.neurons.retain(|n| n.uuid != plan.uuid);
+        self.spliced_neurons.push(plan.uuid);
+    }
+
     /// Hold the constant support invariants: no squash, bias exactly 1, and no
     /// more than [`MAX_SUPPORT_CONSTANTS`] of them.
     ///
@@ -1551,6 +1887,57 @@ pub(crate) fn is_observation_uuid(creature: &CreatureExport, uuid: &str) -> bool
     uuid.strip_prefix("input-")
         .and_then(|index| index.parse::<usize>().ok())
         .is_some_and(|index| index < creature.input)
+}
+
+/// Is this a value the **forward pass** can carry?
+///
+/// A creature stores `f64`, but [`crate::network::CompiledNetwork`] computes in
+/// `f32`, so a product that overflows `f32` reaches the forward pass as an
+/// infinity however finite it looked in the export. The splice's magnitude rule
+/// stays count-only — no comparison against the creature's largest weight, and
+/// no `growthCost` in the request — but "finite" is asked in the precision the
+/// value is actually read in. `NaN` and an `f64` infinity both fail here too:
+/// the cast carries them through.
+fn representable(value: f64) -> bool {
+    (value as f32).is_finite()
+}
+
+/// Add one planned edge to `synapses`, merging it into the row already holding
+/// its readable key.
+///
+/// `None` means the merge would not be exact — cleanup's own [`merge_weights`]
+/// rule refused it, or the result was not a number — so the splice that planned
+/// it must not happen. The caller keeps the neuron instead.
+fn plan_edge(
+    synapses: &mut Vec<SynapseExport>,
+    edge: SynapseExport,
+    target_squash: SquashType,
+    source_is_constant: bool,
+) -> Option<()> {
+    let wanted = canonical_role(target_squash, role_of(&edge));
+    let collision = synapses.iter().position(|s| {
+        s.from_uuid == edge.from_uuid
+            && s.to_uuid == edge.to_uuid
+            && canonical_role(target_squash, role_of(s)) == wanted
+    });
+    let Some(index) = collision else {
+        synapses.push(edge);
+        return Some(());
+    };
+    let merged = merge_weights(
+        merge_rule(target_squash),
+        synapses[index].weight,
+        edge.weight,
+        source_is_constant,
+        &edge,
+        target_squash,
+    )
+    .ok()?;
+    if !representable(merged) {
+        return None;
+    }
+    synapses[index].weight = merged;
+    Some(())
 }
 
 /// Combine two edges that share one readable key, or refuse to.

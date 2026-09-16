@@ -473,6 +473,11 @@ pub struct PruneResponse {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub restored_if_roles: Vec<SynapseKeyJson>,
+    /// Hidden `IDENTITY` neurons spliced out, their sources wired straight into
+    /// their targets (Issue #688). Skipped when empty, like every other list
+    /// here, so a consumer must treat its absence as "nothing was spliced".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spliced_neurons: Vec<String>,
     /// The mean folds applied, one per compensated target.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bias_folds: Vec<BiasFoldJson>,
@@ -519,6 +524,7 @@ impl From<&PruneResult> for PruneResponse {
             downgraded_if_neurons,
             static_if_neurons,
             restored_if_roles,
+            spliced_neurons,
             bias_folds,
             weight_shares,
             uncompensated,
@@ -546,6 +552,7 @@ impl From<&PruneResult> for PruneResponse {
             downgraded_if_neurons: downgraded_if_neurons.clone(),
             static_if_neurons: static_if_neurons.iter().map(Into::into).collect(),
             restored_if_roles: restored_if_roles.iter().map(Into::into).collect(),
+            spliced_neurons: spliced_neurons.clone(),
             bias_folds: bias_folds.iter().map(Into::into).collect(),
             weight_shares: weight_shares.iter().map(Into::into).collect(),
             uncompensated: uncompensated.iter().map(Into::into).collect(),
