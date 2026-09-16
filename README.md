@@ -230,12 +230,31 @@ return — the subprocess form above is the contract.
 
 It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
 `cargo metadata` and `rustc` is what the MSRV gate reads. `rustup` itself is
-never invoked, so a distro-packaged toolchain is fine — a missing one still
-points at <https://rustup.rs>. Two things it deliberately does **not** do. It never edits
-`RUSTFLAGS`: the caller's value reaches `cargo` unchanged and it sets no
-defaults of its own, so `-C target-cpu=native` stays consumer-owned exactly as
-above. And it never installs a toolchain over the network — a missing `cargo`
-or `rustup` exits non-zero naming <https://rustup.rs>. MSRV comes from
+never invoked, so a distro-packaged toolchain is fine. The bootstrap path below
+additionally needs `curl`, `mktemp` and `sha256sum` (or `shasum`) — each is
+checked by name before anything is fetched, so a missing one reads as the
+missing tool rather than as a network failure.
+
+With **no `rustc` at all** the toolchain is bootstrapped rather than demanded
+(Issue #699): the script downloads the pinned `rustup-init` for the detected
+host target over `--proto "=https" --tlsv1.2`, and executes it — as
+`-y --no-modify-path --profile minimal` — only once its SHA-256 matches the
+digest inlined in the script for that target. It is never
+`curl https://sh.rustup.rs | sh`: that runs whatever the distribution point
+served, and what it installs then compiles every `build.rs` in the dependency
+graph. The bootstrap fails **closed** — an unknown host target, no pinned
+digest for it, no `sha256sum`/`shasum`, a failed download, or a digest mismatch
+each exit non-zero with one stderr line naming the cause (the mismatch names
+the URL and both digests), having executed nothing; a toolchain still missing
+afterwards exits non-zero naming <https://rustup.rs>. The download lands in a
+`mktemp -d` the cleanup trap reaps, no shell rc file is edited — the new
+toolchain reaches the run through `PATH` alone — and with `rustc` present
+nothing is downloaded at all. To bump rustup, change `_RUNLIB_RUSTUP_VERSION`
+and every digest in `_runlib_pinned_rustup_digest` together: they are one pin.
+
+The one thing it deliberately does **not** do is edit `RUSTFLAGS`: the caller's
+value reaches `cargo` unchanged and it sets no defaults of its own, so
+`-C target-cpu=native` stays consumer-owned exactly as above. MSRV comes from
 `rust-version` in the crate manifest when present; a `rust-toolchain.toml` is
 rustup's own business.
 
@@ -243,7 +262,13 @@ rustup's own business.
 flowchart TD
     A["runlib.sh, from the repository root"] --> B{"artefact and stamp match<br/>the crate semver?"}
     B -- "yes" --> C["one stderr line: already installed<br/>print the path, run no cargo"]
-    B -- "no" --> D["cargo metadata --no-deps:<br/>single member, targets, MSRV"]
+    B -- "no" --> T{"rustc on PATH?"}
+    T -- "yes" --> D["cargo metadata --no-deps:<br/>single member, targets, MSRV"]
+    T -- "no" --> U["download the pinned rustup-init<br/>for the host target"]
+    U --> V{"SHA-256 matches<br/>the inlined digest?"}
+    V -- "no, or no target, digest tool<br/>or download at all" --> F
+    V -- "yes" --> W["rustup-init -y --no-modify-path<br/>--profile minimal, then PATH"]
+    W --> D
     D --> K{"shape complete and<br/>stamped at this version?"}
     K -- "yes" --> C
     K -- "no" --> E["cargo build --release"]
@@ -258,7 +283,10 @@ flowchart TD
 crates with a `cargo` shim on `PATH`, so the skip, the rebuild triggers, the bin
 / cdylib / both shapes, the failure path and the `target/` removal are asserted
 as observable outcomes — the shim records every invocation, which is what makes
-"runs no `cargo` command" an assertion rather than an inference.
+"runs no `cargo` command" an assertion rather than an inference. The rustup
+bootstrap is covered the same way and without a network: a `curl` shim serves a
+*fake* `rustup-init` that writes a marker when executed, so "the unverified
+download is never executed" is asserted by that marker's absence.
 
 ### Canonical `family-pins.sh` (Issue #681)
 
