@@ -192,6 +192,7 @@ expressible, and the synthetic tests catch header-overrun and undercover cases.
 - **`training_bin_stream`** (`neat-core/src/training_bin_stream.rs`) — **one** chunked `.bin` scan API: pipelined double-buffer reads on native hosts, sequential `File::read` chunks on the wasm family (same `for_each_read_chunk` callback). Used by **NEAT-AI-scorer** for production-sized forward-only scoring.
 - Root **`Cargo.toml`** is a **virtual workspace**; **`[workspace.package].version`** is what the PR **auto-bump** job edits; **`neat-core`** uses `version.workspace = true`.
 - **`scripts/runlib.sh`** (Issue #680) — the canonical build → install → clean helper the NEAT-AI Rust siblings run. It lives **here** and is copied byte-for-byte downstream: change behaviour on `Develop` in this repository and re-copy outward, never edit a sibling's copy. Contract and gate: [README "Canonical `runlib.sh`"](README.md#canonical-runlibsh-issue-680), `tests/scripts/runlib.bats`.
+- **`scripts/family-pins.sh`** (Issue #681) — the canonical helper that moves a consumer's NEAT-AI family git-tag pins to the latest release, under the same copy contract: it lives **here** and is copied byte-for-byte downstream, never edited in a sibling. Contract and gate: [README "Canonical `family-pins.sh`"](README.md#canonical-family-pinssh-issue-681), `tests/scripts/family_pins.bats`.
 
 ## Build profiles (Issue #546)
 

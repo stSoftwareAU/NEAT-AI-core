@@ -115,6 +115,7 @@ safe-fall-back invariants; see
 | `deny.toml` | `cargo deny` (licences, advisories, bans). The `[bans]` wrappers bound the unmaintained `winapi ← page_size ← criterion` and `tinytemplate ← criterion` chains to their one dev-dependency path — see [Orphaned transitive crates](SECURITY.md#orphaned-transitive-crates-issues-676-677); `tests/cargo_orphan_containment_test.ts` is the gate that fails if the policy or the chain changes. |
 | `neat-core/benches/` | Opt-in Criterion harnesses: `hot_paths` (core hot paths) and `parallel_scoring` (data-parallel scoring, needs `--features parallel`); see `neat-core/benches/README.md`. |
 | `scripts/runlib.sh` | Canonical build → install → clean helper for the NEAT-AI Rust siblings (Issue #680). It lives here and is copied byte-for-byte downstream — see [Canonical `runlib.sh`](#canonical-runlibsh-issue-680). Gated by `tests/scripts/runlib.bats`. |
+| `scripts/family-pins.sh` | Canonical helper that moves a consumer's NEAT-AI family git-tag pins to the latest release (Issue #681). It lives here and is copied byte-for-byte downstream — see [Canonical `family-pins.sh`](#canonical-family-pinssh-issue-681). Gated by `tests/scripts/family_pins.bats`. |
 | `quality.sh` | Local gate (fmt, clippy, tests, doc, deny, bats). `bats` is required, not optional: it is the only gate that *runs* the shell scripts (`bash -n` and shellcheck only read them), so a missing binary — or a missing/empty `tests/scripts` suite — fails the run rather than warning and continuing (Issue #631). Install with `brew install bats-core` or `sudo apt-get install -y bats`. |
 | `.github/workflows/ci.yml` | CI gate. Runs on **pull requests** and `workflow_dispatch` only — `Develop` is PR-only, so a push to it is the merge of an already-gated PR and re-running there duplicated the gating run (Issue #580). On pull requests the `quality` job — the full PR pipeline — runs the lint gate (`cargo clippy -D warnings`), which compiles the workspace; the `rust-gates` job carries the same lint gate plus the explicit compile/syntax gate (`cargo check --all-targets`) and is skipped on PRs rather than compiling the workspace twice (Issue #337), leaving `workflow_dispatch` as its on-demand lane. |
 | `bump-deps.sh` | Cargo dep refresh + advisory scan (`cargo deny check advisories`, falling back to `cargo audit`) + native/WASM build ([Vibe Coder](#glossary-vibe-coder) hook). Exits non-zero only when the tree it produced must not be kept — see [Dependency updates](#dependency-updates-two-channels). |
@@ -257,6 +258,65 @@ crates with a `cargo` shim on `PATH`, so the skip, the rebuild triggers, the bin
 / cdylib / both shapes, the failure path and the `target/` removal are asserted
 as observable outcomes — the shim records every invocation, which is what makes
 "runs no `cargo` command" an assertion rather than an inference.
+
+### Canonical `family-pins.sh` (Issue #681)
+
+`scripts/family-pins.sh` is the other file every NEAT-AI family repository
+copies byte-for-byte, and it lives **here** under the same copy contract as
+`runlib.sh`: behaviour changes are made on `Develop` in this repository and
+re-copied outward, never edited downstream.
+
+Run it from a consumer's repository root, in that consumer's own PR — that is
+the only way a pin moves, and running it on every PR is what keeps the family
+on current versions:
+
+```bash
+./scripts/family-pins.sh
+```
+
+It reads the root manifest and every `[workspace] members` manifest (or the
+manifests named with `--manifest`), finds each dependency declared as
+`{ git = "https://github.com/stSoftwareAU/NEAT-AI-<x>", tag = "v<semver>" }` —
+the inline form and the `[dependencies.<name>]` table form both — resolves
+that repository's newest **released** `v<major>.<minor>.<patch>` tag with
+`git ls-remote --tags` (the family repositories are public, so no credential is
+needed), rewrites the pin when the remote carries a newer release, and runs
+`cargo update --package <dep>` so `Cargo.lock` follows. One stderr line is
+printed per pin moved and nothing is written to stdout.
+
+| Property | Behaviour |
+|----------|-----------|
+| Idempotent | A pin already on the newest release is left byte-for-byte alone; the run exits 0 having run no `cargo` command at all. |
+| Releases only | A pre-release tag such as `v1.0.0-rc1` is never what a pin is moved onto. On an equal version triple a release supersedes a pre-release pin. |
+| Fails loud | A remote that cannot be listed, a remote with no released tag, a manifest that does not come back rewritten, or a failing `cargo update` exits non-zero. A pin the reader cannot rewrite — one spread over several lines — is refused by name rather than passed over as "already current". |
+| Leaves the rest alone | A dependency outside the family, a commented-out declaration, and a family dependency pinned by `rev` or `branch` are untouched. |
+
+```mermaid
+flowchart TD
+    A["family-pins.sh, from the consumer repository root"] --> B["read the root manifest<br/>and every workspace member"]
+    B --> C{"a family git-tag pin?"}
+    C -- "no" --> D["leave the line exactly as it is"]
+    C -- "yes" --> E["git ls-remote --tags:<br/>newest released v-tag"]
+    E -- "remote cannot be listed" --> F["exit non-zero, pin left stale"]
+    E --> G{"newer than the pin?"}
+    G -- "no" --> D
+    G -- "yes" --> H["rewrite the tag,<br/>one stderr line per pin moved"]
+    H --> I["cargo update --package dep<br/>so Cargo.lock follows"]
+```
+
+`tests/scripts/family_pins.bats` is the gate. It runs the real script against
+fixture checkouts whose family remote is a real local bare repository carrying
+real `v*` tags, reached through a `url.<base>.insteadOf` rewrite, so the tag
+resolution is real `git ls-remote` output rather than a mock; `cargo` is a shim
+that records its invocations, which is what makes "ran `cargo update` for the
+moved pin" and "ran no `cargo` command at all" assertions rather than
+inferences.
+
+The core side of the same move is in
+[`RELEASING.md`](RELEASING.md#changing-or-removing-public-api-the-three-phase-flow):
+`scripts/check-downstream-consumers.sh` appends a cargo `[patch]` override to
+each cloned consumer, so a consumer that pins a release is still compiled
+against the candidate core.
 
 ## Cargo features
 
