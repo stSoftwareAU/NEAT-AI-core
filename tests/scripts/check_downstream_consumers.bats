@@ -359,3 +359,16 @@ TOML
   [[ "$output" == *"([patch] not used)"* ]]
   [[ "$output" != *"✅ stSoftwareAU/Pinned compiles"* ]]
 }
+
+@test "a --core path carrying a quote is refused rather than written into a [patch] string" {
+  # The candidate path is interpolated into a TOML string; a quote in it would
+  # produce a manifest cargo reads as something else entirely.
+  local odd="$WORK/co\"re"
+  mkdir -p "$odd/neat-core"
+  printf '[package]\nname = "neat-core"\n' >"$odd/neat-core/Cargo.toml"
+  run env PATH="$BIN:$PATH" CARGO_LOG="$CARGO_LOG" \
+    "$SCRIPT" --registry "$REGISTRY" --core "$odd"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"contains a quote or a backslash"* ]]
+  [ ! -f "$CARGO_LOG" ]
+}

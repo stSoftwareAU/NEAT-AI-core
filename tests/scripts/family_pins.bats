@@ -46,6 +46,11 @@ SHIM
 
   make_remote NEAT-AI-core v0.15.9 v0.15.10 v0.16.0 v0.17.0-rc1
   make_remote NEAT-AI-Rebase v1.0.0 v1.2.0
+  # v0.9.0 sorts *after* v0.10.0 lexically and before it numerically: the
+  # version comparison is what this remote exists to pin down.
+  make_remote NEAT-AI-Ockham v0.9.0 v0.10.0
+  # Nothing released yet — only a pre-release.
+  make_remote NEAT-AI-Lamarck v1.0.0-rc1
 }
 
 # --- fixture plumbing -------------------------------------------------------
@@ -66,7 +71,7 @@ make_remote() {
   for tag in "$@"; do
     git -C "$src" tag "$tag"
   done
-  git clone -q --bare "$src" "${REMOTES}/${name}" 2>/dev/null
+  git clone -q --bare "$src" "${REMOTES}/${name}"
 }
 
 # write_consumer <manifest-body> — a consumer checkout whose root manifest is
@@ -255,7 +260,7 @@ neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core",
               tag = "v0.15.9" }
 TOML
   run_pins
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 1 ]
   [[ "$output" == *"spread over several lines"* ]]
 }
 
@@ -312,4 +317,133 @@ TOML
   run_pins
   [ "$status" -eq 2 ]
   [[ "$output" == *"unknown argument: --nope"* ]]
+}
+
+@test "versions are compared numerically, not lexically" {
+  # A lexical comparison picks v0.9.0 over v0.10.0 and leaves the consumer a
+  # minor version behind for ever.
+  write_consumer <<'TOML'
+[package]
+name = "fixture-consumer"
+version = "0.1.0"
+
+[dependencies]
+ockham = { git = "https://github.com/stSoftwareAU/NEAT-AI-Ockham", tag = "v0.9.0" }
+TOML
+  run_pins
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"ockham v0.9.0 → v0.10.0"* ]]
+  grep -q 'tag = "v0.10.0"' "${CONSUMER}/Cargo.toml"
+}
+
+@test "a pre-release pin moves onto the release of the same version" {
+  write_consumer <<'TOML'
+[package]
+name = "fixture-consumer"
+version = "0.1.0"
+
+[dependencies]
+neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.16.0-rc1" }
+TOML
+  run_pins
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"neat-core v0.16.0-rc1 → v0.16.0"* ]]
+  grep -q 'tag = "v0.16.0"' "${CONSUMER}/Cargo.toml"
+}
+
+@test "a remote carrying no released tag fails the run rather than pinning a pre-release" {
+  write_consumer <<'TOML'
+[package]
+name = "fixture-consumer"
+version = "0.1.0"
+
+[dependencies]
+lamarck = { git = "https://github.com/stSoftwareAU/NEAT-AI-Lamarck", tag = "v0.1.0" }
+TOML
+  run_pins
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"carries no released v<major>.<minor>.<patch> tag"* ]]
+  grep -q 'tag = "v0.1.0"' "${CONSUMER}/Cargo.toml"
+}
+
+@test "a family dependency pinned by rev or branch is left alone" {
+  write_consumer <<'TOML'
+[package]
+name = "fixture-consumer"
+version = "0.1.0"
+
+[dependencies]
+by-rev = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", rev = "0123456789abcdef0123456789abcdef01234567" }
+by-branch = { git = "https://github.com/stSoftwareAU/NEAT-AI-Rebase", branch = "Develop" }
+TOML
+  cp "${CONSUMER}/Cargo.toml" "${WORK}/before.toml"
+  run_pins
+  [ "$status" -eq 0 ]
+  diff "${WORK}/before.toml" "${CONSUMER}/Cargo.toml"
+  [ ! -f "$FAMILY_PINS_SHIM_LOG" ]
+}
+
+@test "a root manifest that cannot be read fails the run rather than reporting no members" {
+  [ "$(id -u)" -ne 0 ] || skip "file permissions do not constrain root"
+  write_consumer <<'TOML'
+[workspace]
+members = ["app"]
+TOML
+  mkdir -p "${CONSUMER}/app"
+  cat >"${CONSUMER}/app/Cargo.toml" <<'TOML'
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.15.9" }
+TOML
+  chmod 000 "${CONSUMER}/Cargo.toml"
+  run_pins
+  chmod 644 "${CONSUMER}/Cargo.toml"
+  [ "$status" -eq 1 ]
+  # It names the reader that failed: a members reader whose status was
+  # swallowed would report an empty workspace and blame something else.
+  [[ "$output" == *"could not read the [workspace] members"* ]]
+  # The member's pin is still stale — the run says so rather than exiting 0.
+  grep -q 'tag = "v0.15.9"' "${CONSUMER}/app/Cargo.toml"
+}
+
+@test "a manifest that cannot be rewritten fails the run" {
+  [ "$(id -u)" -ne 0 ] || skip "file permissions do not constrain root"
+  mkdir -p "${CONSUMER}/locked"
+  cat >"${CONSUMER}/locked/Cargo.toml" <<'TOML'
+[package]
+name = "locked"
+version = "0.1.0"
+
+[dependencies]
+neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.15.9" }
+TOML
+  write_consumer <<'TOML'
+[package]
+name = "fixture-consumer"
+version = "0.1.0"
+TOML
+  chmod 500 "${CONSUMER}/locked"
+  EXTRA_ARGS="--manifest locked/Cargo.toml"
+  run_pins
+  chmod 700 "${CONSUMER}/locked"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"family-pins:"* ]]
+  grep -q 'tag = "v0.15.9"' "${CONSUMER}/locked/Cargo.toml"
+  [ ! -f "$FAMILY_PINS_SHIM_LOG" ]
+}
+
+@test "--help prints the usage block and exits 0" {
+  write_consumer <<'TOML'
+[package]
+name = "fixture-consumer"
+version = "0.1.0"
+TOML
+  EXTRA_ARGS="--help"
+  run_pins
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--manifest FILE"* ]]
+  [[ "$output" == *"Exit codes:"* ]]
 }

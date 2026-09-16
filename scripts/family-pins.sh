@@ -52,11 +52,13 @@ _fp_usage() {
   sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
-# The `members` entries of the root manifest $1, one per line.
+# The `members` entries of the root manifest $1, one per line. Returns awk's
+# own status: a reader that failed must not read as "this workspace has no
+# members", which would leave every member's pin silently stale.
 #
-# This reader is a deliberate copy of the one in the canonical `runlib.sh`:
-# both scripts are copied byte-for-byte into every sibling, so sharing a third
-# file would make each copy depend on the other arriving too.
+# This reader is adapted from the one in the canonical `runlib.sh`: both
+# scripts are copied byte-for-byte into every sibling, so sharing a third file
+# would make each copy depend on the other arriving too.
 _fp_workspace_members() {
   [[ -f "$1" ]] || return 0
   awk '
@@ -87,7 +89,6 @@ _fp_workspace_members() {
       for (i = 2; i <= n; i += 2) print parts[i]
     }
   ' "$1"
-  return 0
 }
 
 # Every family git-tag pin in manifest $1, one `<lineno>\t<dep>\t<url>\t<tag>`
@@ -96,8 +97,9 @@ _fp_workspace_members() {
 #
 # A commented-out declaration is not a pin: any line whose first non-blank
 # character is `#` is skipped, so a pin left behind in a comment is never
-# rewritten. A family pin spread over several lines is refused loudly (exit 4)
-# rather than passed over — a pin this reader cannot rewrite must not read as
+# rewritten. A family pin spread over several lines is refused loudly — the
+# reader stops with a message naming the file and the line, and the run exits 1
+# — rather than passed over: a pin this reader cannot rewrite must not read as
 # "already current".
 _fp_pins() {
   awk -v family="$FAMILY_URL_RE" '
@@ -261,6 +263,11 @@ if ((${#manifests[@]} == 0)); then
   [[ -f "$root_manifest" ]] ||
     { echo "no Cargo.toml in $REPO_ROOT — run family-pins.sh from the repository root" >&2; exit 2; }
   manifests+=("$root_manifest")
+  # Captured with an explicit status check, never straight into the heredoc: a
+  # `$(…)` whose reader died is an empty member list and a run that reports
+  # every member pin already current.
+  members="$(_fp_workspace_members "$root_manifest")" ||
+    _fp_die "could not read the [workspace] members of $root_manifest"
   while IFS= read -r member; do
     [[ -n "$member" ]] || continue
     # Unquoted on purpose: a `members` entry may be a glob (`crates/*`).
@@ -270,7 +277,7 @@ if ((${#manifests[@]} == 0)); then
       manifests+=("$candidate")
     done
   done <<EOF
-$(_fp_workspace_members "$root_manifest")
+$members
 EOF
 else
   for manifest in "${manifests[@]}"; do
