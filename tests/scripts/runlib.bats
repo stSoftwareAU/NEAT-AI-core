@@ -840,6 +840,24 @@ JSON
   [ "$status" -ne 0 ]
   run grep -F "1.93.1" "$ERR"
   [ "$status" -eq 0 ]
+  run grep -F "https://rustup.rs" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+}
+
+@test "a pinned toolchain install that fails exits non-zero naming the required version" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.92.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  export RUNLIB_SHIM_RUSTUP_FAILS="1"
+  run invoke
+  [ "$status" -ne 0 ]
+  run grep -F "1.93.1" "$ERR"
+  [ "$status" -eq 0 ]
+  run grep -F "https://rustup.rs" "$ERR"
+  [ "$status" -eq 0 ]
   [ ! -e "${CARGO_HOME}/bin/demo_app" ]
   [ -d "${REPO}/target" ]
 }
