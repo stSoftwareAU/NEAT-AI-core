@@ -14,9 +14,10 @@
 
 use neat_core::{
     CleanupOptions, CleanupOutcome, CreatureExport, IfRepair, MAX_NET_NEW_SYNAPSES_PER_SPLICE,
-    PruneResult, SynapseKey, SynapseType, ValidateOptions, cleanup_creature, cleanup_creature_with,
-    compile_creature, creature_validate, parse_creature_json, parse_synapse_type, prune_neuron,
-    prune_synapse, validate_creature_topology,
+    PRUNE_PARITY_CASES, PruneResult, SynapseKey, SynapseType, TransformClass, ValidateOptions,
+    cleanup_creature, cleanup_creature_with, compile_creature, creature_validate,
+    parse_creature_json, parse_synapse_type, prune_neuron, prune_synapse,
+    validate_creature_topology,
 };
 
 /// `f32` activation slack: the creatures carry `f64` weights and the compiled
@@ -633,6 +634,24 @@ fn the_parity_default_splices_nothing() {
 }
 
 #[test]
+fn the_parity_default_leaves_every_typescript_capture_untouched() {
+    // The captures are what `cleanup_creature`'s default policy is graded
+    // against (`neat-core/tests/prune_cleanup.rs` asserts the creatures
+    // themselves, byte for byte). This is the Issue #688 half of that: the
+    // splice must not reach any of them.
+    for case in PRUNE_PARITY_CASES {
+        let outcome = cleanup_creature(&case.after())
+            .unwrap_or_else(|e| panic!("{}: cleanup of the capture failed: {e}", case.name));
+        assert!(
+            outcome.spliced_neurons.is_empty(),
+            "{}: the parity default spliced {:?}",
+            case.name,
+            outcome.spliced_neurons
+        );
+    }
+}
+
+#[test]
 fn both_pruning_entry_points_splice_and_report_it() {
     // Removing `h-drop` strands nothing, but it leaves `h-1` a pure relay.
     let before = creature(
@@ -691,4 +710,47 @@ fn both_pruning_entry_points_splice_and_report_it() {
         vec!["h-1".to_string(), "h-2".to_string()],
         "the relay chain the removal left goes with it"
     );
+}
+
+#[test]
+fn a_splice_leaves_an_otherwise_exact_prune_exact() {
+    // The removed edge's source is a constant, so the term it took away is one
+    // the creature itself proves and the fold is exact. The splice that follows
+    // is exact too, so nothing about it may downgrade the label.
+    let before = creature(
+        r#"{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":1,"output":1,
+      "neurons":[
+        {"type":"constant","uuid":"c-1","bias":1.0},
+        {"type":"hidden","uuid":"h-1","bias":0.0,"squash":"IDENTITY"},
+        {"type":"output","uuid":"output-0","bias":0.25,"squash":"IDENTITY"}
+      ],
+      "synapses":[
+        {"weight":2.0,"fromUUID":"input-0","toUUID":"h-1"},
+        {"weight":0.2,"fromUUID":"c-1","toUUID":"output-0"},
+        {"weight":3.0,"fromUUID":"h-1","toUUID":"output-0"}
+      ]
+    }"#,
+    );
+    let key = SynapseKey {
+        from_uuid: "c-1".to_string(),
+        to_uuid: "output-0".to_string(),
+        role: SynapseType::Standard,
+    };
+    let result = prune_synapse(&before, &key, None).expect("the synapse prune succeeds");
+
+    assert_eq!(result.spliced_neurons, vec!["h-1".to_string()]);
+    assert_eq!(
+        result.transform,
+        TransformClass::Exact,
+        "the splice is exact, so it cannot spoil an exact prune"
+    );
+    assert_eq!(result.creature.neurons.len(), 1, "only the output is left");
+    assert_eq!(result.creature.synapses.len(), 1);
+    assert_close(
+        "the observation reaches the output at the product weight",
+        weight(&result.creature, "input-0", "output-0"),
+        6.0,
+    );
+    assert_valid("exact_with_splice", &result.creature);
 }
