@@ -314,7 +314,16 @@ shim_path_without_rustup() {
 }
 
 invoke_with_path() {
-  ( cd "$REPO" && PATH="$1" "$SCRIPT" > "$OUT" 2> "$ERR" )
+  local path="$1"
+  shift
+  ( cd "$REPO" && PATH="$path" "$SCRIPT" "$@" > "$OUT" 2> "$ERR" )
+}
+
+# The script with arguments — `--toolchain-only`, or a bad one — on the shim
+# PATH. stdout and stderr stay in separate files, because the toolchain-only
+# stdout contract is asserted byte-exactly.
+invoke_args() {
+  ( cd "$REPO" && "$SCRIPT" "$@" > "$OUT" 2> "$ERR" )
 }
 
 # --- install shapes ---------------------------------------------------------
@@ -1842,4 +1851,155 @@ SHIM
   [ -d "${REPO}/target" ]
   run grep -F "curl not found" "$ERR"
   [ "$status" -eq 0 ]
+}
+
+# --- the toolchain-only entry point (Issue #701) ----------------------------
+#
+# `--toolchain-only` runs the same bootstrap → pin repair → graph → gate chain
+# install mode runs, builds nothing and installs nothing, and prints the
+# override toolchain name — or an empty line — on stdout for a caller that runs
+# cargo itself and exports it as `RUSTUP_TOOLCHAIN`. The stdout contract is
+# asserted byte-exactly here: a stray line would be exported as a toolchain
+# name.
+
+@test "--toolchain-only on a satisfied toolchain builds nothing and prints an empty line" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.93.1"
+  run invoke_args --toolchain-only
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "" ]
+  [ "$(wc -l < "$OUT" | tr -d ' ')" -eq 1 ]
+  run grep -F "build" "$RUNLIB_SHIM_LOG"
+  [ "$status" -ne 0 ]
+  [ ! -e "${CARGO_HOME}/bin" ]
+  [ ! -e "${CARGO_HOME}/lib" ]
+  [ -d "${REPO}/target" ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "--toolchain-only prints the required version when the pin is below it" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.92.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke_args --toolchain-only
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "1.93.1" ]
+  [ "$(wc -l < "$OUT" | tr -d ' ')" -eq 1 ]
+  run grep -Fx "toolchain install 1.93.1" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c -e "1.92.0.*1.93.1.*rust-toolchain.toml" "$ERR")" -eq 1 ]
+  run grep -F "build" "$RUNLIB_SHIM_LOG"
+  [ "$status" -ne 0 ]
+  [ ! -e "${CARGO_HOME}/bin" ]
+}
+
+@test "--toolchain-only updates an unpinned channel and still prints an empty line" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  export RUNLIB_SHIM_RUSTC_AFTER_UPDATE="1.93.1"
+  run invoke_args --toolchain-only
+  [ "$status" -eq 0 ]
+  run grep -Fx "update stable" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "" ]
+  [ "$(wc -l < "$OUT" | tr -d ' ')" -eq 1 ]
+  run grep -F "build" "$RUNLIB_SHIM_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "--toolchain-only below the requirement with no rustup fails loud and prints nothing" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.80.0" "1.93.1" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke_with_path "$(shim_path_without_rustup)" --toolchain-only
+  [ "$status" -ne 0 ]
+  [ ! -s "$OUT" ]
+  run grep -F "1.93.1" "$ERR"
+  [ "$status" -eq 0 ]
+  run grep -F "https://rustup.rs" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin" ]
+  [ -d "${REPO}/target" ]
+}
+
+@test "an unknown argument exits 2 with a usage line and never calls cargo" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.93.1"
+  run invoke_args --wat
+  [ "$status" -eq 2 ]
+  [ ! -s "$OUT" ]
+  [ "$(wc -l < "$ERR" | tr -d ' ')" -eq 1 ]
+  run grep -F -- "--toolchain-only" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$(cargo_invocations)" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+}
+
+@test "an argument after --toolchain-only exits 2 and never calls cargo" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.93.1"
+  run invoke_args --toolchain-only extra
+  [ "$status" -eq 2 ]
+  [ ! -s "$OUT" ]
+  [ "$(cargo_invocations)" -eq 0 ]
+}
+
+# The already-installed skip is install mode's; a caller running its own cargo
+# always needs a good toolchain, so the gate runs whatever the stamp says.
+@test "a matching stamp does not short-circuit --toolchain-only" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.92.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  : > "$RUNLIB_SHIM_LOG"
+  : > "$RUNLIB_SHIM_RUSTUP_LOG"
+  run invoke_args --toolchain-only
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "1.93.1" ]
+  run grep -F "metadata" "$RUNLIB_SHIM_LOG"
+  [ "$status" -eq 0 ]
+  run grep -F "build" "$RUNLIB_SHIM_LOG"
+  [ "$status" -ne 0 ]
+}
+
+@test "sourcing the script and calling runlib_ensure_toolchain behaves the same" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.93.1"
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    . "$2"
+    runlib_ensure_toolchain > "$3" 2> "$4"
+  ' _ "$REPO" "$SCRIPT" "$OUT" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "" ]
+  [ "$(wc -l < "$OUT" | tr -d ' ')" -eq 1 ]
+  run grep -F "build" "$RUNLIB_SHIM_LOG"
+  [ "$status" -ne 0 ]
+  [ ! -e "${CARGO_HOME}/bin" ]
+}
+
+@test "a sourced runlib_ensure_toolchain reports the override it selected" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.92.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    . "$2"
+    override="$(runlib_ensure_toolchain 2> "$3")"
+    printf "override=%s toolchain=%s\n" "$override" "${RUSTUP_TOOLCHAIN-<unset>}"
+  ' _ "$REPO" "$SCRIPT" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$output" = "override=1.93.1 toolchain=<unset>" ]
 }

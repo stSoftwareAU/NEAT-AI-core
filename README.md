@@ -219,6 +219,30 @@ sourcing applies `set -euo pipefail` to the calling shell, prepends
 had set, and turns any failure into an `exit` of that shell rather than a
 return — the subprocess form above is the contract.
 
+A caller that runs `cargo` **itself** — `cargo run --example …` inline in a
+checkout, say — cannot use install mode, and needs the gate rather than a
+build. `--toolchain-only` (Issue #701) is that entry point:
+
+```bash
+override="$(./scripts/runlib.sh --toolchain-only)"
+[[ -z "$override" ]] || export RUSTUP_TOOLCHAIN="$override"
+cargo run --release --example generate_snapshot
+```
+
+It runs the same chain install mode runs — the rustup bootstrap, the
+unrunnable-`rustc` repair, the resolved dependency graph and the toolchain gate
+— builds nothing, installs nothing, and prints **only** the override toolchain
+the gate selected on stdout: a bare name such as `1.93.1`, or an empty line
+when the active toolchain already satisfies the requirement. Every gate
+diagnostic goes to stderr, so that stdout is safe to export verbatim. The
+already-installed skip is never consulted — it answers "is the artefact
+current?", and a caller running its own cargo needs a good toolchain whatever
+the stamp says. Failures exit non-zero with install mode's own stderr messages;
+any **other** argument exits `2` with a one-line usage on stderr, having run no
+`cargo` at all, so a stale copy downstream cannot silently run a full build for
+a caller that asked only for the gate. Sourced, the same mode is
+`runlib_ensure_toolchain`.
+
 | Step | Behaviour |
 |------|-----------|
 | Resolve | The single workspace member — the root crate, or the one `[workspace] members` entry — via `cargo metadata --no-deps`. Zero members, or more than one, fails loud. The skip below must decide without running cargo at all, so it reads the crate name, version and declared target shape straight from the manifests. Anything it cannot read unambiguously — a globbed `members` entry, a `crate-type` array split over several lines, several `[[bin]]` tables, a `[[bin]]` table naming something other than the crate, or `autobins` — makes it decline outright and fall through to `cargo metadata`, which is always the authority. A single `[[bin]]` table that names the crate *is* unambiguous and is read, so the common sibling shape (a CLI plus a cdylib) skips with no cargo call at all. Declining is the safe direction: a target the reader failed to notice would otherwise let a half-installed crate report itself complete. |
@@ -284,32 +308,38 @@ loud. Every value handed to `rustup` (the pin, the required version) is
 validated against `^[A-Za-z0-9][A-Za-z0-9._+-]*$` first: `rust-toolchain.toml`
 and `cargo metadata` are repository input, not shell. The selected override is
 recorded in `_RUNLIB_TOOLCHAIN_OVERRIDE` (empty when none); install mode prints
-only the artefact path on stdout, and every gate diagnostic goes to stderr.
+only the artefact path on stdout, `--toolchain-only` prints only that override,
+and every gate diagnostic goes to stderr.
 
 ```mermaid
 flowchart TD
-    A["runlib.sh, from the repository root"] --> B{"artefact and stamp match<br/>the crate semver?"}
+    A["runlib.sh, from the repository root"] --> Z{"argument"}
+    Z -- "neither of the two below" --> Y["one-line usage on stderr,<br/>exit 2, no cargo call"]
+    Z -- "none (install mode)" --> B{"artefact and stamp match<br/>the crate semver?"}
+    Z -- "--toolchain-only" --> T{"rustc on PATH?"}
     B -- "yes" --> C["one stderr line: already installed<br/>print the path, run no cargo"]
-    B -- "no" --> T{"rustc on PATH?"}
-    T -- "yes" --> D["cargo metadata --no-deps:<br/>single member, targets"]
+    B -- "no" --> T
     T -- "no" --> U["download the pinned rustup-init<br/>for the host target"]
     U --> V{"SHA-256 matches<br/>the inlined digest?"}
     V -- "no, or no target, digest tool<br/>or download at all" --> F
     V -- "yes" --> W["rustup-init -y --no-modify-path<br/>--profile minimal, then PATH"]
-    W --> D
-    D --> K{"shape complete and<br/>stamped at this version?"}
+    W --> R
+    T -- "yes" --> R["rustc runnable? if not, rustup<br/>installs the pin, or selects stable"]
+    R --> D["cargo metadata --no-deps:<br/>the single member and its manifest"]
+    D --> K{"install mode, and the shape is<br/>complete and stamped at this version?"}
     K -- "yes" --> C
-    K -- "no" --> M["cargo metadata:<br/>required = highest rust-version<br/>in the resolved graph"]
+    K -- "no, or --toolchain-only" --> M["cargo metadata --filter-platform:<br/>required = highest rust-version<br/>in the resolved graph"]
     M --> N{"active rustc<br/>&gt;= required?"}
-    N -- "yes" --> E
-    N -- "no, unpinned, rustup" --> O["rustup update stable,<br/>re-read rustc"]
-    N -- "no, pin below it, rustup" --> P["rustup toolchain install required,<br/>RUSTUP_TOOLCHAIN override,<br/>one stderr line"]
+    N -- "yes, or an exact pin satisfies it" --> S{"which mode?"}
     N -- "no, no rustup" --> F
+    N -- "no, unpinned or a channel pin" --> O["rustup update stable, or update<br/>the pinned channel; re-read rustc"]
+    N -- "no, exact pin below it too" --> P["rustup toolchain install required,<br/>record the RUSTUP_TOOLCHAIN override,<br/>one stderr line"]
     O --> Q{"&gt;= required?"}
-    Q -- "yes" --> E
+    Q -- "yes" --> S
     Q -- "no" --> F
-    P --> E
-    E["cargo build --release"]
+    P --> S
+    S -- "--toolchain-only" --> X["print the override name or an<br/>empty line; build and install nothing"]
+    S -- "install" --> E["cargo build --release"]
     E -- "fails or an artefact is missing" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
     E -- "succeeds" --> G["stage every artefact,<br/>then move them all into CARGO_HOME"]
     G --> H["write the version stamps last"]
