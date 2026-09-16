@@ -259,6 +259,17 @@ cargo_invocations() {
   if [ -f "$RUNLIB_SHIM_LOG" ]; then wc -l < "$RUNLIB_SHIM_LOG" | tr -d ' '; else echo 0; fi
 }
 
+# How many `cargo build` calls the shim recorded. A missing log is a fault, not
+# a zero: proving "no build" by an absent marker would pass just as happily for
+# a harness that stopped recording at all.
+cargo_build_invocations() {
+  if [ ! -f "$RUNLIB_SHIM_LOG" ]; then
+    echo "the cargo shim log ${RUNLIB_SHIM_LOG} does not exist" >&2
+    return 1
+  fi
+  grep -c '^build' "$RUNLIB_SHIM_LOG" || true
+}
+
 rustup_invocations() {
   if [ -f "$RUNLIB_SHIM_RUSTUP_LOG" ]; then wc -l < "$RUNLIB_SHIM_RUSTUP_LOG" | tr -d ' '; else echo 0; fi
 }
@@ -1870,8 +1881,8 @@ SHIM
   [ "$status" -eq 0 ]
   [ "$(cat "$OUT")" = "" ]
   [ "$(wc -l < "$OUT" | tr -d ' ')" -eq 1 ]
-  run grep -F "build" "$RUNLIB_SHIM_LOG"
-  [ "$status" -ne 0 ]
+  [ "$(cargo_build_invocations)" -eq 0 ]
+  [ "$(cargo_invocations)" -gt 0 ]
   [ ! -e "${CARGO_HOME}/bin" ]
   [ ! -e "${CARGO_HOME}/lib" ]
   [ -d "${REPO}/target" ]
@@ -1890,8 +1901,8 @@ SHIM
   run grep -Fx "toolchain install 1.93.1" "$RUNLIB_SHIM_RUSTUP_LOG"
   [ "$status" -eq 0 ]
   [ "$(grep -c -e "1.92.0.*1.93.1.*rust-toolchain.toml" "$ERR")" -eq 1 ]
-  run grep -F "build" "$RUNLIB_SHIM_LOG"
-  [ "$status" -ne 0 ]
+  [ "$(cargo_build_invocations)" -eq 0 ]
+  [ "$(cargo_invocations)" -gt 0 ]
   [ ! -e "${CARGO_HOME}/bin" ]
 }
 
@@ -1906,8 +1917,8 @@ SHIM
   [ "$status" -eq 0 ]
   [ "$(cat "$OUT")" = "" ]
   [ "$(wc -l < "$OUT" | tr -d ' ')" -eq 1 ]
-  run grep -F "build" "$RUNLIB_SHIM_LOG"
-  [ "$status" -ne 0 ]
+  [ "$(cargo_build_invocations)" -eq 0 ]
+  [ "$(cargo_invocations)" -gt 0 ]
 }
 
 @test "--toolchain-only below the requirement with no rustup fails loud and prints nothing" {
@@ -1966,8 +1977,8 @@ SHIM
   [ "$(cat "$OUT")" = "1.93.1" ]
   run grep -F "metadata" "$RUNLIB_SHIM_LOG"
   [ "$status" -eq 0 ]
-  run grep -F "build" "$RUNLIB_SHIM_LOG"
-  [ "$status" -ne 0 ]
+  [ "$(cargo_build_invocations)" -eq 0 ]
+  [ "$(cargo_invocations)" -gt 0 ]
 }
 
 @test "sourcing the script and calling runlib_ensure_toolchain behaves the same" {
@@ -1983,8 +1994,8 @@ SHIM
   [ "$status" -eq 0 ]
   [ "$(cat "$OUT")" = "" ]
   [ "$(wc -l < "$OUT" | tr -d ' ')" -eq 1 ]
-  run grep -F "build" "$RUNLIB_SHIM_LOG"
-  [ "$status" -ne 0 ]
+  [ "$(cargo_build_invocations)" -eq 0 ]
+  [ "$(cargo_invocations)" -gt 0 ]
   [ ! -e "${CARGO_HOME}/bin" ]
 }
 

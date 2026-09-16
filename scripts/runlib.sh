@@ -744,7 +744,7 @@ _runlib_check_msrv() {
   # already satisfies the requirement needs nothing from this script — but the
   # rustc this run measured does not satisfy it, so say which one is building.
   if _runlib_version_ge "$pin" "$required"; then
-    printf 'runlib: rustc %s is below the required Rust %s, but rust-toolchain.toml pins %s, which satisfies it — building on the pinned toolchain\n' \
+    printf 'runlib: rustc %s is below the required Rust %s, but rust-toolchain.toml pins %s, which satisfies it — the pinned toolchain is what this run uses\n' \
       "$_RUNLIB_ACTIVE_RUST_VERSION" "$required" "$pin" >&2
     return 0
   fi
@@ -756,7 +756,9 @@ _runlib_check_msrv() {
   # and nothing else. A sourced caller's shell must not come away pinned to a
   # toolchain it never asked for.
   _RUNLIB_TOOLCHAIN_OVERRIDE="$required"
-  printf 'runlib: rust-toolchain.toml pins %s, below the Rust %s this dependency graph requires — building this run with %s; bump the pin in rust-toolchain.toml\n' \
+  # Worded for both entry points: `--toolchain-only` builds nothing, so a line
+  # claiming a build would be false in exactly the mode that only reports.
+  printf 'runlib: rust-toolchain.toml pins %s, below the Rust %s this dependency graph requires — using %s for this run; bump the pin in rust-toolchain.toml\n' \
     "$pin" "$required" "$required" >&2
   return 0
 }

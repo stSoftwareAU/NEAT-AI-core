@@ -224,6 +224,8 @@ checkout, say — cannot use install mode, and needs the gate rather than a
 build. `--toolchain-only` (Issue #701) is that entry point:
 
 ```bash
+set -euo pipefail                   # a failed gate must stop the caller, not
+                                    # read as "no override needed"
 override="$(./scripts/runlib.sh --toolchain-only)"
 [[ -z "$override" ]] || export RUSTUP_TOOLCHAIN="$override"
 cargo run --release --example generate_snapshot
