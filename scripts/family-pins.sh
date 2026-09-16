@@ -38,7 +38,10 @@
 #   2  usage error
 set -euo pipefail
 
-FAMILY_URL_RE='^https://github\.com/stSoftwareAU/NEAT-AI-[A-Za-z0-9_.-]+$'
+# A POSIX ERE with no backslash escapes: it is handed to awk through -v, which
+# processes escapes in the value, so `[.]` — not `\.` — is what survives as a
+# literal dot in both the awk and the bash reading of this pattern.
+FAMILY_URL_RE='^https://github[.]com/stSoftwareAU/NEAT-AI-[A-Za-z0-9_.-]+$'
 
 _fp_die() {
   printf 'family-pins: %s\n' "$*" >&2
