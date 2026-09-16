@@ -16,10 +16,13 @@ setup() {
   SCRIPT="${REPO_ROOT}/scripts/lockfile-freshness.sh"
   QUALITY="${REPO_ROOT}/quality.sh"
   CI_WORKFLOW="${REPO_ROOT}/.github/workflows/ci.yml"
-  # Hermetic: every fixture resolves path dependencies only, and the committed
-  # tree's remote packages are already in the lockfiles being read.
-  export CARGO_NET_OFFLINE=true
-  command -v cargo &>/dev/null || skip "cargo required"
+  # cargo is not optional in a Rust repository: a skip here would report the
+  # gate's own suite green with zero coverage (Issue #631 outlawed exactly that
+  # for this suite).
+  if ! command -v cargo &>/dev/null; then
+    echo "cargo is required — the lockfile-freshness gate cannot be tested without it" >&2
+    return 1
+  fi
 }
 
 # Write a crate at $1 named $2 at version $3, depending on the path crates $4…
@@ -137,8 +140,10 @@ bump_dep() {
 @test "--update leaves an already-fresh tree byte-identical" {
   local copy="${BATS_TEST_TMPDIR}/copy"
   mkdir -p "$copy"
-  cp -a "${REPO_ROOT}/Cargo.toml" "${REPO_ROOT}/Cargo.lock" \
-    "${REPO_ROOT}/neat-core" "${REPO_ROOT}/wasm-bench" "$copy/"
+  # Tracked files only: a `cp -a` of the directories would drag in whatever
+  # build output a local `wasm-bench` run left behind.
+  (cd "$REPO_ROOT" && git ls-files -z -- Cargo.toml Cargo.lock neat-core wasm-bench |
+    tar -cf - --null -T -) | (cd "$copy" && tar -xf -)
 
   run "$SCRIPT" --update --root "$copy"
   [ "$status" -eq 0 ] || printf '%s\n' "$output" >&2
@@ -151,11 +156,42 @@ bump_dep() {
 
 # --- wiring: the gate and the re-lock must be reachable from the pipeline ---
 
-@test "quality.sh runs the freshness check" {
+@test "quality.sh runs the freshness check, in check mode" {
   run strip_comments "$QUALITY"
   [ "$status" -eq 0 ]
-  printf '%s\n' "$output" | grep -qE 'lockfile-freshness\.sh([^\n]*--check)?[^\n]*$'
-  ! printf '%s\n' "$output" | grep -q 'lockfile-freshness\.sh.*--update'
+  local invocations
+  invocations="$(printf '%s\n' "$output" | grep 'lockfile-freshness\.sh' || true)"
+  [ -n "$invocations" ]
+  # Every invocation the local gate makes is a read-only check: a `--update`
+  # here would rewrite a contributor's lockfiles behind the gate's back, and a
+  # mode-less one would silently become whatever the default later is.
+  local line
+  while IFS= read -r line; do
+    [[ "$line" == *"--check"* ]] || {
+      printf 'quality.sh invocation is not in check mode: %s\n' "$line" >&2
+      return 1
+    }
+  done <<<"$invocations"
+}
+
+# The re-lock reaches CI through this script, which puts it out of reach of the
+# `cargo update` ban ci_workflow_quarantine.bats enforces on ci.yml (Issue #76).
+# Every update it runs must therefore stay scoped to the local path packages —
+# a bare `cargo update` here would move remote versions the release-age
+# quarantine chose.
+@test "the re-lock never runs an unscoped cargo update" {
+  run strip_comments "$SCRIPT"
+  [ "$status" -eq 0 ]
+  local updates
+  updates="$(printf '%s\n' "$output" | grep -E 'cargo[[:space:]]+update' || true)"
+  [ -n "$updates" ]
+  local line
+  while IFS= read -r line; do
+    [[ "$line" == *"--workspace"* ]] || {
+      printf 'unscoped cargo update bypasses the quarantine: %s\n' "$line" >&2
+      return 1
+    }
+  done <<<"$updates"
 }
 
 @test "the CI quality job runs the freshness check" {
