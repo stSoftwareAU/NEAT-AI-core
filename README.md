@@ -223,16 +223,19 @@ return — the subprocess form above is the contract.
 |------|-----------|
 | Resolve | The single workspace member — the root crate, or the one `[workspace] members` entry — via `cargo metadata --no-deps`. Zero members, or more than one, fails loud. The skip below must decide without running cargo at all, so it reads the crate name, version and declared target shape straight from the manifests. Anything it cannot read unambiguously — a globbed `members` entry, a `crate-type` array split over several lines, several `[[bin]]` tables, a `[[bin]]` table naming something other than the crate, or `autobins` — makes it decline outright and fall through to `cargo metadata`, which is always the authority. A single `[[bin]]` table that names the crate *is* unambiguous and is read, so the common sibling shape (a CLI plus a cdylib) skips with no cargo call at all. Declining is the safe direction: a target the reader failed to notice would otherwise let a half-installed crate report itself complete. |
 | Skip | With every artefact the crate's shape calls for present, and `.<crate>.version` matching the crate semver beside each, it runs **no** `cargo` command and prints one stderr line, `[<crate>] already installed v<x>`. The whole shape is checked, so a crate shipping both a bin and a cdylib does not report "already installed" once one half has been removed. There is no force flag: delete the stamp to force a rebuild. |
+| Gate | Once a rebuild is due, the toolchain is checked against the **highest `rust-version` in the resolved dependency graph** — the crate's own included. At or above it the build proceeds with no `rustup` call; below it the toolchain is updated, or an exact-version toolchain installed and overridden for this run, and only then does it fail loud. See the gate table below. |
 | Install | The bin target named after the crate to `$CARGO_HOME/bin/<crate>`; a `cdylib` target to `$CARGO_HOME/lib/lib<crate>.{so,dylib}` — both with `-` → `_` in the crate name. A crate carrying both installs both. The installed names come from the **crate**, never from the cargo target name, so a crate whose `[lib] name` differs from its package name is not installed under one name and looked up under another. `CARGO_HOME` defaults to `~/.cargo`. |
 | Stamp | `.<crate>.version` is written beside every installed artefact, and written **last** — until it exists, a half-finished install still reads as "needs building". |
 | Clean | `target/` is removed after a successful install, with one stderr line naming the path removed and the bytes freed. The measurement is `du -sk` taken before the removal — the portable reading, macOS bash 3.2 included. A build directory **outside** the checkout (a shared `CARGO_TARGET_DIR`) holds other checkouts' builds, so it is kept and the fact reported rather than passed over. |
 | Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. |
 
 It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
-`cargo metadata` and `rustc` is what the MSRV gate reads. `rustup` itself is
-never invoked, so a distro-packaged toolchain is fine. The bootstrap path below
-additionally needs `curl`, `mktemp` and `sha256sum` (or `shasum`) — each is
-checked by name before anything is fetched, so a missing one reads as the
+`cargo metadata` and `rustc` is what the toolchain gate reads. `rustup` is not
+a precondition, so a distro-packaged toolchain is fine — it is invoked only
+where the toolchain is missing or too old for the graph (see the gate below),
+and never to replace a toolchain that already satisfies it. The bootstrap path
+below additionally needs `curl`, `mktemp` and `sha256sum` (or `shasum`) — each
+is checked by name before anything is fetched, so a missing one reads as the
 missing tool rather than as a network failure.
 
 With **no `rustc` at all** the toolchain is bootstrapped rather than demanded
@@ -254,16 +257,41 @@ and every digest in `_runlib_pinned_rustup_digest` together: they are one pin.
 
 The one thing it deliberately does **not** do is edit `RUSTFLAGS`: the caller's
 value reaches `cargo` unchanged and it sets no defaults of its own, so
-`-C target-cpu=native` stays consumer-owned exactly as above. MSRV comes from
-`rust-version` in the crate manifest when present; a `rust-toolchain.toml` is
-rustup's own business.
+`-C target-cpu=native` stays consumer-owned exactly as above.
+
+The **toolchain gate** (Issue #700) runs on the build path only — a matching
+stamp still runs no `cargo`, no `rustc` and no `rustup` at all. The required
+version is the **highest `rust-version` across the crate's resolved dependency
+graph** (`cargo metadata --filter-platform <host>`), the crate's own included:
+the crate manifest alone could not catch what stopped a Discovery build —
+`serial_test@4.0.1 requires rustc 1.93.1` with no family crate declaring
+`rust-version` at all. Two-part values such as `1.85` compare as `1.85.0`.
+
+| Active `rustc` vs the requirement | What happens |
+|------|------|
+| At or above it | Passes. No `rustup` call, and never a downgrade. |
+| Below it, no `rustup` on `PATH` | Exits non-zero naming the required version and <https://rustup.rs>. A distro toolchain is never replaced. |
+| Below it, crate unpinned | `rustup update stable`, then re-reads `rustc`; still below exits non-zero naming the version and <https://rustup.rs>. |
+| Below it, crate pinned to a **channel** (`stable`, `nightly`, `nightly-2025-06-01`, or a two-part `1.93`) | `rustup update <channel>` — a moving pin is moved, never swapped for an exact version. Still below afterwards exits non-zero naming the version and <https://rustup.rs>. |
+| Below it, **exact** pin (`1.98.0`) satisfies it | Passes — rustup's own proxies honour the pin — with one stderr line saying which toolchain is building. |
+| Below it, exact pin below it too | `rustup toolchain install <required>` and a `RUSTUP_TOOLCHAIN` override passed to **that one `cargo build`** (never exported, so a sourced caller's shell is untouched), with one stderr line naming the pin, the requirement and `rust-toolchain.toml` as the file to bump. The pin file is a repository commit and is left untouched. |
+
+A `rustc` that cannot run at all is repaired before the metadata calls rather
+than at the gate — a rustup proxy whose pinned toolchain is not installed
+cannot run `cargo` either — by installing the pin, or by `rustup default
+stable` when unpinned; with no `rustup` the unreadable version still fails
+loud. Every value handed to `rustup` (the pin, the required version) is
+validated against `^[A-Za-z0-9][A-Za-z0-9._+-]*$` first: `rust-toolchain.toml`
+and `cargo metadata` are repository input, not shell. The selected override is
+recorded in `_RUNLIB_TOOLCHAIN_OVERRIDE` (empty when none); install mode prints
+only the artefact path on stdout, and every gate diagnostic goes to stderr.
 
 ```mermaid
 flowchart TD
     A["runlib.sh, from the repository root"] --> B{"artefact and stamp match<br/>the crate semver?"}
     B -- "yes" --> C["one stderr line: already installed<br/>print the path, run no cargo"]
     B -- "no" --> T{"rustc on PATH?"}
-    T -- "yes" --> D["cargo metadata --no-deps:<br/>single member, targets, MSRV"]
+    T -- "yes" --> D["cargo metadata --no-deps:<br/>single member, targets"]
     T -- "no" --> U["download the pinned rustup-init<br/>for the host target"]
     U --> V{"SHA-256 matches<br/>the inlined digest?"}
     V -- "no, or no target, digest tool<br/>or download at all" --> F
@@ -271,7 +299,17 @@ flowchart TD
     W --> D
     D --> K{"shape complete and<br/>stamped at this version?"}
     K -- "yes" --> C
-    K -- "no" --> E["cargo build --release"]
+    K -- "no" --> M["cargo metadata:<br/>required = highest rust-version<br/>in the resolved graph"]
+    M --> N{"active rustc<br/>&gt;= required?"}
+    N -- "yes" --> E
+    N -- "no, unpinned, rustup" --> O["rustup update stable,<br/>re-read rustc"]
+    N -- "no, pin below it, rustup" --> P["rustup toolchain install required,<br/>RUSTUP_TOOLCHAIN override,<br/>one stderr line"]
+    N -- "no, no rustup" --> F
+    O --> Q{"&gt;= required?"}
+    Q -- "yes" --> E
+    Q -- "no" --> F
+    P --> E
+    E["cargo build --release"]
     E -- "fails or an artefact is missing" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
     E -- "succeeds" --> G["stage every artefact,<br/>then move them all into CARGO_HOME"]
     G --> H["write the version stamps last"]
@@ -283,8 +321,11 @@ flowchart TD
 crates with a `cargo` shim on `PATH`, so the skip, the rebuild triggers, the bin
 / cdylib / both shapes, the failure path and the `target/` removal are asserted
 as observable outcomes — the shim records every invocation, which is what makes
-"runs no `cargo` command" an assertion rather than an inference. The rustup
-bootstrap is covered the same way and without a network: a `curl` shim serves a
+"runs no `cargo` command" an assertion rather than an inference. The `rustup`
+and `rustc` shims record theirs the same way, so "no `rustup` call on a pass",
+"exactly `toolchain install <required>` on a pin below the requirement" and the
+`RUSTUP_TOOLCHAIN` override the `cargo` shim saw are assertions over logs. The
+rustup bootstrap is covered the same way and without a network: a `curl` shim serves a
 *fake* `rustup-init` that writes a marker when executed, so "the unverified
 download is never executed" is asserted by that marker's absence.
 
