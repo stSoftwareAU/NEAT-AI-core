@@ -464,9 +464,16 @@ _runlib_bootstrap_rustup() {
   # the refusal look like a network problem.
   _runlib_sha256_tool >/dev/null ||
     _runlib_die "no SHA-256 tool (sha256sum or shasum) on PATH — refusing to download an unverifiable rustup-init; install the Rust toolchain from https://rustup.rs and re-run"
+  # `curl` is checked for the same reason: without it the download below dies
+  # naming the URL, which blames the network for a missing tool.
+  command -v curl >/dev/null 2>&1 ||
+    _runlib_die "curl not found — it is what fetches the pinned rustup-init; install curl, or install the Rust toolchain from https://rustup.rs, and re-run"
   url="$_RUNLIB_RUSTUP_BASE_URL/$_RUNLIB_RUSTUP_VERSION/$target/rustup-init"
 
-  tmp_dir="$(mktemp -d)"
+  # Named rather than left to `set -e`: a bare abort here reports a failure
+  # with no cause at all.
+  tmp_dir="$(mktemp -d)" ||
+    _runlib_die "could not create a temporary directory to download rustup-init into"
   _runlib_track_temp "$tmp_dir"
   trap _runlib_cleanup_temps EXIT INT TERM
   installer="$tmp_dir/rustup-init"

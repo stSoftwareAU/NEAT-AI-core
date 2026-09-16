@@ -494,11 +494,19 @@ JSON
 
 # --- toolchain preconditions ------------------------------------------------
 
+# Issue #699 changed what "no toolchain" means: a missing `rustc` is now
+# bootstrapped rather than refused, so this pair was re-pointed at the
+# preconditions each one names. `rustc` is supplied here, which is what keeps
+# the run out of the bootstrap and on the `cargo` check the title is about.
 @test "a missing cargo exits non-zero naming rustup.rs and installs nothing" {
   make_crate "demo_app" "1.2.3" bin
-  run env PATH="$(minimal_path)" CARGO_HOME="$CARGO_HOME" \
+  local only_rustc="${WORK}/only-rustc"
+  mkdir -p "$only_rustc"
+  cp "${SHIM_DIR}/rustc" "${only_rustc}/rustc"
+  run env PATH="${only_rustc}:$(minimal_path)" CARGO_HOME="$CARGO_HOME" \
     bash -c 'cd "$0" && "$1" 2>&1' "$REPO" "$SCRIPT"
   [ "$status" -ne 0 ]
+  [[ "$output" == *"cargo not found"* ]]
   [[ "$output" == *"https://rustup.rs"* ]]
   [ ! -e "${CARGO_HOME}/bin/demo_app" ]
 }
@@ -995,11 +1003,15 @@ SHIM
   [ -x "${CARGO_HOME}/bin/demo_app" ]
 }
 
-@test "a missing rustc exits non-zero naming rustup.rs and installs nothing" {
+# With no `rustc` the script now tries to bootstrap one, so what this asserts
+# is the fail-closed end of that attempt: a host it cannot verify a download on
+# still exits non-zero naming rustup.rs, and installs nothing.
+@test "a missing rustc with no way to bootstrap exits non-zero naming rustup.rs" {
   make_crate "demo_app" "1.2.3" bin
   rm -f "${SHIM_DIR}/rustc"
   # The shim dir supplies cargo; the minimal PATH supplies the coreutils and
-  # no toolchain, so the host's own rustc cannot stand in for the removed shim.
+  # no toolchain — and no SHA-256 tool, so the bootstrap refuses rather than
+  # reaching for the network.
   run env PATH="${SHIM_DIR}:$(minimal_path)" CARGO_HOME="$CARGO_HOME" \
     RUNLIB_SHIM_LOG="$RUNLIB_SHIM_LOG" RUNLIB_SHIM_METADATA="$RUNLIB_SHIM_METADATA" \
     RUNLIB_SHIM_ARTEFACTS="$RUNLIB_SHIM_ARTEFACTS" \
@@ -1100,6 +1112,9 @@ boot_fixture() {
 # working toolchain under CARGO_HOME/bin.
 set -euo pipefail
 printf '%s\n' "$*" > "$BOOT_MARKER"
+# BOOT_INSTALLS=0 models the installer that exits 0 having left no toolchain
+# behind, which is what the post-bootstrap preconditions are there to catch.
+[ "${BOOT_INSTALLS:-1}" = "1" ] || exit 0
 mkdir -p "${CARGO_HOME}/bin"
 cp "${BOOT_TOOLCHAIN_SRC}/cargo" "${CARGO_HOME}/bin/cargo"
 cp "${BOOT_TOOLCHAIN_SRC}/rustc" "${CARGO_HOME}/bin/rustc"
@@ -1165,6 +1180,10 @@ boot_invoke() {
   # tampered download without re-running anything.
   run grep -E "expected [0-9a-f]{64}.*(got|actual)[^0-9a-f]*[0-9a-f]{64}" "$ERR"
   [ "$status" -eq 0 ]
+  # And the URL, so the operator can fetch the published digest and tell a
+  # stale pin from a tampered download.
+  run grep -F "https://static.rust-lang.org/rustup/archive/" "$ERR"
+  [ "$status" -eq 0 ]
 }
 
 @test "a failed rustup-init download exits non-zero and executes nothing" {
@@ -1175,6 +1194,7 @@ boot_invoke() {
   [ "$status" -ne 0 ]
   [ ! -f "$BOOT_MARKER" ]
   [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
   [ "$(curl_invocations)" -eq 1 ]
   run grep -F "download" "$ERR"
   [ "$status" -eq 0 ]
@@ -1211,6 +1231,9 @@ SHIM
   run boot_invoke "$path"
   [ "$status" -ne 0 ]
   [ ! -f "$BOOT_MARKER" ]
+  # Nothing is fetched either: an installer that cannot be verified is not one
+  # to download first and refuse afterwards.
+  [ "$(curl_invocations)" -eq 0 ]
   [ ! -e "${CARGO_HOME}/bin/demo_app" ]
   [ -d "${REPO}/target" ]
   run grep -E "sha256sum|shasum" "$ERR"
@@ -1271,4 +1294,139 @@ SHIM
   [ "$(curl_invocations)" -eq 0 ]
   [ ! -f "$BOOT_MARKER" ]
   [ -x "${CARGO_HOME}/bin/demo_app" ]
+}
+
+# --- what the bootstrap actually fetches, and over what transport -----------
+#
+# The URL and the transport flags are the pin. A base URL, a version or a
+# `--proto`/`--tlsv1.2` flag lost in a later edit would leave every test above
+# green — the shim log records the argv, so these assert it. The host is fixed
+# by `uname`/`ldd` shims rather than read from the machine, so the expected
+# target is derived here independently of the script's own probe.
+
+# A `uname` reporting $1 (kernel) and $2 (machine), and an `ldd` whose
+# --version output is $3, exiting $4 — musl's `ldd` exits non-zero.
+fake_host() {
+  local dir="${WORK}/boot-shims"
+  mkdir -p "$dir"
+  cat > "${dir}/uname" <<SHIM
+#!/usr/bin/env bash
+case "\${1:-}" in
+  -s) echo "$1" ;;
+  -m) echo "$2" ;;
+  *) echo "$1" ;;
+esac
+SHIM
+  cat > "${dir}/ldd" <<SHIM
+#!/usr/bin/env bash
+echo "$3" >&2
+exit $4
+SHIM
+  chmod +x "${dir}/uname" "${dir}/ldd"
+}
+
+@test "the download names the pinned version and target over pinned HTTPS" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  path="$(boot_path)"
+  fake_host Linux x86_64 "ldd (GNU libc) 2.39" 0
+  run boot_invoke "$path"
+  # The fixture bytes are not the published installer, so this still refuses —
+  # what matters here is what it asked for before refusing.
+  [ "$status" -ne 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+  [ "$(curl_invocations)" -eq 1 ]
+  run grep -F "https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init" "$BOOT_CURL_LOG"
+  [ "$status" -eq 0 ]
+  run grep -F -- "--proto =https" "$BOOT_CURL_LOG"
+  [ "$status" -eq 0 ]
+  run grep -F -- "--tlsv1.2" "$BOOT_CURL_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "a musl host asks for the musl installer, not the gnu one" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  path="$(boot_path)"
+  # musl's `ldd` writes its banner to stderr and exits 1; reading that through
+  # a bare pipe under `pipefail` reports the failure instead of the match, and
+  # the host would silently take the gnu installer.
+  fake_host Linux x86_64 "musl libc (x86_64)" 1
+  run boot_invoke "$path"
+  [ "$status" -ne 0 ]
+  run grep -F "/x86_64-unknown-linux-musl/rustup-init" "$BOOT_CURL_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "an Apple host asks for the darwin installer, with no libc suffix" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  path="$(boot_path)"
+  fake_host Darwin arm64 "no ldd here" 127
+  run boot_invoke "$path"
+  [ "$status" -ne 0 ]
+  run grep -F "/aarch64-apple-darwin/rustup-init" "$BOOT_CURL_LOG"
+  [ "$status" -eq 0 ]
+}
+
+# --- the digest table -------------------------------------------------------
+
+@test "every pinned target carries a distinct 64-character lower-case digest" {
+  # The values themselves are checked against the published `.sha256` files
+  # when the pin moves — that needs the network and is recorded in the PR
+  # summary. What runs here is the shape a typo or a truncated paste breaks.
+  run bash -c '
+    . "$1"
+    seen=""
+    for target in \
+      x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu \
+      x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+      x86_64-apple-darwin aarch64-apple-darwin; do
+      digest="$(_runlib_pinned_rustup_digest "$target")" || exit 1
+      [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo "bad digest for $target: $digest"; exit 1; }
+      case "$seen" in *"$digest"*) echo "duplicate digest for $target"; exit 1 ;; esac
+      seen="$seen $digest"
+    done
+    # An unpinned target must refuse rather than print something.
+    if _runlib_pinned_rustup_digest "riscv64-unknown-linux-gnu"; then exit 1; fi
+  ' _ "$SCRIPT"
+  [ "$status" -eq 0 ]
+}
+
+# --- the toolchain must actually be there afterwards ------------------------
+
+@test "a bootstrap that leaves no toolchain exits non-zero naming rustup.rs" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  export BOOT_INSTALLS=0
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    PATH="$2"
+    . "$3"
+    _runlib_sha256_of() { _runlib_pinned_rustup_digest "$(_runlib_host_target)"; }
+    runlib_install
+  ' _ "$REPO" "$(boot_path)" "$SCRIPT"
+  [ "$status" -ne 0 ]
+  # The installer ran — and still left nothing behind, which is the case the
+  # post-bootstrap preconditions exist for.
+  [ -f "$BOOT_MARKER" ]
+  [[ "$output" == *"https://rustup.rs"* ]]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+}
+
+# --- the tools the bootstrap itself needs -----------------------------------
+
+@test "no curl on PATH names curl rather than blaming the download" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  path="$(boot_path)"
+  rm -f "${WORK}/boot-shims/curl"
+  run boot_invoke "$path"
+  [ "$status" -ne 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+  [ -d "${REPO}/target" ]
+  run grep -F "curl not found" "$ERR"
+  [ "$status" -eq 0 ]
 }

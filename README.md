@@ -230,7 +230,10 @@ return — the subprocess form above is the contract.
 
 It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
 `cargo metadata` and `rustc` is what the MSRV gate reads. `rustup` itself is
-never invoked, so a distro-packaged toolchain is fine.
+never invoked, so a distro-packaged toolchain is fine. The bootstrap path below
+additionally needs `curl`, `mktemp` and `sha256sum` (or `shasum`) — each is
+checked by name before anything is fetched, so a missing one reads as the
+missing tool rather than as a network failure.
 
 With **no `rustc` at all** the toolchain is bootstrapped rather than demanded
 (Issue #699): the script downloads the pinned `rustup-init` for the detected
