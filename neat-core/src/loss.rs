@@ -316,6 +316,47 @@ fn packed_layout(
     })
 }
 
+/// The packed-record bundle every batch scan is driven by: the buffer, how it
+/// carves into records, and whether the network may keep state between them.
+///
+/// The five values travel together — a scan needs all of them or none — so they
+/// are named once here rather than repeated as a positional list at every entry
+/// point. The `#[cfg_attr(wasm_bindgen)]` exports keep their flat signatures,
+/// which are a JS/WASM calling-convention constraint; each builds one config and
+/// hands that to the shared scan.
+///
+/// Issue #671 — one bundle for the internal plumbing between the batch entry
+/// points and [`packed_record_scan`].
+#[derive(Clone, Copy)]
+struct RecordScanConfig<'a> {
+    /// Packed `[inputs…, targets…]` records, laid end to end.
+    records: &'a [f32],
+    /// Input floats at the head of each record.
+    input_size: usize,
+    /// Target floats following each record's inputs; also the network's output width.
+    num_outputs: usize,
+    /// When true the per-record `reset_state()` is skipped, which v4+
+    /// forward-only creatures allow.
+    forward_only: bool,
+}
+
+impl<'a> RecordScanConfig<'a> {
+    fn new(records: &'a [f32], input_size: usize, num_outputs: usize, forward_only: bool) -> Self {
+        Self {
+            records,
+            input_size,
+            num_outputs,
+            forward_only,
+        }
+    }
+
+    /// Carve this config's buffer into records, or `None` when it holds no
+    /// whole record.
+    fn layout(&self) -> Option<PackedLayout> {
+        packed_layout(self.records.len(), self.input_size, self.num_outputs)
+    }
+}
+
 /// Drive a packed `[inputs…, targets…]` buffer record by record, returning the
 /// sum of `reduce(targets, outputs)` over every whole record. Returns `0.0`
 /// when the buffer holds no whole records.
@@ -332,15 +373,18 @@ fn packed_layout(
 /// the callers, where it genuinely differs.
 fn packed_record_scan(
     network: &mut CompiledNetwork,
-    records: &[f32],
-    input_size: usize,
-    num_outputs: usize,
-    forward_only: bool,
+    config: RecordScanConfig<'_>,
     reduce: impl Fn(&[f32], &[f32]) -> f64,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
+    let RecordScanConfig {
+        records,
+        input_size,
+        num_outputs,
+        forward_only,
+    } = config;
 
     // Reuse a small output buffer to avoid per-record allocation.
     let mut outputs: Vec<f32> = vec![0.0; num_outputs];
@@ -417,7 +461,8 @@ pub fn mse_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    let config = RecordScanConfig::new(records, input_size, num_outputs, forward_only);
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
 
@@ -449,14 +494,7 @@ pub fn mse_sum_batch_packed(
     }
 
     // Issue #538 — the per-record reduction lives in `mse_record`.
-    packed_record_scan(
-        network,
-        records,
-        input_size,
-        num_outputs,
-        forward_only,
-        mse_record,
-    )
+    packed_record_scan(network, config, mse_record)
 }
 
 /// Issue #1209 - Batched MSE with 8-record SIMD parallelism.
@@ -1078,7 +1116,8 @@ pub fn mae_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    let config = RecordScanConfig::new(records, input_size, num_outputs, forward_only);
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
 
@@ -1100,21 +1139,14 @@ pub fn mae_sum_batch_packed(
         0.0
     };
 
-    packed_record_scan(
-        network,
-        records,
-        input_size,
-        num_outputs,
-        forward_only,
-        |targets, outputs| {
-            // Per-record MAE = mean(|target - output|)
-            let mut abs_sum: f64 = 0.0;
-            for (t, o) in targets.iter().zip(outputs.iter()) {
-                abs_sum += ((*t - *o) as f64).abs();
-            }
-            abs_sum * inv_outputs
-        },
-    )
+    packed_record_scan(network, config, |targets, outputs| {
+        // Per-record MAE = mean(|target - output|)
+        let mut abs_sum: f64 = 0.0;
+        for (t, o) in targets.iter().zip(outputs.iter()) {
+            abs_sum += ((*t - *o) as f64).abs();
+        }
+        abs_sum * inv_outputs
+    })
 }
 
 /// Fused activate + Cross Entropy calculation for batch scoring.
@@ -1139,7 +1171,8 @@ pub fn cross_entropy_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    let config = RecordScanConfig::new(records, input_size, num_outputs, forward_only);
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
 
@@ -1163,24 +1196,17 @@ pub fn cross_entropy_sum_batch_packed(
 
     const EPSILON: f64 = 1e-15;
 
-    packed_record_scan(
-        network,
-        records,
-        input_size,
-        num_outputs,
-        forward_only,
-        |targets, outputs| {
-            // Per-record Cross Entropy = -(1/n) * Σ(t * log(o) + (1-t) * log(1-o))
-            let mut ce_sum: f64 = 0.0;
-            for (t, o_raw) in targets.iter().zip(outputs.iter()) {
-                let t = *t as f64;
-                // Clamp to [epsilon, 1-epsilon] to prevent log(0)
-                let o = (*o_raw as f64).clamp(EPSILON, 1.0 - EPSILON);
-                ce_sum -= t * o.ln() + (1.0 - t) * (1.0 - o).ln();
-            }
-            ce_sum * inv_outputs
-        },
-    )
+    packed_record_scan(network, config, |targets, outputs| {
+        // Per-record Cross Entropy = -(1/n) * Σ(t * log(o) + (1-t) * log(1-o))
+        let mut ce_sum: f64 = 0.0;
+        for (t, o_raw) in targets.iter().zip(outputs.iter()) {
+            let t = *t as f64;
+            // Clamp to [epsilon, 1-epsilon] to prevent log(0)
+            let o = (*o_raw as f64).clamp(EPSILON, 1.0 - EPSILON);
+            ce_sum -= t * o.ln() + (1.0 - t) * (1.0 - o).ln();
+        }
+        ce_sum * inv_outputs
+    })
 }
 
 /// Fused activate + MAPE (Mean Absolute Percentage Error) calculation for batch scoring.
@@ -1204,7 +1230,8 @@ pub fn mape_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    let config = RecordScanConfig::new(records, input_size, num_outputs, forward_only);
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
 
@@ -1228,22 +1255,15 @@ pub fn mape_sum_batch_packed(
 
     const EPSILON: f64 = 1e-15;
 
-    packed_record_scan(
-        network,
-        records,
-        input_size,
-        num_outputs,
-        forward_only,
-        |targets, outputs| {
-            // Per-record MAPE = (1/n) * Σ|(output - target) / max(target, ε)|
-            let mut mape_sum: f64 = 0.0;
-            for (t, o) in targets.iter().zip(outputs.iter()) {
-                let t = (*t as f64).max(EPSILON);
-                mape_sum += ((*o as f64 - t) / t).abs();
-            }
-            mape_sum * inv_outputs
-        },
-    )
+    packed_record_scan(network, config, |targets, outputs| {
+        // Per-record MAPE = (1/n) * Σ|(output - target) / max(target, ε)|
+        let mut mape_sum: f64 = 0.0;
+        for (t, o) in targets.iter().zip(outputs.iter()) {
+            let t = (*t as f64).max(EPSILON);
+            mape_sum += ((*o as f64 - t) / t).abs();
+        }
+        mape_sum * inv_outputs
+    })
 }
 
 /// Fused activate + MSLE (Mean Squared Logarithmic Error) calculation for batch scoring.
@@ -1268,7 +1288,8 @@ pub fn msle_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    let config = RecordScanConfig::new(records, input_size, num_outputs, forward_only);
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
 
@@ -1286,24 +1307,17 @@ pub fn msle_sum_batch_packed(
 
     const EPSILON: f64 = 1e-15;
 
-    packed_record_scan(
-        network,
-        records,
-        input_size,
-        num_outputs,
-        forward_only,
-        |targets, outputs| {
-            // Per-record MSLE = Σ(log(max(target, ε)) - log(max(output, ε)))
-            // Note: No averaging per record to match JS implementation
-            let mut msle_sum: f64 = 0.0;
-            for (t, o) in targets.iter().zip(outputs.iter()) {
-                let t = (*t as f64).max(EPSILON);
-                let o = (*o as f64).max(EPSILON);
-                msle_sum += t.ln() - o.ln();
-            }
-            msle_sum
-        },
-    )
+    packed_record_scan(network, config, |targets, outputs| {
+        // Per-record MSLE = Σ(log(max(target, ε)) - log(max(output, ε)))
+        // Note: No averaging per record to match JS implementation
+        let mut msle_sum: f64 = 0.0;
+        for (t, o) in targets.iter().zip(outputs.iter()) {
+            let t = (*t as f64).max(EPSILON);
+            let o = (*o as f64).max(EPSILON);
+            msle_sum += t.ln() - o.ln();
+        }
+        msle_sum
+    })
 }
 
 /// Fused activate + Hinge Loss calculation for batch scoring.
@@ -1328,7 +1342,8 @@ pub fn hinge_sum_batch_packed(
     num_outputs: usize,
     forward_only: bool,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    let config = RecordScanConfig::new(records, input_size, num_outputs, forward_only);
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
 
@@ -1344,22 +1359,15 @@ pub fn hinge_sum_batch_packed(
         );
     }
 
-    packed_record_scan(
-        network,
-        records,
-        input_size,
-        num_outputs,
-        forward_only,
-        |targets, outputs| {
-            // Per-record Hinge = Σmax(0, 1 - target * output)
-            // Note: No averaging per record to match JS implementation
-            let mut hinge_sum: f64 = 0.0;
-            for (t, o) in targets.iter().zip(outputs.iter()) {
-                hinge_sum += (1.0 - (*t as f64) * (*o as f64)).max(0.0);
-            }
-            hinge_sum
-        },
-    )
+    packed_record_scan(network, config, |targets, outputs| {
+        // Per-record Hinge = Σmax(0, 1 - target * output)
+        // Note: No averaging per record to match JS implementation
+        let mut hinge_sum: f64 = 0.0;
+        for (t, o) in targets.iter().zip(outputs.iter()) {
+            hinge_sum += (1.0 - (*t as f64) * (*o as f64)).max(0.0);
+        }
+        hinge_sum
+    })
 }
 
 /// Fused activate + Categorical Error (argmax misclassification) for batch scoring.
@@ -1422,10 +1430,7 @@ pub fn categorical_error_sum_batch_packed(
 
     packed_record_scan(
         network,
-        records,
-        input_size,
-        num_outputs,
-        forward_only,
+        RecordScanConfig::new(records, input_size, num_outputs, forward_only),
         |targets, outputs| {
             if argmax(targets) != argmax(outputs) {
                 1.0
@@ -1466,15 +1471,15 @@ pub fn mse_mean_record(
     input_size: usize,
     num_outputs: usize,
 ) -> f64 {
-    let Some(layout) = packed_layout(records.len(), input_size, num_outputs) else {
+    // Non-fused recurrent path: `forward_only = false` clears hidden state
+    // between records so the previous record's activations cannot leak in.
+    let config = RecordScanConfig::new(records, input_size, num_outputs, false);
+    let Some(layout) = config.layout() else {
         return 0.0;
     };
 
-    // Non-fused recurrent path: `forward_only = false` clears hidden state
-    // between records so the previous record's activations cannot leak in.
     // Issue #538 — the per-record reduction lives in `mse_record`.
-    let sum_error =
-        packed_record_scan(network, records, input_size, num_outputs, false, mse_record);
+    let sum_error = packed_record_scan(network, config, mse_record);
 
     sum_error / (layout.num_records as f64)
 }

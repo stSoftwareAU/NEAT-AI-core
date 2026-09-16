@@ -112,6 +112,17 @@ deno test --allow-read tests/wasm_prune_parity_test.ts </dev/null
 echo "🔒 Checking JSR dependency quarantine and lockfile..."
 deno test --allow-read --allow-write --allow-run=deno tests/deno_supply_chain_test.ts </dev/null
 
+# Cargo orphan-containment gate (Issues #676, #677) — mirrors the CI
+# typescript-gate step. `winapi` and `tinytemplate` are both unmaintained and
+# both arrive transitively through the `criterion` dev-dependency
+# (`winapi <- page_size <- criterion`, `tinytemplate <- criterion`), edges no
+# feature or version choice here removes. `deny.toml` bounds them with
+# wrappers; this test fails if that policy is dropped, if the lockfile grows a
+# second path into any of those crates, or if criterion stops being a
+# dev-dependency.
+echo "🧭 Checking Cargo orphan-dependency containment..."
+deno test --allow-read tests/cargo_orphan_containment_test.ts </dev/null
+
 # Optional: codespell (CI runs this; install: pip install codespell)
 if command -v codespell &>/dev/null; then
     echo "📖 Running codespell..."
