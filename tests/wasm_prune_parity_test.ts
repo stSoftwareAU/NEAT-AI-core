@@ -92,6 +92,12 @@ Deno.test("the golden record reaches both entry points and both answer shapes", 
     golden.some((c) => (c.response.restoredIfRoles?.length ?? 0) > 0),
     "no restored IF role recorded",
   );
+  // Issue #688's splice report: a record that stopped carrying one would leave
+  // every splicedNeurons shape ungraded on the wasm side.
+  assert(
+    golden.some((c) => (c.response.splicedNeurons?.length ?? 0) > 0),
+    "no IDENTITY splice recorded — every splicedNeurons shape would go ungraded",
+  );
   // The aggregate rewrite report (Ockham #197) and the magnitude a dropped
   // term carries. `droppedMean` rides inside an `uncompensated` entry, so a
   // non-empty `uncompensated` alone does not reach it.
