@@ -188,3 +188,145 @@ assert name in contexts, f"{name!r} is not a required check; required: {sorted(c
 PY
   [ "$status" -eq 0 ]
 }
+
+# --- [patch] injection for git-tag-pinned consumers (Issue #681) -------------
+#
+# Once a consumer pins `neat-core = { git = …, tag = "v…" }` instead of taking
+# the path dependency, the gate must still compile it against the *candidate*
+# core. These tests use real git remotes on disk — reached through a
+# `url.<base>.insteadOf` rewrite in a throwaway global git config — so the
+# clone, the fetch and (in the first test) the compile are the real thing and
+# nothing leaves the machine.
+
+# A bare repository at $1 whose default branch is $2, built from the working
+# tree at $3 with the tags named after it.
+make_bare_repo() {
+  local bare="$1" branch="$2" src="$3" tag
+  shift 3
+  git -C "$src" init -q
+  git -C "$src" symbolic-ref HEAD "refs/heads/$branch"
+  git -C "$src" add -A
+  git -C "$src" -c user.email=fixture@example.com -c user.name=fixture \
+    commit -q -m fixture
+  for tag in "$@"; do
+    git -C "$src" tag "$tag"
+  done
+  git clone -q --bare "$src" "$bare"
+}
+
+# Rewrite every family URL onto $WORK/remotes, for git and for cargo alike.
+use_local_family_remotes() {
+  mkdir -p "$WORK/remotes"
+  export GIT_CONFIG_NOSYSTEM=1
+  export GIT_CONFIG_GLOBAL="$WORK/gitconfig"
+  cat >"$GIT_CONFIG_GLOBAL" <<EOF
+[url "file://$WORK/remotes/"]
+	insteadOf = https://github.com/stSoftwareAU/
+EOF
+  # libgit2 does not honour insteadOf; cargo's git CLI transport does.
+  export CARGO_NET_GIT_FETCH_WITH_CLI=true
+  export CARGO_HOME="$WORK/cargo-home"
+}
+
+# A candidate core at $WORK/candidate carrying `candidate_only()`, a symbol no
+# release has — so "the consumer compiled" is proof the candidate was used.
+write_candidate_core() {
+  mkdir -p "$WORK/candidate/neat-core/src"
+  cat >"$WORK/candidate/neat-core/Cargo.toml" <<'TOML'
+[package]
+name = "neat-core"
+version = "0.15.9"
+edition = "2021"
+TOML
+  printf 'pub fn candidate_only() -> u32 { 1 }\n' \
+    >"$WORK/candidate/neat-core/src/lib.rs"
+  printf '[workspace]\nmembers = ["neat-core"]\nresolver = "2"\n' \
+    >"$WORK/candidate/Cargo.toml"
+}
+
+# The released core the consumer pins: same crate, without `candidate_only`.
+publish_released_core() {
+  mkdir -p "$WORK/released/neat-core/src"
+  cat >"$WORK/released/neat-core/Cargo.toml" <<'TOML'
+[package]
+name = "neat-core"
+version = "0.15.9"
+edition = "2021"
+TOML
+  printf 'pub fn released_only() -> u32 { 0 }\n' \
+    >"$WORK/released/neat-core/src/lib.rs"
+  printf '[workspace]\nmembers = ["neat-core"]\nresolver = "2"\n' \
+    >"$WORK/released/Cargo.toml"
+  make_bare_repo "$WORK/remotes/NEAT-AI-core" main "$WORK/released" v0.15.9
+}
+
+# A consumer repository pinning neat-core by git tag, published as a bare repo
+# the gate can clone. $1 is extra text appended to its root manifest.
+publish_pinned_consumer() {
+  mkdir -p "$WORK/pinned/app/src"
+  cat >"$WORK/pinned/Cargo.toml" <<'TOML'
+[workspace]
+members = ["app"]
+resolver = "2"
+TOML
+  [ "$#" -eq 0 ] || printf '%s\n' "$1" >>"$WORK/pinned/Cargo.toml"
+  cat >"$WORK/pinned/app/Cargo.toml" <<'TOML'
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.15.9" }
+TOML
+  printf 'pub fn go() -> u32 { neat_core::candidate_only() }\n' \
+    >"$WORK/pinned/app/src/lib.rs"
+  make_bare_repo "$WORK/remotes/Pinned.git" Develop "$WORK/pinned"
+  printf 'stSoftwareAU/Pinned\n' >"$REGISTRY"
+}
+
+@test "a consumer pinning neat-core by git tag is compiled against the candidate core" {
+  command -v cargo >/dev/null || skip "cargo is required to compile the fixture consumer"
+  use_local_family_remotes
+  write_candidate_core
+  publish_released_core
+  publish_pinned_consumer
+  # No stub cargo: this one really compiles. The consumer calls a function only
+  # the candidate core defines, so a green check is proof the [patch] override
+  # replaced the pinned release.
+  run "$SCRIPT" --registry "$REGISTRY" --core "$WORK/candidate"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"🩹 stSoftwareAU/Pinned: [patch] 1 git pin(s) of neat-core"* ]]
+  [[ "$output" == *"✅ stSoftwareAU/Pinned compiles against this core"* ]]
+}
+
+@test "a consumer that already patches neat-core fails the gate instead of compiling some other core" {
+  use_local_family_remotes
+  write_candidate_core
+  publish_released_core
+  publish_pinned_consumer '[patch."https://github.com/stSoftwareAU/NEAT-AI-core"]
+neat-core = { path = "/somewhere/else/neat-core" }'
+  run env PATH="$BIN:$PATH" CARGO_LOG="$CARGO_LOG" \
+    "$SCRIPT" --registry "$REGISTRY" --core "$WORK/candidate"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"already declares a [patch] for neat-core"* ]]
+  [[ "$output" == *"[patch] injection failed"* ]]
+  # It is never compiled: a green check against an unknown core is the failure
+  # this gate exists to prevent.
+  [ ! -f "$CARGO_LOG" ]
+}
+
+@test "--workspace mode writes nothing into the sibling checkouts you already have" {
+  # Alpha has moved to the git-tag pin; its checkout is the developer's own
+  # working tree, so the gate must leave it byte-for-byte alone.
+  cat >>"$WORK/Alpha/Cargo.toml" <<'TOML'
+
+[workspace.dependencies]
+neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.15.9" }
+TOML
+  cp "$WORK/Alpha/Cargo.toml" "$WORK/Alpha.before"
+  run_gate
+  [ "$status" -eq 0 ]
+  diff "$WORK/Alpha.before" "$WORK/Alpha/Cargo.toml"
+  [[ "$output" != *"🩹"* ]]
+}

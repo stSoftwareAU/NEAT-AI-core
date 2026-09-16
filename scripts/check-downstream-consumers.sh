@@ -18,11 +18,22 @@
 #   Develop), shallowly, into a temporary workspace beside a symlink to the
 #   candidate core, then runs `cargo check --workspace --all-targets` in each.
 #
+#   In clone mode a consumer that pins `neat-core` by git tag rather than by
+#   path has a `[patch."<its git url>"] neat-core = { path = "<candidate>/neat-core" }`
+#   appended to its root manifest before `cargo check`, so the gate compiles it
+#   against the candidate core and not against the release it pins (Issue #681).
+#   The patch is keyed by the URL the consumer actually declares, so a pin the
+#   gate cannot override fails the gate instead of quietly compiling the
+#   released core. A consumer still on the `../../NEAT-AI-core/neat-core` path
+#   dependency declares no such URL and is left exactly as it was.
+#
 #   --workspace DIR  Use the sibling checkouts already under DIR instead of
 #                    cloning — the local shape, e.g. `--workspace ..` from this
 #                    repo. DIR/NEAT-AI-core must be the same directory as
 #                    --core, so the consumers compile against the core you are
-#                    editing and not some other clone.
+#                    editing and not some other clone. The checkouts under DIR
+#                    are yours, so nothing is written to them: this mode is for
+#                    consumers that still carry the path dependency.
 #   --core DIR       The neat-core checkout under test (default: this repo).
 #   --ref REF        Branch to clone each consumer at (default: Develop).
 #   --keep           Keep the temporary workspace and its logs.
@@ -69,6 +80,53 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# --- [patch] injection ------------------------------------------------------
+CORE_REPO_URL="https://github.com/stSoftwareAU/NEAT-AI-core"
+
+# The distinct git URLs through which the checkout $1 declares neat-core, one
+# per line. Empty for a consumer still on the path dependency.
+consumer_core_git_urls() {
+  local found
+  found="$(find "$1" -name Cargo.toml -not -path '*/target/*' \
+    -exec grep -ho "git[[:space:]]*=[[:space:]]*\"${CORE_REPO_URL}[^\"]*\"" {} + 2>/dev/null || true)"
+  [[ -n "$found" ]] || return 0
+  printf '%s\n' "$found" | sed -e 's/.*"\(.*\)"/\1/' | sort -u
+  return 0
+}
+
+# Append a `[patch]` override to the root manifest of consumer checkout $2, so
+# every git-tag pin of neat-core it declares resolves to the candidate core.
+# Returns non-zero — having said why — when the override cannot be trusted to
+# take effect, because a gate that compiled the released core would be green
+# for a core it never looked at.
+inject_core_patch() {
+  local entry="$1" dir="$2" manifest="$2/Cargo.toml" urls url count=0
+  urls="$(consumer_core_git_urls "$dir")"
+  if [[ -z "$urls" ]]; then
+    return 0 # still on the path dependency — nothing to override
+  fi
+  if grep -q "^\[patch\..*NEAT-AI-core" "$manifest"; then
+    echo "❌ $entry: its root manifest already declares a [patch] for neat-core — this gate cannot prove which core it compiled"
+    return 1
+  fi
+  {
+    printf '\n# Appended by scripts/check-downstream-consumers.sh (Issue #681):\n'
+    printf '# compile against the candidate core, not the release this consumer pins.\n'
+    while IFS= read -r url; do
+      [[ -n "$url" ]] || continue
+      printf '[patch."%s"]\nneat-core = { path = "%s/neat-core" }\n' "$url" "$CORE"
+      count=$((count + 1))
+    done <<EOF
+$urls
+EOF
+  } >>"$manifest" || {
+    echo "❌ $entry: could not append the [patch] override to $manifest"
+    return 1
+  }
+  echo "🩹 $entry: [patch] $count git pin(s) of neat-core → $CORE/neat-core"
+  return 0
+}
+
 # --- registry ---------------------------------------------------------------
 [[ -f "$REGISTRY" ]] || { echo "❌ registry not found: $REGISTRY" >&2; exit 2; }
 entries=()
@@ -106,6 +164,14 @@ if [[ ! -f "$CORE/neat-core/Cargo.toml" ]]; then
   exit 2
 fi
 CORE="$(cd "$CORE" && pwd -P)"
+# The candidate path is written into a TOML string below; a quote or backslash
+# in it would produce a manifest cargo reads as something else entirely.
+case "$CORE" in
+  *[\"\\]*)
+    echo "❌ --core $CORE contains a quote or a backslash — it cannot be written into a [patch] override" >&2
+    exit 2
+    ;;
+esac
 
 # --- workspace ---------------------------------------------------------------
 if [[ -n "$WORKSPACE" ]]; then
@@ -147,6 +213,11 @@ for entry in "${entries[@]}"; do
       echo "❌ $entry: clone of $REF failed"
       sed 's/^/    /' "$LOG_DIR/$name.clone.log" | tail -n 5
       failed+=("$entry (clone failed)")
+    elif ! inject_core_patch "$entry" "$dir"; then
+      # The clone is there but the gate cannot point it at the candidate core,
+      # so it must not be compiled and reported green against a released one.
+      rm -f "$dir/Cargo.toml"
+      failed+=("$entry ([patch] injection failed)")
     fi
   elif [[ ! -f "$dir/Cargo.toml" ]]; then
     echo "❌ $entry: no checkout at $dir — clone it beside NEAT-AI-core, or remove it from $REGISTRY if it no longer takes the path dependency"
