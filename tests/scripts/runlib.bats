@@ -635,7 +635,7 @@ JSON
 # Issue #700 made the remedy part of the gate: below the requirement with a
 # rustup to hand the script updates rather than refusing, so the refusal this
 # names is the one left — no rustup on PATH at all.
-@test "a rustc below the manifest MSRV fails loud without installing" {
+@test "a rustc below the crate's own rust-version with no rustup fails loud" {
   write_manifest "demo_app" "1.2.3" bin 'rust-version = "1.92.0"'
   write_metadata "demo_app" "1.2.3" bin
   mkdir -p "${REPO}/target"
@@ -813,9 +813,84 @@ JSON
   run grep -Fx "toolchain install 1.93.1" "$RUNLIB_SHIM_RUSTUP_LOG"
   [ "$status" -eq 0 ]
   [ "$(cat "$RUNLIB_SHIM_CARGO_TOOLCHAIN")" = "1.93.1" ]
+  # Install mode still prints only the artefact path on stdout.
+  [ "$(cat "$OUT")" = "${CARGO_HOME}/bin/demo_app" ]
   [ "$(cat "${REPO}/rust-toolchain.toml")" = "$before" ]
   # Exactly one line names the pin, the requirement and the file to bump.
   [ "$(grep -c -e "1.92.0.*1.93.1.*rust-toolchain.toml" "$ERR")" -eq 1 ]
+}
+
+# `stable` is not "below" anything — comparing a channel with a version number
+# reads it as 0.0.0. The remedy for a channel pin is to move that channel, not
+# to swap the repository's deliberate pin for an exact version.
+@test "a channel pin below the requirement is updated, not replaced by a version" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "stable"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  export RUNLIB_SHIM_RUSTC_AFTER_UPDATE="1.93.1"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  run grep -Fx "update stable" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+  run grep -F "toolchain install" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -ne 0 ]
+  [ "$(cat "$RUNLIB_SHIM_CARGO_TOOLCHAIN")" = "<unset>" ]
+  [ "$(cat "${REPO}/rust-toolchain.toml")" = "$(printf '[toolchain]\nchannel = "stable"')" ]
+}
+
+# `1.93` is rustup's two-part channel, resolving to the newest 1.93.x — a
+# moving pin, so it is moved rather than overridden.
+@test "a two-part version pin is treated as a channel, not as an exact pin" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.93"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.93.0"
+  export RUNLIB_SHIM_RUSTC_AFTER_UPDATE="1.93.1"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  run grep -Fx "update 1.93" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+  run grep -F "toolchain install" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -ne 0 ]
+}
+
+# The override belongs to this run's `cargo build` and nowhere else: a sourced
+# caller must not come away with its shell pinned to a toolchain it never
+# asked for. `_RUNLIB_TOOLCHAIN_OVERRIDE` is the record of what was selected.
+@test "the override is recorded but never exported into the caller's shell" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  write_toolchain_pin "1.92.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.92.0"
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    . "$2"
+    runlib_install > /dev/null 2>&1
+    printf "override=%s toolchain=%s\n" \
+      "$_RUNLIB_TOOLCHAIN_OVERRIDE" "${RUSTUP_TOOLCHAIN-<unset>}"
+  ' _ "$REPO" "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "override=1.93.1 toolchain=<unset>" ]
+  [ "$(cat "$RUNLIB_SHIM_CARGO_TOOLCHAIN")" = "1.93.1" ]
+}
+
+@test "a build needing no override records an empty _RUNLIB_TOOLCHAIN_OVERRIDE" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.93.1"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.93.1"
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    . "$2"
+    runlib_install > /dev/null 2>&1
+    printf "override=[%s]\n" "$_RUNLIB_TOOLCHAIN_OVERRIDE"
+  ' _ "$REPO" "$SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$output" = "override=[]" ]
 }
 
 @test "a pinned toolchain that is not installed is installed before the build" {

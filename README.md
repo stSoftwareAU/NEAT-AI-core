@@ -272,8 +272,9 @@ the crate manifest alone could not catch what stopped a Discovery build —
 | At or above it | Passes. No `rustup` call, and never a downgrade. |
 | Below it, no `rustup` on `PATH` | Exits non-zero naming the required version and <https://rustup.rs>. A distro toolchain is never replaced. |
 | Below it, crate unpinned | `rustup update stable`, then re-reads `rustc`; still below exits non-zero naming the version and <https://rustup.rs>. |
-| Below it, `rust-toolchain.toml` pin satisfies it | Passes — rustup's own proxies honour the pin. |
-| Below it, pin below it too | `rustup toolchain install <required>` and a `RUSTUP_TOOLCHAIN` override for **this run's build alone**, with one stderr line naming the pin, the requirement and `rust-toolchain.toml` as the file to bump. The pin file is a repository commit and is left untouched. |
+| Below it, crate pinned to a **channel** (`stable`, `nightly`, `nightly-2025-06-01`, or a two-part `1.93`) | `rustup update <channel>` — a moving pin is moved, never swapped for an exact version. Still below afterwards exits non-zero naming the version and <https://rustup.rs>. |
+| Below it, **exact** pin (`1.98.0`) satisfies it | Passes — rustup's own proxies honour the pin — with one stderr line saying which toolchain is building. |
+| Below it, exact pin below it too | `rustup toolchain install <required>` and a `RUSTUP_TOOLCHAIN` override passed to **that one `cargo build`** (never exported, so a sourced caller's shell is untouched), with one stderr line naming the pin, the requirement and `rust-toolchain.toml` as the file to bump. The pin file is a repository commit and is left untouched. |
 
 A `rustc` that cannot run at all is repaired before the metadata calls rather
 than at the gate — a rustup proxy whose pinned toolchain is not installed
@@ -324,8 +325,7 @@ as observable outcomes — the shim records every invocation, which is what make
 and `rustc` shims record theirs the same way, so "no `rustup` call on a pass",
 "exactly `toolchain install <required>` on a pin below the requirement" and the
 `RUSTUP_TOOLCHAIN` override the `cargo` shim saw are assertions over logs. The
-rustup
-bootstrap is covered the same way and without a network: a `curl` shim serves a
+rustup bootstrap is covered the same way and without a network: a `curl` shim serves a
 *fake* `rustup-init` that writes a marker when executed, so "the unverified
 download is never executed" is asserted by that marker's absence.
 

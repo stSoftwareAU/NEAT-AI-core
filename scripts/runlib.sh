@@ -52,14 +52,18 @@
 # graph — `cargo metadata --filter-platform <host>` — including the crate's
 # own, because a dependency can demand a newer rustc than any family crate
 # declares. A rustc at or above it passes with no `rustup` call at all, and is
-# never downgraded. Below it, and with `rustup` on PATH, an unpinned crate gets
-# `rustup update stable`; a `rust-toolchain.toml` pin below the requirement
-# gets `rustup toolchain install <required>` plus a `RUSTUP_TOOLCHAIN` override
-# for this run's build alone — the pin file is a repository commit and is left
-# untouched, with one stderr line naming the bump. Below it *without* rustup —
-# or still below after the update — exits non-zero naming the required version
-# and https://rustup.rs; a distro toolchain is never replaced. Every value
-# handed to rustup is validated as a plain toolchain name first: a
+# never downgraded. Below it, and with `rustup` on PATH: an unpinned crate gets
+# `rustup update stable`, and a crate pinned to a *channel* — `stable`,
+# `nightly`, or a two-part `1.93` rustup resolves to the newest 1.93.x — gets
+# `rustup update <channel>`, because a moving pin is moved rather than swapped
+# for an exact version. An *exact* `rust-toolchain.toml` pin below the
+# requirement gets `rustup toolchain install <required>` plus a
+# `RUSTUP_TOOLCHAIN` override handed to that one `cargo build` and never
+# exported — the pin file is a repository commit and is left untouched, with
+# one stderr line naming the bump. Below it *without* rustup — or still below
+# after the update — exits non-zero naming the required version and
+# https://rustup.rs; a distro toolchain is never replaced. Every value handed
+# to rustup is validated as a plain toolchain name first: a
 # `rust-toolchain.toml` channel and `cargo metadata` are repository input.
 #
 # Run it as a subprocess — `path="$(./scripts/runlib.sh)"`. It can also be
@@ -555,6 +559,20 @@ _runlib_pinned_channel() {
   return 0
 }
 
+# True when $1 is an *exact* version toolchain — `1.93.1` — as opposed to one
+# of rustup's moving channels: `stable`, `beta`, `nightly`,
+# `nightly-2025-06-01`, or a two-part `1.93`, which rustup resolves to the
+# newest 1.93.x.
+#
+# The distinction decides the remedy. Only an exact pin can be compared with
+# the requirement — `_runlib_version_ge` reads every non-numeric component as
+# 0, so comparing `stable` would call a perfectly current channel pin "below
+# the requirement" and swap it for an exact version nobody asked for. A moving
+# channel is moved instead.
+_runlib_is_exact_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
 # Sets _RUNLIB_ACTIVE_RUST_VERSION from `rustc --version`, dying loud when the
 # active rustc cannot be run or its version cannot be read. $1 is appended to
 # both messages, so the caller says what the version was needed for.
@@ -616,18 +634,20 @@ _runlib_ensure_toolchain() {
 # 1.93.1` with no family crate declaring `rust-version` at all. This resolves
 # the graph, so it runs on the build path only, never on the skip.
 _runlib_required_rust_version() {
-  local manifest="$1" root_manifest="$2" host graph declared candidate best=""
+  local manifest="$1" root_manifest="$2" verbose host graph declared candidate best=""
   local -a metadata_args
-  # The host filter keeps the maximum to the platform actually being built —
-  # a Windows-only dependency's `rust-version` is not this host's problem. An
-  # unreadable host (a rustc wrapper that answers nothing useful) drops the
-  # filter rather than passing cargo an empty one; the gate below is what
-  # fails loud on such a rustc.
-  host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')" || host=""
-  metadata_args=(metadata --format-version 1)
-  if [[ -n "$host" ]]; then
-    metadata_args+=(--filter-platform "$host")
-  fi
+  # The host filter keeps the maximum to the platform actually being built — a
+  # Windows-only dependency's `rust-version` is not this host's problem. A
+  # rustc that cannot name its own host is not one this script will guess for:
+  # dropping the filter silently would let a foreign dependency inflate the
+  # requirement and trigger an install nobody needed, with nothing on stderr
+  # to say why.
+  verbose="$(rustc -vV 2>&1)" ||
+    _runlib_die "cannot read the rustc host target (rustc -vV said: ${verbose:-nothing}) — the dependency graph cannot be filtered for this platform"
+  host="$(printf '%s\n' "$verbose" | sed -n 's/^host: //p')"
+  [[ -n "$host" ]] ||
+    _runlib_die "rustc -vV named no host target — the dependency graph cannot be filtered for this platform"
+  metadata_args=(metadata --format-version 1 --filter-platform "$host")
   if ! graph="$(cargo "${metadata_args[@]}")"; then
     _runlib_die "cargo metadata could not resolve the dependency graph — the highest required Rust version cannot be read"
   fi
@@ -651,6 +671,23 @@ EOF
   return 0
 }
 
+# Move a channel toolchain forward and re-check it: `stable` when the crate is
+# unpinned, the pinned channel itself when `rust-toolchain.toml` names one. A
+# channel that is still short of the requirement afterwards fails loud — this
+# script does not switch a host's default toolchain to get past it.
+_runlib_update_channel() {
+  local channel="$1" required="$2"
+  _runlib_assert_toolchain_name "$channel" "the toolchain channel"
+  printf 'runlib: rustc %s is below the required Rust %s — running: rustup update %s\n' \
+    "$_RUNLIB_ACTIVE_RUST_VERSION" "$required" "$channel" >&2
+  rustup update "$channel" >&2 ||
+    _runlib_die "rustup update $channel failed and this build needs Rust $required — install it from https://rustup.rs and re-run"
+  _runlib_read_rust_version "; this build needs Rust >= $required"
+  _runlib_version_ge "$_RUNLIB_ACTIVE_RUST_VERSION" "$required" ||
+    _runlib_die "rustc $_RUNLIB_ACTIVE_RUST_VERSION is still below the Rust $required this dependency graph requires after rustup update $channel — install Rust $required from https://rustup.rs and re-run"
+  return 0
+}
+
 # The toolchain gate. The requirement is the highest `rust-version` across the
 # dependency graph; the active rustc either meets it, or rustup is asked to
 # make it so, and only then does this fail loud.
@@ -663,10 +700,12 @@ EOF
 _runlib_check_msrv() {
   local manifest="$1" root_manifest="$2" repo_root="$3" required pin
   _RUNLIB_TOOLCHAIN_OVERRIDE=""
+  # Read before the graph is resolved: a rustc whose version cannot be read is
+  # a fault to name here, not one to carry into a `cargo metadata` call.
+  _runlib_read_rust_version "; the toolchain gate cannot check it against the dependency graph"
   required="$(_runlib_required_rust_version "$manifest" "$root_manifest")"
   [[ -n "$required" ]] || return 0
 
-  _runlib_read_rust_version "; this build needs Rust >= $required"
   if _runlib_version_ge "$_RUNLIB_ACTIVE_RUST_VERSION" "$required"; then
     return 0
   fi
@@ -677,29 +716,33 @@ _runlib_check_msrv() {
     _runlib_die "rustc $_RUNLIB_ACTIVE_RUST_VERSION is below the Rust $required this dependency graph requires, and rustup is not on PATH — install Rust $required from https://rustup.rs and re-run"
 
   pin="$(_runlib_pinned_channel "$repo_root")"
+  # Unpinned, or pinned to a *channel* rather than a version: the remedy is to
+  # move that channel forward, never to swap a deliberate channel pin for an
+  # exact version.
   if [[ -z "$pin" ]]; then
-    printf 'runlib: rustc %s is below the required Rust %s — running: rustup update stable\n' \
-      "$_RUNLIB_ACTIVE_RUST_VERSION" "$required" >&2
-    rustup update stable >&2 ||
-      _runlib_die "\`rustup update stable\` failed and this build needs Rust $required — install it from https://rustup.rs and re-run"
-    _runlib_read_rust_version "; this build needs Rust >= $required"
-    _runlib_version_ge "$_RUNLIB_ACTIVE_RUST_VERSION" "$required" ||
-      _runlib_die "rustc $_RUNLIB_ACTIVE_RUST_VERSION is still below the Rust $required this dependency graph requires after \`rustup update stable\` — install Rust $required from https://rustup.rs and re-run"
+    _runlib_update_channel stable "$required"
+    return 0
+  fi
+  if ! _runlib_is_exact_version "$pin"; then
+    _runlib_update_channel "$pin" "$required"
     return 0
   fi
 
-  _runlib_assert_toolchain_name "$pin" "the rust-toolchain.toml channel"
-  # The pin is what rustup's own proxies will honour, so a pin that already
-  # satisfies the requirement needs nothing from this script.
+  # An exact version pin is what rustup's own proxies will honour, so a pin that
+  # already satisfies the requirement needs nothing from this script — but the
+  # rustc this run measured does not satisfy it, so say which one is building.
   if _runlib_version_ge "$pin" "$required"; then
+    printf 'runlib: rustc %s is below the required Rust %s, but rust-toolchain.toml pins %s, which satisfies it — building on the pinned toolchain\n' \
+      "$_RUNLIB_ACTIVE_RUST_VERSION" "$required" "$pin" >&2
     return 0
   fi
 
   _runlib_assert_toolchain_name "$required" "the required Rust version"
   rustup toolchain install "$required" >&2 ||
     _runlib_die "could not install Rust $required with rustup, and this dependency graph requires it — install it from https://rustup.rs and re-run"
-  RUSTUP_TOOLCHAIN="$required"
-  export RUSTUP_TOOLCHAIN
+  # Recorded, not exported: the override belongs to the `cargo build` below
+  # and nothing else. A sourced caller's shell must not come away pinned to a
+  # toolchain it never asked for.
   _RUNLIB_TOOLCHAIN_OVERRIDE="$required"
   printf 'runlib: rust-toolchain.toml pins %s, below the Rust %s this dependency graph requires — building this run with %s; bump the pin in rust-toolchain.toml\n' \
     "$pin" "$required" "$required" >&2
@@ -897,8 +940,14 @@ runlib_install() {
   if [[ -n "$bin_name" ]]; then
     build_args+=(--bin "$bin_name")
   fi
-  # RUSTFLAGS is the caller's: this script neither sets nor edits it.
-  cargo "${build_args[@]}" >&2
+  # RUSTFLAGS is the caller's: this script neither sets nor edits it. The
+  # toolchain override, when the gate set one, reaches this one command and
+  # goes no further.
+  if [[ -n "$_RUNLIB_TOOLCHAIN_OVERRIDE" ]]; then
+    RUSTUP_TOOLCHAIN="$_RUNLIB_TOOLCHAIN_OVERRIDE" cargo "${build_args[@]}" >&2
+  else
+    cargo "${build_args[@]}" >&2
+  fi
 
   local bin_dir lib_dir release_dir bin_file lib_file
   local staged_bin="" staged_lib="" installed_bin="" installed_lib=""
