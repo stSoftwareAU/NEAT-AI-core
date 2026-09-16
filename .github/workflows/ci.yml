@@ -186,6 +186,17 @@ jobs:
           echo "Refreshing dependencies via bump-deps.sh (quarantine-aware)..."
           chmod +x bump-deps.sh
           ./bump-deps.sh --quarantine-hours "${VIBE_BUMP_QUARANTINE_HOURS}" --skip-build
+
+          # Issue #695 — the bump above rewrote [workspace.package].version and
+          # bump-deps.sh re-locked the root lockfile only. Every lockfile
+          # outside that workspace records the same version for the `neat-core`
+          # path dependency it resolves, so re-lock them here — after the bump,
+          # before the commit step below — or they name a superseded version and
+          # any `--locked` read of their manifest fails. `cargo update
+          # --workspace` moves the local path packages only, leaving the
+          # release-age quarantine's remote choices intact.
+          chmod +x scripts/lockfile-freshness.sh
+          ./scripts/lockfile-freshness.sh --update
           cargo outdated -R || true
 
       - name: Commit version and dependency changes
@@ -395,6 +406,13 @@ jobs:
       # never sees it. Same root deny.toml, second manifest.
       - name: cargo deny (wasm-bench)
         run: cargo deny --manifest-path wasm-bench/Cargo.toml check
+
+      # Issue #695 — every committed lockfile must still resolve against the
+      # manifest beside it. version-increment re-locks the siblings its version
+      # bump stales; this gate is what stops that silently regressing, and it
+      # sweeps the tree rather than a hardcoded list.
+      - name: Check lockfile freshness
+        run: ./scripts/lockfile-freshness.sh --check
 
       - name: Check formatting
         run: cargo fmt --all -- --check

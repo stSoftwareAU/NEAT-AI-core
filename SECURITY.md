@@ -204,6 +204,16 @@ flowchart LR
     W --> BW["Dependabot /wasm-bench"]
 ```
 
+Freshness is the fourth concern, and it needs no per-lockfile wiring: a
+lockfile outside the root workspace records the workspace version for the
+`neat-core` path dependency it resolves, so the CI version bump stales it unless
+something re-locks it. `scripts/lockfile-freshness.sh` sweeps every `Cargo.lock`
+in the tree — `--check` fails when one no longer resolves against the manifest
+beside it (the `quality` CI job and `quality.sh`), and `--update` re-locks them
+inside `version-increment`, after the bump and before the commit (Issue #695).
+The re-lock moves local path packages only, so the release-age quarantine's
+remote choices survive it.
+
 A crate kept out of the root workspace brings a third lockfile with it: wire it
 into all three channels and add it to the table above in the same change.
 `tests/scripts/wasm_bench_supply_chain.bats` fails while a lockfile in the tree

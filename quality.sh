@@ -141,6 +141,15 @@ else
     echo "   Install with: cargo install cargo-edit"
 fi
 
+# Lockfile freshness gate (Issue #695) — mirrors the CI quality job step. The
+# version bump rewrites [workspace.package].version, and every lockfile outside
+# the root workspace records that version for the `neat-core` path dependency it
+# resolves, so a root-only re-lock stales the siblings. The sweep is over every
+# committed Cargo.lock, so a third lockfile added later is covered without being
+# wired in here by hand.
+echo "🔐 Checking every committed Cargo.lock resolves (--locked)..."
+./scripts/lockfile-freshness.sh --check
+
 # Licence and dependency audit
 echo "📜 Running licence and dependency audit..."
 if ! command -v cargo-deny &>/dev/null; then

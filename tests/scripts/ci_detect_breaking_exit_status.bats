@@ -62,6 +62,11 @@ SH
 #!/usr/bin/env bash
 touch bump-deps.ran
 SH
+  # Issue #695 — the step re-locks the sibling lockfiles after the bump.
+  cat >"$repo/scripts/lockfile-freshness.sh" <<'SH'
+#!/usr/bin/env bash
+touch lockfile-freshness.ran
+SH
   cat >"$repo/bin/cargo" <<'SH'
 #!/usr/bin/env bash
 exit 0
