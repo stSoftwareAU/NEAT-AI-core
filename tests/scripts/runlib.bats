@@ -1073,3 +1073,202 @@ SHIM
     "${CARGO_HOME}/bin" "${CARGO_HOME}/lib"
   [ "$status" -ne 0 ]
 }
+
+# --- the rustup bootstrap (Issue #699) --------------------------------------
+#
+# With no `rustc` on PATH the script installs rustup itself, from the pinned
+# `rustup-init` whose SHA-256 is inlined in the script. Nothing here touches
+# the network: a `curl` shim serves fixture bytes to the `-o` path, and the
+# fixture is a *fake* rustup-init that writes $BOOT_MARKER when executed — so
+# "the downloaded file is never executed" is asserted by that file's absence
+# rather than inferred.
+
+# The fixture installer, the marker it writes, and the logs the shims keep.
+boot_fixture() {
+  BOOT_DIR="${WORK}/boot"
+  BOOT_FIXTURE="${BOOT_DIR}/served-rustup-init"
+  BOOT_MARKER="${BOOT_DIR}/installer-ran.txt"
+  BOOT_CURL_LOG="${BOOT_DIR}/curl-invocations.log"
+  BOOT_TOOLCHAIN_SRC="${SHIM_DIR}"
+  export BOOT_FIXTURE BOOT_MARKER BOOT_CURL_LOG BOOT_TOOLCHAIN_SRC
+  mkdir -p "$BOOT_DIR"
+  rm -f "$BOOT_MARKER" "$BOOT_CURL_LOG"
+  cat > "$BOOT_FIXTURE" <<'FIXTURE'
+#!/usr/bin/env bash
+# The fake rustup-init. Running it is the thing the fail-closed paths must
+# never do, so it records that it ran — and, like the real one, leaves a
+# working toolchain under CARGO_HOME/bin.
+set -euo pipefail
+printf '%s\n' "$*" > "$BOOT_MARKER"
+mkdir -p "${CARGO_HOME}/bin"
+cp "${BOOT_TOOLCHAIN_SRC}/cargo" "${CARGO_HOME}/bin/cargo"
+cp "${BOOT_TOOLCHAIN_SRC}/rustc" "${CARGO_HOME}/bin/rustc"
+FIXTURE
+  chmod +x "$BOOT_FIXTURE"
+}
+
+# A PATH with no Rust toolchain on it at all, carrying a `curl` shim that
+# serves $BOOT_FIXTURE, and the digest and temp-directory tools the bootstrap
+# needs. Echoes the PATH.
+boot_path() {
+  local dir="${WORK}/boot-shims" tool resolved
+  mkdir -p "$dir"
+  for tool in mktemp sha256sum shasum jq; do
+    resolved="$(command -v "$tool" 2>/dev/null || true)"
+    [ -n "$resolved" ] || continue
+    ln -sf "$resolved" "${dir}/${tool}"
+  done
+  cat > "${dir}/curl" <<'SHIM'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$BOOT_CURL_LOG"
+if [ "${BOOT_CURL_FAILS:-0}" = "1" ]; then
+  echo "curl shim: could not resolve host" >&2
+  exit 6
+fi
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$arg"; fi
+  prev="$arg"
+done
+if [ -z "$out" ]; then
+  echo "curl shim: no -o path in: $*" >&2
+  exit 2
+fi
+cp "$BOOT_FIXTURE" "$out"
+SHIM
+  chmod +x "${dir}/curl"
+  printf '%s:%s' "$dir" "$(minimal_path)"
+}
+
+curl_invocations() {
+  if [ -f "$BOOT_CURL_LOG" ]; then wc -l < "$BOOT_CURL_LOG" | tr -d ' '; else echo 0; fi
+}
+
+# Run the script from the fixture repository with the given PATH.
+boot_invoke() {
+  ( cd "$REPO" && PATH="$1" "$SCRIPT" > "$OUT" 2> "$ERR" )
+}
+
+@test "a served rustup-init whose digest does not match is never executed" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  run boot_invoke "$(boot_path)"
+  [ "$status" -ne 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+  run grep -F "digest mismatch" "$ERR"
+  [ "$status" -eq 0 ]
+  # The line names both digests, so the operator can tell a stale pin from a
+  # tampered download without re-running anything.
+  run grep -E "expected [0-9a-f]{64}.*(got|actual)[^0-9a-f]*[0-9a-f]{64}" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+@test "a failed rustup-init download exits non-zero and executes nothing" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  export BOOT_CURL_FAILS=1
+  run boot_invoke "$(boot_path)"
+  [ "$status" -ne 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ "$(curl_invocations)" -eq 1 ]
+  run grep -F "download" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+@test "a host target with no pinned rustup-init fails loud without downloading" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  path="$(boot_path)"
+  cat > "${WORK}/boot-shims/uname" <<'SHIM'
+#!/usr/bin/env bash
+case "${1:-}" in
+  -s) echo "Plan9" ;;
+  -m) echo "sparc64" ;;
+  *) echo "Plan9" ;;
+esac
+SHIM
+  chmod +x "${WORK}/boot-shims/uname"
+  run boot_invoke "$path"
+  [ "$status" -ne 0 ]
+  [ "$(curl_invocations)" -eq 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+  run grep -F "Plan9" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+@test "no SHA-256 tool on PATH means no rustup install at all" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  path="$(boot_path)"
+  rm -f "${WORK}/boot-shims/sha256sum" "${WORK}/boot-shims/shasum"
+  run boot_invoke "$path"
+  [ "$status" -ne 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+  [ -d "${REPO}/target" ]
+  run grep -E "sha256sum|shasum" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+@test "a matching digest installs rustup with a minimal profile and the build proceeds" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  # The digest is the one seam: the fixture bytes are not the published
+  # rustup-init, so the happy path redefines the hashing helper — in a sourced
+  # subshell, exactly as the sourced-entry-point test above does — to report
+  # the digest this script pins for this host. Everything else is the real
+  # code path.
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    PATH="$2"
+    . "$3"
+    _runlib_sha256_of() { _runlib_pinned_rustup_digest "$(_runlib_host_target)"; }
+    runlib_install 2> "$4"
+  ' _ "$REPO" "$(boot_path)" "$SCRIPT" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$output" = "${CARGO_HOME}/bin/demo_app" ]
+  [ "$(cat "$BOOT_MARKER")" = "-y --no-modify-path --profile minimal" ]
+  [ "$(curl_invocations)" -eq 1 ]
+  # The build really ran on the freshly installed toolchain.
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+  [ "$(cat "${CARGO_HOME}/bin/.demo_app.version")" = "1.2.3" ]
+  run grep -F "build --release" "$RUNLIB_SHIM_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "the installed rustup-init and its temporary directory are not left behind" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  run bash -c '
+    set -euo pipefail
+    cd "$1"
+    PATH="$2"
+    . "$3"
+    _runlib_sha256_of() { _runlib_pinned_rustup_digest "$(_runlib_host_target)"; }
+    runlib_install 2> "$4"
+    printf "%s\n" "${_RUNLIB_TEMPS[@]+${_RUNLIB_TEMPS[@]}}" > "$5"
+  ' _ "$REPO" "$(boot_path)" "$SCRIPT" "$ERR" "${WORK}/temps.txt"
+  [ "$status" -eq 0 ]
+  while IFS= read -r leftover; do
+    [ -n "$leftover" ] || continue
+    [ ! -e "$leftover" ]
+  done < "${WORK}/temps.txt"
+}
+
+@test "with rustc on PATH nothing is downloaded and no installer is run" {
+  make_crate "demo_app" "1.2.3" bin
+  boot_fixture
+  run boot_invoke "$(boot_path):${SHIM_DIR}"
+  [ "$status" -eq 0 ]
+  [ "$(curl_invocations)" -eq 0 ]
+  [ ! -f "$BOOT_MARKER" ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+}
