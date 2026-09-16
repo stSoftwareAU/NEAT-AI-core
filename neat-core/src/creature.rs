@@ -155,6 +155,16 @@ pub struct NeuronExport {
 }
 
 /// Synapse export format matching the TypeScript `SynapseExport` interface.
+///
+/// Both endpoints stay plain `String`, deliberately (Issue #672). A newtype
+/// over one of them catches no transposition, because both ends would take the
+/// same type; two *different* newtypes would, but every target UUID is some
+/// other edge's source UUID — `h-1` is the `toUUID` of `input-0 -> h-1` and the
+/// `fromUUID` of `h-1 -> out-0` — so the pair resolves against one table here
+/// and in `creature_validate`, and distinct types would only move the swap into
+/// the conversion. The analysis, the twelve public items that carry the pair,
+/// and the fail-loud gap it did uncover are recorded in
+/// `docs/research/uuid-endpoint-newtypes.md`.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct SynapseExport {
     /// UUID of the source neuron (e.g. "input-0" for input neurons).

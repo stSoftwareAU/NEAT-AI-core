@@ -589,6 +589,52 @@ predicate itself is built from, so there is still exactly one list.
 `neat-core/tests/aggregate_squash_set.rs` pins the rule: membership, batched-vs-
 single-record parity for every squash type, and both hint semantics.
 
+## One per-variant data list for range and safe zone (Issue #673)
+
+`SquashType` is switched on in several modules, and most of those switches are
+staying: the forward value (`squash.rs`), the derivative (`derivative.rs`), the
+inverse (`unsquash.rs`), the error curve (`error.rs`) and the aggregate
+reductions (`batch_scoring.rs`) are genuinely **different algorithms** that
+share nothing but the tag, so a table is the wrong tool for them.
+
+Two of the switches were not algorithms at all. The **output range**
+(`apply_get_range`) and the **safe-zone rule** (`apply_safe_zone_adjustment`)
+are per-variant *values*, and they had a 38-arm `match` each, in two files.
+`neat-core/src/squash_profile.rs` is now the single home of that data: one row
+per `SquashType`, carrying the range bounds and the safe-zone rule together, in
+one exhaustive `match`. Adding an activation function is **one row**, and the
+compiler still refuses to build a variant that has no row.
+
+The safe-zone rule is carried as data — `Band` (fourteen types share the linear
+fade), `Saturating` (three), `Symmetric` (three), `Constant` (eight) — plus ten
+named shapes for the types whose rule really is its own algorithm. That naming
+is what keeps the dispatch exhaustively checked without a second membership
+list: a new `SquashType` is a compile error in the table, and a new shape is a
+compile error in `safe_zone.rs` until it has an arm. Do **not** reach for
+function-pointer or trait-object dispatch here — the crate's SIMD hot paths
+rule it out, and it would buy nothing the closed shape set does not already
+give.
+
+Two of the fourteen `Band` types, `Gaussian` and `BipolarSigmoid`, had carried a
+hand-inlined copy of `bounded_safe_zone` with their constants baked in; the same
+move removed the copies. `weight_is_recovering` is likewise the one home of the
+"defer to a weight the error is already correcting" guard that `Sine`, `Cosine`
+and `Tan` each restated.
+
+```mermaid
+flowchart LR
+    T["squash_profile.rs<br/>one row per SquashType"] --> R["range.rs<br/>apply_get_range"]
+    T --> S["safe_zone.rs<br/>apply_safe_zone_adjustment"]
+    S --> B["Band / Saturating /<br/>Symmetric / Constant<br/>— data only"]
+    S --> N["ten named shapes<br/>— genuinely per-variant"]
+    X["squash.rs / derivative.rs<br/>unsquash.rs / error.rs<br/>batch_scoring.rs"] -.->|"different algorithms —<br/>deliberately left as matches"| X
+```
+
+`neat-core/tests/squash_profile_parity.rs` pins it: the **verbatim pre-change**
+implementations of both functions are kept in the test module as a differential
+oracle, and every `SquashType` is swept bit-exactly against them across a grid
+of raw inputs, errors and weights.
+
 ## One packed-record scan for every loss entry point (Issue #444)
 
 `packed_record_scan` (`neat-core/src/loss.rs`) is the single home of the rule
@@ -600,6 +646,14 @@ eight entry points — the seven `*_sum_batch_packed` kernels and `mse_mean_reco
 — call it with a closure carrying **only** their per-output reduction, so the
 per-record `1/num_outputs` factor lives in the closure (which is what keeps MSLE
 and hinge deliberately un-averaged).
+
+The four values that describe the buffer — `records`, `input_size`,
+`num_outputs`, `forward_only` — travel as one internal `RecordScanConfig`
+(Issue #671), built once per entry point and used for both `config.layout()`
+and the scan itself, so a sixth "what travels together" value is added in one
+struct rather than in nine parameter lists. The public
+`#[cfg_attr(wasm_bindgen)]` signatures stay flat: that is the JS/WASM calling
+convention, not a smell.
 
 The driver takes a closure and **no mode flags**: SIMD dispatch stays at the
 callers, where it genuinely differs (MSE falls back through the 8-way *and*
