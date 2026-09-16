@@ -51,6 +51,13 @@ wasm-bindgen = "0.2.127"
 
 [dev-dependencies]
 tempfile = "3"
+# Issue #677 - criterion forces the unmaintained `tinytemplate` into the graph:
+# it is non-optional in 0.8.2 and `html_reports` carries an empty feature list,
+# so turning the feature off costs the local HTML reports without dropping the
+# crate. Being a dev-dependency is what keeps it off every shipped path -
+# SECURITY.md "Orphaned transitive crates" records the exception, and
+# deny.toml's `[bans]` wrappers plus tests/cargo_orphan_containment_test.ts are
+# what hold it.
 criterion = { version = "0.8", features = ["html_reports"] }
 
 # Issue #152 - opt-in Criterion harness for core hot paths. `harness = false`

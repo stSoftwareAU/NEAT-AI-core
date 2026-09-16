@@ -1,4 +1,7 @@
-// Containment gate for the orphaned transitive Cargo crates — Issue #676.
+// Containment gate for the orphaned transitive Cargo crates — Issues #676, #677.
+//
+// Two unmaintained crates reach this graph, both forced in by `criterion`, the
+// benchmark harness `neat-core` declares as a dev-dependency.
 //
 // `winapi` is the legacy raw-FFI Windows bindings crate: last release 0.3.9
 // (2020-06-26), no maintainer triage since, superseded by `windows-sys`. It is
@@ -11,6 +14,15 @@
 // dev-dependency, so the crate never reaches the shipped library or the wasm
 // bundle, and page_size's winapi edge is `cfg(windows)`-gated.
 //
+// `tinytemplate` is the templating engine criterion renders its local HTML
+// benchmark reports with: last release 1.2.1 (2021-03-04), with "Project
+// dead?", "Maintenance?" and a CVE-2023-38497 report all still open and
+// unanswered upstream. It arrives as `tinytemplate <- criterion`, one edge
+// shorter and no more removable: criterion 0.8.2 declares it non-optional, and
+// the `html_reports` feature that renders those reports carries an empty
+// feature list — so turning the feature off costs the reports and resolves the
+// crate regardless. It is bounded by the same dev-dependency boundary.
+//
 // "Bounded" was an assumption nothing enforced. This gate makes it an
 // invariant: `deny.toml` pins the wrapper chain so `cargo deny check bans`
 // fails the build the moment anything other than page_size pulls `winapi`, or
@@ -18,10 +30,10 @@
 // policy is dropped from `deny.toml`, if the committed `Cargo.lock` grows a new
 // path to either crate, or if criterion stops being a dev-dependency.
 //
-// The whole edge disappears — with no source change here — once criterion drops
-// page_size upstream, or page_size migrates to `windows-sys`. Re-bump then and
-// delete the two `deny.toml` entries; these tests are what tells you the shape
-// changed.
+// An edge disappears — with no source change here — once criterion drops the
+// dependency upstream, or (for winapi) page_size migrates to `windows-sys`.
+// Re-bump then and delete that crate's `deny.toml` entry; these tests are what
+// tells you the shape changed.
 //
 // "What" tests: each one reads a committed artefact and asserts on the graph it
 // actually describes, and the parsers are exercised against synthetic fixtures
@@ -172,12 +184,17 @@ Deno.test("Cargo.lock reaches page_size through criterion and nothing else", asy
   assertEquals(dependentsOf(packages, "page_size"), ["criterion"]);
 });
 
-Deno.test("criterion is declared as a dev-dependency only, so winapi never ships", async () => {
+Deno.test("Cargo.lock reaches tinytemplate through criterion and nothing else", async () => {
+  const packages = await lockPackages();
+  assertEquals(dependentsOf(packages, "tinytemplate"), ["criterion"]);
+});
+
+Deno.test("criterion is declared as a dev-dependency only, so neither crate ships", async () => {
   const manifest = await Deno.readTextFile(CORE_MANIFEST);
   assertEquals(sectionsDeclaring(manifest, "criterion"), ["dev-dependencies"]);
 });
 
-Deno.test("deny.toml pins the winapi wrapper chain so cargo deny fails on a new path", async () => {
+Deno.test("deny.toml pins both wrapper chains so cargo deny fails on a new path", async () => {
   const entries = parseBanDenyEntries(await Deno.readTextFile(DENY_TOML));
   const byName = new Map(entries.map((entry) => [entry.name, entry.wrappers]));
   assertEquals(
@@ -189,6 +206,11 @@ Deno.test("deny.toml pins the winapi wrapper chain so cargo deny fails on a new 
     byName.get("page_size"),
     ["criterion"],
     "deny.toml [bans] must deny page_size except through criterion",
+  );
+  assertEquals(
+    byName.get("tinytemplate"),
+    ["criterion"],
+    "deny.toml [bans] must deny tinytemplate except through criterion",
   );
 });
 

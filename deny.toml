@@ -39,9 +39,17 @@ multiple-versions = "warn"
 # bundle. Delete both entries once criterion drops page_size, or page_size
 # migrates to `windows-sys`; `tests/cargo_orphan_containment_test.ts` is what
 # reports the shape changing.
+# Issue #677 — the same containment for `tinytemplate` (1.2.1, 2021-03-04;
+# "Project dead?" and an unanswered CVE report still open upstream), which
+# criterion renders its local HTML benchmark reports with. criterion 0.8.2
+# declares it non-optional and its `html_reports` feature carries an empty
+# feature list, so turning that feature off drops the reports without dropping
+# the crate. Delete this entry once criterion makes the dependency optional or
+# drops it.
 deny = [
     { crate = "winapi", wrappers = ["page_size"] },
     { crate = "page_size", wrappers = ["criterion"] },
+    { crate = "tinytemplate", wrappers = ["criterion"] },
 ]
 wildcards = "allow"
 highlight = "lowest-version"
