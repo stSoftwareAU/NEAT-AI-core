@@ -126,6 +126,16 @@ No test was commented out, removed or weakened. The two deleted `bats` files
 were added earlier **on this branch** and never existed on the base.
 
 Documentation updated in the same change: SECURITY.md *"Orphaned transitive
-crates"* now covers both crates and both exit conditions, and the README row,
-`quality.sh` comment and CI step name that named only `winapi` were corrected
-along with the moved section anchor.
+crates"* now covers both crates and both exit conditions, and the README row and
+`quality.sh` comment that named only `winapi` were corrected along with the moved
+section anchor.
+
+One wording fix could not be pushed: the CI step is still named *"Cargo
+orphan-containment gate (winapi wrapper chain)"* though it now runs the gate for
+both crates. This run's token carries no `workflow` scope, so any push touching
+`.github/workflows/` is rejected outright — `.github/workflows/ci.yml` is
+therefore left byte-identical to the base branch. The step **runs the right
+test** (`deno test --allow-read tests/cargo_orphan_containment_test.ts`, which
+now has the `tinytemplate` assertions), so this is a stale label on a working
+gate, not a coverage gap. A reviewer with `workflow` scope can rename it in one
+line.
