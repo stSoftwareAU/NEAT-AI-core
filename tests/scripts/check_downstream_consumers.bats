@@ -265,7 +265,8 @@ TOML
 
 # A consumer repository pinning neat-core by git tag, published as a bare repo
 # the gate can clone. $1 is extra text appended to its root manifest;
-# $PIN_DEP_LINE and $APP_BODY override the pin and the code that exercises it.
+# $PIN_DEP_LINE and $APP_BODY override the pin and the code that exercises it,
+# and $PIN_COMMIT_LOCK commits a Cargo.lock naming the release it pins.
 publish_pinned_consumer() {
   local dep_line="${PIN_DEP_LINE-}" app_body="${APP_BODY-}"
   [ -n "$dep_line" ] ||
@@ -289,6 +290,10 @@ edition = "2021"
 $dep_line
 TOML
   printf '%s\n' "$app_body" >"$WORK/pinned/app/src/lib.rs"
+  if [ -n "${PIN_COMMIT_LOCK-}" ]; then
+    (cd "$WORK/pinned" && cargo generate-lockfile) >"$WORK/pinned-lock.log" 2>&1 ||
+      fail "could not generate the consumer's lockfile: $(cat "$WORK/pinned-lock.log")"
+  fi
   make_bare_repo "$WORK/remotes/Pinned.git" Develop "$WORK/pinned"
   printf 'stSoftwareAU/Pinned\n' >"$REGISTRY"
 }
@@ -358,6 +363,27 @@ TOML
   [[ "$output" == *"was not used in the crate graph"* ]]
   [[ "$output" == *"([patch] not used)"* ]]
   [[ "$output" != *"✅ stSoftwareAU/Pinned compiles"* ]]
+}
+
+@test "a consumer whose committed lockfile names the release it pins is re-locked onto the candidate" {
+  command -v cargo >/dev/null || skip "cargo is required to compile the fixture consumer"
+  use_local_family_remotes
+  # The candidate carries the next version — what `version-increment` does on
+  # every PR here — while the consumer's committed Cargo.lock still names the
+  # release its tag pins. Cargo keeps a locked version in preference to an
+  # override whose number differs, so without the re-lock the [patch] goes
+  # unused and the gate never looks at the candidate at all.
+  write_candidate_core 0.16.0
+  publish_released_core 0.15.9
+  PIN_COMMIT_LOCK=1
+  export PIN_COMMIT_LOCK
+  publish_pinned_consumer
+  run "$SCRIPT" --registry "$REGISTRY" --core "$WORK/candidate"
+  [ "$status" -eq 0 ]
+  # The fixture calls `candidate_only()`, which no release defines: compiling
+  # is proof the override — not the pinned 0.15.9 — is in the crate graph.
+  [[ "$output" == *"✅ stSoftwareAU/Pinned compiles against this core"* ]]
+  [[ "$output" != *"was not used in the crate graph"* ]]
 }
 
 @test "a --core path carrying a quote is refused rather than written into a [patch] string" {

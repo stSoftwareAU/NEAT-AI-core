@@ -27,6 +27,15 @@
 #   released core. A consumer still on the `../../NEAT-AI-core/neat-core` path
 #   dependency declares no such URL and is left exactly as it was.
 #
+#   Appending the `[patch]` is not enough on its own: the consumer's committed
+#   `Cargo.lock` records the version the tag it pins carries, and cargo keeps
+#   that locked version — silently ignoring the override — whenever the
+#   candidate's version differs. That is every PR here, because
+#   `version-increment` bumps the workspace version before this gate runs, so
+#   each patched consumer is re-locked with `cargo update --package neat-core`:
+#   that moves the one package onto the override and leaves every other version
+#   the consumer committed exactly as it is.
+#
 #   --workspace DIR  Use the sibling checkouts already under DIR instead of
 #                    cloning — the local shape, e.g. `--workspace ..` from this
 #                    repo. DIR/NEAT-AI-core must be the same directory as
@@ -126,8 +135,19 @@ EOF
     echo "❌ $entry: could not append the [patch] override to $manifest"
     return 1
   }
-  patched+=("$entry")
   echo "🩹 $entry: [patch] $count git pin(s) of neat-core → $CORE/neat-core"
+  # The consumer's committed lockfile still names the released version its tag
+  # pins, and cargo keeps a locked version whose number differs from the
+  # override's rather than taking the override — so the manifest edit alone
+  # leaves the gate compiling the release. Re-lock that one package onto the
+  # candidate; every other dependency keeps the version the consumer committed.
+  if [[ -f "$dir/Cargo.lock" ]] &&
+    ! (cd "$dir" && cargo update --package neat-core) >"$LOG_DIR/${dir##*/}.relock.log" 2>&1; then
+    echo "❌ $entry: could not re-lock neat-core onto the [patch] override"
+    sed 's/^/    /' "$LOG_DIR/${dir##*/}.relock.log" | tail -n 5
+    return 1
+  fi
+  patched+=("$entry")
   return 0
 }
 
