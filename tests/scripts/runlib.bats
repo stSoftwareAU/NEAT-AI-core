@@ -1335,12 +1335,16 @@ TOML
   [ "$status" -eq 0 ]
 }
 
-# Two tables name two binaries, and only one of them can be the crate's — the
-# single-line reader cannot tell which, so it declines.
-@test "several [[bin]] tables still fall through to cargo metadata" {
+# Several tables, one of them the crate's own CLI, is the shape a sibling that
+# ships bench binaries beside its CLI writes (NEAT-AI-scorer #629). The bin the
+# install wrote is named after the crate, so the table naming the crate settles
+# the shape whatever sits beside it — and the skip costs no cargo call.
+@test "several [[bin]] tables skip without cargo when one names the crate" {
   make_crate "demo_both" "1.0.0" both
   run invoke
   [ "$status" -eq 0 ]
+  local build_path
+  build_path="$(cat "$OUT")"
 
   cat > "${REPO}/Cargo.toml" <<'TOML'
 [package]
@@ -1355,6 +1359,40 @@ path = "src/main.rs"
 [[bin]]
 name = "demo_helper"
 path = "src/bin/demo_helper.rs"
+
+[lib]
+name = "demo_both"
+crate-type = ["cdylib"]
+TOML
+  : > "$RUNLIB_SHIM_LOG"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ "$(cargo_invocations)" -eq 0 ]
+  run grep -F "already installed v1.0.0" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "$build_path" ]
+}
+
+# None of the tables names the crate, and cargo can autodiscover a binary named
+# after the package beside them — so the reader still declines.
+@test "several [[bin]] tables naming other binaries still fall through to cargo metadata" {
+  make_crate "demo_both" "1.0.0" both
+  run invoke
+  [ "$status" -eq 0 ]
+
+  cat > "${REPO}/Cargo.toml" <<'TOML'
+[package]
+name = "demo_both"
+version = "1.0.0"
+edition = "2024"
+
+[[bin]]
+name = "demo_helper"
+path = "src/bin/demo_helper.rs"
+
+[[bin]]
+name = "demo_bench"
+path = "src/bin/demo_bench.rs"
 
 [lib]
 name = "demo_both"
