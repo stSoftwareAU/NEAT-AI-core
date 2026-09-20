@@ -220,11 +220,11 @@ into all three channels and add it to the table above in the same change.
 is missing from this table, or while the table names a lockfile `security.yml`
 does not audit.
 
-### Orphaned transitive crates (Issues #676, #677)
+### Orphaned transitive crates (Issues #676, #677, #720)
 
 An audit covers *known advisories*; it says nothing about a crate whose
-maintainers have stopped answering. Two such crates are in this graph, and
-neither is a choice made here — both arrive through `criterion`, the benchmark
+maintainers have stopped answering. Three such crates are in this graph, and
+none is a choice made here — all three arrive through `criterion`, the benchmark
 harness `neat-core` declares as a dev-dependency.
 
 [`winapi`](https://crates.io/crates/winapi) is the legacy raw-FFI Windows
@@ -247,19 +247,31 @@ off — the mitigation the finding suggested — stops the HTML reports being
 rendered and leaves the crate resolved exactly as before, so the feature stays
 on and the exposure is bounded instead.
 
+[`alloca`](https://crates.io/crates/alloca) is the dynamic stack-allocation
+helper criterion declares for native targets — last release `0.4.0` in January
+2021, with the upstream repository dormant since 2023-08 and two issues still
+open and unanswered by the owner: *"Undefined behavior when `size` is `0`"* and
+*"Compilation fails on wasm32-wasi"*. It arrives as `alloca ← criterion`, the
+same one-edge shape as `tinytemplate` and just as unremovable: criterion `0.8.2`
+declares it non-optional for `cfg(any(windows, unix))`, so **every native build
+resolves it whatever features are chosen here**. No replacement is available to
+this manifest either — the choice belongs to criterion — so, as with the other
+two, the exposure is bounded rather than removed.
+
 What *is* controlled is the blast radius, and it is pinned rather than assumed:
 
-- `criterion` is a **dev-dependency** of `neat-core`, so neither crate reaches
-  the published library or the wasm bundles.
+- `criterion` is a **dev-dependency** of `neat-core`, so none of the three
+  crates reaches the published library or the wasm bundles.
 - `page_size`'s `winapi` edge is `cfg(windows)`-gated, so it is not even
-  compiled by the Linux and macOS gates.
-- `deny.toml` `[bans]` denies all three crates except through their one
-  legitimate wrapper (`winapi` through `page_size`, `page_size` through
-  `criterion`, `tinytemplate` through `criterion`), so `cargo deny check` — run
+  compiled by the Linux and macOS gates, and `alloca`'s
+  `cfg(any(windows, unix))` gate keeps it out of the wasm target entirely.
+- `deny.toml` `[bans]` denies all four crates except through their one
+  legitimate wrapper (`winapi` through `page_size`, and `page_size`,
+  `tinytemplate` and `alloca` through `criterion`), so `cargo deny check` — run
   by `quality.sh` and the CI `deny` job — **fails the build** the moment a
   second path into any of them appears.
 - `tests/cargo_orphan_containment_test.ts` fails if that policy is dropped from
-  `deny.toml`, if `Cargo.lock` grows a new dependent of any of the three, or if
+  `deny.toml`, if `Cargo.lock` grows a new dependent of any of them, or if
   `criterion` stops being a dev-dependency.
 
 ```mermaid
@@ -268,12 +280,15 @@ flowchart LR
     Crit --> PS[page_size 0.6]
     PS -->|"cfg(windows)"| Win["winapi 0.3.9<br/>unmaintained"]
     Crit --> TT["tinytemplate 1.2.1<br/>unmaintained"]
+    Crit -->|"cfg(any(windows, unix))"| AL["alloca 0.4.0<br/>unmaintained"]
     Other["any other crate"] -.->|new path| Win
     Other -.->|new path| PS
     Other -.->|new path| TT
+    Other -.->|new path| AL
     Win --> Bans["cargo deny check bans<br/>deny.toml wrappers"]
     PS --> Bans
     TT --> Bans
+    AL --> Bans
     Bans -->|second path| Fail["build fails"]
     Bans -->|chain unchanged| Pass[bans ok]
 ```

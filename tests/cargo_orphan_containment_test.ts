@@ -1,6 +1,7 @@
-// Containment gate for the orphaned transitive Cargo crates — Issues #676, #677.
+// Containment gate for the orphaned transitive Cargo crates — Issues #676,
+// #677, #720.
 //
-// Two unmaintained crates reach this graph, both forced in by `criterion`, the
+// Three unmaintained crates reach this graph, all forced in by `criterion`, the
 // benchmark harness `neat-core` declares as a dev-dependency.
 //
 // `winapi` is the legacy raw-FFI Windows bindings crate: last release 0.3.9
@@ -23,12 +24,22 @@
 // feature list — so turning the feature off costs the reports and resolves the
 // crate regardless. It is bounded by the same dev-dependency boundary.
 //
+// `alloca` is the dynamic stack-allocation helper criterion declares for native
+// targets: last release 0.4.0 (2021-01), upstream repository
+// dormant since 2023-08, with an undefined-behaviour report and a wasm32 build
+// failure both open and unanswered. It arrives as `alloca <- criterion`, the
+// same one-edge shape as tinytemplate and just as unremovable: criterion 0.8.2
+// declares it non-optional for `cfg(any(windows, unix))`, so every native build
+// resolves it whatever features are chosen here. It is bounded by the same
+// dev-dependency boundary.
+//
 // "Bounded" was an assumption nothing enforced. This gate makes it an
-// invariant: `deny.toml` pins the wrapper chain so `cargo deny check bans`
+// invariant: `deny.toml` pins each wrapper chain so `cargo deny check bans`
 // fails the build the moment anything other than page_size pulls `winapi`, or
-// anything other than criterion pulls `page_size`, and these tests fail if that
-// policy is dropped from `deny.toml`, if the committed `Cargo.lock` grows a new
-// path to either crate, or if criterion stops being a dev-dependency.
+// anything other than criterion pulls `page_size`, `tinytemplate` or `alloca`,
+// and these tests fail if that policy is dropped from `deny.toml`, if the
+// committed `Cargo.lock` grows a new path to any of those crates, or if
+// criterion stops being a dev-dependency.
 //
 // An edge disappears — with no source change here — once criterion drops the
 // dependency upstream, or (for winapi) page_size migrates to `windows-sys`.
@@ -189,6 +200,11 @@ Deno.test("Cargo.lock reaches tinytemplate through criterion and nothing else", 
   assertEquals(dependentsOf(packages, "tinytemplate"), ["criterion"]);
 });
 
+Deno.test("Cargo.lock reaches alloca through criterion and nothing else", async () => {
+  const packages = await lockPackages();
+  assertEquals(dependentsOf(packages, "alloca"), ["criterion"]);
+});
+
 Deno.test("criterion is declared as a dev-dependency only, so neither crate ships", async () => {
   const manifest = await Deno.readTextFile(CORE_MANIFEST);
   assertEquals(sectionsDeclaring(manifest, "criterion"), ["dev-dependencies"]);
@@ -211,6 +227,11 @@ Deno.test("deny.toml pins both wrapper chains so cargo deny fails on a new path"
     byName.get("tinytemplate"),
     ["criterion"],
     "deny.toml [bans] must deny tinytemplate except through criterion",
+  );
+  assertEquals(
+    byName.get("alloca"),
+    ["criterion"],
+    "deny.toml [bans] must deny alloca except through criterion",
   );
 });
 
