@@ -46,10 +46,16 @@ multiple-versions = "warn"
 # feature list, so turning that feature off drops the reports without dropping
 # the crate. Delete this entry once criterion makes the dependency optional or
 # drops it.
+# Issue #720 — the same containment for `alloca` (0.4.0, 2021-01; upstream
+# repository dormant since 2023-08 with an undefined-behaviour report and a
+# wasm32 build failure both open and unanswered), which criterion 0.8.2
+# declares non-optional for `cfg(any(windows, unix))` — i.e. every native
+# build. Delete this entry once criterion drops the dependency.
 deny = [
     { crate = "winapi", wrappers = ["page_size"] },
     { crate = "page_size", wrappers = ["criterion"] },
     { crate = "tinytemplate", wrappers = ["criterion"] },
+    { crate = "alloca", wrappers = ["criterion"] },
 ]
 wildcards = "allow"
 highlight = "lowest-version"
