@@ -69,7 +69,12 @@ flowchart LR
   matches across all 239 archives.
 - `deno run --allow-read scripts/check_mermaid.ts docs` — `check-mermaid: all
   Mermaid blocks passed` (the diagram in `pr-summary-661.md` was reworded).
-- `./quality.sh < /dev/null` — see the gate result recorded in the PR.
+- `./quality.sh < /dev/null` — exits 1 on six **pre-existing**, unrelated
+  failures: five in `build_wasm_bundle_wasm64.bats` (no nightly toolchain or
+  `wasm-bindgen` in this container) and `markdownlint-cli2 passes against the
+  current tree`, whose only offenders are three Markdown files in the untracked
+  `graft/` tooling directory. Every other check passes, including all 25 tests
+  of the guard this change touches. Nothing in this diff is implicated.
 
 ## Test Plan
 
