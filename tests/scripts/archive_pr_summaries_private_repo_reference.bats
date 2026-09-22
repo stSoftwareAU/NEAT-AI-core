@@ -181,3 +181,31 @@ setup() {
     "${ARCHIVE}/pr-summary-572.md"
   [ "$status" -eq 0 ]
 }
+
+# Issue #722: one per newly covered archive, so the reword cannot silently
+# degrade into deletion of the passage that carried the private name.
+
+@test "pr-summary-661 still records the float round-trip contract" {
+  run grep -nF 'float_roundtrip' "${ARCHIVE}/pr-summary-661.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-664 still records the seven audit-fix archive sweep" {
+  run grep -niE 'seven audit-fix archives' "${ARCHIVE}/pr-summary-664.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-688 still records the identity-splice symptom" {
+  run grep -niE 'production sampler' "${ARCHIVE}/pr-summary-688.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-700 still records the stamp-skip contract it preserved" {
+  run grep -niE 'stamp-skip contract' "${ARCHIVE}/pr-summary-700.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-701 still records why the caller cannot use install mode" {
+  run grep -niE 'cannot use install mode' "${ARCHIVE}/pr-summary-701.md"
+  [ "$status" -eq 0 ]
+}

@@ -106,9 +106,10 @@ the neuron and synapse counts have not moved.
 
 ## Reproduction
 
-- **symptom** — an `IF` the prune rewrote to `IDENTITY` (the GRQ-sampler
-  `forest-…-if1` case) was kept as a pass-through, so the creature carried a
-  hidden neuron the score charges `growthCost` for and nothing else read.
+- **symptom** — an `IF` the prune rewrote to `IDENTITY` (the production sampler
+  fixture's `forest-…-if1` case) was kept as a pass-through, so the creature
+  carried a hidden neuron the score charges `growthCost` for and nothing else
+  read.
 - **status** — `verified` — `neat-core/tests/prune_splice.rs` was written first
   and run red against the unfixed crate (it did not compile: no
   `splice_identity`, no `spliced_neurons`), and the two defects independent

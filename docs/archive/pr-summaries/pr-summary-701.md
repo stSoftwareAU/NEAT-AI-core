@@ -6,8 +6,8 @@ repair → dependency graph → toolchain gate chain install mode runs, builds a
 installs nothing, and prints **only** the override toolchain the gate selected
 on stdout — a bare name such as `1.93.1`, or an empty line when the active
 toolchain already satisfies the requirement. That is for a caller which runs
-`cargo` itself and exports the value as `RUSTUP_TOOLCHAIN`; GRQ's
-`worker/generate_neat_ai_explore_snapshot.sh` runs `cargo run --release
+`cargo` itself and exports the value as `RUSTUP_TOOLCHAIN`; the private
+downstream trainer's snapshot-generation worker script runs `cargo run --release
 --example generate_snapshot` inline and so cannot use install mode.
 
 `argv` is now parsed in the `BASH_SOURCE == $0` block: no argument installs

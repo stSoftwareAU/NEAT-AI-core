@@ -20,7 +20,7 @@ level**, keeping the historical narrative of what changed and why intact:
 | the private trainer's `owner/repo` slug, its name as a bare token, and its telemetry-archive and cluster siblings | "the private downstream repository", "its telemetry-archive sibling", "the private cluster repository" |
 | private issue slugs (`repo#NNNN` / `repo #NNNN`) quoted in before/after tables | "a private issue slug", "two private orchestration issue slugs" |
 | private host identifiers and the host class named after that repository | "a private host identifier", "its host class" |
-| quoted `grep` patterns spelling the private token (`\bGRQ\b`, `'GRQ\|node\.sh'`) | "a word-boundary grep for the private repository's name" |
+| quoted `grep` patterns spelling the private token literally | "a word-boundary grep for the private repository's name" |
 | quoted guard test names that embed the private token | the test described by what it asserts |
 | the fleet build-profile decision cited as `owner/repo#NNNN` (`pr-summary-546.md`) | "the fleet build-profile decision" |
 | two headings naming a private repository (`pr-summary-376.md`, `pr-summary-377.md`) | "private-cluster provenance", "worker-orchestration issue references" |
