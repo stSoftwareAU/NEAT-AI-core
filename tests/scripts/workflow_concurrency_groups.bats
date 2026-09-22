@@ -13,6 +13,16 @@
 # per-commit bundle, so cancelling a superseded run would silently skip an
 # artefact downstream consumers pin by SHA.
 #
+# Issue #717 — those two publishers nonetheless declared no group at all, so two
+# merges landing close together queued a second full run (up to 60 minutes of
+# wasm builds, parity gates, SBOMs and attestations) on top of one still
+# building. They now key their group on the **commit** as well as the ref.
+# Keying on the ref alone would lose artefacts whatever `cancel-in-progress`
+# said: GitHub cancels a *pending* run when a newer one queues behind the same
+# group, so the earlier commit's bundle would never be published. Per-commit
+# groups deduplicate only a re-run racing the original — the one race worth
+# preventing — and no run can cancel another commit's publish.
+#
 # These are "what" tests: they parse the YAML and assert on the observable
 # effective configuration each workflow declares, not on source text. The
 # heredocs are quoted (`<<'PY'`) and the directory arrives through the
@@ -131,6 +141,83 @@ for filename in PUBLISHERS:
 
 if bad:
     sys.stderr.write("Publishing workflow failures:\n  " + "\n  ".join(bad) + "\n")
+    sys.exit(1)
+PY
+  [ "$status" -eq 0 ]
+}
+
+# Issue #717 — the rule above names the gates by hand, so a push-triggered
+# workflow added later joins no queue at all until someone remembers this file.
+# This one discovers the push triggers from the YAML instead.
+@test "every push-triggered workflow declares a concurrency group" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<'PY'
+import glob, os, sys, yaml
+
+workflows_dir = os.environ["WORKFLOWS_DIR"]
+
+bad = []
+checked = 0
+for path in sorted(glob.glob(os.path.join(workflows_dir, "*.yml"))):
+    filename = os.path.basename(path)
+    with open(path) as fh:
+        data = yaml.safe_load(fh)
+    # PyYAML resolves the bare `on:` key to the boolean True.
+    triggers = data.get("on", data.get(True))
+    if isinstance(triggers, str):
+        triggers = [triggers]
+    if "push" not in triggers:
+        continue
+    checked += 1
+    concurrency = data.get("concurrency")
+    if not isinstance(concurrency, dict):
+        bad.append(f"{filename}: triggers on push but declares no concurrency mapping")
+        continue
+    group = concurrency.get("group", "")
+    for key in ("github.workflow", "github.ref"):
+        if key not in group:
+            bad.append(f"{filename}: group must include {key}, got {group!r}")
+    if "cancel-in-progress" not in concurrency:
+        bad.append(f"{filename}: cancel-in-progress must be declared explicitly")
+
+if bad:
+    sys.stderr.write("Push-trigger gate failures:\n  " + "\n  ".join(bad) + "\n")
+    sys.exit(1)
+assert checked >= 2, f"expected the push-triggered publishers, found {checked}"
+PY
+  [ "$status" -eq 0 ]
+}
+
+# Issue #717 — a publisher owns one artefact per commit, so its queue is the
+# commit, not the branch: a ref-keyed group cancels the *pending* run for an
+# earlier commit as soon as a newer push arrives, and that commit's bundle or
+# tag is then never published.
+@test "publishing workflows key their concurrency group on the commit" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<'PY'
+import os, sys, yaml
+
+workflows_dir = os.environ["WORKFLOWS_DIR"]
+PUBLISHERS = ["release.yml", "wasm-bundle.yml"]
+
+bad = []
+for filename in PUBLISHERS:
+    with open(os.path.join(workflows_dir, filename)) as fh:
+        data = yaml.safe_load(fh)
+    concurrency = data.get("concurrency")
+    if not isinstance(concurrency, dict):
+        bad.append(f"{filename}: no top-level concurrency mapping")
+        continue
+    group = concurrency.get("group", "")
+    if "github.sha" not in group:
+        bad.append(f"{filename}: group must include github.sha, got {group!r}")
+
+if bad:
+    sys.stderr.write("Publisher group failures:\n  " + "\n  ".join(bad) + "\n")
     sys.exit(1)
 PY
   [ "$status" -eq 0 ]

@@ -24,6 +24,23 @@ on:
   push:
     branches: [Develop]
 
+# Issue #717 — this workflow declared no concurrency group, so two pushes to
+# Develop close together queued a second full run (two wasm builds, the parity
+# gates, SBOMs and attestations, up to 60 minutes) on top of one still
+# building. The PR-gate pattern (`github.workflow`-`github.ref` +
+# `cancel-in-progress: true`) cannot be used: each run publishes its own
+# `wasm-bundle-<sha>` Release, so cancelling the earlier run means that commit
+# never gets a bundle and no consumer can ever pin `neatCore.rev` to it —
+# exactly the per-commit invariant this workflow exists to hold. GitHub also
+# cancels a *pending* run when a newer one queues behind the same group, so a
+# ref-keyed group loses commits even with `cancel-in-progress: false`. Keying
+# on the commit as well gives every commit its own group: duplicate runs for
+# the same SHA (a re-run racing the original) are deduplicated, which is the
+# race worth preventing, and no run ever cancels another commit's publish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
 permissions:
   contents: write       # required by `gh release create`
   id-token: write       # Issue #122 — OIDC token for keyless Sigstore signing
