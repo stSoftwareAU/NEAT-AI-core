@@ -1922,6 +1922,16 @@ consumer is migrated — see
   Release tagged `wasm-bundle-<SHA>`. Each Release carries three assets: the
   tarball, its `wasm_activation-pkg.tar.gz.sha256` sidecar, and the CycloneDX
   SBOM `wasm_activation-pkg.cdx.json`.
+- The workflow's concurrency group is keyed on the **commit**
+  (`${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}`, Issue #717)
+  with `cancel-in-progress: false`, so a later push never cancels an earlier
+  commit's build: every `Develop` commit still gets its own Release, and only a
+  duplicate run of the *same* SHA is deduplicated. `release.yml` carries the
+  same group for the same reason — a cancelled run would leave a semver tag
+  whose release never appears.
+  `tests/scripts/workflow_concurrency_groups.bats` is the gate that fails if
+  either drifts, or if a push-triggered workflow added later declares no group
+  at all.
 - NEAT-AI's `bump-deps.sh` invokes `./build.sh`, which downloads the matching
   bundle, verifies it against the `.sha256` sidecar, and updates `deno.json`'s
   `neatCore.rev` field in lock-step. The sidecar is the per-revision hash

@@ -12,6 +12,20 @@ on:
     paths:
       - "Cargo.toml"
 
+# Issue #717 — this job was the only push-triggered workflow beside
+# wasm-bundle.yml with no concurrency group, so two merges landing close
+# together queued a second full run on top of one still cutting a release.
+# The PR-gate pattern (`github.workflow`-`github.ref` + `cancel-in-progress:
+# true`) is wrong here: a run cancelled mid-`gh release create` can leave a tag
+# whose release never appears, and the gate above is idempotent in the wrong
+# direction — it sees the tag, decides "already released" and never repairs it.
+# Keying on the commit gives each version bump its own group, so a run is only
+# ever deduplicated against another run of the *same* commit, never against the
+# release of a different version.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
+
 permissions:
   contents: write # required to push the tag and create the release
 
