@@ -28,8 +28,8 @@ rustup proxy whose pinned toolchain is not installed cannot run `cargo` either
 handed to `rustup` is validated against `^[A-Za-z0-9][A-Za-z0-9._+-]*$` first:
 `rust-toolchain.toml` and `cargo metadata` are repository input, not shell. The
 graph resolve runs on the build path only, after the up-to-date check, so the
-GRQ#4754 stamp-skip contract holds unchanged: a matching stamp still runs no
-`cargo`, no `rustc` and no `rustup`.
+downstream production trainer's stamp-skip contract holds unchanged: a matching
+stamp still runs no `cargo`, no `rustc` and no `rustup`.
 
 Closes #700.
 
@@ -84,7 +84,7 @@ flowchart TD
 - **met** — any rustup failure, or a rustc still below after the update, exits non-zero naming the required version and `https://rustup.rs`; nothing installed, `target/` kept — evidence: `tests/scripts/runlib.bats::a rustup update that fails exits non-zero naming the required version`, `::a pinned toolchain install that fails exits non-zero naming the required version` — reviewer: met — reason: the reviewer said "met (with a test gap)" — the update-failure case asserted only the version; the `https://rustup.rs` assertion was added to it in this diff, closing the gap
 - **met** — a matching install stamp produces zero cargo, rustc and rustup shim invocations — evidence: `tests/scripts/runlib.bats::a matching stamp runs no cargo, no rustc and no rustup at all` — reviewer: met
 - **met** — `./quality.sh < /dev/null` passes (`bash -n`, shellcheck, bats) — evidence: full gate run after the final edit, exit 0, `✅ All quality checks passed!` — reviewer: met
-- **unrequested** — the gate runs after the *second* up-to-date check (`_runlib_report_current`), not immediately after the metadata calls — reviewer: unrequested — reason: the issue asks for the graph resolve "on the build path only" and "read only when a rebuild is due", which is exactly this position; a crate already current pays no graph resolve and the GRQ#4754 stamp-skip contract is untouched
+- **unrequested** — the gate runs after the *second* up-to-date check (`_runlib_report_current`), not immediately after the metadata calls — reviewer: unrequested — reason: the issue asks for the graph resolve "on the build path only" and "read only when a rebuild is due", which is exactly this position; a crate already current pays no graph resolve and the downstream production trainer's stamp-skip contract is untouched
 - **unrequested** — progress lines on stderr the issue did not list (`rustc is not runnable — installing the pinned toolchain …`, `… — running: rustup update …`) — reviewer: unrequested — reason: a rustup invocation that changes the host's toolchain must not be silent; stdout is still only the artefact path, which `::a pin below the requirement is overridden for this run, not rewritten` asserts
 - **unrequested** — `_runlib_ensure_toolchain` fails loud for an unrunnable `rustc` on every build path, where the old code only did so for a crate declaring `rust-version` — reviewer: unrequested — reason: it is the issue's ensure-toolchain bullet ("without `rustup` keep today's cannot-read-the-rustc-version fail-loud"); carrying a dead rustc into `cargo metadata` would fail with no cause named
 - **unrequested** — a 15th bats case beyond the issue's 14 (`::a pinned toolchain install that fails exits non-zero naming the required version`) — reviewer: unrequested — reason: acceptance criterion 6 says "any rustup failure", and the issue's case list only covered the unpinned branch

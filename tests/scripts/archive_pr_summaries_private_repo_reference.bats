@@ -8,7 +8,7 @@
 # they cannot open and learns the layout of a private production system —
 # check 3 of the private-repo-reference audit.
 #
-# This guard pins the enumerated archives at concept level: no private-repo
+# This guard pins every archived PR summary at concept level: no private-repo
 # token, no private path or issue slug, while the historical narrative survives.
 #
 # These are "what" tests over the committed artefacts — they read the archived
@@ -31,6 +31,15 @@
 # their **file name** as well, so they were renamed to concept level:
 # `pr-summary-memetic-weight-forms.md` and `pr-summary-exact-float-parsing.md`.
 #
+# Issue #722 (BP-41043689d67d) found five more archives naming the private
+# trainer directly — three of them written *after* the sweeps above, because a
+# hand-kept list only covers what was enumerated the day it was written. The
+# guarded set is therefore **discovered** from the archive directory rather than
+# enumerated: every `*.md` under `docs/archive/pr-summaries/` is checked,
+# including summaries added after this guard was last edited. A fail-loud
+# coverage assertion pins the discovery itself, so an empty or truncated glob
+# cannot present as a pass.
+#
 # Scope note: the guard matches the private repo names on **word boundaries**
 # (`-w`), so snake_case identifiers that merely embed the letters are not
 # flagged. That is deliberate — `production_exact_matches_committed_grq_topology`
@@ -41,40 +50,23 @@
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
   ARCHIVE="${REPO_ROOT}/docs/archive/pr-summaries"
-  SUMMARIES=(
-    "${ARCHIVE}/pr-summary-5.md"
-    "${ARCHIVE}/pr-summary-6.md"
-    "${ARCHIVE}/pr-summary-38.md"
-    "${ARCHIVE}/pr-summary-228.md"
-    "${ARCHIVE}/pr-summary-243.md"
-    "${ARCHIVE}/pr-summary-246.md"
-    "${ARCHIVE}/pr-summary-261.md"
-    "${ARCHIVE}/pr-summary-286.md"
-    "${ARCHIVE}/pr-summary-287.md"
-    "${ARCHIVE}/pr-summary-288.md"
-    "${ARCHIVE}/pr-summary-296.md"
-    "${ARCHIVE}/pr-summary-298.md"
-    "${ARCHIVE}/pr-summary-299.md"
-    "${ARCHIVE}/pr-summary-373.md"
-    "${ARCHIVE}/pr-summary-374.md"
-    "${ARCHIVE}/pr-summary-375.md"
-    "${ARCHIVE}/pr-summary-376.md"
-    "${ARCHIVE}/pr-summary-377.md"
-    "${ARCHIVE}/pr-summary-378.md"
-    "${ARCHIVE}/pr-summary-546.md"
-    "${ARCHIVE}/pr-summary-572.md"
-    "${ARCHIVE}/pr-summary-memetic-weight-forms.md"
-    "${ARCHIVE}/pr-summary-exact-float-parsing.md"
-  )
+  # Discovered, not enumerated (Issue #722): every archive is guarded, including
+  # ones added after this file was last edited. An `if` with no `else` returns 0,
+  # so bats' `set -e` cannot trip on a non-matching final iteration.
+  SUMMARIES=()
+  for summary in "${ARCHIVE}"/*.md; do
+    if [ -f "$summary" ]; then
+      SUMMARIES+=("$summary")
+    fi
+  done
 }
 
-@test "every enumerated archived PR summary is present" {
-  for summary in "${SUMMARIES[@]}"; do
-    [ -f "$summary" ] || {
-      echo "missing archive: $summary"
-      return 1
-    }
-  done
+@test "discovery covers every archived PR summary on disk" {
+  # Fail loud: an empty or truncated glob must not present as a pass, because
+  # every absence assertion below would then vacuously succeed.
+  [ "${#SUMMARIES[@]}" -gt 0 ]
+  present=$(find "${ARCHIVE}" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d '[:space:]')
+  [ "${#SUMMARIES[@]}" -eq "$present" ]
 }
 
 # --- No private repository names --------------------------------------------
@@ -187,5 +179,33 @@ setup() {
 @test "pr-summary-572 still records the same-role fan-in rule it pinned" {
   run grep -nF 'same_role_fan_in_from_distinct_sources_breaks_no_rule' \
     "${ARCHIVE}/pr-summary-572.md"
+  [ "$status" -eq 0 ]
+}
+
+# Issue #722: one per newly covered archive, so the reword cannot silently
+# degrade into deletion of the passage that carried the private name.
+
+@test "pr-summary-661 still records the float round-trip contract" {
+  run grep -nF 'float_roundtrip' "${ARCHIVE}/pr-summary-661.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-664 still records the seven audit-fix archive sweep" {
+  run grep -niE 'seven audit-fix archives' "${ARCHIVE}/pr-summary-664.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-688 still records the identity-splice symptom" {
+  run grep -niE 'production sampler' "${ARCHIVE}/pr-summary-688.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-700 still records the stamp-skip contract it preserved" {
+  run grep -niE 'stamp-skip contract' "${ARCHIVE}/pr-summary-700.md"
+  [ "$status" -eq 0 ]
+}
+
+@test "pr-summary-701 still records why the caller cannot use install mode" {
+  run grep -niE 'cannot use install mode' "${ARCHIVE}/pr-summary-701.md"
   [ "$status" -eq 0 ]
 }
