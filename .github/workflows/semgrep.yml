@@ -25,7 +25,10 @@ env:
   # immutable, same as `uses:` SHA pins (Issue #77).
   # semgrep/semgrep:1.170.1 — `:latest` as of 2026-07. Refresh with
   # `docker buildx imagetools inspect semgrep/semgrep:latest`.
-  SEMGREP_IMAGE: semgrep/semgrep@sha256:98c2572fced2474539fd27cab3207ebd8e95e4e7aab4c3b381fdc5e2641d9941
+  # Issue #716 — carry the release tag beside the digest: the digest alone is
+  # immutable but untrackable (Renovate/Dependabot resolve bumps from the tag),
+  # so the tag must sit in the ref itself, matching SEMGREP_VERSION below.
+  SEMGREP_IMAGE: semgrep/semgrep:1.170.1@sha256:98c2572fced2474539fd27cab3207ebd8e95e4e7aab4c3b381fdc5e2641d9941
   # PR #468 — fallback path when Docker Hub itself is unreachable. Must track
   # the version the digest above pins, so both paths scan with the same semgrep.
   SEMGREP_VERSION: 1.170.1
