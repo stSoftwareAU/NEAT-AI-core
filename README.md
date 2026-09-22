@@ -165,7 +165,10 @@ while every PR run stayed green. markdownlint-cli2 reads `.gitignore` only, neve
 `.git/info/exclude`, so anything that must be out of scope belongs in the
 committed `.gitignore`. `tests/scripts/markdown_lint_workflow.bats` also asserts
 the run still covers every tracked Markdown file the config does not explicitly
-ignore, so the narrowing cannot quietly swallow a real file.
+ignore, so the narrowing cannot quietly swallow a real file. `.codespellrc`
+carries the same cache in its `skip` list for the same reason, with
+`tests/scripts/codespell_config.bats` proving it still catches a misspelling in
+a file that is in scope.
 
 ### Build profiles (Issue #546)
 
