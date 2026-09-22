@@ -173,6 +173,32 @@ PY
   [ "$status" -eq 0 ]
 }
 
+# Issue #716 — a bare `@sha256:` digest is immutable but untrackable:
+# Renovate/Dependabot resolve version bumps from the release tag and rewrite the
+# digest beside it, so a pin with no tag freezes forever. The tag must sit in the
+# ref itself (not just a comment), and it must equal SEMGREP_VERSION so the
+# fallback and the container scan the same release.
+@test "SEMGREP_IMAGE pin carries its release tag beside the digest" {
+  if ! command -v python3 &>/dev/null; then
+    skip "python3 required for YAML parsing"
+  fi
+  run python3 - <<PY
+import re, yaml
+env = yaml.safe_load(open("$WF")).get("env") or {}
+image = env.get("SEMGREP_IMAGE", "")
+version = str(env.get("SEMGREP_VERSION", ""))
+m = re.fullmatch(r"([A-Za-z0-9_.\-/]+):([^@]+)@sha256:([0-9a-f]{64})", image)
+assert m, (
+    f"SEMGREP_IMAGE must be <image>:<tag>@sha256:<digest> so an updater can "
+    f"resolve a bump against it, got {image!r}"
+)
+assert m.group(2) == version, (
+    f"SEMGREP_IMAGE tag {m.group(2)!r} does not match SEMGREP_VERSION {version!r}"
+)
+PY
+  [ "$status" -eq 0 ]
+}
+
 @test "semgrep.yml has no job-level container, so the pull backoff is ours" {
   if ! command -v python3 &>/dev/null; then
     skip "python3 required for YAML parsing"
