@@ -22,3 +22,9 @@ deno-outdated.log
 # Bytecode written when the vendored YAML parser is imported (Issue #642).
 __pycache__/
 *.pyc
+
+# Code-graph cache written into the worktree by the graft tooling (Issue #728) —
+# one generated Markdown file per source file, never committed. Listing it here
+# rather than in .git/info/exclude is what keeps it out of the markdownlint gate,
+# which reads .gitignore only.
+/graft/

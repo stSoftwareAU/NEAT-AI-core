@@ -62,10 +62,15 @@ BODY
 }
 
 # A cargo stub that leaves the raw Tier 3 artefact where the real one lands.
+# Issue #728 — the script resolves the artefact under `${CARGO_TARGET_DIR:-target}`,
+# so the stub has to honour the same variable. Hard-coding `target/` made every
+# wasm64 assertion fail on any machine that exports CARGO_TARGET_DIR (shared
+# build caches do), which is a red gate on an untouched tree.
 emit_cargo_body() {
   cat <<'BODY'
-mkdir -p target/wasm64-unknown-unknown/release
-dd if=/dev/zero of=target/wasm64-unknown-unknown/release/neat_core.wasm \
+target_dir="${CARGO_TARGET_DIR:-target}"
+mkdir -p "$target_dir/wasm64-unknown-unknown/release"
+dd if=/dev/zero of="$target_dir/wasm64-unknown-unknown/release/neat_core.wasm" \
   bs=1024 count=600 status=none
 BODY
 }
@@ -80,7 +85,11 @@ stub_toolchain() {
 
 run_build() {
   cd "$WORK_DIR" || return 1
-  PATH="$STUB_BIN:$PATH" run "$SCRIPT_UNDER_TEST" "$@"
+  # Issue #728 — pin the cargo target directory inside the throwaway work tree.
+  # Inheriting an ambient CARGO_TARGET_DIR would let one test's stub artefact
+  # survive in a shared cache and satisfy the next test's fail-loud assertion.
+  PATH="$STUB_BIN:$PATH" CARGO_TARGET_DIR="$WORK_DIR/target" \
+    run "$SCRIPT_UNDER_TEST" "$@"
 }
 
 @test "--help documents the --arch selector and both wasm targets" {

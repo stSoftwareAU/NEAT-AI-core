@@ -228,6 +228,71 @@ PY
   [ "$status" -ne 0 ]
 }
 
+# Issue #728 — CI lints a fresh checkout, which contains only tracked files, but
+# a local run lints whatever is on disk. Tool caches written into the worktree
+# (the `graft/` code-graph mirror is 156 generated Markdown files) were therefore
+# linted locally and never in CI, so the gate was red on an untouched default
+# branch while every PR run was green. The config must honour `.gitignore` so the
+# two file sets agree.
+@test "markdownlint-cli2 skips Markdown under a git-ignored directory" {
+  if ! command -v markdownlint-cli2 &>/dev/null; then
+    skip "markdownlint-cli2 not installed locally"
+  fi
+  TMP="$(mktemp -d)"
+  cp "$CONFIG" "$TMP/.markdownlint-cli2.jsonc"
+  printf 'generated/\n' > "$TMP/.gitignore"
+  mkdir -p "$TMP/generated"
+  # Same malformed Markdown the in-scope case above rejects.
+  printf '# Title\nbody with trailing space   \n## Sub\nbody' > "$TMP/generated/bad.md"
+  cd "$TMP"
+  run markdownlint-cli2
+  echo "$output"
+  rm -rf "$TMP"
+  [ "$status" -eq 0 ]
+}
+
+# The companion half: the gate only treats a tool cache as out of scope if the
+# committed `.gitignore` says so. `.git/info/exclude` is worker-local and
+# markdownlint-cli2 never reads it, so this replays the committed `.gitignore`
+# against a graft cache in a throwaway tree — no dependence on whatever local
+# exclude the checkout happens to carry.
+@test "markdownlint-cli2 skips the graft code-graph cache under the committed gitignore" {
+  if ! command -v markdownlint-cli2 &>/dev/null; then
+    skip "markdownlint-cli2 not installed locally"
+  fi
+  TMP="$(mktemp -d)"
+  cp "$CONFIG" "$TMP/.markdownlint-cli2.jsonc"
+  cp "${REPO_ROOT}/.gitignore" "$TMP/.gitignore"
+  mkdir -p "$TMP/graft/neat-core/src"
+  # Mirrors what graft writes: a generated Markdown file per source file, in
+  # prose markdownlint rejects (MD009/MD022/MD047).
+  printf '# Title\nbody with trailing space   \n## Sub\nbody' \
+    > "$TMP/graft/neat-core/src/creature_validate.md"
+  cd "$TMP"
+  run markdownlint-cli2
+  echo "$output"
+  rm -rf "$TMP"
+  [ "$status" -eq 0 ]
+}
+
+# Honouring `.gitignore` narrows what the gate sees, so it must be proved not to
+# narrow too far: a tracked Markdown file dropped from the run would pass the
+# gate by never being read. Every tracked file the config does not explicitly
+# ignore has to be linted.
+@test "markdownlint-cli2 lints every tracked Markdown file the config does not ignore" {
+  if ! command -v markdownlint-cli2 &>/dev/null; then
+    skip "markdownlint-cli2 not installed locally"
+  fi
+  cd "$REPO_ROOT"
+  expected="$(git ls-files '*.md' \
+    | grep -cv -e '^docs/pr-summary-' -e '^docs/archive/pr-summaries/pr-summary-')"
+  run markdownlint-cli2
+  echo "$output"
+  linted="$(echo "$output" | sed -n 's/^Linting: \([0-9][0-9]*\) file.*/\1/p')"
+  [ -n "$linted" ]
+  [ "$linted" -eq "$expected" ]
+}
+
 # Issue #581 (BP-CI-INSTALL-PIN-npm-markdownlint-cli2) — a `run:` step that
 # installs a package without an exact version resolves whatever the registry
 # serves at that moment, so a hijacked release executes on the runner the

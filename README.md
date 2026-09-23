@@ -155,6 +155,21 @@ generated wasm-pack output under `neat-core/wasm_activation/pkg/`, which
 `.gitignore` does not cover, so a local bundle build does not redden the gate
 with code nobody wrote. Fix a formatting failure with `deno fmt`.
 
+Markdown follows the same rule from the other side (Issue #728):
+`.markdownlint-cli2.jsonc` sets `"gitignore": true`, so the `markdown-lint`
+workflow lints a fresh checkout and a local run lints the same set — tracked
+files. Without it, a tool cache written into the worktree (the `graft/`
+code-graph mirror is one generated Markdown file per source file) was linted
+locally and never in CI, leaving the gate red on an untouched default branch
+while every PR run stayed green. markdownlint-cli2 reads `.gitignore` only, never
+`.git/info/exclude`, so anything that must be out of scope belongs in the
+committed `.gitignore`. `tests/scripts/markdown_lint_workflow.bats` also asserts
+the run still covers every tracked Markdown file the config does not explicitly
+ignore, so the narrowing cannot quietly swallow a real file. `.codespellrc`
+carries the same cache in its `skip` list for the same reason, with
+`tests/scripts/codespell_config.bats` proving it still catches a misspelling in
+a file that is in scope.
+
 ### Build profiles (Issue #546)
 
 Fleet build-profile decision: **dev builds compile as fast as possible;

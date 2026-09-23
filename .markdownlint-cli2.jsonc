@@ -7,6 +7,14 @@
   "globs": [
     "**/*.md"
   ],
+  // Issue #728 — CI lints a fresh checkout (tracked files only); a local run
+  // lints whatever sits on disk. Without this, generated tool caches written
+  // into the worktree are linted locally and never in CI, so the gate reads red
+  // on an untouched default branch while every PR run is green. Honouring
+  // `.gitignore` makes both file sets the same. Note markdownlint-cli2 reads
+  // `.gitignore` only — never `.git/info/exclude` — so anything that must be
+  // out of scope belongs in the committed `.gitignore`.
+  "gitignore": true,
   "ignores": [
     "target/**",
     "node_modules/**",

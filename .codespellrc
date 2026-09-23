@@ -1,5 +1,8 @@
 [codespell]
-skip = ./target,./.git
+# ./graft — Issue #728: the graft code-graph cache is generated into the
+# worktree and never committed, so CI (a fresh checkout) never sees it while a
+# local run spell-checks its JSON index and reads the gate red.
+skip = ./target,./.git,./graft
 # Boolean flags: use `key =` with nothing after `=` (not `= true` — that breaks argparse).
 check-filenames =
 check-hidden =
