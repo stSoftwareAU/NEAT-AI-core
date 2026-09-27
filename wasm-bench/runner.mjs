@@ -10,8 +10,30 @@
 //   node runner.mjs <control.wasm> <unchecked.wasm> <samples> <shape> <records>
 //
 // Emits CSV rows on stdout: variant,bench,sample,nanos,checksum_bits.
+//
+// Issue #736 — every export answers a sentinel instead of unwinding across the
+// C ABI on misuse: `u32` exports return 0xFFFFFFFF, `f64` exports return NaN.
+// This driver fails loud on either rather than folding a sentinel into a row.
 
 import { readFile } from "node:fs/promises";
+
+const FAILED_U32 = 0xffffffff;
+
+/** Throw if a `u32` export answered its Issue #736 failure sentinel. */
+function checkU32(label, value) {
+  if ((value >>> 0) === FAILED_U32) {
+    throw new Error(`${label} returned the failure sentinel (Issue #736)`);
+  }
+  return value;
+}
+
+/** Throw if an `f64` export answered its Issue #736 failure sentinel (NaN). */
+function checkChecksum(label, value) {
+  if (Number.isNaN(value)) {
+    throw new Error(`${label} returned NaN (Issue #736)`);
+  }
+  return value;
+}
 
 const [
   controlPath,
@@ -57,12 +79,12 @@ const variants = {
 
 const topology = {};
 for (const [label, exports] of Object.entries(variants)) {
-  const synapses = exports.setup(SHAPE, RECORDS);
+  const synapses = checkU32("setup", exports.setup(SHAPE, RECORDS));
   topology[label] = {
     synapses,
-    neurons: exports.neuron_count(),
-    inputs: exports.input_count(),
-    records: exports.record_count(),
+    neurons: checkU32("neuron_count", exports.neuron_count()),
+    inputs: checkU32("input_count", exports.input_count()),
+    records: checkU32("record_count", exports.record_count()),
   };
 }
 console.error("fixture:", JSON.stringify(topology.control));
@@ -70,15 +92,18 @@ console.error("fixture:", JSON.stringify(topology.control));
 const BENCHES = ["kernel", "activate", "score"];
 const call = (exports, bench) => {
   if (bench === "kernel") {
-    exports.seed_activations();
+    checkU32("seed_activations", exports.seed_activations());
     const t = process.hrtime.bigint();
-    const checksum = exports.bench_kernel();
+    const checksum = checkChecksum(
+      "bench_kernel",
+      exports.bench_kernel(),
+    );
     return [process.hrtime.bigint() - t, checksum];
   }
   const t = process.hrtime.bigint();
   const checksum = bench === "activate"
-    ? exports.bench_activate()
-    : exports.bench_score();
+    ? checkChecksum("bench_activate", exports.bench_activate())
+    : checkChecksum("bench_score", exports.bench_score());
   return [process.hrtime.bigint() - t, checksum];
 };
 
