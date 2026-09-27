@@ -56,6 +56,35 @@ single-record inference) and `score` (end-to-end batched scoring, which does
 returns an `f64` checksum, so `analyse.mjs` reports numerical parity alongside
 the timings.
 
+## FFI panic safety (Issue #736)
+
+Panics unwinding across a Rust `extern "C"` FFI boundary are undefined
+behaviour. The harness guards all public exports against panicking on misuse —
+invalid fixture shape, missing fixture state, out-of-bounds indexing — by using
+`std::panic::catch_unwind` to catch panics and return sentinel values instead:
+
+- **`u32` exports** (`setup`, `neuron_count`, `input_count`, `record_count`,
+  `seed_activations`) return **`0xFFFFFFFF`** on panic or validation failure
+- **`f64` exports** (`bench_kernel`, `bench_activate`, `bench_score`) return
+  **`NaN`** on panic or validation failure
+
+The JavaScript driver (`runner.mjs`) fails loud on either sentinel, throwing an
+error that names the export and references Issue #736. A user error (invalid
+shape or missing state) is caught early and reported as a clear error rather
+than undefined behaviour; a defect in the harness is still caught and named.
+
+`catch_unwind` only catches on an unwinding target — the native `cargo test`
+build, where the guard is pinned by tests that drive a real panic through it.
+`wasm32-unknown-unknown` builds with `panic = "abort"`, so there a panic that
+escapes validation traps the instance (the runtime surfaces it as an error)
+rather than returning a sentinel; the sentinels on wasm come from the
+validation paths, which return `None` before any panic can occur.
+
+**Breaking change:** The `seed_activations()` signature changed from `-> ()`
+(void) to `-> u32` (status code) to report success or failure. Existing callers
+must check the return value. See `src/lib.rs` for details on the sentinel
+approach and the guarded-call helper pattern.
+
 ## Running the wasm-only tests
 
 `neat-core`'s own test targets cannot be built for wasm — its `criterion`
