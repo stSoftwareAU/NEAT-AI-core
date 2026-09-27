@@ -262,6 +262,33 @@ mod tests {
     }
 
     #[test]
+    fn a_panicking_body_answers_the_sentinel_instead_of_unwinding() {
+        assert_eq!(
+            guarded(FAILED, || -> Option<u32> { panic!("boom") }),
+            FAILED
+        );
+        assert!(guarded(f64::NAN, || -> Option<f64> { panic!("boom") }).is_nan());
+    }
+
+    #[test]
+    fn a_panic_inside_a_public_export_answers_the_sentinel() {
+        clear_fixture();
+        assert_eq!(
+            setup(0, 8),
+            build_network(&NETWORKS[0], SEED).synapses().len() as u32
+        );
+        // Holding the fixture borrow makes the export's own `borrow_mut` panic
+        // (`BorrowMutError`) — a real panic raised inside the export body.
+        FIXTURE.with(|cell| {
+            let _held = cell.borrow_mut();
+            assert_eq!(neuron_count(), FAILED);
+            assert!(bench_score().is_nan());
+        });
+        // The guard left the fixture intact: the next call succeeds.
+        assert_eq!(record_count(), 8);
+    }
+
+    #[test]
     fn seeding_a_fixture_with_no_records_returns_the_sentinel() {
         clear_fixture();
         let spec = &NETWORKS[0];

@@ -73,6 +73,13 @@ error that names the export and references Issue #736. A user error (invalid
 shape or missing state) is caught early and reported as a clear error rather
 than undefined behaviour; a defect in the harness is still caught and named.
 
+`catch_unwind` only catches on an unwinding target — the native `cargo test`
+build, where the guard is pinned by tests that drive a real panic through it.
+`wasm32-unknown-unknown` builds with `panic = "abort"`, so there a panic that
+escapes validation traps the instance (the runtime surfaces it as an error)
+rather than returning a sentinel; the sentinels on wasm come from the
+validation paths, which return `None` before any panic can occur.
+
 **Breaking change:** The `seed_activations()` signature changed from `-> ()`
 (void) to `-> u32` (status code) to report success or failure. Existing callers
 must check the return value. See `src/lib.rs` for details on the sentinel
