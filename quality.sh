@@ -179,13 +179,14 @@ cargo check --workspace --all-targets --all-features
 
 echo "🧪 Running tests..."
 # neat-core is library + integration tests only (no [[bin]]); --bins is harmless if added later
-cargo test --workspace --lib --tests --all-features -- --test-threads=2
+# Issue #735 — `-q` drops per-test "ok" lines only; failures still print in full. Keep identical to ci.yml.
+cargo test --workspace --lib --tests --all-features -- --test-threads=2 -q
 
 # Issue #562 — doctests are part of the public API surface (the
 # `creature_validate` examples), so a doctest that stops compiling must fail
 # the gate rather than pass unrun.
 echo "🧪 Running doctests..."
-cargo test --workspace --doc --all-features
+cargo test --workspace --doc --all-features -q
 
 echo "📖 Building documentation..."
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
