@@ -1,36 +1,50 @@
 ## Summary
 
-Adds GitHub Actions dependency cache for Deno across four workflows. `actions/cache` steps now cache `~/.cache/deno` (Deno's default `DENO_DIR`) immediately after each of 5 instances of `denoland/setup-deno` across `ci.yml`, `deno-outdated.yml`, `markdown-lint.yml`, and `wasm-bundle.yml`. Cache keys are hash-based on `deno.lock` to ensure stale caches don't serve outdated modules. Closes #737.
+Adds an `actions/cache` step after each of the five `denoland/setup-deno` steps
+(`ci.yml` `typescript-gate` and `wasm64-memory64-smoke`, `deno-outdated.yml`,
+`markdown-lint.yml`, `wasm-bundle.yml` `publish`). Each one caches
+`~/.cache/deno` (the default `DENO_DIR`) under the hash-exact key
+`${{ runner.os }}-deno-${{ hashFiles('deno.lock') }}`, with
+`${{ runner.os }}-deno-` only as a `restore-keys` warm-start fallback. Closes #737.
+
+`actions/cache` is pinned to `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`, resolved
+this run with `gh api repos/actions/cache/commits/v6.1.0` (the latest release),
+with `# actions/cache@v6.1.0` as its version comment.
+
+The earlier PR (#741) conflicted on the version files only; this branch merges
+the current `Develop` and takes its `Cargo.toml` / `Cargo.lock` /
+`wasm-bench/Cargo.lock` unchanged, so the diff is the workflows, the gate and
+this summary.
+
+```mermaid
+flowchart LR
+    A[denoland/setup-deno] --> B["actions/cache ~/.cache/deno<br/>key: os-deno-hash(deno.lock)"]
+    B -->|exact hit| C[warm module cache]
+    B -->|miss| D["restore-keys os-deno- seed"]
+    D --> E[deno fetches only the delta]
+```
 
 ## Evidence
 
-- **Test-driven validation:** Created `tests/scripts/workflow_deno_cache.bats` with 7 test cases:
-  - Real-workflow sweep confirms exactly 5 cache job sites with 0 violations.
-  - Synthetic pass/fail tests validate correct cache step placement (must come immediately after `setup-deno`).
-  - Key format, path, and restore-keys fallback validation.
-  - All tests pass against the live workflows.
+CI-only change — no UI. `tests/scripts/workflow_deno_cache.bats` (7 tests)
+parses every workflow as YAML and requires, in each job that runs
+`denoland/setup-deno`, a later `actions/cache` step whose `path` includes
+`~/.cache/deno`, whose `key` uses `hashFiles('deno.lock')`, and which sets
+`restore-keys`. The checker has one definition, shared by the real-workflow sweep
+and the synthetic good/bad literals (AGENTS.md oracle rule 4); the sweep must
+find at least the five jobs the issue named, so it cannot pass vacuously.
 
-- **Cache step details (all 5 sites identical template):**
-  - Path: `~/.cache/deno`
-  - Primary key: `${{ runner.os }}-deno-${{ hashFiles('deno.lock') }}`
-  - Restore-keys fallback: `${{ runner.os }}-deno-`
-  - SHA pinned to `actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9` (v6.1.0) with version comment
-
-- **Regression validation:** All workflow-related test suites pass:
-  - `workflow_sha_pinning.bats` (4/4 pass) — SHA pin format validated
-  - `workflow_container_pinning.bats` (4/4 pass) — container pins unchanged
-  - `actionlint_workflow.bats` (8/8 pass) — YAML syntax valid
-  - `ci_workflow.bats` (4/4 pass), `deno_outdated_workflow.bats` (10/10 pass), `markdown_lint_workflow.bats` (17/17 pass), `ci_workflow_quarantine.bats` (8/8 pass)
-  - All existing gates pass; no workflow regressions.
-
-- **Quality gate:** `./quality.sh < /dev/null` passes with 500+ Rust tests, all doctests, doc build, and release build green.
+Mutation check: deleting the cache step from `markdown-lint.yml` turns the sweep
+red with `markdown-lint.yml job=markdownlint: no actions/cache of ~/.cache/deno
+…`; restored before commit.
 
 ## Test Plan
 
-- [x] Created test-driven validation framework for Deno cache placement
-- [x] Verified all 5 cache steps correctly positioned (after setup-deno)
-- [x] Verified cache key uses `hashFiles('deno.lock')` to invalidate on dependency changes
-- [x] Verified all 5 cache steps use identical template with correct SHA pin
-- [x] Ran all workflow-related regression test suites (no gates broken)
-- [x] Ran full `./quality.sh` gate (all checks pass)
-- [x] Confirmed no secrets staged and run-id trailer on commits
+- Added `tests/scripts/workflow_deno_cache.bats` — sweep over the live
+  workflows, plus rejects for no cache, cache before `setup-deno`, a key that
+  ignores `deno.lock`, the wrong path, missing `restore-keys`, and a vacuous
+  sweep.
+- `bats tests/scripts/*.bats` — all green, including `workflow_sha_pinning`,
+  `actionlint_workflow`, `ci_workflow`, `deno_outdated_workflow` and
+  `markdown_lint_workflow`.
+- `./quality.sh < /dev/null` — run after the final edit.

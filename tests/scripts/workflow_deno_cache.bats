@@ -68,9 +68,9 @@ write_workflow() {
   run python3 -c "$DENO_CACHE_CHECKER" "${WORKFLOWS_DIR}"/*.yml
   echo "$output"
   [ "$status" -eq 0 ]
-  # Five jobs install Deno today; a sweep that finds none proves nothing.
+  # The five jobs Issue #737 named install Deno; a smaller sweep missed one.
   [[ "$output" =~ jobs=([0-9]+) ]]
-  [ "${BASH_REMATCH[1]}" -ge 1 ]
+  [ "${BASH_REMATCH[1]}" -ge 5 ]
 }
 
 @test "checker accepts a Deno job with a lock-keyed cache after setup-deno" {
