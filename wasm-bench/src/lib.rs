@@ -217,9 +217,7 @@ pub extern "C" fn bench_activate() -> f64 {
 pub extern "C" fn bench_score() -> f64 {
     guarded(f64::NAN, || {
         with_fixture(|f| {
-            let out = f
-                .net
-                .score_records_flat(&f.flat, f.stride, f.num_outputs);
+            let out = f.net.score_records_flat(&f.flat, f.stride, f.num_outputs);
             out.iter().map(|v| *v as f64).sum()
         })
     })
