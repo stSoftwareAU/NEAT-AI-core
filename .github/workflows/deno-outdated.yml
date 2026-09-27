@@ -38,6 +38,16 @@ jobs:
           # proposes. Bump this alongside the other three.
           deno-version: "2.9.3"
 
+      - name: Cache Deno modules
+        # Issue #737 — setup-deno has no cache input; reuse ~/.cache/deno across runs.
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/deno
+          key: ${{ runner.os }}-deno-${{ hashFiles('deno.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deno-
+
       - name: Refresh Deno dependencies (quarantine-aware)
         shell: bash
         run: |
