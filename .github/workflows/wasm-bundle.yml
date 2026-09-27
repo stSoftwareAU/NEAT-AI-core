@@ -90,6 +90,16 @@ jobs:
         with:
           deno-version: "2.9.3"
 
+      - name: Cache Deno modules
+        # Issue #737 — setup-deno has no cache input; reuse ~/.cache/deno across runs.
+        # actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/deno
+          key: ${{ runner.os }}-deno-${{ hashFiles('deno.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-deno-
+
       # Issue #78 — install wasm-pack from a version-pinned release tarball
       # with SHA-256 verification instead of `curl … | sh`. The previous
       # bootstrap re-fetched `init.sh` on every run with no checksum, so any
