@@ -422,12 +422,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace --lib --tests --all-features -- --test-threads=2
+        run: cargo test --workspace --lib --tests --all-features -- --test-threads=2 -q
 
       # Issue #562 — the public API's doctests (creature_validate) are a gate,
       # not decoration: `--lib --tests` never compiles them.
       - name: Run doctests
-        run: cargo test --workspace --doc --all-features
+        run: cargo test --workspace --doc --all-features -q
 
       - name: Build documentation
         env:
