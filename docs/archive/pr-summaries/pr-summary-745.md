@@ -81,7 +81,16 @@ repository. A `git` shim on `PATH` records `push` calls instead of making them.
 the PAT scope, its just-in-time handling and the bump/re-lock order are
 unchanged; `README.md:2041` — still true because `bump-deps.sh` still runs on
 every PR; `RELEASING.md:837`, `RELEASING.md:838` — still true because the
-bump computation is unchanged.
+bump computation is unchanged; `README.md:119` — still true because
+`version-increment` still runs `lockfile-freshness.sh --update` after its bump
+(`ci.yml:199`, ahead of the changed commit step); only the push is skipped on a
+tokenless Dependabot run; `README.md:123` — still true because
+`.github/dependabot.yml` is unchanged; `README.md:2079` — still true because it
+is the heading of the bullet this change extends, and the configuration it
+names is unchanged; `README.md:2090`, `README.md:2093` — still true because
+security updates are still a repository setting the tree does not configure;
+`README.md:2180` — still true because a Dependabot version-update PR still goes
+to `Develop` through the same gates.
 
 ## Test Plan
 
