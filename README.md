@@ -2082,7 +2082,10 @@ bump:
   `interval: weekly`, a 7-day `cooldown` (newly published crates are not
   proposed until they have aged), and `open-pull-requests-limit: 10`. They
   overlap the workflow above rather than replacing it; their PRs go through the
-  same CI gates.
+  same CI gates. The `version-increment` bump is not pushed on a
+  Dependabot-triggered run because GitHub withholds Actions secrets there, as
+  described in [`RELEASING.md#how-a-version-bump-happens`](RELEASING.md#how-a-version-bump-happens)
+  (Issue #745).
 
 Dependabot **security updates** — the advisory-triggered fast lane — are a
 repository-level setting rather than anything the committed tree configures, so
