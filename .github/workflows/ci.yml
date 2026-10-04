@@ -202,6 +202,14 @@ jobs:
       - name: Commit version and dependency changes
         # Issue #483 — the PAT is supplied just-in-time to this one step and
         # pushed through an explicit remote URL, so it never touches disk.
+        #
+        # Issue #745 — GitHub withholds Actions secrets from a run Dependabot
+        # triggers, so PUSH_TOKEN is empty there and the push could only fail
+        # (PR #744), skipping every gate behind this job. On that run the bump
+        # is left unpushed with a warning annotation and the gates check the
+        # PR head as written; any other actor with no token is a missing
+        # secret and fails loud. tests/scripts/ci_dependabot_push.bats drives
+        # this step.
         env:
           HEAD_REF: ${{ github.head_ref }}
           PUSH_TOKEN: ${{ secrets.ACTIONS_PUSH }}
@@ -210,6 +218,12 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "No changes after version bump / dependency upgrade"
+          elif [ -z "${PUSH_TOKEN:-}" ] && [ "${GITHUB_ACTOR:-}" = "dependabot[bot]" ]; then
+            git diff --cached --stat
+            echo "::warning title=Version bump not pushed::GitHub withholds Actions secrets from Dependabot-triggered runs, so ACTIONS_PUSH is empty and the bump above cannot be pushed. The gates below validate the PR head as Dependabot wrote it; the version gate accepts an unchanged version for a non-breaking change."
+          elif [ -z "${PUSH_TOKEN:-}" ]; then
+            echo "::error title=ACTIONS_PUSH missing::ACTIONS_PUSH is empty for actor '${GITHUB_ACTOR:-unknown}' — the org-level secret is missing or not shared with this repository, so the version bump cannot be pushed."
+            exit 1
           else
             git commit -m "chore: auto-increment versions for changed projects"
             git push "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$HEAD_REF"

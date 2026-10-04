@@ -67,6 +67,13 @@ Bumping is automated by the `version-increment` job in
   already sitting on the branch is not proof on its own: a milestone branch
   collects patch bumps from its sub-PRs and may then acquire a breaking commit,
   so the branch still owes a minor bump.
+- On a run Dependabot triggers, GitHub withholds Actions secrets, so the bump
+  is computed but not pushed (a warning annotation says so) and the PR merges
+  on its current version — the version gate accepts that for a non-breaking
+  change, and the next PR bumps; an empty `ACTIONS_PUSH` for any other actor
+  fails the job (Issue #745, `tests/scripts/ci_dependabot_push.bats`). A human
+  push to the Dependabot branch (e.g. merging `Develop` in) re-runs CI with
+  secrets and the bump is pushed as usual.
 
 ### Signalling a breaking change
 
