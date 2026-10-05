@@ -313,7 +313,7 @@ the crate manifest alone could not catch what stopped a Discovery build —
 declares. The gate can only enforce a version something declares, and
 NEAT-AI-Discovery#2395 proved that is not enough. A std API stable from 1.95,
 in a graph whose highest declared `rust-version` was 1.93.1, passed every
-host on 1.93/1.94 into a build that died with `E0658` on the whole GRQ fleet.
+host on 1.93/1.94 into a build that died with `E0658` on every fleet host.
 With the floor, nothing in the family builds below it, and a host that is
 older is moved forward by the gate's own `rustup` rules below, unattended. A
 crate that needs more than the floor declares its own `rust-version`, and the
