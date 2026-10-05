@@ -28,6 +28,10 @@ setup() {
   export RUNLIB_SHIM_RUSTC_LOG="${WORK}/rustc-invocations.log"
   export RUNLIB_SHIM_RUSTUP_STATE="${WORK}/rustup-state"
   export RUNLIB_SHIM_CARGO_TOOLCHAIN="${WORK}/cargo-toolchain.log"
+  # The family floor (Issue #747) is held below every fixture rustc so the
+  # cases written before it keep testing what they were written for; the floor
+  # has its own cases, which set it (or unset it) explicitly.
+  export RUNLIB_FAMILY_MIN_RUST="1.0"
   OUT="${WORK}/stdout.txt"
   ERR="${WORK}/stderr.txt"
   TARGET_DIR="${REPO}/target"
@@ -73,6 +77,18 @@ case "${1:-}" in
       echo "shim: compilation failed" >&2
       exit 1
     fi
+    # Issue #747: a build that needs a newer std API than this rustc. `always`
+    # fails every time; `until-update` fails until `rustup update` has run.
+    case "${RUNLIB_SHIM_BUILD_E0658:-}" in
+      always | until-update)
+        if [ "$RUNLIB_SHIM_BUILD_E0658" = "always" ] ||
+          [ ! -e "${RUNLIB_SHIM_RUSTUP_STATE}/updated" ]; then
+          echo "error[E0658]: use of unstable library feature \`atomic_try_update\`" >&2
+          echo "error: could not compile \`demo_app\` (lib) due to 1 previous error" >&2
+          exit 101
+        fi
+        ;;
+    esac
     while IFS= read -r artefact; do
       [ -n "$artefact" ] || continue
       mkdir -p "$(dirname "$artefact")"
@@ -137,6 +153,7 @@ fi
 echo "rustc ${version} (0000000 2026-01-01)"
 if [ "${1:-}" = "-vV" ]; then
   echo "host: x86_64-unknown-linux-gnu"
+  echo "release: ${RUNLIB_SHIM_RUSTC_RELEASE:-${version}}"
 fi
 SHIM
   chmod +x "${SHIM_DIR}/cargo" "${SHIM_DIR}/rustup" "${SHIM_DIR}/rustc"
@@ -246,7 +263,7 @@ minimal_path() {
   local dir="${WORK}/minimal-bin" tool resolved
   if [ ! -d "$dir" ]; then
     mkdir -p "$dir"
-    for tool in bash env awk grep sed cat cp mv rm mkdir chmod dirname uname du ls; do
+    for tool in bash env awk grep sed cat cp mv rm mkdir chmod dirname uname du ls tee mktemp; do
       resolved="$(command -v "$tool" 2>/dev/null || true)"
       [ -n "$resolved" ] || continue
       ln -sf "$resolved" "${dir}/${tool}"
@@ -2051,4 +2068,159 @@ SHIM
   ' _ "$REPO" "$SCRIPT" "$ERR"
   [ "$status" -eq 0 ]
   [ "$output" = "override=1.93.1 toolchain=<unset>" ]
+}
+
+# --- the family floor (Issue #747) -------------------------------------------
+#
+# NEAT-AI-Discovery#2395: a std API stable from 1.95, a graph whose highest
+# declared rust-version was 1.93.1, and a gate that therefore passed every host
+# on 1.93/1.94 into a build that died with E0658. The floor is the fleet's
+# guarantee that nothing builds below it, whatever is declared.
+
+@test "with no override the family floor is 1.99: an older unpinned rustc is updated first" {
+  unset RUNLIB_FAMILY_MIN_RUST
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.90.0" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.98.1"
+  export RUNLIB_SHIM_RUSTC_AFTER_UPDATE="1.99.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  run grep -Fx "update stable" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+  run grep -F "below the required Rust 1.99" "$ERR"
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+}
+
+@test "a rustc already at the family floor builds with no rustup call" {
+  unset RUNLIB_FAMILY_MIN_RUST
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.90.0" null
+  export RUNLIB_SHIM_RUSTC_VERSION="1.99.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ "$(rustup_invocations)" -eq 0 ]
+}
+
+@test "an exact pin below the family floor builds on the floor, not the pin" {
+  unset RUNLIB_FAMILY_MIN_RUST
+  make_crate "demo_app" "1.2.3" bin
+  write_toolchain_pin "1.98.0"
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.98.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  run grep -Fx "toolchain install 1.99" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$RUNLIB_SHIM_CARGO_TOOLCHAIN")" = "1.99" ]
+  # The pin file is a repository commit and is never rewritten.
+  run grep -Fx 'channel = "1.98.0"' "${REPO}/rust-toolchain.toml"
+  [ "$status" -eq 0 ]
+}
+
+@test "a crate's own rust-version above the floor wins, and that toolchain is installed" {
+  unset RUNLIB_FAMILY_MIN_RUST
+  write_manifest "demo_app" "1.2.3" bin 'rust-version = "1.100"'
+  write_metadata "demo_app" "1.2.3" bin
+  mkdir -p "${TARGET_DIR}"
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.99.0"
+  export RUNLIB_SHIM_RUSTC_AFTER_UPDATE="1.100.0"
+  run invoke
+  [ "$status" -eq 0 ]
+  run grep -F "below the required Rust 1.100" "$ERR"
+  [ "$status" -eq 0 ]
+  run grep -Fx "update stable" "$RUNLIB_SHIM_RUSTUP_LOG"
+  [ "$status" -eq 0 ]
+}
+
+@test "a malformed RUNLIB_FAMILY_MIN_RUST is refused before any build" {
+  export RUNLIB_FAMILY_MIN_RUST="latest"
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.90.0"
+  run invoke
+  [ "$status" -ne 0 ]
+  run grep -F "RUNLIB_FAMILY_MIN_RUST must be a Rust version" "$ERR"
+  [ "$status" -eq 0 ]
+  [ "$(cargo_build_invocations)" -eq 0 ]
+}
+
+@test "--toolchain-only reports the floor for an exact pin below it" {
+  unset RUNLIB_FAMILY_MIN_RUST
+  make_crate "demo_app" "1.2.3" bin
+  write_toolchain_pin "1.98.0"
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.98.0"
+  run invoke_args --toolchain-only
+  [ "$status" -eq 0 ]
+  [ "$(cat "$OUT")" = "1.99" ]
+  [ "$(cargo_build_invocations)" -eq 0 ]
+}
+
+# --- E0658: the compiler is older than the code (Issue #747) -----------------
+
+@test "an unpinned build that fails with E0658 is healed by one rustup update and one retry" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.94.0"
+  export RUNLIB_SHIM_RUSTC_AFTER_UPDATE="1.99.0"
+  export RUNLIB_SHIM_BUILD_E0658="until-update"
+  run invoke
+  [ "$status" -eq 0 ]
+  [ "$(cargo_build_invocations)" -eq 2 ]
+  [ "$(grep -cx 'update stable' "$RUNLIB_SHIM_RUSTUP_LOG")" -eq 1 ]
+  run grep -F 'declare rust-version = "1.99.0"' "$ERR"
+  [ "$status" -eq 0 ]
+  [ -x "${CARGO_HOME}/bin/demo_app" ]
+}
+
+@test "a build that still fails with E0658 after the update dies after exactly one retry" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.94.0"
+  export RUNLIB_SHIM_BUILD_E0658="always"
+  run invoke
+  [ "$status" -ne 0 ]
+  [ "$(cargo_build_invocations)" -eq 2 ]
+  [ "$(rustup_invocations)" -eq 1 ]
+  run grep -F "still fails with E0658 after rustup update stable" "$ERR"
+  [ "$status" -eq 0 ]
+  [ ! -e "${CARGO_HOME}/bin/demo_app" ]
+}
+
+@test "E0658 under an exact pin names the bump and never moves the toolchain" {
+  make_crate "demo_app" "1.2.3" bin
+  write_toolchain_pin "1.99.0"
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.99.0"
+  export RUNLIB_SHIM_BUILD_E0658="always"
+  run invoke
+  [ "$status" -ne 0 ]
+  [ "$(cargo_build_invocations)" -eq 1 ]
+  [ "$(rustup_invocations)" -eq 0 ]
+  run grep -F "raise channel in rust-toolchain.toml and rust-version in Cargo.toml" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+@test "E0658 on a nightly toolchain is never auto-updated" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_RUSTC_VERSION="1.101.0"
+  export RUNLIB_SHIM_RUSTC_RELEASE="1.101.0-nightly"
+  export RUNLIB_SHIM_BUILD_E0658="always"
+  run invoke
+  [ "$status" -ne 0 ]
+  [ "$(rustup_invocations)" -eq 0 ]
+  run grep -F "on a nightly toolchain" "$ERR"
+  [ "$status" -eq 0 ]
+}
+
+@test "a build failure that is not E0658 keeps cargo's status and calls no rustup" {
+  make_crate "demo_app" "1.2.3" bin
+  write_graph_metadata "1.90.0"
+  export RUNLIB_SHIM_BUILD_FAILS=1
+  run invoke
+  [ "$status" -eq 1 ]
+  [ "$(cargo_build_invocations)" -eq 1 ]
+  [ "$(rustup_invocations)" -eq 0 ]
 }
