@@ -13,6 +13,9 @@ resolver = "2"
 # major-equivalent (minor) bump. See RELEASING.md.
 version = "0.22.16"
 edition = "2024"
+# Issue #747: the NEAT-AI family floor. scripts/runlib.sh enforces the same
+# version on every build host; keep the two in step.
+rust-version = "1.99"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
 

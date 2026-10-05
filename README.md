@@ -308,6 +308,29 @@ the crate manifest alone could not catch what stopped a Discovery build —
 `serial_test@4.0.1 requires rustc 1.93.1` with no family crate declaring
 `rust-version` at all. Two-part values such as `1.85` compare as `1.85.0`.
 
+**The family floor (Issue #747).** The requirement is never lower than
+`_RUNLIB_FAMILY_MIN_RUST_DEFAULT` (currently **1.99**), whatever the graph
+declares. The gate can only enforce a version something declares, and
+NEAT-AI-Discovery#2395 proved that is not enough. A std API stable from 1.95,
+in a graph whose highest declared `rust-version` was 1.93.1, passed every
+host on 1.93/1.94 into a build that died with `E0658` on the whole GRQ fleet.
+With the floor, nothing in the family builds below it, and a host that is
+older is moved forward by the gate's own `rustup` rules below, unattended. A
+crate that needs more than the floor declares its own `rust-version`, and the
+higher value wins, so `rust-version = "1.100"` in any sibling installs 1.100
+on every host that builds it. Raise the floor here; family-sync carries it to
+every sibling. `RUNLIB_FAMILY_MIN_RUST` overrides it for tests and must be a
+plain version.
+
+**An `E0658` build is healed once (Issue #747).** When `cargo build` fails
+with `error[E0658]` (an API newer than the active stable compiler) on an
+unpinned or channel-pinned crate, the script runs `rustup update <channel>`
+and retries the build **once**, then tells you which `rust-version` to
+declare. A second `E0658` exits non-zero. An exact pin, a gate override or a
+nightly toolchain is never moved. Those exit non-zero naming the bump, which
+is a `rust-toolchain.toml` `channel` plus a matching `rust-version`. Any other
+build failure keeps cargo's own exit status.
+
 | Active `rustc` vs the requirement | What happens |
 |------|------|
 | At or above it | Passes. No `rustup` call, and never a downgrade. |
