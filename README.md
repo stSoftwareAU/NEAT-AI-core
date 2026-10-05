@@ -268,7 +268,7 @@ a caller that asked only for the gate. Sourced, the same mode is
 | Install | The bin target named after the crate to `$CARGO_HOME/bin/<crate>`; a `cdylib` target to `$CARGO_HOME/lib/lib<crate>.{so,dylib}` — both with `-` → `_` in the crate name. A crate carrying both installs both. The installed names come from the **crate**, never from the cargo target name, so a crate whose `[lib] name` differs from its package name is not installed under one name and looked up under another. `CARGO_HOME` defaults to `~/.cargo`. |
 | Stamp | `.<crate>.version` is written beside every installed artefact, and written **last** — until it exists, a half-finished install still reads as "needs building". |
 | Clean | `target/` is removed after a successful install, with one stderr line naming the path removed and the bytes freed. The measurement is `du -sk` taken before the removal — the portable reading, macOS bash 3.2 included. A build directory **outside** the checkout (a shared `CARGO_TARGET_DIR`) holds other checkouts' builds, so it is kept and the fact reported rather than passed over. |
-| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. A `cargo build` failure keeps cargo's own exit status (e.g. `101`) unless it is the single E0658 self-heal below, which retries once before giving up. |
+| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. |
 
 It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
 `cargo metadata` and `rustc` is what the toolchain gate reads. `rustup` is not
@@ -277,10 +277,7 @@ where the toolchain is missing or too old for the graph (see the gate below),
 and never to replace a toolchain that already satisfies it. The bootstrap path
 below additionally needs `curl`, `mktemp` and `sha256sum` (or `shasum`) — each
 is checked by name before anything is fetched, so a missing one reads as the
-missing tool rather than as a network failure. The build path also needs
-`tee` and `mktemp` — both POSIX and already required above — to stream
-`cargo build`'s output to stderr while capturing it in a reaped temp file for
-the E0658 self-heal below.
+missing tool rather than as a network failure.
 
 With **no `rustc` at all** the toolchain is bootstrapped rather than demanded
 (Issue #699): the script downloads the pinned `rustup-init` for the detected
@@ -347,27 +344,6 @@ recorded in `_RUNLIB_TOOLCHAIN_OVERRIDE` (empty when none); install mode prints
 only the artefact path on stdout, `--toolchain-only` prints only that override,
 and every gate diagnostic goes to stderr.
 
-**One E0658 self-heal (Issue #747).** `cargo build`'s output is streamed to
-stderr and, at the same time, captured through `tee` into a `mktemp` file the
-cleanup trap reaps. A build that fails with an `error[E0658]` line — use of an
-unstable feature, which on a stable toolchain almost always means the active
-`rustc` is older than the code needs even though the gate above just passed it
-— is retried **exactly once**, after one `rustup` call chosen the same way the
-gate above chooses one: `rustup update stable` for an unpinned crate,
-`rustup update <channel>` for a channel pin. A second `E0658` after that retry
-exits non-zero naming the `rustc` version and the first build's `E0658` line.
-Three cases take no retry at all and exit non-zero straight away: the active
-toolchain (or the pin) is already `nightly` — `rustup update` cannot move a
-crate forward from there, so the message names the `rustc` and the feature
-without calling `rustup`; the crate carries an exact pin, or the gate already
-selected a `RUSTUP_TOOLCHAIN` override for this run — `rustup update` cannot
-move an exact version, so the message says to bump `rust-toolchain.toml` and
-`rust-version` instead; and no `rustup` on `PATH` — the message names
-<https://rustup.rs>. A build failure with **no** `E0658` line is never
-retried: the script prints `runlib: cargo build failed (exit N)` and exits
-with cargo's own status. `--toolchain-only` builds nothing, so this retry is
-install-mode only.
-
 ```mermaid
 flowchart TD
     A["runlib.sh, from the repository root"] --> Z{"argument"}
@@ -398,12 +374,8 @@ flowchart TD
     Q -- "no" --> F
     P --> S
     S -- "--toolchain-only" --> X["print the override name or an<br/>empty line; build and install nothing"]
-    S -- "install" --> E["cargo build --release<br/>(tee'd to a reaped temp file)"]
-    E -- "fails, no E0658 line" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
-    E -- "fails with E0658, not yet retried,<br/>not nightly, movable pin" --> E658["rustup update stable, or the<br/>pinned channel; retry build once"]
-    E658 -- "succeeds" --> G
-    E658 -- "fails again, or nightly,<br/>exact pin, or no rustup" --> F
-    E -- "artefact missing" --> F
+    S -- "install" --> E["cargo build --release"]
+    E -- "fails or an artefact is missing" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
     E -- "succeeds" --> G["stage every artefact,<br/>then move them all into CARGO_HOME"]
     G --> H["write the version stamps last"]
     H --> I["remove the checkout's target/,<br/>report the bytes freed"]
@@ -420,14 +392,7 @@ and `rustc` shims record theirs the same way, so "no `rustup` call on a pass",
 `RUSTUP_TOOLCHAIN` override the `cargo` shim saw are assertions over logs. The
 rustup bootstrap is covered the same way and without a network: a `curl` shim serves a
 *fake* `rustup-init` that writes a marker when executed, so "the unverified
-download is never executed" is asserted by that marker's absence. The
-undeclared-crate refusal and the E0658 self-heal are covered the same way: a
-fixture crate with neither an exact pin nor its own `rust-version` is
-asserted to fail before any `rustc`/`rustup` shim call is logged, and the
-`cargo` shim can be made to emit an `E0658` line on its first invocation only
-(or on every invocation), so "exactly one `rustup update` and one retried
-build" — and, for the always-failing shim, "no third invocation" — are
-assertions over the shim's logs rather than over the script's source.
+download is never executed" is asserted by that marker's absence.
 
 ### Canonical `family-pins.sh` (Issue #681)
 
