@@ -247,9 +247,10 @@ gap rather than failing with a bare cargo error.
 
 No public Rust API changed.
 
-**Migration** — build with `rustc >= 1.98.0`. The family convention from Issue
-#747 is to pin `rust-toolchain.toml` to an exact version `>= 1.98.0` in the
-consuming repository too, so the two cannot quietly drift apart there either.
+**Migration** — build with `rustc >= 1.98.0`. The family convention from
+Issue #747 is to pin `rust-toolchain.toml` to an exact version `>= 1.98.0` in
+the consuming repository too, so the two cannot quietly drift apart there
+either.
 
 ### `0.22.0` — pruning splices out `IDENTITY` pass-throughs (Issue #688)
 
