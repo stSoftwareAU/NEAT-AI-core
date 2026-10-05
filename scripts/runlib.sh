@@ -78,6 +78,25 @@
 # to rustup is validated as a plain toolchain name first: a
 # `rust-toolchain.toml` channel and `cargo metadata` are repository input.
 #
+# The gate refuses outright, before any rustc or `cargo metadata` call, when
+# the crate has declared no Rust requirement of its own at all — neither an
+# exact `rust-toolchain.toml` pin nor its own `rust-version` (Issue #747).
+# The dependency-graph maximum above is resolved from third-party crates too,
+# and NEAT-AI-Discovery#2395 is what that let through: the graph's highest
+# `rust-version` came entirely from dependencies, the crate's own code needed
+# a newer compiler than any of them declared, and the gate passed an old
+# rustc straight through with nothing to check it against. A channel pin
+# (`stable`, `nightly`, `1.93`) does not count as declared — only an exact
+# version pins a compiler the gate can compare against.
+#
+# A build that still fails with an unstable-feature error (`error[E0658]`)
+# after the gate has passed almost always means the active rustc is older
+# than the crate's code needs in a way the resolved graph never surfaced.
+# `runlib_install` retries such a failure exactly once: `rustup update` on the
+# active channel, then one more build. An exact pin, a nightly toolchain, or a
+# second E0658 after the retry dies loud instead of looping or auto-updating
+# what this script does not own.
+#
 # Run it as a subprocess — `path="$(./scripts/runlib.sh)"`. It can also be
 # sourced, but note that sourcing applies `set -euo pipefail` to the calling
 # shell, prepends `$CARGO_HOME/bin` to its PATH, clears any EXIT/INT/TERM trap
@@ -743,9 +762,29 @@ _runlib_update_channel() {
 # `rust-toolchain.toml` is a repository commit, so it is left untouched and
 # this run alone is redirected with a `RUSTUP_TOOLCHAIN` override, named on
 # stderr so the bump is obvious.
+#
+# Refuses outright, before touching rustc or `cargo metadata`, when the crate
+# has declared no Rust requirement of its own — neither an exact
+# `rust-toolchain.toml` pin nor its own `rust-version` (Issue #747). The
+# dependency-graph maximum this gate otherwise compares against is resolved
+# from third-party crates as much as from the family's own — that is what let
+# NEAT-AI-Discovery#2395 through: the graph's highest `rust-version` came from
+# dependencies alone, the crate's own code needed a newer compiler than any of
+# them declared, and the gate passed an old rustc straight through with
+# nothing to check it against.
 _runlib_check_msrv() {
-  local manifest="$1" root_manifest="$2" repo_root="$3" required pin
+  local manifest="$1" root_manifest="$2" repo_root="$3" required pin own_rust_version
   _RUNLIB_TOOLCHAIN_OVERRIDE=""
+
+  # The refusal above runs no rustc and no cargo metadata call at all — it
+  # reads only the two local declarations the requirement could come from.
+  pin="$(_runlib_pinned_channel "$repo_root")"
+  if ! _runlib_is_exact_version "$pin"; then
+    own_rust_version="$(_runlib_crate_field "$manifest" "$root_manifest" rust-version)"
+    [[ -n "$own_rust_version" ]] ||
+      _runlib_die "$manifest declares no Rust requirement of its own — neither an exact rust-toolchain.toml pin (channel = \"1.98.0\") nor a rust-version — so the compiler it needs is unknown and it will not be built; pin rust-toolchain.toml to an exact version, declare a matching rust-version in Cargo.toml, and re-run"
+  fi
+
   # Read before the graph is resolved: a rustc whose version cannot be read is
   # a fault to name here, not one to carry into a `cargo metadata` call.
   _runlib_read_rust_version "; the toolchain gate cannot check it against the dependency graph"
@@ -761,7 +800,7 @@ _runlib_check_msrv() {
   command -v rustup >/dev/null 2>&1 ||
     _runlib_die "rustc $_RUNLIB_ACTIVE_RUST_VERSION is below the Rust $required this dependency graph requires, and rustup is not on PATH — install Rust $required from https://rustup.rs and re-run"
 
-  pin="$(_runlib_pinned_channel "$repo_root")"
+  # $pin was already read by the refusal above; unchanged since.
   # Unpinned, or pinned to a *channel* rather than a version: the remedy is to
   # move that channel forward, never to swap a deliberate channel pin for an
   # exact version.
