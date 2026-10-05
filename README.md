@@ -264,11 +264,11 @@ a caller that asked only for the gate. Sourced, the same mode is
 |------|-----------|
 | Resolve | The single workspace member — the root crate, or the one `[workspace] members` entry — via `cargo metadata --no-deps`. Zero members, or more than one, fails loud. The skip below must decide without running cargo at all, so it reads the crate name, version and declared target shape straight from the manifests. Anything it cannot read unambiguously — a globbed `members` entry, a `crate-type` array split over several lines, `[[bin]]` tables that name only other binaries (cargo may still autodiscover one named after the package beside them), or `autobins` — makes it decline outright and fall through to `cargo metadata`, which is always the authority. A `[[bin]]` table that names the crate *is* unambiguous and is read, whether it stands alone or beside other tables, so both common sibling shapes — a CLI plus a cdylib, and a CLI plus bench binaries — skip with no cargo call at all. Declining is the safe direction: a target the reader failed to notice would otherwise let a half-installed crate report itself complete. |
 | Skip | With every artefact the crate's shape calls for present, and `.<crate>.version` matching the crate semver beside each, it runs **no** `cargo` command and prints one stderr line, `[<crate>] already installed v<x>`. The whole shape is checked, so a crate shipping both a bin and a cdylib does not report "already installed" once one half has been removed. There is no force flag: delete the stamp to force a rebuild. |
-| Gate | Once a rebuild is due, the toolchain is checked against the **highest `rust-version` in the resolved dependency graph** — the crate's own included. At or above it the build proceeds with no `rustup` call; below it the toolchain is updated, or an exact-version toolchain installed and overridden for this run, and only then does it fail loud. See the gate table below. |
+| Gate | Once a rebuild is due, the crate is first refused if it declares neither an exact `rust-toolchain.toml` pin nor its own `rust-version` (Issue #747) — see below. Otherwise the toolchain is checked against the **highest `rust-version` in the resolved dependency graph** — the crate's own included. At or above it the build proceeds with no `rustup` call; below it the toolchain is updated, or an exact-version toolchain installed and overridden for this run, and only then does it fail loud. See the gate table below. |
 | Install | The bin target named after the crate to `$CARGO_HOME/bin/<crate>`; a `cdylib` target to `$CARGO_HOME/lib/lib<crate>.{so,dylib}` — both with `-` → `_` in the crate name. A crate carrying both installs both. The installed names come from the **crate**, never from the cargo target name, so a crate whose `[lib] name` differs from its package name is not installed under one name and looked up under another. `CARGO_HOME` defaults to `~/.cargo`. |
 | Stamp | `.<crate>.version` is written beside every installed artefact, and written **last** — until it exists, a half-finished install still reads as "needs building". |
 | Clean | `target/` is removed after a successful install, with one stderr line naming the path removed and the bytes freed. The measurement is `du -sk` taken before the removal — the portable reading, macOS bash 3.2 included. A build directory **outside** the checkout (a shared `CARGO_TARGET_DIR`) holds other checkouts' builds, so it is kept and the fact reported rather than passed over. |
-| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. |
+| Fail | Any failure keeps `target/`, leaves the installed artefacts and their stamps untouched, and exits non-zero. Every artefact is staged beside its destination and moved into place only once all of them are ready; the binary it replaces is held aside until the library is in place too, and restored if that step fails, so a cdylib that fails to build — or to sign on macOS — cannot leave the new binary installed beside the old library. An install is confirmed rather than assumed: a directory sitting at an install path is refused instead of being moved into, and every commit is checked to have produced a regular file. A `cargo build` failure keeps cargo's own exit status (e.g. `101`) unless it is the single E0658 self-heal below, which retries once before giving up. |
 
 It needs `cargo`, `rustc` and `jq` on the host; `jq` is what reads
 `cargo metadata` and `rustc` is what the toolchain gate reads. `rustup` is not
@@ -277,7 +277,10 @@ where the toolchain is missing or too old for the graph (see the gate below),
 and never to replace a toolchain that already satisfies it. The bootstrap path
 below additionally needs `curl`, `mktemp` and `sha256sum` (or `shasum`) — each
 is checked by name before anything is fetched, so a missing one reads as the
-missing tool rather than as a network failure.
+missing tool rather than as a network failure. The build path also needs
+`tee` and `mktemp` — both POSIX and already required above — to stream
+`cargo build`'s output to stderr while capturing it in a reaped temp file for
+the E0658 self-heal below.
 
 With **no `rustc` at all** the toolchain is bootstrapped rather than demanded
 (Issue #699): the script downloads the pinned `rustup-init` for the detected
@@ -308,6 +311,22 @@ the crate manifest alone could not catch what stopped a Discovery build —
 `serial_test@4.0.1 requires rustc 1.93.1` with no family crate declaring
 `rust-version` at all. Two-part values such as `1.85` compare as `1.85.0`.
 
+Before any of that — before the first `rustc` version read, before the graph
+resolve — the gate (both on the install path once a rebuild is due, and on
+`--toolchain-only`) refuses a crate that declares **neither** an exact
+`rust-toolchain.toml` pin (`channel = "1.98.0"`, not a channel name or a
+two-part value) **nor** its own `rust-version` (read from the crate manifest,
+following `rust-version.workspace = true`), exiting non-zero with one stderr
+line naming both fixes (Issue #747). This is the other half of the Discovery
+incident above: the resolved graph's maximum `rust-version` is a **floor** set
+by whatever dependency happens to declare one, not a ceiling the crate's own
+code is held to, so a crate that declares nothing can use a stable feature
+newer than every manifest in its graph names and still pass the gate against
+old hosts. A crate declaring neither must pick up both before it re-copies
+this `runlib.sh`, or every fleet host refuses its rebuild outright. The
+already-installed skip above is unaffected: a matching stamp still runs no
+`cargo` at all, so this refusal is never reached on a build that was not due.
+
 | Active `rustc` vs the requirement | What happens |
 |------|------|
 | At or above it | Passes. No `rustup` call, and never a downgrade. |
@@ -328,6 +347,27 @@ recorded in `_RUNLIB_TOOLCHAIN_OVERRIDE` (empty when none); install mode prints
 only the artefact path on stdout, `--toolchain-only` prints only that override,
 and every gate diagnostic goes to stderr.
 
+**One E0658 self-heal (Issue #747).** `cargo build`'s output is streamed to
+stderr and, at the same time, captured through `tee` into a `mktemp` file the
+cleanup trap reaps. A build that fails with an `error[E0658]` line — use of an
+unstable feature, which on a stable toolchain almost always means the active
+`rustc` is older than the code needs even though the gate above just passed it
+— is retried **exactly once**, after one `rustup` call chosen the same way the
+gate above chooses one: `rustup update stable` for an unpinned crate,
+`rustup update <channel>` for a channel pin. A second `E0658` after that retry
+exits non-zero naming the `rustc` version and the first build's `E0658` line.
+Three cases take no retry at all and exit non-zero straight away: the active
+toolchain (or the pin) is already `nightly` — `rustup update` cannot move a
+crate forward from there, so the message names the `rustc` and the feature
+without calling `rustup`; the crate carries an exact pin, or the gate already
+selected a `RUSTUP_TOOLCHAIN` override for this run — `rustup update` cannot
+move an exact version, so the message says to bump `rust-toolchain.toml` and
+`rust-version` instead; and no `rustup` on `PATH` — the message names
+<https://rustup.rs>. A build failure with **no** `E0658` line is never
+retried: the script prints `runlib: cargo build failed (exit N)` and exits
+with cargo's own status. `--toolchain-only` builds nothing, so this retry is
+install-mode only.
+
 ```mermaid
 flowchart TD
     A["runlib.sh, from the repository root"] --> Z{"argument"}
@@ -345,7 +385,9 @@ flowchart TD
     R --> D["cargo metadata --no-deps:<br/>the single member and its manifest"]
     D --> K{"install mode, and the shape is<br/>complete and stamped at this version?"}
     K -- "yes" --> C
-    K -- "no, or --toolchain-only" --> M["cargo metadata --filter-platform:<br/>required = highest rust-version<br/>in the resolved graph"]
+    K -- "no, or --toolchain-only" --> DCL{"exact rust-toolchain.toml pin,<br/>or own rust-version declared?"}
+    DCL -- "no" --> F
+    DCL -- "yes" --> M["cargo metadata --filter-platform:<br/>required = highest rust-version<br/>in the resolved graph"]
     M --> N{"active rustc<br/>&gt;= required?"}
     N -- "yes, or an exact pin satisfies it" --> S{"which mode?"}
     N -- "no, no rustup" --> F
@@ -356,8 +398,12 @@ flowchart TD
     Q -- "no" --> F
     P --> S
     S -- "--toolchain-only" --> X["print the override name or an<br/>empty line; build and install nothing"]
-    S -- "install" --> E["cargo build --release"]
-    E -- "fails or an artefact is missing" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
+    S -- "install" --> E["cargo build --release<br/>(tee'd to a reaped temp file)"]
+    E -- "fails, no E0658 line" --> F["keep target/, keep the old<br/>artefact and stamp, exit non-zero"]
+    E -- "fails with E0658, not yet retried,<br/>not nightly, movable pin" --> E658["rustup update stable, or the<br/>pinned channel; retry build once"]
+    E658 -- "succeeds" --> G
+    E658 -- "fails again, or nightly,<br/>exact pin, or no rustup" --> F
+    E -- "artefact missing" --> F
     E -- "succeeds" --> G["stage every artefact,<br/>then move them all into CARGO_HOME"]
     G --> H["write the version stamps last"]
     H --> I["remove the checkout's target/,<br/>report the bytes freed"]
@@ -374,7 +420,14 @@ and `rustc` shims record theirs the same way, so "no `rustup` call on a pass",
 `RUSTUP_TOOLCHAIN` override the `cargo` shim saw are assertions over logs. The
 rustup bootstrap is covered the same way and without a network: a `curl` shim serves a
 *fake* `rustup-init` that writes a marker when executed, so "the unverified
-download is never executed" is asserted by that marker's absence.
+download is never executed" is asserted by that marker's absence. The
+undeclared-crate refusal and the E0658 self-heal are covered the same way: a
+fixture crate with neither an exact pin nor its own `rust-version` is
+asserted to fail before any `rustc`/`rustup` shim call is logged, and the
+`cargo` shim can be made to emit an `E0658` line on its first invocation only
+(or on every invocation), so "exactly one `rustup update` and one retried
+build" — and, for the always-failing shim, "no third invocation" — are
+assertions over the shim's logs rather than over the script's source.
 
 ### Canonical `family-pins.sh` (Issue #681)
 

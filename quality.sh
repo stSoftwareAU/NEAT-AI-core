@@ -1,7 +1,7 @@
 #!/bin/bash
 # Local gate — mirrors NEAT-AI-Discovery `quality.sh` (virtual workspace: neat-core).
-# Toolchain: use rustup `stable` (no rust-toolchain.toml; same idea as NEAT-AI-discovery).
-# Run `rustup update stable` periodically so local Clippy matches CI.
+# Toolchain: exact pin in rust-toolchain.toml (Issue #747), which rustup selects
+# automatically — no `rustup update stable` needed for local Clippy to match CI.
 set -euo pipefail
 
 # Source cargo environment if available (needed for non-login shells)

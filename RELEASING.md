@@ -230,6 +230,27 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.23.0` — neat-core declares `rust-version = "1.98.0"` (Issue #747)
+
+One breaking count: a declared MSRV. `cargo` now refuses to compile `neat-core`
+with a `rustc` older than `1.98.0`, where before the crate declared no floor at
+all and would build with whatever `rustc` was on `PATH`, back-compiler
+mismatches included. `rust-toolchain.toml` pins the same exact version, so the
+two cannot drift apart silently.
+
+Every repository in `scripts/downstream-consumers.txt` was checked — each
+builds with an exact `1.98.0` pin of its own or with current stable, so none is
+broken by this floor. A host that reaches `neat-core` through the canonical
+`scripts/runlib.sh` sees `1.98.0` as the requirement in its resolved dependency
+graph, and the toolchain gate there runs `rustup update stable` to close the
+gap rather than failing with a bare cargo error.
+
+No public Rust API changed.
+
+**Migration** — build with `rustc >= 1.98.0`. The family convention from Issue
+#747 is to pin `rust-toolchain.toml` to an exact version `>= 1.98.0` in the
+consuming repository too, so the two cannot quietly drift apart there either.
+
 ### `0.22.0` — pruning splices out `IDENTITY` pass-throughs (Issue #688)
 
 Two breaking counts, both consequences of the same optimisation:

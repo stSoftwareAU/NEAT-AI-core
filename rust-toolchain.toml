@@ -1,0 +1,17 @@
+# Issue #747 — exact pin; keep `rust-version` in Cargo.toml's [workspace.package] equal to it.
+#
+# Exact, not a moving channel: CI and every host build with the same compiler,
+# so a newer std API cannot ship without this file and `rust-version` being
+# bumped together — that is what lets the canonical `scripts/runlib.sh`
+# toolchain gate (Issue #680) enforce a floor at all. `components` and
+# `targets` are listed because CI's `dtolnay/rust-toolchain` step installs
+# plain `stable` with a minimal profile, so rustup's own auto-install of this
+# pinned toolchain (triggered by this file being present) is what actually
+# supplies clippy/rustfmt and the wasm32 target that `wasm-bundle.yml`'s
+# wasm-pack lane and `bump-deps.sh`'s dual build both need. The wasm64 lane
+# runs `cargo +nightly …`, which overrides this file for that one invocation.
+[toolchain]
+channel = "1.98.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]
