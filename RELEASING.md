@@ -230,6 +230,20 @@ Each major-equivalent bump is recorded here so downstream consumers can see what
 changed without diffing the API. The generated `v<version>` GitHub release notes
 point back at this file.
 
+### `0.23.0` — neat-core declares `rust-version = "1.99"` (Issue #749)
+
+Raises neat-core's declared MSRV floor to Rust `1.99`, matching the family
+floor already enforced informally via `scripts/runlib.sh`'s
+`_RUNLIB_FAMILY_MIN_RUST_DEFAULT`. It is a breaking change because any
+consumer building this crate on an older toolchain now fails to compile where
+it previously may have succeeded.
+
+All six registered downstream consumers — NEAT-AI-scorer,
+NEAT-AI-Backpropagation, NEAT-AI-Rebase, NEAT-AI-Forests, NEAT-AI-Ockham and
+NEAT-AI-Lamarck — already pin `channel = "1.99.0"` as of this change (Issue
+#748's consumer migration), so no further consumer migration is needed before
+this merges.
+
 ### `0.22.0` — pruning splices out `IDENTITY` pass-throughs (Issue #688)
 
 Two breaking counts, both consequences of the same optimisation:

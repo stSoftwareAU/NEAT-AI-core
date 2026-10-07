@@ -15,6 +15,10 @@ version = "0.22.17"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/stSoftwareAU/NEAT-AI-core"
+# Issue #749: family MSRV floor — matches scripts/runlib.sh's
+# _RUNLIB_FAMILY_MIN_RUST_DEFAULT, now that every registered downstream
+# consumer pins channel = "1.99.0" (issue #748).
+rust-version = "1.99"
 
 # Issue #546 (fleet build-profile decision): dev builds compile as fast as
 # possible. `line-tables-only` keeps panic/backtrace file:line and drops the
