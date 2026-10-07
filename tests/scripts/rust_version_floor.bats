@@ -1,44 +1,41 @@
 #!/usr/bin/env bats
-# Tests for Issue #749: the root Cargo.toml declares `rust-version = "1.99"`
-# in `[workspace.package]`, matching the family MSRV floor already enforced
-# informally by scripts/runlib.sh's `_RUNLIB_FAMILY_MIN_RUST_DEFAULT`.
+# Tests for Issue #749: neat-core declares `rust-version = "1.99"` (via
+# `rust-version.workspace = true` inheriting `[workspace.package]`), matching
+# the family MSRV floor already enforced informally by scripts/runlib.sh's
+# `_RUNLIB_FAMILY_MIN_RUST_DEFAULT`.
 #
-# These are "what" tests: each reads the real committed files and asserts on
-# the observable declared value, never a private copy of either.
+# These are "what" tests: each asserts on the rust-version cargo actually
+# resolves for the neat-core package (via `cargo metadata`), not on the text
+# of the `[workspace.package]` table alone. A `[workspace.package]` key does
+# nothing to a crate unless the member inherits it with `*.workspace = true`
+# — reading the root manifest's text can't see whether neat-core still does
+# that, so the oracle here is cargo's own resolution (PR #750 review).
 
 setup() {
   REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
-  CARGO_TOML="${REPO_ROOT}/Cargo.toml"
   RUNLIB="${REPO_ROOT}/scripts/runlib.sh"
 }
 
-workspace_rust_version() {
-  # Extract the rust-version declared in [workspace.package], not any other
-  # table that might one day carry the same key.
-  awk '
-    /^\[workspace\.package\]/ { in_section = 1; next }
-    /^\[/ { in_section = 0 }
-    in_section && /^rust-version[[:space:]]*=/ {
-      match($0, /"[^"]*"/)
-      print substr($0, RSTART + 1, RLENGTH - 2)
-    }
-  ' "$CARGO_TOML"
+neat_core_rust_version() {
+  cargo metadata --no-deps --format-version 1 --offline \
+    --manifest-path "${REPO_ROOT}/Cargo.toml" \
+    | jq -r '.packages[] | select(.name == "neat-core") | .rust_version'
 }
 
 runlib_family_min_rust() {
   sed -n 's/^_RUNLIB_FAMILY_MIN_RUST_DEFAULT="\(.*\)"$/\1/p' "$RUNLIB"
 }
 
-@test "root Cargo.toml declares the family MSRV floor as rust-version" {
-  run workspace_rust_version
+@test "neat-core resolves rust-version 1.99 via workspace inheritance" {
+  run neat_core_rust_version
   [ "$status" -eq 0 ]
   [ "$output" = "1.99" ]
 }
 
-@test "the declared rust-version matches runlib.sh's family floor default" {
-  declared="$(workspace_rust_version)"
+@test "the resolved rust-version matches runlib.sh's family floor default" {
+  resolved="$(neat_core_rust_version)"
   floor="$(runlib_family_min_rust)"
-  [ -n "$declared" ]
+  [ -n "$resolved" ]
   [ -n "$floor" ]
-  [ "$declared" = "$floor" ]
+  [ "$resolved" = "$floor" ]
 }

@@ -12,7 +12,7 @@ Declares neat-core's minimum supported Rust version (MSRV) floor as `1.99` in `C
 - **neat-core/Cargo.toml** (line 5): Added `rust-version.workspace = true` to inherit from workspace
 - **RELEASING.md** (lines 233–244): New `0.23.0` breaking-change entry documenting MSRV floor raise and consumer migration status
 - **README.md** ("The family floor (Issue #747)" paragraph): notes that raising the floor in `scripts/runlib.sh` now also means raising neat-core's `rust-version`, which `tests/scripts/rust_version_floor.bats` holds equal
-- **tests/scripts/rust_version_floor.bats** (new, 44 lines): Regression test asserting MSRV floor is declared correctly and matches `scripts/runlib.sh`'s `_RUNLIB_FAMILY_MIN_RUST_DEFAULT`
+- **tests/scripts/rust_version_floor.bats** (new, 41 lines): Regression test asserting, via `cargo metadata`, the `rust-version` cargo actually resolves for the `neat-core` package, matching `scripts/runlib.sh`'s `_RUNLIB_FAMILY_MIN_RUST_DEFAULT` (revised in PR #750 review — see below)
 
 ## Spec Verdicts (Issue #749 acceptance criteria)
 
@@ -22,7 +22,7 @@ Declares neat-core's minimum supported Rust version (MSRV) floor as `1.99` in `C
 | 2. `neat-core/Cargo.toml` adds `rust-version.workspace = true` | **MET** | Added, line 5 |
 | 3. Downstream-consumers CI gate passes | **PARTIAL** | Diff asserts all six consumers already pinned 1.99.0; verified by actual `downstream-consumers` CI job during quality gate (see Test Plan below) |
 | 4. Breaking-change log entry in RELEASING.md | **MET** | v0.23.0 entry present, lines 233–244; documents break and consumer-migration status |
-| 5. No visible test regression | **MET** | New bats test exercises real code paths; incomplete coverage note: test verifies root Cargo.toml and runlib.sh parity, not neat-core/Cargo.toml's inheritance (validated by Cargo at build time) |
+| 5. No visible test regression | **MET** | New bats test exercises real code paths: it asserts on the `rust_version` `cargo metadata` resolves for `neat-core`, so dropping `rust-version.workspace = true` from `neat-core/Cargo.toml` turns it red (verified in PR #750 review response) |
 | 6. Optional `rust-toolchain.toml` pin | **N/A** | Correctly left undone; repo has no `rust-toolchain.toml` file |
 
 ## Standards Review Findings
@@ -39,10 +39,10 @@ Declares neat-core's minimum supported Rust version (MSRV) floor as `1.99` in `C
 ## Test Plan
 
 ### Regression test coverage
-- **`rust_version_floor.bats`**: Asserts root `Cargo.toml` declares `rust-version = "1.99"` and parity with `scripts/runlib.sh` MSRV family floor; executed on every `./quality.sh` run via `bats tests/scripts`
+- **`rust_version_floor.bats`**: Asserts, via `cargo metadata --no-deps --format-version 1`, that the `rust_version` cargo resolves for the `neat-core` package is `1.99` and matches `scripts/runlib.sh`'s MSRV family floor; executed on every `./quality.sh` run via `bats tests/scripts`
 - **No test regression**: Existing `tests/scripts/rust_build_profiles.bats` and the `version-gate` CI job are unchanged by this diff
 
-**Branch outcomes:** none added — the diff adds two manifest keys, a RELEASING.md entry, a README sentence and a test; no product condition, match arm or exit-code check. Mutation check on the new test: changing the root `Cargo.toml` to `rust-version = "1.98"` turned both tests in `tests/scripts/rust_version_floor.bats` red (`root Cargo.toml declares the family MSRV floor as rust-version`, `the declared rust-version matches runlib.sh's family floor default`); reverted.
+**Branch outcomes:** none added — the diff adds two manifest keys, a RELEASING.md entry, a README sentence and a test; no product condition, match arm or exit-code check. Mutation check on the new test (PR #750 review): removing `rust-version.workspace = true` from `neat-core/Cargo.toml` turned both tests in `tests/scripts/rust_version_floor.bats` red (`neat-core resolves rust-version 1.99 via workspace inheritance`, `the resolved rust-version matches runlib.sh's family floor default`); reverted. This is the meaningful regression the earlier source-grep oracle (reading `[workspace.package]` text only) could not detect, since `cargo metadata` is what actually reflects whether `neat-core` still inherits the floor.
 
 ### Critical verification: Criterion 3
 The **downstream-consumers** CI gate (`scripts/check-downstream-consumers.sh`, required on `Develop`) will verify all six registered consumers compile against this change:
