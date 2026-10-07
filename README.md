@@ -319,8 +319,10 @@ older is moved forward by the gate's own `rustup` rules below, unattended. A
 crate that needs more than the floor declares its own `rust-version`, and the
 higher value wins, so `rust-version = "1.100"` in any sibling installs 1.100
 on every host that builds it. Raise the floor here; family-sync carries it to
-every sibling. `RUNLIB_FAMILY_MIN_RUST` overrides it for tests and must be a
-plain version.
+every sibling. Raise neat-core's own `rust-version` in the root `Cargo.toml`
+with it — the crate declares the floor too (Issue #749), and
+`tests/scripts/rust_version_floor.bats` fails while the two differ.
+`RUNLIB_FAMILY_MIN_RUST` overrides it for tests and must be a plain version.
 
 **An `E0658` build is healed once (Issue #747).** When `cargo build` fails
 with `error[E0658]` (an API newer than the active stable compiler) on an

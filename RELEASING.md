@@ -240,9 +240,8 @@ it previously may have succeeded.
 
 All six registered downstream consumers — NEAT-AI-scorer,
 NEAT-AI-Backpropagation, NEAT-AI-Rebase, NEAT-AI-Forests, NEAT-AI-Ockham and
-NEAT-AI-Lamarck — already pin `channel = "1.99.0"` as of this change (Issue
-#748's consumer migration), so no further consumer migration is needed before
-this merges.
+NEAT-AI-Lamarck — already pin `channel = "1.99.0"` as of Issue #748's consumer
+migration, so no further consumer migration is needed before this merges.
 
 ### `0.22.0` — pruning splices out `IDENTITY` pass-throughs (Issue #688)
 

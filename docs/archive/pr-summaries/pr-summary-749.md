@@ -10,7 +10,8 @@ Declares neat-core's minimum supported Rust version (MSRV) floor as `1.99` in `C
 
 - **Cargo.toml** (line 21): Added `rust-version = "1.99"` to `[workspace.package]`
 - **neat-core/Cargo.toml** (line 5): Added `rust-version.workspace = true` to inherit from workspace
-- **RELEASING.md** (lines 24–37): New `0.23.0` breaking-change entry documenting MSRV floor raise and consumer migration status
+- **RELEASING.md** (lines 233–244): New `0.23.0` breaking-change entry documenting MSRV floor raise and consumer migration status
+- **README.md** ("The family floor (Issue #747)" paragraph): notes that raising the floor in `scripts/runlib.sh` now also means raising neat-core's `rust-version`, which `tests/scripts/rust_version_floor.bats` holds equal
 - **tests/scripts/rust_version_floor.bats** (new, 44 lines): Regression test asserting MSRV floor is declared correctly and matches `scripts/runlib.sh`'s `_RUNLIB_FAMILY_MIN_RUST_DEFAULT`
 
 ## Spec Verdicts (Issue #749 acceptance criteria)
@@ -20,7 +21,7 @@ Declares neat-core's minimum supported Rust version (MSRV) floor as `1.99` in `C
 | 1. Root `Cargo.toml` declares `rust-version = "1.99"` | **MET** | Added to `[workspace.package]`, line 21 |
 | 2. `neat-core/Cargo.toml` adds `rust-version.workspace = true` | **MET** | Added, line 5 |
 | 3. Downstream-consumers CI gate passes | **PARTIAL** | Diff asserts all six consumers already pinned 1.99.0; verified by actual `downstream-consumers` CI job during quality gate (see Test Plan below) |
-| 4. Breaking-change log entry in RELEASING.md | **MET** | v0.23.0 entry present, lines 24–37; documents break and consumer-migration status |
+| 4. Breaking-change log entry in RELEASING.md | **MET** | v0.23.0 entry present, lines 233–244; documents break and consumer-migration status |
 | 5. No visible test regression | **MET** | New bats test exercises real code paths; incomplete coverage note: test verifies root Cargo.toml and runlib.sh parity, not neat-core/Cargo.toml's inheritance (validated by Cargo at build time) |
 | 6. Optional `rust-toolchain.toml` pin | **N/A** | Correctly left undone; repo has no `rust-toolchain.toml` file |
 
@@ -39,8 +40,9 @@ Declares neat-core's minimum supported Rust version (MSRV) floor as `1.99` in `C
 
 ### Regression test coverage
 - **`rust_version_floor.bats`**: Asserts root `Cargo.toml` declares `rust-version = "1.99"` and parity with `scripts/runlib.sh` MSRV family floor; executed on every `./quality.sh` run via `bats tests/scripts`
-- **Branch outcomes**: No new branching logic added; no outcomes to enumerate
-- **No test regression**: Existing `rust_build_profiles.bats` and Rust version gate (`version-gate` CI job) remain unchanged
+- **No test regression**: Existing `tests/scripts/rust_build_profiles.bats` and the `version-gate` CI job are unchanged by this diff
+
+**Branch outcomes:** none added — the diff adds two manifest keys, a RELEASING.md entry, a README sentence and a test; no product condition, match arm or exit-code check. Mutation check on the new test: changing the root `Cargo.toml` to `rust-version = "1.98"` turned both tests in `tests/scripts/rust_version_floor.bats` red (`root Cargo.toml declares the family MSRV floor as rust-version`, `the declared rust-version matches runlib.sh's family floor default`); reverted.
 
 ### Critical verification: Criterion 3
 The **downstream-consumers** CI gate (`scripts/check-downstream-consumers.sh`, required on `Develop`) will verify all six registered consumers compile against this change:
@@ -51,31 +53,29 @@ The **downstream-consumers** CI gate (`scripts/check-downstream-consumers.sh`, r
 - NEAT-AI-Ockham
 - NEAT-AI-Lamarck
 
-This gate runs as part of the full `./quality.sh` execution below and definitively proves all consumers already pin 1.99.0 and the declaration does not break them.
+Locally `./quality.sh` runs this gate only when `QUALITY_DOWNSTREAM=1` is set (quality.sh lines 68–70); the `downstream-consumers` CI job runs it unconditionally on every pull request, and that job is the evidence for Criterion 3.
 
 ### Quality gate execution
 ```bash
 timeout 900 ./quality.sh < /dev/null
 ```
 
-This runs (in order):
-1. `cargo fmt --all --check`
-2. `cargo clippy --workspace -- -D warnings`
-3. `cargo deny check advisories` / `cargo audit` (advisory scan)
-4. `./scripts/lockfile-freshness.sh --check` (lockfile consistency)
-5. `cargo test --workspace` (all tests, including new `rust_version_floor.bats`)
-6. **`scripts/check-downstream-consumers.sh`** (compiles all six consumers; Criterion 3 verification)
-7. Other gates (doc tests, mermaid validation, etc.)
+This runs, among other steps (in order, `quality.sh` line numbers):
+1. `bats tests/scripts` (line 60) — includes the new `tests/scripts/rust_version_floor.bats`
+2. `./scripts/check-downstream-consumers.sh --workspace ..` (line 70, opt-in via `QUALITY_DOWNSTREAM=1`) — compiles the six registered consumers; Criterion 3 verification
+3. `deno fmt --check` and the Mermaid check (`scripts/check_mermaid.ts`)
+4. `./scripts/lockfile-freshness.sh --check` (line 152)
+5. `cargo deny check` for the root workspace and `wasm-bench` (licences and dependencies; lines 160, 164)
+6. `cargo build --workspace`, `cargo fmt --all` (reformats in place), `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+7. `cargo test --workspace --lib --tests --all-features` (line 183), doctests, `cargo doc` with `-D warnings`, release build
 
 ## Docs sweep
 
-Searched for: `rust-version`, `MSRV`, `1.99`
+**Docs sweep** — grep: `rust-version`, `MSRV`, `1.99`, `rust_version`, `minimum supported rust`, `toolchain`, `_RUNLIB_FAMILY_MIN_RUST` over `README.md`, `docs/` (excluding `docs/archive/`) and `*/README.md`; section: `README.md` "The family floor (Issue #747)" (toolchain gate, `#canonical-runlibsh-issue-680`); updated: `README.md`
 
-- **Cargo.toml**: Added `rust-version = "1.99"` with inline comment linking Issue #749 and Issue #748
-- **neat-core/Cargo.toml**: Added `rust-version.workspace = true`
-- **RELEASING.md**: New `0.23.0` entry (lines 24–37) documents MSRV floor raise, consumer migration, and breaking-change rationale
-- **AGENTS.md**: No change needed; existing section "Unsafe & SIMD invariants" describes load-time index validation that depends on this MSRV but does not name a specific version; family MSRV floor is now declared in Cargo.toml, making this implicit dependency explicit
-- **README.md**: No MSRV-floor entry; MSRV is now in Cargo.toml and RELEASING.md per standard practice
+- `README.md` "The family floor" said only "Raise the floor here; family-sync carries it to every sibling" — now that neat-core also declares the floor, that instruction was incomplete (raising `runlib.sh` alone fails `tests/scripts/rust_version_floor.bats`), so a sentence was added naming the root `Cargo.toml` `rust-version`.
+- `README.md` toolchain-gate paragraph ("with no family crate declaring `rust-version` at all") describes the historical NEAT-AI-Discovery `serial_test@4.0.1` build — still true of that build; left unchanged.
+- `README.md` lines 73 and the remaining toolchain-gate table rows, `docs/research/wasm64-lane-b-build-lane-feasibility.md` (nightly `1.99.0-nightly` measurement baseline), `docs/research/wasm-gather4-unchecked-loads.md` (`rustc 1.97.1` measurement baseline) and `wasm-bench/README.md` — read; they record measurement toolchains or the nightly wasm64 lane, none states neat-core's MSRV; no change.
 
 ## Commit hygiene
 
@@ -86,4 +86,4 @@ Searched for: `rust-version`, `MSRV`, `1.99`
 
 ---
 
-**Definition of done**: Downstream consumers CI gate passes with the MSRV declaration in place. ✓ (verified by quality gate execution)
+**Definition of done**: Downstream consumers CI gate passes with the MSRV declaration in place. — verified by the `downstream-consumers` CI job on this PR
