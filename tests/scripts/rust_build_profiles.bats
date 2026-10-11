@@ -79,10 +79,14 @@ PY
 }
 
 # Print the rustc invocation cargo builds the probe crate with, for profile $2.
+# The probe measures the manifest, not the shell: Cargo 1.99 turns incremental
+# off by default when `CI` is set, and `CARGO_INCREMENTAL` overrides the profile
+# outright, so both are cleared before cargo resolves the flags.
 probe_rustc_flags() {
   local dir="$1" profile="$2"
   (
     cd "$dir" || exit 1
+    unset CI CARGO_INCREMENTAL
     CARGO_TARGET_DIR="${dir}/target" cargo build -v --offline \
       --profile "$profile" 2>&1
   ) | grep -F -- '--crate-name profile_probe'
