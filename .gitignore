@@ -4,6 +4,8 @@
 !.gitignore
 !.codespellrc
 !.markdownlint-cli2.jsonc
+# Anthropic OSS Scanner build image and threat-model brief.
+!.oss-scanner
 
 /target/
 **/*.rs.bk
