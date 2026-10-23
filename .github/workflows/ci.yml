@@ -40,7 +40,7 @@ jobs:
     name: Auto-increment Versions
     runs-on: ubuntu-latest
     timeout-minutes: 15 # version bump + push
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     permissions:
       contents: write
       pull-requests: write
@@ -237,7 +237,7 @@ jobs:
     name: Breaking-change version gate
     runs-on: ubuntu-latest
     timeout-minutes: 10 # version comparison only
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     needs: [version-increment]
     permissions:
       contents: read
@@ -295,7 +295,7 @@ jobs:
     name: Auto-format Code
     runs-on: ubuntu-latest
     timeout-minutes: 20 # cargo fmt + push
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     needs: [version-increment]
     permissions:
       contents: write
@@ -359,7 +359,7 @@ jobs:
     name: Quality Checks
     runs-on: ubuntu-latest
     timeout-minutes: 45 # cargo build + clippy + tests + docs
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     needs: [version-increment, auto-format]
     # Issue #309 — least-privilege GITHUB_TOKEN. This job only reads the repo
     # (checkout, git pull, cargo deny/fmt/clippy/test/doc); it never pushes, so
@@ -463,7 +463,7 @@ jobs:
     # so running this job there compiled and linted the workspace twice per PR
     # in separate jobs with separate caches. Scope it to the events `quality`
     # does not cover; `quality` stays the comprehensive PR gate.
-    if: ${{ (github.event_name != 'pull_request') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: (github.event_name != 'pull_request') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     # Issue #310 — least privilege: this job only checks out and compiles/lints
     # the repo, so read-only contents is all the GITHUB_TOKEN needs.
     permissions:
@@ -515,7 +515,7 @@ jobs:
   # every pull request with no `if:` (the repo-owned, unconditional gate rule)
   # and is a required check in .github/rulesets/develop.json.
   downstream-consumers:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: Downstream consumers
     runs-on: ubuntu-latest
     timeout-minutes: 60 # six consumer workspaces, cargo check in each
@@ -557,7 +557,7 @@ jobs:
   # `deno fmt --check`. The same script and the same two commands back the
   # local quality.sh run.
   typescript-gate:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: TypeScript validity and style gate
     runs-on: ubuntu-latest
     timeout-minutes: 10 # deno check/lint/fmt over committed .ts helpers
@@ -641,7 +641,7 @@ jobs:
     name: Scripts & spelling
     runs-on: ubuntu-latest
     timeout-minutes: 15 # shellcheck + bats + codespell
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     needs: [version-increment]
     # Issue #311 — least-privilege GITHUB_TOKEN. This job only reads the repo
     # (checkout, shellcheck, bash -n, codespell); it never pushes, so it must
@@ -714,7 +714,7 @@ jobs:
   # across the JS↔WASM boundary. A Deno/V8 upgrade that drops or breaks Wasm 3.0
   # Memory64 support fails HERE, in CI, rather than being rediscovered mid-port.
   wasm64-memory64-smoke:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     name: wasm64 Memory64 smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 10 # single deno smoke test
@@ -776,7 +776,7 @@ jobs:
 
   security:
     uses: ./.github/workflows/security.yml
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     needs: [version-increment]
     # Issue #312 — least-privilege GITHUB_TOKEN. A reusable-workflow caller with
     # no permissions block hands the called workflow the repository's broad
@@ -792,7 +792,7 @@ jobs:
     name: Project Validation
     runs-on: ubuntu-latest
     timeout-minutes: 15 # cargo metadata + manifest/doc checks
-    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft }}
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     needs: [version-increment]
     # Issue #313 — least-privilege GITHUB_TOKEN. This job only reads the repo
     # (checkout, cargo metadata, manifest/README/rustdoc file checks); it never
