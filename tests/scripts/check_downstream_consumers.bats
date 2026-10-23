@@ -158,7 +158,10 @@ import yaml
 data = yaml.safe_load(open(sys.argv[1]))
 job = (data.get("jobs") or {}).get("downstream-consumers")
 assert job is not None, "no downstream-consumers job"
-assert "if" not in job, f"the gate must be unconditional, got if: {job['if']!r}"
+# The one condition allowed is the draft guard: draft PRs skip CI and it runs
+# once the PR is marked ready (owner, 2026-10-23, VibeCoder#4152).
+DRAFT_GUARD = "github.event_name != 'pull_request' || !github.event.pull_request.draft"
+assert job.get("if", DRAFT_GUARD) == DRAFT_GUARD, f"the gate must be unconditional, got if: {job['if']!r}"
 runs = [s.get("run", "") for s in job.get("steps") or []]
 assert any("check-downstream-consumers.sh" in r for r in runs), runs
 print(job["name"])

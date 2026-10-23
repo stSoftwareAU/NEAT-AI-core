@@ -463,7 +463,7 @@ jobs:
     # so running this job there compiled and linted the workspace twice per PR
     # in separate jobs with separate caches. Scope it to the events `quality`
     # does not cover; `quality` stays the comprehensive PR gate.
-    if: (github.event_name != 'pull_request') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event_name != 'pull_request'
     # Issue #310 — least privilege: this job only checks out and compiles/lints
     # the repo, so read-only contents is all the GITHUB_TOKEN needs.
     permissions:
