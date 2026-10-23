@@ -11,9 +11,6 @@ name: Gitleaks
 
 on:
   pull_request:
-    # Draft PRs are work in progress (owner, 2026-10-23): CI runs
-    # once, when the PR is marked ready.
-    types: [opened, synchronize, reopened, ready_for_review]
     # Issue #328 — GitHub branch-filter globs treat `*` as "any chars except
     # /", so a bare "*" never matches milestone/<slug> feature branches. Add an
     # explicit "milestone/*" pattern so this secret scan runs on milestone
@@ -31,7 +28,6 @@ permissions:
 
 jobs:
   gitleaks:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 15 # secret scan over full history
     steps:
