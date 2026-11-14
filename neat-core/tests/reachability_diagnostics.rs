@@ -4,8 +4,7 @@
 //! produced by the code under test.
 
 use neat_core::reachability::{
-    ClassCounts, ReachabilityClass as C, ReachabilityError as E, bridge_candidates,
-    reachability_diagnostics,
+    ClassCounts, ReachabilityClass as C, ReachabilityError as E, reachability_diagnostics,
 };
 use neat_core::{cleanup_creature, parse_creature_json};
 
@@ -155,54 +154,6 @@ fn out_of_range_edges_are_refused() {
             num_neurons: 3
         })
     );
-}
-
-/// Inputs 0,1; interior 2..=7; outputs 8,9 with these edges:
-/// 0->2, 2->8, 4->3, 3->8, 0->5, 1->9 and 6 reading from 5 (6 is DeadEnd now).
-/// Classes: 0 L, 1 L, 2 L, 3 B, 4 B, 5 D, 6 D, 7 I, 8 L, 9 L.
-fn bridge_report() -> neat_core::reachability::ReachabilityReport {
-    let (f, t) = split(&[(0, 2), (2, 8), (4, 3), (3, 8), (0, 5), (1, 9), (5, 6)]);
-    reachability_diagnostics(&f, &t, 10, 2, 2).unwrap()
-}
-
-#[test]
-fn bridge_candidates_keep_only_pairs_that_join_a_path() {
-    let r = bridge_report();
-    assert_eq!(r.class_of(6), Some(C::DeadEnd));
-    let pairs = [
-        0, 2, // Live -> Live: dropped
-        0, 3, // Live -> BiasDriven: kept
-        5, 8, // DeadEnd -> output (Live): kept
-        4, 8, // BiasDriven source: dropped
-        0, 7, // Isolated target: dropped
-        6, 3, // DeadEnd -> BiasDriven: kept
-        5, 6, // DeadEnd -> DeadEnd: target reaches no output, dropped
-        7, 8, // Isolated source: dropped
-    ];
-    assert_eq!(
-        bridge_candidates(&pairs, &r).unwrap(),
-        vec![0, 3, 5, 8, 6, 3]
-    );
-}
-
-#[test]
-fn bridge_candidates_refuse_bad_buffers() {
-    let r = bridge_report();
-    assert_eq!(
-        bridge_candidates(&[0, 3, 5], &r),
-        Err(E::OddPairBuffer { len: 3 })
-    );
-    assert!(bridge_candidates(&[0, 3], &r).is_ok());
-    assert_eq!(
-        bridge_candidates(&[0, 3, 5, 10], &r),
-        Err(E::PairOutOfRange {
-            pair_index: 1,
-            from: 5,
-            to: 10,
-            num_neurons: 10
-        })
-    );
-    assert!(bridge_candidates(&[0, 3, 5, 9], &r).is_ok());
 }
 
 #[test]

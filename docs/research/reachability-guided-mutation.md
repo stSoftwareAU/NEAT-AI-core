@@ -64,7 +64,8 @@ sweeps (forward from inputs, backward from outputs):
 - `reachability_diagnostics` returns a `ReachabilityReport` with per-neuron
   classes, `interior_counts`, `unused_inputs` and `input_independent_outputs`.
   Malformed input is a typed `ReachabilityError`, never a panic.
-- `bridge_candidates` filters a flattened `[from, to, ...]` pool (the shape
+- `bridge_candidates` is a private helper in the example harness, **not core
+  API**. It filters a flattened `[from, to, ...]` pool (the shape
   `scan_available_connections` returns) to pairs whose source is input-reached
   (`Live` or `DeadEnd`) and whose target reaches an output (`Live` or
   `BiasDriven`), **excluding `Live -> Live`**: adding such an edge puts at least
@@ -81,7 +82,7 @@ flowchart TD
     P["parent creature<br/>(cleaned up)"] --> C["candidate pool<br/>scan_available_connections"]
     C --> A{"arm policy"}
     A -- "unbiased" --> U["any forward pair"]
-    A -- "bridge" --> B["bridge_candidates<br/>(fallback to full pool if empty)"]
+    A -- "bridge" --> B["bridge_candidates (example-private)<br/>(fallback to full pool if empty)"]
     U --> O["offspring: parent + one edge,<br/>random weight"]
     B --> O
     O --> V["validate_creature_topology"]
@@ -113,7 +114,7 @@ manifest:
 | Bootstrap | 2 000 resamples, seed `0x00B0_0757_12AB` |
 
 - **Arms.** `unbiased` picks any pair from the available forward pool.
-  `bridge` picks from `bridge_candidates`, falling back to the full pool when
+  `bridge` picks from the harness-private `bridge_candidates`, falling back to the full pool when
   that is empty.
 - **Pairing.** Per seed both arms share the teacher, the data, the initial
   student and the weight-draw stream (independent RNG sub-streams per
@@ -203,10 +204,12 @@ Coverage: **40 of 40 seeds completed, 0 failures.** Paired differences are
 - **Keep `reachability_diagnostics`.** It is the generic diagnostic requested
   for NEAT-AI and Ockham (unused inputs, constant outputs, `BiasDriven` vs
   `DeadEnd` structure) and is cheap and self-contained. No default is changed.
-- **`bridge_candidates` is kept only as the opt-in arm** for the outstanding
-  representative run. If a representative run on **real (private) corpora**,
-  with mutation operators that can create `DeadEnd` structure (add-neuron,
-  remove-connection), is also inconclusive, remove `bridge_candidates` and the
-  example.
+- **The bridge policy is not adopted.** `bridge_candidates` was removed from
+  core's public API because it did not earn its maintenance cost on this run
+  (96% fallback, inconclusive CI). It lives only inside the example harness
+  (`neat-core/examples/reachability_mutation_experiment.rs`) so the comparison
+  stays reproducible. A representative run on private corpora with operators
+  that create `DeadEnd` structure (add-neuron, remove-connection) is an owner
+  step, and its results stay private.
 - Representative runs on private corpora are an **owner step and have not been
   performed**. This record makes no claim about real NEAT-AI workloads.

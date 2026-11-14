@@ -72,22 +72,6 @@ pub enum ReachabilityError {
         /// Neuron count.
         num_neurons: usize,
     },
-    /// A bridge-candidate buffer whose length is odd.
-    OddPairBuffer {
-        /// Buffer length.
-        len: usize,
-    },
-    /// A candidate pair index is `>= classes.len()`.
-    PairOutOfRange {
-        /// Offending pair position.
-        pair_index: usize,
-        /// Source index.
-        from: u32,
-        /// Target index.
-        to: u32,
-        /// Neuron count.
-        num_neurons: usize,
-    },
 }
 
 impl fmt::Display for ReachabilityError {
@@ -114,19 +98,6 @@ impl fmt::Display for ReachabilityError {
             } => write!(
                 f,
                 "edge {edge_index} ({from} -> {to}) has an endpoint outside 0..{num_neurons}"
-            ),
-            Self::OddPairBuffer { len } => {
-                write!(f, "candidate pair buffer has odd length {len}")
-            }
-            Self::PairOutOfRange {
-                pair_index,
-                from,
-                to,
-                num_neurons,
-            } => write!(
-                f,
-                "candidate pair {pair_index} ({from} -> {to}) has an index outside \
-                 0..{num_neurons}"
             ),
         }
     }
@@ -300,47 +271,4 @@ pub fn reachability_diagnostics(
         num_inputs,
         num_outputs,
     })
-}
-
-/// Filters a flattened `[from, to, ...]` candidate buffer (the shape
-/// `topology_ops::scan_available_connections` returns) to bridge proposals.
-///
-/// A pair is kept when its source is input-reached (`Live` or `DeadEnd`) and
-/// its target reaches an output (`Live` or `BiasDriven`), excluding
-/// `Live -> Live`: adding it puts at least one currently non-`Live` endpoint on
-/// an input-to-output path. Order is preserved.
-///
-/// # Errors
-///
-/// Refuses an odd-length buffer or an index outside the report.
-pub fn bridge_candidates(
-    available_pairs: &[u32],
-    report: &ReachabilityReport,
-) -> Result<Vec<u32>, ReachabilityError> {
-    if available_pairs.len() % 2 != 0 {
-        return Err(ReachabilityError::OddPairBuffer {
-            len: available_pairs.len(),
-        });
-    }
-    let n = report.classes.len();
-    let mut kept = Vec::new();
-    for (pair_index, &pair) in available_pairs.as_chunks::<2>().0.iter().enumerate() {
-        let (from, to) = (pair[0], pair[1]);
-        let (Some(src), Some(dst)) = (report.class_of(from as usize), report.class_of(to as usize))
-        else {
-            return Err(ReachabilityError::PairOutOfRange {
-                pair_index,
-                from,
-                to,
-                num_neurons: n,
-            });
-        };
-        use ReachabilityClass::*;
-        let input_reached = matches!(src, Live | DeadEnd);
-        let reaches_output = matches!(dst, Live | BiasDriven);
-        if input_reached && reaches_output && !(src == Live && dst == Live) {
-            kept.extend_from_slice(&pair);
-        }
-    }
-    Ok(kept)
 }

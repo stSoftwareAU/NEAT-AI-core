@@ -21,7 +21,7 @@
 //! is recorded as indicative only; nothing asserts on it.
 
 use neat_core::creature::{CreatureExport, NeuronExport, SynapseExport};
-use neat_core::reachability::{ReachabilityReport, bridge_candidates, reachability_diagnostics};
+use neat_core::reachability::{ReachabilityClass, ReachabilityReport, reachability_diagnostics};
 use neat_core::topology_ops::scan_available_connections;
 use neat_core::{cleanup_creature, compile_creature, validate_creature_topology};
 use serde_json::{Value, json};
@@ -49,6 +49,36 @@ const STREAM_WEIGHTS: u64 = 4;
 const STREAM_SELECT: u64 = 5;
 
 type Res<T> = Result<T, Box<dyn Error>>;
+
+/// Filters a flattened `[from, to, ...]` candidate buffer (the shape
+/// `scan_available_connections` returns) to bridge proposals: the source is
+/// input-reached (`Live` or `DeadEnd`), the target reaches an output (`Live` or
+/// `BiasDriven`), and `Live -> Live` is excluded. Order is preserved. Refuses an
+/// odd-length buffer or a pair index outside the report.
+fn bridge_candidates(available_pairs: &[u32], report: &ReachabilityReport) -> Res<Vec<u32>> {
+    if available_pairs.len() % 2 != 0 {
+        return Err(format!("odd-length candidate buffer: {}", available_pairs.len()).into());
+    }
+    let n = report.classes().len();
+    let mut kept = Vec::new();
+    for (pair_index, pair) in available_pairs.as_chunks::<2>().0.iter().enumerate() {
+        let (from, to) = (pair[0], pair[1]);
+        let (Some(src), Some(dst)) = (report.class_of(from as usize), report.class_of(to as usize))
+        else {
+            return Err(format!(
+                "candidate pair {pair_index} ({from} -> {to}) is outside {n} neurons"
+            )
+            .into());
+        };
+        use ReachabilityClass::*;
+        let input_reached = matches!(src, Live | DeadEnd);
+        let reaches_output = matches!(dst, Live | BiasDriven);
+        if input_reached && reaches_output && !(src == Live && dst == Live) {
+            kept.extend_from_slice(pair);
+        }
+    }
+    Ok(kept)
+}
 
 // ---- RNG ----
 struct Rng(u64);
@@ -601,4 +631,59 @@ fn main() -> Res<()> {
     );
     println!("verdict: {verdict}\nwrote {}", args.out);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use neat_core::reachability::{ReachabilityClass as C, reachability_diagnostics};
+
+    /// Splits `(from, to)` pairs into the parallel arrays the API takes.
+    fn split(edges: &[(u32, u32)]) -> (Vec<u32>, Vec<u32>) {
+        (
+            edges.iter().map(|e| e.0).collect(),
+            edges.iter().map(|e| e.1).collect(),
+        )
+    }
+
+    /// Inputs 0,1; interior 2..=7; outputs 8,9 with these edges:
+    /// 0->2, 2->8, 4->3, 3->8, 0->5, 1->9 and 6 reading from 5 (6 is DeadEnd now).
+    /// Classes: 0 L, 1 L, 2 L, 3 B, 4 B, 5 D, 6 D, 7 I, 8 L, 9 L.
+    fn bridge_report() -> ReachabilityReport {
+        let (f, t) = split(&[(0, 2), (2, 8), (4, 3), (3, 8), (0, 5), (1, 9), (5, 6)]);
+        reachability_diagnostics(&f, &t, 10, 2, 2).unwrap()
+    }
+
+    #[test]
+    fn bridge_candidates_keep_only_pairs_that_join_a_path() {
+        let r = bridge_report();
+        assert_eq!(r.class_of(6), Some(C::DeadEnd));
+        let pairs = [
+            0, 2, // Live -> Live: dropped
+            0, 3, // Live -> BiasDriven: kept
+            5, 8, // DeadEnd -> output (Live): kept
+            4, 8, // BiasDriven source: dropped
+            0, 7, // Isolated target: dropped
+            6, 3, // DeadEnd -> BiasDriven: kept
+            5, 6, // DeadEnd -> DeadEnd: target reaches no output, dropped
+            7, 8, // Isolated source: dropped
+        ];
+        assert_eq!(
+            bridge_candidates(&pairs, &r).unwrap(),
+            vec![0, 3, 5, 8, 6, 3]
+        );
+    }
+
+    #[test]
+    fn bridge_candidates_refuse_bad_buffers() {
+        let r = bridge_report();
+        let odd = bridge_candidates(&[0, 3, 5], &r).unwrap_err().to_string();
+        assert!(odd.contains("odd"), "unexpected message: {odd}");
+        assert!(bridge_candidates(&[0, 3], &r).is_ok());
+        let range = bridge_candidates(&[0, 3, 5, 10], &r)
+            .unwrap_err()
+            .to_string();
+        assert!(range.contains("outside"), "unexpected message: {range}");
+        assert!(bridge_candidates(&[0, 3, 5, 9], &r).is_ok());
+    }
 }
