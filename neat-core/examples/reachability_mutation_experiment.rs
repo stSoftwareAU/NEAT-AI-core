@@ -509,8 +509,8 @@ impl ArmResult {
             "final_dead_structure": self.final_dead_end + self.final_isolated,
             "final_input_independent_outputs": self.final_input_independent_outputs,
             "final_unused_inputs": self.final_unused_inputs,
-            "mean_dead_interior_over_valid_offspring": self.mean_dead_offspring,
-            "mean_bias_driven_interior_over_valid_offspring": self.mean_bias_offspring,
+            "mean_dead_interior_over_valid_offspring": if self.evaluations > 1 { Some(self.mean_dead_offspring) } else { None },
+            "mean_bias_driven_interior_over_valid_offspring": if self.evaluations > 1 { Some(self.mean_bias_offspring) } else { None },
         })
     }
 }

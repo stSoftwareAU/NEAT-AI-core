@@ -11,8 +11,9 @@ No default changes or representative product benefit are claimed.
 Issue #759 asks whether classifying every neuron by input-to-output
 reachability, and biasing connection proposals toward "bridges" that put a
 non-live endpoint on an input-to-output path, produces fewer invalid or wasted
-offspring and better final models than unbiased connection addition, under matched proposal/evaluation caps, with measured costs. These caps do not
-make the two policies cost the same amount of time.
+offspring and better final models than unbiased connection addition, under
+matched proposal/evaluation caps, with measured costs. These caps do not make the
+two policies cost the same amount of time.
 
 The paper is now verified against [arXiv v1](https://arxiv.org/abs/2610.17425v1)
 and [its method, section 3 and appendix B](https://arxiv.org/html/2610.17425v1):
@@ -38,8 +39,9 @@ to a fixed point (the loop calls `remove_dead_structure` at line 554 and
 `fold_zero_inward_hidden` at line 558, with the `IF` repair between them) and:
 
 - **(a) remove dead structure** — non-output nodes with no outward edge,
-  repeated to a fixed point. In a `forwardOnly` creature "no outward edge" and
-  "cannot reach an output" are the same statement (module doc, lines 72–77).
+  repeated to a fixed point. In a finite forward-only graph, a chain that
+  cannot reach an output must end at a non-output sink; repeated removal
+  therefore removes that chain.
 - **(b) fold, never drop, bias-driven computation** — a hidden neuron with no
   inward edge is folded exactly into a bias-1 support constant, so
   constant-driven computation that still reaches an output is preserved
@@ -81,8 +83,8 @@ sweeps (forward from inputs, backward from outputs):
   (`Live` or `DeadEnd`) and whose target reaches an output (`Live` or
   `BiasDriven`), **excluding `Live -> Live`**: adding such an edge puts at least
   one currently non-`Live` endpoint on an input-to-output path. Order is kept.
-- It is a **diagnostic only**. `cleanup_creature` remains the sole rewrite
-  owner; nothing here edits a creature.
+- The reachability module is a **diagnostic only**. `cleanup_creature` remains
+  the pruning rewrite owner; the harness proposes additions on clones.
 - `neat-core/examples/reachability_mutation_experiment.rs` is the paired
   harness. Its correctness tests run in the workspace suite; research
   comparisons are opt-in and do not gate CI.
@@ -194,7 +196,7 @@ Coverage: **40 of 40 seeds completed, 0 failures.** Paired differences are
 | `invalid_offspring` | 0 | [0, 0] | 0 / 0 / 40 |
 | final non-`Live` interior neurons | 0 | [0, 0] | 0 / 0 / 40 |
 
-- Both CIs straddle 0, so the verdict is **inconclusive**. The point estimates
+- Both score-related CIs straddle 0, so the verdict is **inconclusive**. The point estimates
   lean towards bridge, but that is not evidence at this sample size.
 - Every final creature, in both arms, has **5 `Live` interior neurons and 1
   `BiasDriven`** (the support constant), with no unused input and no
@@ -253,7 +255,7 @@ those external preparation costs are recorded with the execution evidence.
 
 Schema version 2 separates the corrected fields from the historical JSON.
 Paired 98.75% bootstrap intervals account for four family comparisons; empty
-summaries are unknown. Dead structure is DeadEnd + Isolated, never BiasDriven.
+summaries and means with no evaluated offspring are unknown. Dead structure is DeadEnd + Isolated, never BiasDriven.
 The additive operator still cannot create dead structure after cleanup, and the
 validated pool may leave no invalid-rate difference to measure. Those outcomes
 are limitations, not improvements.
@@ -267,3 +269,69 @@ pruning rewrite owner. These generated tasks measure the local bridge
 hypothesis; they do not measure private corpora, product orchestration, recurrent
 training or the cited paper's guided DST. Private data and operational
 integration remain outside this public experiment.
+
+## V2 observed results
+
+Source: `0d7f98e0eda1bcd3f7374c413fd3a02fc124a272`, tree
+`813b24a44cb6e5dea44691a7e55b4445f29520ba`. The protocol and executable were
+committed before this run. To reproduce this record, use that source commit.
+A subsequent serialisation fix represents an offspring mean with no samples as
+null; it does not affect these observations (the minimum was 98 calibration
+evaluations, including the initial parent). Files:
+
+- [Manifest](reachability-mutation-v2-manifest.json): declaration written before execution.
+- [Results](reachability-mutation-v2-results.json): 160 paired trials, 0 failures,
+  separate per-arm outcomes and family summaries.
+- [Execution costs](reachability-mutation-v2-execution.json): build, declaration
+  and comparison commands, durations and exit codes.
+
+All 40 seeds completed in each family. Differences are bridge minus unbiased;
+intervals are paired bootstrap 98.75% intervals (12,000 resamples; four-family
+Bonferroni adjustment). Lower validation MSE is better.
+
+| Family | Mean validation-MSE difference | Interval | Wins / losses | Bridge-selected proposals | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Legacy control | -0.00821 | [-0.02988, 0.00609] | 21 / 19 | 224 / 5,939 (3.8%) | Inconclusive |
+| Sparse | -0.00217 | [-0.02866, 0.03058] | 25 / 15 | 2,571 / 6,000 (42.9%) | Inconclusive |
+| Mixed aggregate | -0.11111 | [-0.18454, -0.04901] | 34 / 6 | 5,017 / 6,000 (83.6%) | Better on this family |
+| Conditional | -0.06943 | [-0.13023, -0.02436] | 31 / 9 | 2,093 / 6,000 (34.9%) | Better on this family |
+
+The predeclared overall verdict is **do not adopt**: the sparse family did not
+favour bridge. Two generated-family improvements do not establish a
+representative product benefit. This is mixed evidence, not a blanket negative
+result and not a reproduction of guided DST.
+
+Both arms had **zero invalid offspring and zero final DeadEnd/Isolated neurons**
+in every trial. This confirms the comparison's structural limitation, not an
+invalid-rate or pruning improvement. Final mean BiasDriven counts (unbiased /
+bridge) were 1 / 1 for legacy, 6.225 / 1.175 for sparse, 21.725 / 2.9 for mixed,
+and 5.525 / 1 for conditional. These count input-independent paths, not waste.
+All extended arms used 150 offspring evaluations; the legacy control exhausted
+its pool early in 3 unbiased and 4 bridge trials. No proposal limit was hit.
+
+Timing below is **indicative on a shared, parallel host**, summed over each
+family's 40 seeds. Evaluation time includes calibration scoring and compilation;
+allocated total includes arm search plus half the shared preparation. The other
+half belongs to the paired arm, so shared generation is counted once overall.
+
+| Family | Shared preparation (s) | Calibration evaluation U / B (s) | Allocated preparation + search U / B (s) |
+| --- | --- | --- | --- |
+| Legacy | 0.00173 | 0.12195 / 0.12308 | 0.31299 / 0.32006 |
+| Sparse | 0.01036 | 0.29743 / 0.30232 | 0.85033 / 0.85136 |
+| Mixed | 0.01833 | 0.43133 / 0.44516 | 1.41465 / 1.44198 |
+| Conditional | 0.01442 | 0.37481 / 0.37875 | 1.11840 / 1.12110 |
+
+Mean per-trial calibration improvement per calibration-evaluation hour (U / B)
+was 245,179 / 242,335 for legacy, 353,327 / 351,802 for sparse,
+173,778 / 205,686 for mixed, and 422,465 / 444,899 for conditional. Per allocated
+preparation/search hour it was 94,874 / 92,174; 122,579 / 123,636;
+52,515 / 63,192; and 141,374 / 149,694 respectively. These rates concern tiny
+models and must not be extrapolated to production throughput.
+
+Shared preparation totalled 0.04485 seconds and arm search 7.38602 seconds.
+The executable took 7.45319 seconds before final output; the surrounding Cargo
+comparison command took 7.51022 seconds. The release build took 31.55468 seconds
+and declaration 0.03272 seconds, recorded separately rather than hidden inside
+an evaluation rate. Source inspection and engineering labour are not timed by
+the research harness. Validation scoring, candidate preparation and individual
+rejection reasons remain available per trial in the JSON.

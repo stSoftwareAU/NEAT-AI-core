@@ -140,6 +140,15 @@ fn paired_search_keeps_parents_and_uses_only_calibration_for_acceptance() {
     assert_eq!(a.proposals, a.accepted + a.rejected.values().sum::<usize>());
     assert_eq!(a.bridge_selected + a.bridge_fallbacks, a.proposals);
     assert_eq!(a.stop, "evaluation_budget");
+    let mut recurrent = original;
+    recurrent.forward_only = false;
+    let error = run_arm(Arm::Bridge, 7, &recurrent, &p.cal, &p.val, limits)
+        .err()
+        .unwrap();
+    assert_eq!(
+        error.to_string(),
+        "experiment requires forward-only parents"
+    );
 }
 
 #[test]
@@ -299,6 +308,14 @@ fn proposal_limit_is_incomplete_but_an_empty_pool_is_a_valid_terminal_state() {
     assert_eq!(r.stop, "empty_pool");
     assert!(r.complete());
     assert_eq!((r.proposals, r.evaluations), (0, 1));
+    assert_eq!(
+        r.to_json()["mean_dead_interior_over_valid_offspring"],
+        Value::Null
+    );
+    assert_eq!(
+        r.to_json()["mean_bias_driven_interior_over_valid_offspring"],
+        Value::Null
+    );
 }
 
 #[test]
