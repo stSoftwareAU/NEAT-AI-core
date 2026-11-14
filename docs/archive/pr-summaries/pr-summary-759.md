@@ -22,7 +22,7 @@ Added generic O(V+E) reachability diagnostics and an opt-in paired connection-mu
 - The paper was accessible on 14 November 2026. Its identity and pruning/regrowth method were verified against arXiv v1; the research record links the sources and explains the method differences.
 - The manifest was declared before execution at `0d7f98e0eda1bcd3f7374c413fd3a02fc124a272`. The subsequent empty-offspring-mean serialisation fix did not affect these trials: the smallest arm had 98 calibration evaluations, including its initial parent. Policies, seeds and generators were unchanged.
 - Timings came from a shared, parallel host and are indicative only. Build and declaration costs are recorded separately; the harness does not time engineering labour.
-- Normal push was rejected by the worker's pre-push specification: it supplies the action SHA as a toolchain in `cargo +29eef336d9b2848a0b548edc03f92a220660cdb8 --version`. The command exited 101 (`no such command`). Gates were not bypassed.
+- Ten earlier completion attempts ended `infrastructure-error` in the worker's pre-push gate, which read the pinned `dtolnay/rust-toolchain@29eef336…` SHA in `.github/workflows/ci.yml` as a toolchain name (`cargo +29eef336… --version` exited 101). That is a worker defect outside this repository; this PR does not change the workflows and no gate was bypassed.
 
 ## Evidence
 
@@ -57,7 +57,7 @@ flowchart LR
 - Four measurement tests failed at checkpoint `58d04e8` before the fixes: empty statistics reported zero, an unmeasured evaluation rate used wall time, dead structure was not separately reported, and empty scoring data returned NaN. Develop contained no harness, so these are checkpoint regressions, not a claimed reproduction of a released defect. The original diagnostic implementation had no observed failing-first run.
 - `proposal_limit_is_incomplete_but_an_empty_pool_is_a_valid_terminal_state` additionally failed at `0d7f98e` when an offspring mean with no observations was zero; it now asserts null. No pre-existing behaviour assertions were removed. The two original bridge tests moved into the example's test module with their outcome assertions preserved.
 - `cargo test -p neat-core --example reachability_mutation_experiment`: passed, 17 tests. `cargo test -p neat-core --test reachability_diagnostics --test prune_cleanup --test if_graft`: passed, 108 tests.
-- `cargo test --workspace -q`: passed on the final code, including example tests and doctests. `./quality.sh < /dev/null`: passed after the final Rust change, printing `All quality checks passed!`. Targeted clippy and Markdown lint also passed.
+- `cargo test --workspace -q`: passed on the final code, including example tests and doctests. `./quality.sh < /dev/null`: passed on head `3f016ae` (the last code commit; later commits touch only this summary), printing `All quality checks passed!`. Targeted clippy and Markdown lint also passed.
 - `scripts/check-downstream-consumers.sh`: passed for all six registered consumers against this core. The subsequent change only affects private example serialisation and tests.
 - Artifact checks confirmed the manifest matches the results, all 160 pairs are present, proposal counts equal acceptance plus rejection counts, and calibration-call counts equal evaluations.
 - Callers checked: `driver::run_prepared` executes both arms; `run_arm` owns proposal, acceptance and timed scoring paths. Initial calibration, initial validation, offspring calibration and final validation use the cost recorder. No second experiment-accounting implementation was found.
@@ -73,8 +73,8 @@ flowchart LR
 
 - [x] Focused and workspace tests, local quality gate and downstream compatibility.
 - [x] Predeclared comparison and machine-readable evidence.
-- [ ] Push: rejected by the worker pre-push toolchain probe above; remote CI and review are pending.
+- [ ] Remote CI and code review: pending.
 
 ## Not checked
 
-Private/product corpora, guided DST replication and wasm builds were not run. No representative optimisation benefit is established. Remote delivery remains blocked by the recorded worker pre-push failure; no gate bypass or PR creation was attempted.
+Private/product corpora, guided DST replication and wasm builds were not run. No representative optimisation benefit is established. Remote CI has not yet run on this branch.
