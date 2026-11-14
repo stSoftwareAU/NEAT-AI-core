@@ -1,75 +1,80 @@
-# PR summary — Issue #759: reachability-guided pruning and connection mutation
-
 ## Summary
 
-This PR runs the controlled experiment issue #759 asks for. It audited the existing fixed-point cleanup, added the missing O(V+E) input→output reachability diagnostics as `neat_core::reachability`, and compared unbiased connection addition with bridge-biased proposals in a paired, seeded, opt-in experiment. On the synthetic task the verdict is **inconclusive**, and the negative findings are recorded. The bridge filter did not earn its maintenance cost, so it is not core API. It lives only inside the example harness, which keeps the comparison reproducible. No default, interface or cleanup behaviour changes, and no success is claimed. Closes #759.
+Added generic O(V+E) reachability diagnostics and an opt-in paired connection-mutation experiment. Corrected cost and failure accounting, preserved the original inconclusive result, and completed a predeclared 160-pair comparison. The overall decision is **do not adopt**; no production mutation or pruning default changes. Closes #759.
 
 ## Spec
 
 ### Intent and Rationale
 
-- **The audit found the pruning half already in place.** `cleanup_creature` (`neat-core/src/prune_cleanup.rs`) removes nodes with no outward edge, repeating until nothing changes. In a `forwardOnly` creature that is the same as "cannot reach an output". It folds a bias-only hidden neuron exactly into a support constant, so constant-driven computation is kept. No second pruning implementation was added.
-- **Missing piece 1: a reachability diagnostic.** Core had no way to report which structure no input reaches, which inputs are unused, or which outputs are constant.
-- **Missing piece 2: a policy comparison.** Nothing compared connection-proposal policies. `topology_ops::scan_available_connections` already served as the unbiased candidate pool, and the experiment reuses it as the baseline.
+- Fixed-point cleanup already removes forward-only dead structure. Reachability adds diagnostics without introducing another pruning implementation.
+- The original experiment used bridge selection on about 4% of proposals and omitted shared preparation costs. Extended generated workloads exercise sustained bridge opportunities and separate scoring from preparation/search.
+- Mixed and conditional families favoured bridge, while sparse and legacy families remained inconclusive. This does not establish a representative product benefit or reproduce the cited paper.
 
 ### Essential Design Decisions
 
-- **A diagnostic, never a rewrite.** `reachability_diagnostics` only classifies neurons, and `prune_cleanup` stays the sole rewrite owner. A `BiasDriven` neuron (it reaches an output, but no input reaches it) is documented as not removable on reachability alone. The API takes the same parallel `from`/`to` index arrays as `topology_ops`, so NEAT-AI and Ockham can call it without a creature-JSON round trip. Malformed input is a typed `ReachabilityError`, and a neuron count above `u32::MAX` is refused before anything is allocated.
-- **`bridge_candidates` is private to the harness.** The results were inconclusive, and 96% of bridge-arm proposals fell back to the unbiased pool. Under the issue's "remove optional code that does not earn its maintenance cost", the filter stays out of the public crate. Releasing it and removing it later would need the three-PR public-API flow (`RELEASING.md`). Its rule and tests moved unchanged into `neat-core/examples/reachability_mutation_experiment.rs`. `[[example]] test = true` in `neat-core/Cargo.toml` keeps those tests in `cargo test`.
-- **How "bridge" was defined.** The paper could not be fetched, so the definition comes from the issue text. A bridge is a pair whose source an input reaches and whose target reaches an output, excluding Live→Live pairs.
-- **Experiment shape.** The experiment is an example binary, not a test, so its numbers never gate CI. Per seed, both arms share the teacher, the data, the initial student and the weight draws; only the selection policy differs. A child is accepted only on strict improvement of the full calibration MSE. The untouched validation set is scored only on the first and final creatures. Seeds, budgets and the verdict rule are fixed in code and echoed in the JSON manifest.
+- The public API is diagnostic only. Bridge policy stays private to the example; parents are cloned, topology validation precedes cleanup's authoritative validation, and acceptance requires finite strict calibration improvement.
+- `docs/research/reachability-mutation-protocol-v2.md` fixes four families, 40 paired seeds each, 150 offspring evaluations, 600 proposals, untouched validation records and 12,000 bootstrap resamples with 98.75% intervals. Research execution is separate from CI.
+- Initial teacher/data/cleanup preparation is charged once per pair and allocated half to each arm. Calibration and validation scoring include compilation. DeadEnd/Isolated structure is reported separately from BiasDriven paths.
+- New filenames and schema version 2 separate corrected results from the retained historical JSON. Manifest execution requires a matching committed source tree, embedded source, executable and protocol; incomplete coverage cannot produce a success verdict.
 
 ### Undiscoverable Facts
 
-- **Paper unverified.** <https://arxiv.org/abs/2610.17425> could not be fetched in this work (`proxy refused the connection`), and the issue audit had already failed to fetch it. The method does not rely on it.
-- **A `Standard` edge into an `IF` target is valid.** It counts as the `IF`'s positive role (`neat-core/src/topology_invariants.rs:157`). As a result, `validate_creature_topology` accepted every candidate `scan_available_connections` proposed, in both arms.
-- **Owner step:** rerun the harness on representative private NEAT-AI/Ockham corpora, with operators that create dead structure (add-neuron, remove-connection). Its results stay private, as the issue requires.
+- The paper was accessible on 14 November 2026. Its identity and pruning/regrowth method were verified against arXiv v1; the research record links the sources and explains the method differences.
+- The manifest was declared before execution at `0d7f98e0eda1bcd3f7374c413fd3a02fc124a272`. The subsequent empty-offspring-mean serialisation fix did not affect these trials: the smallest arm had 98 calibration evaluations, including its initial parent. Policies, seeds and generators were unchanged.
+- Timings came from a shared, parallel host and are indicative only. Build and declaration costs are recorded separately; the harness does not time engineering labour.
+- Normal push was rejected by the worker's pre-push specification: it supplies the action SHA as a toolchain in `cargo +29eef336d9b2848a0b548edc03f92a220660cdb8 --version`. The command exited 101 (`no such command`). Gates were not bypassed.
 
 ## Evidence
 
-This is a backend/CLI change; no UI files are touched.
+Backend/CLI only; no UI files changed.
 
 ```mermaid
 flowchart LR
-    P["parent (immutable)"] --> S["scan_available_connections"]
-    S --> U["unbiased: uniform pick"]
-    S --> R["reachability_diagnostics → bridge_candidates<br/>(example-private)"]
-    R --> B["bridge: uniform pick,<br/>fallback to full pool"]
-    U --> O["offspring = parent + 1 synapse"]
-    B --> O
-    O --> V{"validate_creature_topology"}
-    V -- refused --> I["invalid_offspring += 1"]
-    V -- ok --> C["calibration MSE (all records)"]
-    C --> A{"strictly better?"}
-    A -- yes --> P
+    S[Committed source and predeclaration] --> M[Matching manifest]
+    M --> P[Shared teacher, records and cleaned parent]
+    P --> U[Unbiased proposals]
+    P --> B[Bridge proposals]
+    U --> V[Topology validation and cleanup]
+    B --> V
+    V --> C[Calibration acceptance on clones]
+    C --> F[Initial and final validation scores]
+    F --> R[Paired distributions, uncertainty and coverage]
 ```
 
-- **Command:** `cargo run --release -p neat-core --example reachability_mutation_experiment -- --rev <sha> --out docs/research/reachability-mutation-experiment-results.json` completed all 40 seeds with 0 failures. The output is committed as `docs/research/reachability-mutation-experiment-results.json`. The filter's move into the example kept its selection rule unchanged, so the recorded run is reproducible from the head.
-- **Validation MSE (bridge − unbiased):** mean −0.00821, 95% bootstrap CI [−0.0252, 0.0039]. Bridge won 21 seeds and lost 19, so the verdict is `inconclusive`.
-- **Invalid offspring:** 0 in both arms on every seed.
-- **Dead structure:** the final non-Live interior count was tied on all 40 seeds.
-- **Bridge candidates:** found on only 224 of 5 939 bridge-arm proposals.
-- **Wall-clock figures:** wall-clock and per-evaluation-hour figures in the JSON come from a shared, parallel host and are indicative only.
-- **Write-up:** the audit, design, findings and decision are in `docs/research/reachability-guided-mutation.md`.
+- `docs/research/reachability-mutation-v2-manifest.json`, `docs/research/reachability-mutation-v2-results.json` and `docs/research/reachability-mutation-v2-execution.json` record provenance, commands, all 160 paired trials, uncertainty, costs and zero failures.
+- Mean validation-MSE differences (bridge minus unbiased), with 98.75% intervals: legacy -0.00821 [-0.02988, 0.00609]; sparse -0.00217 [-0.02866, 0.03058]; mixed -0.11111 [-0.18454, -0.04901]; conditional -0.06943 [-0.13023, -0.02436].
+- Bridge-selected proposals: legacy 224/5,939; sparse 2,571/6,000; mixed 5,017/6,000; conditional 2,093/6,000. All extended arms reached their evaluation budget. Seven legacy arms stopped at an empty pool; none hit the proposal cap.
+- Both arms had zero invalid offspring and zero final dead structure. Those metrics cannot demonstrate an improvement in this already-cleaned, addition-only experiment. BiasDriven paths remain separately counted.
+- Indicative costs: shared preparation 0.04485 s; arm search 7.38602 s; executable before output 7.45319 s; release build 31.55468 s. Per-evaluation-hour and allocated preparation/search-hour rates are recorded per arm, with no timing threshold or production-throughput claim.
+- `docs/research/reachability-guided-mutation.md` contains the cleanup audit, historical limitations, method verification, reproduction command and observed results. The private filter earns retention as the reproducer, not as a supported production policy.
+- #759: Experiment: Measure reachability-guided pruning and connection mutation. Latest `origin/Develop` was `b426a98`; no merged reachability PR was found.
 
 ## Test Plan
 
-- **`neat-core/tests/reachability_diagnostics.rs`: 10 tests.** Expected classes are derived by hand. Coverage:
-  - all four classes and `interior_counts`;
-  - unused inputs and input-independent outputs;
-  - recurrent cycles, including a self-feeding island;
-  - duplicate and unsorted edges matching the clean list;
-  - each `ReachabilityError` variant, paired with an accepted legal control;
-  - a count above `u32::MAX`, refused before allocation;
-  - a creature passed through `cleanup_creature` having only Live or BiasDriven interior neurons.
-- **`neat-core/examples/reachability_mutation_experiment.rs`: 2 tests.** `bridge_candidates_keep_only_pairs_that_join_a_path` checks the exact kept pairs and their order. `bridge_candidates_refuse_bad_buffers` checks that the odd-buffer and out-of-range refusals name their cause, each with an accepted control.
-- **Red runs:** the tests and the module were written together, so no red run was observed before implementing.
-- **Gate:** `./quality.sh < /dev/null` exited 0 on the final code commit `ad5b54e`, and again on `fe80476` (summary-only change since), printing `All quality checks passed!` both times. The run covered fmt, clippy `--all-targets -D warnings`, workspace tests (including both suites above), doctests, docs, the Mermaid check and markdownlint.
-- **Existing tests:** no test that predates this branch was edited or removed.
+- `neat-core/tests/reachability_diagnostics.rs`: 10 passing tests cover hand-derived classes/counts, cycles, duplicate/unsorted edges, unused inputs, constant outputs, typed refusals with legal controls, bounded widths and cleanup integration.
+- `neat-core/examples/reachability_mutation_experiment/tests.rs`: 14 passing tests cover exact bridge subsets, malformed buffers, unknown empty summaries/rates, separate dead/BiasDriven counts, invalid scoring data, strict acceptance, immutable parents, validation isolation, generated aggregate/IF semantics, bridge/fallback/empty selection, completion limits, deterministic cost denominators and statistical decisions.
+- `neat-core/examples/reachability_mutation_experiment/driver.rs`: 3 passing tests cover manifest/source mismatch, incomplete coverage/failure refusal and actual scoring-error causes alongside successful paired results.
+- Four measurement tests failed at checkpoint `58d04e8` before the fixes: empty statistics reported zero, an unmeasured evaluation rate used wall time, dead structure was not separately reported, and empty scoring data returned NaN. Develop contained no harness, so these are checkpoint regressions, not a claimed reproduction of a released defect. The original diagnostic implementation had no observed failing-first run.
+- `proposal_limit_is_incomplete_but_an_empty_pool_is_a_valid_terminal_state` additionally failed at `0d7f98e` when an offspring mean with no observations was zero; it now asserts null. No pre-existing behaviour assertions were removed. The two original bridge tests moved into the example's test module with their outcome assertions preserved.
+- `cargo test -p neat-core --example reachability_mutation_experiment`: passed, 17 tests. `cargo test -p neat-core --test reachability_diagnostics --test prune_cleanup --test if_graft`: passed, 108 tests.
+- `cargo test --workspace -q`: passed on the final code, including example tests and doctests. `./quality.sh < /dev/null`: passed after the final Rust change, printing `All quality checks passed!`. Targeted clippy and Markdown lint also passed.
+- `scripts/check-downstream-consumers.sh`: passed for all six registered consumers against this core. The subsequent change only affects private example serialisation and tests.
+- Artifact checks confirmed the manifest matches the results, all 160 pairs are present, proposal counts equal acceptance plus rejection counts, and calibration-call counts equal evaluations.
+- Callers checked: `driver::run_prepared` executes both arms; `run_arm` owns proposal, acceptance and timed scoring paths. Initial calibration, initial validation, offspring calibration and final validation use the cost recorder. No second experiment-accounting implementation was found.
+- Docs sweep covered README, active research docs, AGENTS and the example's module documentation for reachability, bridge selection, old flags, cost labels and paper status. Updated the research record, added the v2 protocol and corrected the example command. No production API was removed or narrowed.
+
+## Security self-check
+
+- Scoring refuses empty, mismatched and non-finite data; candidates use the existing topology and cleanup validators. IF construction uses the canonical graft helper.
+- CLI subprocesses use argument arrays; manifest matching refuses edited declarations. Output uses new files rather than overwriting existing files.
+- Only explicit source, test and research paths were staged; no secrets or hidden files were staged. No experiment dependency or privileged endpoint was added.
+
+## Merge verification
+
+- [x] Focused and workspace tests, local quality gate and downstream compatibility.
+- [x] Predeclared comparison and machine-readable evidence.
+- [ ] Push: rejected by the worker pre-push toolchain probe above; remote CI and review are pending.
 
 ## Not checked
 
-- **Representative corpora:** no run on representative or private corpora (owner step above).
-- **Wasm:** no wasm build was checked, because no wasm-gated code changed.
-- **Independent review:** no Spec or Standards reviewer was dispatched, because the issue has no acceptance-criteria heading.
-- **Downstream consumers:** `scripts/check-downstream-consumers.sh` was not run locally. The PR only adds API, so no consumer can break, and CI runs that job.
+Private/product corpora, guided DST replication and wasm builds were not run. No representative optimisation benefit is established. Remote delivery remains blocked by the recorded worker pre-push failure; no gate bypass or PR creation was attempted.
