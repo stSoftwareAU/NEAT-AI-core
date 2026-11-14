@@ -61,7 +61,7 @@ preparation time; arm search time includes cloning, proposals, validation,
 candidate cleanup and scoring. Time calibration and validation scoring
 (including compilation) separately. Charge half the shared preparation to each
 arm's end-to-end cost, but retain the once-per-pair actual cost. Record the
-experiment process duration and build duration separately from search.
+experiment process duration and build duration separately from search (external execution evidence).
 Report calibration improvement per evaluation, per calibration-evaluation hour,
 and per allocated end-to-end hour. Wall-clock values are indicative on a
 shared host and never a pass/fail criterion.
@@ -95,7 +95,9 @@ in this addition-only, already-cleaned design and must be reported as such.
 
 ## Reproduction
 
-From the committed source, build the release example, then run it with
+From clean committed sources, export
+`NEAT_EXPERIMENT_SOURCE_TREE="$(git rev-parse HEAD^{tree})"`, build the release
+example with that environment value embedded, then run it with
 `--declare <manifest.json>` before running
 `--manifest <manifest.json> --out <results.json>`. Keep research execution out
 of CI. No private models, corpora or results are needed or published here.

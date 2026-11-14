@@ -9,26 +9,31 @@
 //! that is empty). Acceptance is strict improvement of the calibration MSE;
 //! validation records are scored only for the initial and final creature.
 //!
-//! Run:
+//! From clean committed sources, declare the protocol before running:
 //!
 //! ```text
+//! export NEAT_EXPERIMENT_SOURCE_TREE="$(git rev-parse HEAD^{tree})"
 //! cargo run --release -p neat-core --example reachability_mutation_experiment -- \
-//!     --out result.json [--rev <sha>] [--seeds <n>]
+//!     --declare manifest.json
+//! cargo run --release -p neat-core --example reachability_mutation_experiment -- \
+//!     --manifest manifest.json --out result.json
 //! ```
 //!
-//! The task is a synthetic teacher-to-student regression. A result here does
+//! Four generated teacher-to-student families are specified in
+//! `docs/research/reachability-mutation-protocol-v2.md`. A result here does
 //! **not** demonstrate a benefit (or harm) for real NEAT-AI corpora. Wall time
 //! is recorded as indicative only; nothing asserts on it.
 
 use neat_core::creature::{CreatureExport, NeuronExport, SynapseExport};
+use neat_core::if_graft::{IfNodeSpec, graft_if_node};
+use neat_core::loss::mse_record;
 use neat_core::reachability::{ReachabilityClass, ReachabilityReport, reachability_diagnostics};
 use neat_core::topology_ops::scan_available_connections;
 use neat_core::{cleanup_creature, compile_creature, validate_creature_topology};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
-use std::process::Command;
-use neat_core::if_graft::{IfNodeSpec, graft_if_node};
 use std::error::Error;
+use std::process::Command;
 use std::time::Instant;
 
 // ---- Predeclared design (echoed in the manifest) ----
@@ -276,14 +281,14 @@ fn mse(c: &CreatureExport, data: &Data) -> Res<f64> {
         return Err("scoring input/target length mismatch".into());
     }
     if data.targets.iter().any(|x| !x.is_finite())
-        || data.inputs.iter().flatten().any(|x| !x.is_finite()) {
+        || data.inputs.iter().flatten().any(|x| !x.is_finite())
+    {
         return Err("non-finite scoring data".into());
     }
     let mut net = compile_creature(c)?;
     let mut sum = 0.0f64;
     for (x, &t) in data.inputs.iter().zip(&data.targets) {
-        let d = f64::from(net.activate(x, NUM_OUTPUTS)[0]) - f64::from(t);
-        sum += d * d;
+        sum += mse_record(&[t], &net.activate(x, NUM_OUTPUTS));
     }
     let score = sum / data.targets.len() as f64;
     if !score.is_finite() {
@@ -294,31 +299,57 @@ fn mse(c: &CreatureExport, data: &Data) -> Res<f64> {
 
 // ---- Generated workload families ----
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Workload { Legacy, Sparse, Mixed, Conditional }
-const WORKLOADS: [Workload; 4] = [Workload::Legacy, Workload::Sparse, Workload::Mixed, Workload::Conditional];
+enum Workload {
+    Legacy,
+    Sparse,
+    Mixed,
+    Conditional,
+}
+const WORKLOADS: [Workload; 4] = [
+    Workload::Legacy,
+    Workload::Sparse,
+    Workload::Mixed,
+    Workload::Conditional,
+];
 
 impl Workload {
     fn name(self) -> &'static str {
-        match self { Self::Legacy => "legacy", Self::Sparse => "sparse", Self::Mixed => "mixed", Self::Conditional => "conditional" }
+        match self {
+            Self::Legacy => "legacy",
+            Self::Sparse => "sparse",
+            Self::Mixed => "mixed",
+            Self::Conditional => "conditional",
+        }
     }
-    fn hidden(self) -> usize { if self == Self::Mixed { 48 } else { 24 } }
+    fn hidden(self) -> usize {
+        if self == Self::Mixed { 48 } else { 24 }
+    }
 }
 
 fn generated_teacher(workload: Workload, rng: &mut Rng) -> Res<CreatureExport> {
-    if workload == Workload::Legacy { return Ok(teacher(rng)); }
+    if workload == Workload::Legacy {
+        return Ok(teacher(rng));
+    }
     let mut neurons = vec![neuron("constant", "c-0", 1.0, "IDENTITY")];
     let mut synapses = Vec::new();
     for h in 0..workload.hidden() {
         let id = format!("h{h}");
         let squash = if workload == Workload::Mixed {
             ["TANH", "LOGISTIC", "MEAN", "MAXIMUM"][h % 4]
-        } else { "TANH" };
+        } else {
+            "TANH"
+        };
         neurons.push(neuron("hidden", &id, rng.range(-0.3, 0.3), squash));
         synapses.push(edge("c-0", &id, rng.range(-0.3, 0.3), None));
         let a = rng.below(NUM_INPUTS);
         let b = (a + 1 + rng.below(NUM_INPUTS - 1)) % NUM_INPUTS;
         for src in [a, b] {
-            synapses.push(edge(&format!("input-{src}"), &id, rng.range(-1.0, 1.0), None));
+            synapses.push(edge(
+                &format!("input-{src}"),
+                &id,
+                rng.range(-1.0, 1.0),
+                None,
+            ));
         }
         synapses.push(edge(&id, "output-0", rng.range(-1.0, 1.0), None));
     }
@@ -326,11 +357,15 @@ fn generated_teacher(workload: Workload, rng: &mut Rng) -> Res<CreatureExport> {
     let mut c = cleanup_creature(&creature(neurons, synapses))?.creature;
     if workload == Workload::Conditional {
         let mut spec = IfNodeSpec::new("decision", 0.0)
-            .with_condition("input-0", 1.0).with_target("output-0", 1.0);
+            .with_condition("input-0", 1.0)
+            .with_target("output-0", 1.0);
         for h in 0..workload.hidden() {
             let id = format!("h{h}");
-            spec = if h % 2 == 0 { spec.with_positive(id, rng.range(-1.0, 1.0)) }
-                else { spec.with_negative(id, rng.range(-1.0, 1.0)) };
+            spec = if h % 2 == 0 {
+                spec.with_positive(id, rng.range(-1.0, 1.0))
+            } else {
+                spec.with_negative(id, rng.range(-1.0, 1.0))
+            };
         }
         c = graft_if_node(&c, &spec)?;
     }
@@ -343,7 +378,10 @@ fn generated_student(workload: Workload, seed: u64, teacher: &CreatureExport) ->
     }
     let mut c = teacher.clone();
     c.synapses.retain(|s| {
-        let hidden = s.to_uuid.strip_prefix('h').and_then(|n| n.parse::<u64>().ok());
+        let hidden = s
+            .to_uuid
+            .strip_prefix('h')
+            .and_then(|n| n.parse::<u64>().ok());
         !(s.from_uuid.starts_with("input-") && hidden.is_some_and(|h| h % 4 != seed % 4))
     });
     c
@@ -352,28 +390,45 @@ fn generated_student(workload: Workload, seed: u64, teacher: &CreatureExport) ->
 fn structure(c: &CreatureExport) -> Res<Value> {
     let rep = report(&graph(c)?, c)?;
     let counts = rep.interior_counts();
-    Ok(json!({ "live": counts.live, "bias_driven": counts.bias_driven,
+    Ok(
+        json!({ "live": counts.live, "bias_driven": counts.bias_driven,
         "dead_end": counts.dead_end, "isolated": counts.isolated,
         "unused_inputs": rep.unused_inputs(), "input_independent_outputs": rep.input_independent_outputs(),
-        "neurons": c.neurons.len(), "synapses": c.synapses.len() }))
+        "neurons": c.neurons.len(), "synapses": c.synapses.len() }),
+    )
 }
 
 // ---- One arm ----
 #[derive(Clone, Copy, PartialEq)]
-enum Arm { Unbiased, Bridge }
+enum Arm {
+    Unbiased,
+    Bridge,
+}
 impl Arm {
-    fn name(self) -> &'static str { if self == Self::Bridge { "bridge" } else { "unbiased" } }
+    fn name(self) -> &'static str {
+        if self == Self::Bridge {
+            "bridge"
+        } else {
+            "unbiased"
+        }
+    }
 }
 
 #[derive(Default)]
-struct ScoreCost { seconds: f64, calls: usize, records: usize }
+struct ScoreCost {
+    seconds: f64,
+    calls: usize,
+    records: usize,
+}
 impl ScoreCost {
     fn add(&mut self, seconds: f64, records: usize) {
         self.seconds += seconds;
         self.calls += 1;
         self.records += records;
     }
-    fn json(&self) -> Value { json!({ "seconds_indicative": self.seconds, "calls": self.calls, "records": self.records }) }
+    fn json(&self) -> Value {
+        json!({ "seconds_indicative": self.seconds, "calls": self.calls, "records": self.records })
+    }
 }
 fn timed_mse(c: &CreatureExport, data: &Data, cost: &mut ScoreCost) -> Res<f64> {
     let clock = Instant::now();
@@ -382,7 +437,11 @@ fn timed_mse(c: &CreatureExport, data: &Data, cost: &mut ScoreCost) -> Res<f64> 
     Ok(score)
 }
 fn rate(improvement: f64, seconds: f64) -> Option<f64> {
-    if seconds > 0.0 { Some(improvement * 3600.0 / seconds) } else { None }
+    if seconds > 0.0 {
+        Some(improvement * 3600.0 / seconds)
+    } else {
+        None
+    }
 }
 
 #[derive(Default)]
@@ -403,7 +462,7 @@ struct ArmResult {
     preparation_share_seconds: f64,
     calibration_cost: ScoreCost,
     validation_cost: ScoreCost,
-    candidate_cleanup_seconds: f64,
+    candidate_preparation_seconds: f64,
     final_live: usize,
     final_bias_driven: usize,
     final_dead_end: usize,
@@ -414,10 +473,18 @@ struct ArmResult {
     mean_bias_offspring: f64,
 }
 impl ArmResult {
-    fn improvement_cal(&self) -> f64 { self.initial_cal_mse - self.final_cal_mse }
-    fn final_dead(&self) -> f64 { (self.final_dead_end + self.final_isolated) as f64 }
-    fn total_seconds(&self) -> f64 { self.wall_seconds + self.preparation_share_seconds }
-    fn complete(&self) -> bool { matches!(self.stop, "evaluation_budget" | "empty_pool") }
+    fn improvement_cal(&self) -> f64 {
+        self.initial_cal_mse - self.final_cal_mse
+    }
+    fn final_dead(&self) -> f64 {
+        (self.final_dead_end + self.final_isolated) as f64
+    }
+    fn total_seconds(&self) -> f64 {
+        self.wall_seconds + self.preparation_share_seconds
+    }
+    fn complete(&self) -> bool {
+        matches!(self.stop, "evaluation_budget" | "empty_pool")
+    }
     fn to_json(&self) -> Value {
         let imp = self.improvement_cal();
         json!({
@@ -429,7 +496,7 @@ impl ArmResult {
             "preparation_share_seconds_indicative": self.preparation_share_seconds,
             "total_seconds_indicative": self.total_seconds(),
             "calibration_scoring": self.calibration_cost.json(), "validation_scoring": self.validation_cost.json(),
-            "candidate_cleanup_seconds_indicative": self.candidate_cleanup_seconds,
+            "candidate_preparation_seconds_indicative": self.candidate_preparation_seconds,
             "improvement_per_eval_hour_indicative": rate(imp, self.calibration_cost.seconds),
             "improvement_per_total_hour_indicative": rate(imp, self.total_seconds()),
             "evaluations": self.evaluations, "proposals": self.proposals,
@@ -439,7 +506,7 @@ impl ArmResult {
             "stop": self.stop, "complete": self.complete(),
             "final_interior": { "live": self.final_live, "bias_driven": self.final_bias_driven,
                 "dead_end": self.final_dead_end, "isolated": self.final_isolated },
-            "final_dead_structure": self.final_dead(),
+            "final_dead_structure": self.final_dead_end + self.final_isolated,
             "final_input_independent_outputs": self.final_input_independent_outputs,
             "final_unused_inputs": self.final_unused_inputs,
             "mean_dead_interior_over_valid_offspring": self.mean_dead_offspring,
@@ -449,41 +516,89 @@ impl ArmResult {
 }
 
 /// Picks the next pair and whether it came from the nonempty bridge subset.
-fn pick(arm: Arm, parent: &CreatureExport, g: &Graph, rng: &mut Rng) -> Res<Option<((u32, u32), bool)>> {
-    let pool = scan_available_connections(&g.from, &g.to, &g.is_constant, g.n as u32, parent.input as u32);
-    if pool.is_empty() { return Ok(None); }
-    let bridge = if arm == Arm::Bridge { bridge_candidates(&pool, &report(g, parent)?)? } else { Vec::new() };
+fn pick(
+    arm: Arm,
+    parent: &CreatureExport,
+    g: &Graph,
+    rng: &mut Rng,
+) -> Res<Option<((u32, u32), bool)>> {
+    let pool = scan_available_connections(
+        &g.from,
+        &g.to,
+        &g.is_constant,
+        g.n as u32,
+        parent.input as u32,
+    );
+    if pool.is_empty() {
+        return Ok(None);
+    }
+    let bridge = if arm == Arm::Bridge {
+        bridge_candidates(&pool, &report(g, parent)?)?
+    } else {
+        Vec::new()
+    };
     let guided = !bridge.is_empty();
     let chosen = if guided { &bridge } else { &pool };
     let k = rng.below(chosen.len() / 2);
-    Ok(Some(((chosen[2*k], chosen[2*k+1]), guided)))
+    Ok(Some(((chosen[2 * k], chosen[2 * k + 1]), guided)))
 }
 
 fn candidate(parent: &CreatureExport, from: u32, to: u32, weight: f64) -> Res<CreatureExport> {
-    if from as usize >= parent.input + parent.neurons.len() || to as usize >= parent.input + parent.neurons.len() {
+    if from as usize >= parent.input + parent.neurons.len()
+        || to as usize >= parent.input + parent.neurons.len()
+    {
         return Err("candidate endpoint outside parent".into());
     }
     let mut child = parent.clone();
-    child.synapses.push(edge(&uuid_of(parent, from), &uuid_of(parent, to), weight, None));
+    child.synapses.push(edge(
+        &uuid_of(parent, from),
+        &uuid_of(parent, to),
+        weight,
+        None,
+    ));
     validate_creature_topology(&child).map_err(|e| format!("topology: {e:?}"))?;
     // Cleanup owns canonical ordering and the full creature validation as well as rewrites.
-    Ok(cleanup_creature(&child).map_err(|e| format!("cleanup: {e}"))?.creature)
+    Ok(cleanup_creature(&child)
+        .map_err(|e| format!("cleanup: {e}"))?
+        .creature)
 }
-fn accept(parent: &mut CreatureExport, parent_mse: &mut f64, child: CreatureExport, score: f64) -> bool {
+fn accept(
+    parent: &mut CreatureExport,
+    parent_mse: &mut f64,
+    child: CreatureExport,
+    score: f64,
+) -> bool {
     if score.is_finite() && score < *parent_mse {
         *parent = child;
         *parent_mse = score;
         true
-    } else { false }
+    } else {
+        false
+    }
 }
 
 #[derive(Clone, Copy)]
-struct Limits { evaluations: usize, proposals: usize }
-const LIMITS: Limits = Limits { evaluations: EVAL_BUDGET, proposals: MAX_PROPOSALS };
+struct Limits {
+    evaluations: usize,
+    proposals: usize,
+}
+const LIMITS: Limits = Limits {
+    evaluations: EVAL_BUDGET,
+    proposals: MAX_PROPOSALS,
+};
 
-fn run_arm(arm: Arm, seed: u64, start: &CreatureExport, cal: &Data, val: &Data, limits: Limits) -> Res<ArmResult> {
+fn run_arm(
+    arm: Arm,
+    seed: u64,
+    start: &CreatureExport,
+    cal: &Data,
+    val: &Data,
+    limits: Limits,
+) -> Res<ArmResult> {
     let clock = Instant::now();
-    if !start.forward_only { return Err("experiment requires forward-only parents".into()); }
+    if !start.forward_only {
+        return Err("experiment requires forward-only parents".into());
+    }
     validate_creature_topology(start)?;
     let mut select = Rng::stream(seed, STREAM_SELECT);
     let mut weights = Rng::stream(seed, STREAM_WEIGHTS);
@@ -506,7 +621,7 @@ fn run_arm(arm: Arm, seed: u64, start: &CreatureExport, cal: &Data, val: &Data, 
         r.bridge_fallbacks += usize::from(arm == Arm::Bridge && !guided);
         let clock = Instant::now();
         let child = candidate(&parent, from, to, weights.range(-1.0, 1.0));
-        r.candidate_cleanup_seconds += clock.elapsed().as_secs_f64();
+        r.candidate_preparation_seconds += clock.elapsed().as_secs_f64();
         let child = match child {
             Ok(child) => child,
             Err(error) => {
@@ -521,10 +636,15 @@ fn run_arm(arm: Arm, seed: u64, start: &CreatureExport, cal: &Data, val: &Data, 
         let child_mse = timed_mse(&child, cal, &mut r.calibration_cost)?;
         evaluated += 1;
         r.evaluations += 1;
-        if accept(&mut parent, &mut parent_mse, child, child_mse) { r.accepted += 1; }
-        else { *r.rejected.entry("not_strictly_better".into()).or_default() += 1; }
+        if accept(&mut parent, &mut parent_mse, child, child_mse) {
+            r.accepted += 1;
+        } else {
+            *r.rejected.entry("not_strictly_better".into()).or_default() += 1;
+        }
     }
-    if evaluated == limits.evaluations { r.stop = "evaluation_budget"; }
+    if evaluated == limits.evaluations {
+        r.stop = "evaluation_budget";
+    }
     r.final_cal_mse = parent_mse;
     r.final_val_mse = timed_mse(&parent, val, &mut r.validation_cost)?;
     let rep = report(&graph(&parent)?, &parent)?;
@@ -545,7 +665,11 @@ fn run_arm(arm: Arm, seed: u64, start: &CreatureExport, cal: &Data, val: &Data, 
 
 // ---- One trial ----
 struct Prepared {
-    parent: CreatureExport, cal: Data, val: Data, costs: Value, seconds: f64,
+    parent: CreatureExport,
+    cal: Data,
+    val: Data,
+    costs: Value,
+    seconds: f64,
 }
 fn prepare(workload: Workload, seed: u64) -> Res<Prepared> {
     let clock = Instant::now();
@@ -560,15 +684,23 @@ fn prepare(workload: Workload, seed: u64) -> Res<Prepared> {
     let t = Instant::now();
     let raw = generated_student(workload, seed, &teacher);
     let before = structure(&raw)?;
+    let cleanup_clock = Instant::now();
     let parent = cleanup_creature(&raw)?.creature;
+    let cleanup_seconds = cleanup_clock.elapsed().as_secs_f64();
     let after = structure(&parent)?;
-    let cleanup_seconds = t.elapsed().as_secs_f64();
+    let student_seconds = t.elapsed().as_secs_f64();
     let seconds = clock.elapsed().as_secs_f64();
-    Ok(Prepared { parent, cal, val, seconds, costs: json!({
-        "teacher_seconds_indicative": teacher_seconds, "data_seconds_indicative": data_seconds,
-        "student_cleanup_seconds_indicative": cleanup_seconds, "shared_preparation_seconds_indicative": seconds,
-        "raw_structure": before, "cleaned_structure": after,
-    }) })
+    Ok(Prepared {
+        parent,
+        cal,
+        val,
+        seconds,
+        costs: json!({
+            "teacher_seconds_indicative": teacher_seconds, "data_seconds_indicative": data_seconds,
+            "cleanup_seconds_indicative": cleanup_seconds, "student_preparation_seconds_indicative": student_seconds, "shared_preparation_seconds_indicative": seconds,
+            "raw_structure": before, "cleaned_structure": after,
+        }),
+    })
 }
 
 // ---- Statistics ----
@@ -610,7 +742,9 @@ struct Summary {
 
 /// `diffs` are bridge minus unbiased; `lower_is_better` orients wins.
 fn summarise(diffs: &[f64], lower_is_better: bool) -> Res<Summary> {
-    if diffs.iter().any(|x| !x.is_finite()) { return Err("non-finite paired difference".into()); }
+    if diffs.iter().any(|x| !x.is_finite()) {
+        return Err("non-finite paired difference".into());
+    }
     let better = |d: f64| if lower_is_better { d < 0.0 } else { d > 0.0 };
     let worse = |d: f64| if lower_is_better { d > 0.0 } else { d < 0.0 };
     Ok(Summary {
@@ -648,7 +782,9 @@ fn verdict(val: &Summary, invalid: &Summary, bridge_fraction: f64) -> &'static s
 // ---- CLI and provenance ----
 #[path = "reachability_mutation_experiment/driver.rs"]
 mod driver;
-fn main() -> Res<()> { driver::main() }
+fn main() -> Res<()> {
+    driver::main()
+}
 
 #[cfg(test)]
 #[path = "reachability_mutation_experiment/tests.rs"]
