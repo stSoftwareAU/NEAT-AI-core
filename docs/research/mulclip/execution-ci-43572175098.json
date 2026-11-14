@@ -1,0 +1,30 @@
+{
+  "conclusion": "failure",
+  "headSha": "f4d230a904f6de54cf6de14ef35f1c3781e53d9c",
+  "jobs": [
+    {
+      "name": "MulClip experiment (aarch64-macos)",
+      "conclusion": "failure",
+      "startedAt": "2026-11-14T07:40:17Z",
+      "completedAt": "2026-11-14T07:41:53Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572175098/job/132378724376"
+    },
+    {
+      "name": "MulClip experiment (x86_64-linux)",
+      "conclusion": "failure",
+      "startedAt": "2026-11-14T07:40:17Z",
+      "completedAt": "2026-11-14T07:41:43Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572175098/job/132378724601"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572175098",
+  "measurement_started": false,
+  "failure_cause": "cp: cannot stat 'target/release/examples/mulclip_experiment-*.s': No such file or directory",
+  "repair": "Explicit --target-dir mulclip-target for build and execution; copy from that directory.",
+  "counts": {
+    "timing_cells": 0,
+    "calibration_fits": 0,
+    "validation_fits": 0
+  }
+}

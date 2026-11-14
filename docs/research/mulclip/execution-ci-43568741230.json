@@ -1,0 +1,31 @@
+{
+  "conclusion": "success",
+  "createdAt": "2026-11-14T06:56:38Z",
+  "databaseId": 43568741230,
+  "event": "workflow_dispatch",
+  "headBranch": "issue-760-experiment-benchmark-mulclip-as-an-optional-evolva",
+  "headSha": "9e506f9484d7a01c6bac5b00bce25d79bca2d32d",
+  "jobs": [
+    {
+      "name": "MulClip experiment (aarch64-macos)",
+      "conclusion": "success",
+      "startedAt": "2026-11-14T06:56:43Z",
+      "completedAt": "2026-11-14T06:58:38Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43568741230/job/132368241881"
+    },
+    {
+      "name": "MulClip experiment (x86_64-linux)",
+      "conclusion": "success",
+      "startedAt": "2026-11-14T06:56:42Z",
+      "completedAt": "2026-11-14T06:58:00Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43568741230/job/132368242127"
+    }
+  ],
+  "status": "completed",
+  "updatedAt": "2026-11-14T06:58:39Z",
+  "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43568741230",
+  "hosts": {
+    "aarch64-macos": "Darwin sat12-bq164-9446fd6c-c829-4037-a816-a79ff1463bc0-62E09ACCCEF4.local 24.6.0 Darwin Kernel Version 24.6.0: Sun Oct 11 23:44:11 PDT 2026; root:xnu-11417.140.69.713.47~2/RELEASE_ARM64_VMAPPLE arm64",
+    "x86_64-linux": "Linux ip-10-0-128-195 7.0.0-1014-aws #14~24.04.1-Ubuntu SMP PREEMPT Fri Sep 18 21:24:59 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux"
+  }
+}

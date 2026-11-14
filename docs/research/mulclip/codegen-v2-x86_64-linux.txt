@@ -1,0 +1,129 @@
+Protocol v2 SIMD audit: x86_64-linux
+Source: 5a259b1413d80e0ad06811310aa3d91e7f4fdf43
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: x86_64-unknown-linux-gnu
+release: 1.100.0
+LLVM version: 23.1.5
+
+Prepared::apply_lanes::<8>: d2/d3 polynomial arms.
+Command: cargo rustc --target-dir mulclip-target --release -p neat-core --example mulclip_experiment -- --emit=asm=<explicit artifact path>
+
+.LBB1_8:
+	.cfi_def_cfa_offset 48
+	movaps	%xmm2, %xmm0
+	maxss	4(%rdx), %xmm0
+	movaps	%xmm7, %xmm8
+	minss	%xmm0, %xmm8
+	movaps	.LCPI1_1(%rip), %xmm3
+	unpcklps	%xmm8, %xmm4
+	andps	%xmm3, %xmm8
+	movsd	8(%rdx), %xmm0
+	movaps	%xmm2, %xmm9
+	shufps	$0, %xmm2, %xmm9
+	movaps	%xmm9, %xmm10
+	maxps	%xmm0, %xmm10
+	movaps	%xmm7, %xmm6
+	shufps	$0, %xmm7, %xmm6
+	movaps	%xmm6, %xmm0
+	minps	%xmm10, %xmm0
+	unpcklps	%xmm8, %xmm5
+	movlhps	%xmm0, %xmm4
+	andps	%xmm3, %xmm0
+	movlhps	%xmm0, %xmm5
+	movaps	%xmm1, %xmm0
+	shufps	$0, %xmm1, %xmm0
+	mulps	%xmm0, %xmm5
+	mulps	%xmm4, %xmm5
+	subps	%xmm5, %xmm4
+	movups	%xmm4, (%rdi)
+	movsd	16(%rdx), %xmm4
+	maxps	%xmm4, %xmm9
+	minps	%xmm9, %xmm6
+	movaps	%xmm6, %xmm4
+	andps	%xmm3, %xmm4
+	mulps	%xmm0, %xmm4
+	mulps	%xmm6, %xmm4
+	subps	%xmm4, %xmm6
+	movlps	%xmm6, 16(%rdi)
+	movaps	%xmm2, %xmm0
+	maxss	24(%rdx), %xmm0
+	movaps	%xmm7, %xmm4
+	minss	%xmm0, %xmm4
+	movaps	%xmm4, %xmm0
+	andps	%xmm3, %xmm0
+	mulss	%xmm1, %xmm0
+	mulss	%xmm4, %xmm0
+	subss	%xmm0, %xmm4
+	movss	%xmm4, 24(%rdi)
+	movss	28(%rdx), %xmm0
+	maxss	%xmm0, %xmm2
+	minss	%xmm2, %xmm7
+	andps	%xmm7, %xmm3
+	jmp	.LBB1_51
+.LBB1_60:
+	movaps	%xmm2, %xmm0
+	maxss	4(%rdx), %xmm0
+	movaps	%xmm7, %xmm3
+	movaps	%xmm2, %xmm5
+	maxss	8(%rdx), %xmm5
+	minss	%xmm0, %xmm3
+	movaps	%xmm7, %xmm0
+	minss	%xmm5, %xmm0
+	movaps	%xmm2, %xmm5
+	maxss	12(%rdx), %xmm5
+	movaps	%xmm7, %xmm6
+	minss	%xmm5, %xmm6
+	unpcklps	%xmm6, %xmm0
+	unpcklps	%xmm3, %xmm4
+	movlhps	%xmm0, %xmm4
+	movaps	%xmm4, %xmm0
+	mulps	%xmm4, %xmm0
+	movaps	%xmm1, %xmm3
+	shufps	$0, %xmm1, %xmm3
+	mulps	%xmm3, %xmm0
+	mulps	%xmm4, %xmm0
+	subps	%xmm0, %xmm4
+	movups	%xmm4, (%rdi)
+	movsd	16(%rdx), %xmm0
+	movaps	%xmm2, %xmm4
+	shufps	$0, %xmm2, %xmm4
+	maxps	%xmm0, %xmm4
+	movaps	%xmm7, %xmm0
+	shufps	$0, %xmm7, %xmm0
+	minps	%xmm4, %xmm0
+	movaps	%xmm0, %xmm4
+	mulps	%xmm0, %xmm4
+	mulps	%xmm3, %xmm4
+	mulps	%xmm0, %xmm4
+	subps	%xmm4, %xmm0
+	movlps	%xmm0, 16(%rdi)
+	movaps	%xmm2, %xmm0
+	maxss	24(%rdx), %xmm0
+	movaps	%xmm7, %xmm3
+	minss	%xmm0, %xmm3
+	movaps	%xmm3, %xmm0
+	mulss	%xmm3, %xmm0
+	mulss	%xmm1, %xmm0
+	mulss	%xmm3, %xmm0
+	subss	%xmm0, %xmm3
+	movss	%xmm3, 24(%rdi)
+	movss	28(%rdx), %xmm0
+	maxss	%xmm0, %xmm2
+	minss	%xmm2, %xmm7
+	movaps	%xmm7, %xmm3
+	mulss	%xmm7, %xmm3
+.LBB1_51:
+	mulss	%xmm3, %xmm1
+	mulss	%xmm7, %xmm1
+	subss	%xmm1, %xmm7
+	movss	%xmm7, 28(%rdi)
+	addq	$40, %rsp
+	.cfi_def_cfa_offset 8
+	retq
+
+The polynomial arithmetic is packed for four lanes and two lanes, with
+two scalar lanes. No activation FMA contraction appears in these arms.
+These excerpts describe this build, not a portable vectorisation guarantee.

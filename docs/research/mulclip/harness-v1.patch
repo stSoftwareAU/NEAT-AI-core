@@ -1,0 +1,2299 @@
+diff --git a/docs/research/mulclip/manifest.json b/docs/research/mulclip/manifest.json
+new file mode 100644
+index 0000000..1ea2d01
+--- /dev/null
++++ b/docs/research/mulclip/manifest.json
+@@ -0,0 +1,31 @@
++{
++  "protocol_version": 1,
++  "issue": 760,
++  "source": "arXiv:2610.39343 (Matsumura, Takemoto, Koyama, v1 29 Oct 2026)",
++  "activations": ["tanh", "hard_tanh", "relu", "mulclip_d2", "mulclip_d3", "mulclip_mono_d2", "mulclip_mono_d3"],
++  "control": "tanh",
++  "graph_specs": [
++    { "name": "uniform_k4", "inputs": 16, "hidden": 256, "degree": { "kind": "uniform", "fan_in": 4 } },
++    { "name": "uniform_k32", "inputs": 16, "hidden": 256, "degree": { "kind": "uniform", "fan_in": 32 } },
++    { "name": "heavy_tail", "inputs": 16, "hidden": 256, "degree": { "kind": "heavy_tail", "min": 2, "max": 128, "alpha": 2.0 } }
++  ],
++  "timing": { "records": 512, "micro_len": 4096, "warmup": 3, "repetitions": 21, "seed": 760001 },
++  "fitness": {
++    "tasks": [ { "kind": "parity", "bits": 6 }, { "kind": "smooth", "inputs": 4 } ],
++    "hidden_override": 128,
++    "train": 1024,
++    "test": 512,
++    "ridge_lambda": 0.001,
++    "input_scales": [0.25, 0.5, 1.0, 2.0, 4.0],
++    "calibration_seeds": [11, 12, 13],
++    "validation_seeds": [101, 102, 103, 104, 105, 106, 107, 108, 109, 110]
++  },
++  "bootstrap": { "iters": 2000, "seed": 760002 },
++  "criteria": {
++    "speed_ratio_max": 0.95,
++    "fitness_margin_accuracy": 0.02,
++    "fitness_margin_nmse": 0.02,
++    "fitness_better_required": true,
++    "required_platforms": ["aarch64-linux", "x86_64-linux", "aarch64-macos"]
++  }
++}
+diff --git a/neat-core/benches/mulclip_experiment/mod.rs b/neat-core/benches/mulclip_experiment/mod.rs
+new file mode 100644
+index 0000000..3281465
+--- /dev/null
++++ b/neat-core/benches/mulclip_experiment/mod.rs
+@@ -0,0 +1,1555 @@
++//! Issue #760: opt-in, research-only harness benchmarking "MulClip" against
++//! tanh, hard-tanh and ReLU. Included by the example and the integration test
++//! with `#[path]`; it is not a bench target and changes nothing in `src`.
++#![allow(dead_code)]
++
++use neat_core::squash::{SquashType, apply_squash};
++use neat_core::squash_simd::squash_xn;
++use serde::{Deserialize, Serialize};
++use std::hint::black_box;
++use std::time::Instant;
++
++// ---------------------------------------------------------------- MulClip
++
++/// MulClip activation of order `d` (2..=8): `x * (1 - b * |x|^(d-1))`, clipped
++/// to zero for `|x| >= c`.
++///
++/// The formula is reconstructed from the paper's stated properties
++/// (arXiv 2610.39343: odd, order d, built only from compare/abs/multiply/
++/// subtract, clipped at the zero after the peak) because Section II could not
++/// be read from the container; any other published normalisation differs only
++/// by input/output scale, which evolved weights absorb.
++///
++/// Normalised so the slope at 0 is 1 and the peak value is 1 (tanh's slope and
++/// range): `b = (d-1)^(d-1) / d^d`, `c = d^(d/(d-1)) / (d-1)`, peak at
++/// `d/(d-1)`.
++#[derive(Clone, Copy, Debug)]
++pub struct MulClip {
++    pub d: u32,
++    pub b: f32,
++    pub c: f32,
++    pub peak: f32,
++}
++
++impl MulClip {
++    pub fn new(d: u32) -> Result<MulClip, String> {
++        if !(2..=8).contains(&d) {
++            return Err(format!(
++                "MulClip order {d} is outside the allowed range 2..=8"
++            ));
++        }
++        let df = d as f64;
++        let b = (df - 1.0).powi(d as i32 - 1) / df.powi(d as i32);
++        let c = df.powf(df / (df - 1.0)) / (df - 1.0);
++        let peak = df / (df - 1.0);
++        Ok(MulClip {
++            d,
++            b: b as f32,
++            c: c as f32,
++            peak: peak as f32,
++        })
++    }
++
++    /// |x|^(d-1) by repeated multiplication.
++    #[inline(always)]
++    fn pow_abs(&self, a: f32) -> f32 {
++        let mut p = 1.0f32;
++        for _ in 0..self.d - 1 {
++            p *= a;
++        }
++        p
++    }
++
++    #[inline(always)]
++    fn poly(&self, x: f32) -> f32 {
++        x * (1.0 - self.b * self.pow_abs(x.abs()))
++    }
++
++    /// NaN flows through the polynomial (`|NaN| >= c` is false).
++    #[inline(always)]
++    pub fn apply(&self, x: f32) -> f32 {
++        if x.abs() >= self.c { 0.0 } else { self.poly(x) }
++    }
++
++    /// Ablation: clipped at the peak (saturates at +/-1) instead of the zero.
++    #[inline(always)]
++    pub fn apply_mono(&self, x: f32) -> f32 {
++        if x.abs() >= self.peak {
++            x.signum()
++        } else {
++            self.poly(x)
++        }
++    }
++
++    /// Per-lane loop, same formula and comparison as `apply` (autovectorises).
++    #[inline(always)]
++    pub fn apply_lanes<const N: usize>(&self, x: [f32; N]) -> [f32; N] {
++        let mut o = [0.0f32; N];
++        for i in 0..N {
++            o[i] = self.apply(x[i]);
++        }
++        o
++    }
++
++    #[inline(always)]
++    pub fn apply_mono_lanes<const N: usize>(&self, x: [f32; N]) -> [f32; N] {
++        let mut o = [0.0f32; N];
++        for i in 0..N {
++            o[i] = self.apply_mono(x[i]);
++        }
++        o
++    }
++
++    /// `1 - d*b*|x|^(d-1)` inside `|x| < c`, else 0.
++    pub fn derivative(&self, x: f32) -> f32 {
++        if x.abs() >= self.c {
++            0.0
++        } else {
++            1.0 - self.d as f32 * self.b * self.pow_abs(x.abs())
++        }
++    }
++}
++
++// ------------------------------------------------------------ activations
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum Act {
++    Tanh,
++    HardTanh,
++    Relu,
++    MulClip(u32),
++    MulClipMono(u32),
++}
++
++impl Act {
++    pub fn name(&self) -> String {
++        match self {
++            Act::Tanh => "tanh".into(),
++            Act::HardTanh => "hard_tanh".into(),
++            Act::Relu => "relu".into(),
++            Act::MulClip(d) => format!("mulclip_d{d}"),
++            Act::MulClipMono(d) => format!("mulclip_mono_d{d}"),
++        }
++    }
++
++    pub fn parse(s: &str) -> Result<Act, String> {
++        let order = |rest: &str| -> Result<u32, String> {
++            let d: u32 = rest
++                .parse()
++                .map_err(|_| format!("unknown activation '{s}'"))?;
++            MulClip::new(d)?;
++            Ok(d)
++        };
++        match s {
++            "tanh" => Ok(Act::Tanh),
++            "hard_tanh" => Ok(Act::HardTanh),
++            "relu" => Ok(Act::Relu),
++            _ => {
++                if let Some(rest) = s.strip_prefix("mulclip_mono_d") {
++                    Ok(Act::MulClipMono(order(rest)?))
++                } else if let Some(rest) = s.strip_prefix("mulclip_d") {
++                    Ok(Act::MulClip(order(rest)?))
++                } else {
++                    Err(format!("unknown activation '{s}'"))
++                }
++            }
++        }
++    }
++}
++
++/// An activation with its coefficients built once, for the hot loops.
++#[derive(Clone, Copy, Debug)]
++pub struct Prepared {
++    pub act: Act,
++    pub mc: Option<MulClip>,
++}
++
++impl Prepared {
++    pub fn new(act: Act) -> Result<Prepared, String> {
++        let mc = match act {
++            Act::MulClip(d) | Act::MulClipMono(d) => Some(MulClip::new(d)?),
++            _ => None,
++        };
++        Ok(Prepared { act, mc })
++    }
++
++    pub fn from_name(s: &str) -> Result<Prepared, String> {
++        Prepared::new(Act::parse(s)?)
++    }
++
++    #[inline]
++    pub fn apply(&self, x: f32) -> f32 {
++        match self.act {
++            Act::Tanh => apply_squash(SquashType::Tanh, x),
++            Act::HardTanh => apply_squash(SquashType::HardTanh, x),
++            Act::Relu => apply_squash(SquashType::Relu, x),
++            Act::MulClip(_) => self.mc.as_ref().expect("prepared MulClip").apply(x),
++            Act::MulClipMono(_) => self.mc.as_ref().expect("prepared MulClip").apply_mono(x),
++        }
++    }
++
++    #[inline]
++    pub fn apply_lanes<const N: usize>(&self, x: [f32; N]) -> [f32; N] {
++        match self.act {
++            Act::Tanh => squash_xn::<N>(SquashType::Tanh, x).expect("squash_xn supports Tanh"),
++            Act::HardTanh => {
++                squash_xn::<N>(SquashType::HardTanh, x).expect("squash_xn supports HardTanh")
++            }
++            // squash_xn returns None for Relu, so use a per-lane apply_squash loop.
++            Act::Relu => {
++                let mut o = [0.0f32; N];
++                for i in 0..N {
++                    o[i] = apply_squash(SquashType::Relu, x[i]);
++                }
++                o
++            }
++            Act::MulClip(_) => self.mc.as_ref().expect("prepared MulClip").apply_lanes(x),
++            Act::MulClipMono(_) => self
++                .mc
++                .as_ref()
++                .expect("prepared MulClip")
++                .apply_mono_lanes(x),
++        }
++    }
++}
++
++// -------------------------------------------------------------------- Rng
++
++/// SplitMix64.
++#[derive(Clone, Debug)]
++pub struct Rng {
++    state: u64,
++}
++
++impl Rng {
++    pub fn new(seed: u64) -> Rng {
++        Rng { state: seed }
++    }
++
++    pub fn next_u64(&mut self) -> u64 {
++        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
++        let mut z = self.state;
++        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
++        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
++        z ^ (z >> 31)
++    }
++
++    /// Uniform in [0, 1).
++    pub fn next_f64(&mut self) -> f64 {
++        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
++    }
++
++    /// Standard normal by Box-Muller.
++    pub fn normal(&mut self) -> f64 {
++        let u1 = 1.0 - self.next_f64();
++        let u2 = self.next_f64();
++        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
++    }
++
++    fn below(&mut self, n: usize) -> usize {
++        (self.next_u64() % n as u64) as usize
++    }
++}
++
++// ----------------------------------------------------------------- graphs
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
++pub enum Degree {
++    Uniform { fan_in: u32 },
++    HeavyTail { min: u32, max: u32, alpha: f64 },
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct GraphSpec {
++    pub name: String,
++    pub inputs: u32,
++    pub hidden: u32,
++    pub degree: Degree,
++}
++
++impl GraphSpec {
++    pub fn validate(&self) -> Result<(), String> {
++        let n = &self.name;
++        if self.inputs == 0 || self.hidden == 0 {
++            return Err(format!("graph spec '{n}': inputs and hidden must be >= 1"));
++        }
++        match self.degree {
++            Degree::Uniform { fan_in: 0 } => Err(format!("graph spec '{n}': fan_in must be >= 1")),
++            Degree::HeavyTail { min, max, alpha } => {
++                if min == 0 || min > max || !(alpha > 1.0 && alpha.is_finite()) {
++                    Err(format!(
++                        "graph spec '{n}': heavy_tail needs 1 <= min <= max and alpha > 1"
++                    ))
++                } else {
++                    Ok(())
++                }
++            }
++            _ => Ok(()),
++        }
++    }
++}
++
++/// Forward-only DAG in CSR form. Ids `0..inputs` are inputs; hidden node `j`
++/// has id `inputs + j`.
++#[derive(Clone, Debug, PartialEq)]
++pub struct Graph {
++    pub inputs: usize,
++    pub hidden: usize,
++    pub start: Vec<u32>,
++    pub len: Vec<u32>,
++    pub from: Vec<u32>,
++    pub weight: Vec<f32>,
++    pub bias: Vec<f32>,
++}
++
++impl Graph {
++    pub fn generate(spec: &GraphSpec, seed: u64) -> Graph {
++        let mut rng = Rng::new(seed);
++        let inputs = spec.inputs as usize;
++        let hidden = spec.hidden as usize;
++        let mut g = Graph {
++            inputs,
++            hidden,
++            start: Vec::with_capacity(hidden),
++            len: Vec::with_capacity(hidden),
++            from: Vec::new(),
++            weight: Vec::new(),
++            bias: Vec::with_capacity(hidden),
++        };
++        for j in 0..hidden {
++            let avail = inputs + j;
++            let k = match spec.degree {
++                Degree::Uniform { fan_in } => fan_in as usize,
++                Degree::HeavyTail { min, max, alpha } => {
++                    let v = 1.0 - rng.next_f64();
++                    let k = (min as f64 * v.powf(-1.0 / (alpha - 1.0))).floor();
++                    k.min(max as f64) as usize
++                }
++            };
++            let fan_in = k.min(avail);
++            // Partial Fisher-Yates: `fan_in` distinct sources below this node.
++            let mut pool: Vec<u32> = (0..avail as u32).collect();
++            g.start.push(g.from.len() as u32);
++            g.len.push(fan_in as u32);
++            let scale = 1.0 / (fan_in.max(1) as f64).sqrt();
++            for i in 0..fan_in {
++                let r = i + rng.below(avail - i);
++                pool.swap(i, r);
++                g.from.push(pool[i]);
++                g.weight.push((rng.normal() * scale) as f32);
++            }
++            g.bias.push((rng.normal() * 0.1) as f32);
++        }
++        g
++    }
++}
++
++pub fn forward_scalar(
++    g: &Graph,
++    p: &Prepared,
++    input_scale: f32,
++    input: &[f32],
++    acts: &mut Vec<f32>,
++) {
++    acts.clear();
++    acts.resize(g.inputs + g.hidden, 0.0);
++    for i in 0..g.inputs {
++        acts[i] = input.get(i).copied().unwrap_or(0.0) * input_scale;
++    }
++    for j in 0..g.hidden {
++        let s = g.start[j] as usize;
++        let mut sum = g.bias[j];
++        for e in s..s + g.len[j] as usize {
++            sum += g.weight[e] * acts[g.from[e] as usize];
++        }
++        acts[g.inputs + j] = p.apply(sum);
++    }
++}
++
++pub fn forward_lanes<const N: usize>(
++    g: &Graph,
++    p: &Prepared,
++    input_scale: f32,
++    records: &[&[f32]; N],
++    acts: &mut Vec<[f32; N]>,
++) {
++    acts.clear();
++    acts.resize(g.inputs + g.hidden, [0.0; N]);
++    for i in 0..g.inputs {
++        for l in 0..N {
++            acts[i][l] = records[l].get(i).copied().unwrap_or(0.0) * input_scale;
++        }
++    }
++    for j in 0..g.hidden {
++        let s = g.start[j] as usize;
++        let mut sum = [g.bias[j]; N];
++        for e in s..s + g.len[j] as usize {
++            let w = g.weight[e];
++            let a = acts[g.from[e] as usize];
++            for l in 0..N {
++                sum[l] += w * a[l];
++            }
++        }
++        acts[g.inputs + j] = p.apply_lanes(sum);
++    }
++}
++
++// ------------------------------------------------------------- statistics
++
++/// Type-7 quantile of an ascending slice.
++pub fn quantile(sorted: &[f64], p: f64) -> f64 {
++    let n = sorted.len();
++    if n == 0 {
++        return 0.0;
++    }
++    let h = (n - 1) as f64 * p;
++    let lo = h.floor() as usize;
++    let hi = (lo + 1).min(n - 1);
++    sorted[lo] + (h - lo as f64) * (sorted[hi] - sorted[lo])
++}
++
++pub fn median(values: &[f64]) -> f64 {
++    let mut v = values.to_vec();
++    v.sort_by(|a, b| a.total_cmp(b));
++    quantile(&v, 0.5)
++}
++
++/// Percentile bootstrap CI of the median; `(0, 0)` for empty input.
++pub fn bootstrap_median_ci(values: &[f64], iters: u32, seed: u64, level: f64) -> (f64, f64) {
++    if values.is_empty() {
++        return (0.0, 0.0);
++    }
++    let mut rng = Rng::new(seed);
++    let mut meds = Vec::with_capacity(iters as usize);
++    let mut buf = vec![0.0; values.len()];
++    for _ in 0..iters {
++        for b in buf.iter_mut() {
++            *b = values[rng.below(values.len())];
++        }
++        meds.push(median(&buf));
++    }
++    meds.sort_by(|a, b| a.total_cmp(b));
++    let tail = (1.0 - level) / 2.0;
++    (quantile(&meds, tail), quantile(&meds, 1.0 - tail))
++}
++
++// ------------------------------------------------------------------ ridge
++
++/// Ridge regression by the normal equations `(XtX + lambda I) w = Xty`,
++/// solved by Cholesky.
++pub fn ridge_fit(x_rows: &[Vec<f64>], y: &[f64], lambda: f64) -> Result<Vec<f64>, String> {
++    if x_rows.is_empty() || x_rows.len() != y.len() {
++        return Err("ridge_fit: need equal, non-empty rows and targets".into());
++    }
++    let p = x_rows[0].len();
++    let mut a = vec![0.0f64; p * p];
++    let mut b = vec![0.0f64; p];
++    for (r, &t) in x_rows.iter().zip(y) {
++        for i in 0..p {
++            b[i] += r[i] * t;
++            for j in 0..=i {
++                a[i * p + j] += r[i] * r[j];
++            }
++        }
++    }
++    for i in 0..p {
++        a[i * p + i] += lambda;
++    }
++    for i in 0..p {
++        for j in 0..=i {
++            let mut s = a[i * p + j];
++            for k in 0..j {
++                s -= a[i * p + k] * a[j * p + k];
++            }
++            if i == j {
++                if !(s > 0.0 && s.is_finite()) {
++                    return Err(format!(
++                        "ridge_fit: matrix is not positive definite (pivot {i} = {s})"
++                    ));
++                }
++                a[i * p + i] = s.sqrt();
++            } else {
++                a[i * p + j] = s / a[j * p + j];
++            }
++        }
++    }
++    let mut z = b;
++    for i in 0..p {
++        let mut s = z[i];
++        for k in 0..i {
++            s -= a[i * p + k] * z[k];
++        }
++        z[i] = s / a[i * p + i];
++    }
++    for i in (0..p).rev() {
++        let mut s = z[i];
++        for k in i + 1..p {
++            s -= a[k * p + i] * z[k];
++        }
++        z[i] = s / a[i * p + i];
++    }
++    Ok(z)
++}
++
++// ------------------------------------------------------------------ tasks
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
++pub enum Task {
++    Parity { bits: u32 },
++    Smooth { inputs: u32 },
++}
++
++impl Task {
++    pub fn name(&self) -> String {
++        match self {
++            Task::Parity { bits } => format!("parity{bits}"),
++            Task::Smooth { inputs } => format!("smooth{inputs}"),
++        }
++    }
++
++    pub fn input_count(&self) -> u32 {
++        match self {
++            Task::Parity { bits } => *bits,
++            Task::Smooth { inputs } => *inputs,
++        }
++    }
++
++    /// "accuracy" (higher is better) or "nmse" (lower is better).
++    pub fn metric(&self) -> &'static str {
++        match self {
++            Task::Parity { .. } => "accuracy",
++            Task::Smooth { .. } => "nmse",
++        }
++    }
++
++    pub fn validate(&self) -> Result<(), String> {
++        match self {
++            Task::Parity { bits } if *bits == 0 || *bits > 20 => {
++                Err(format!("parity task needs 1..=20 bits, got {bits}"))
++            }
++            Task::Smooth { inputs } if *inputs < 3 => {
++                Err(format!("smooth task needs inputs >= 3, got {inputs}"))
++            }
++            _ => Ok(()),
++        }
++    }
++
++    fn sample(&self, rng: &mut Rng) -> (Vec<f32>, f64) {
++        match self {
++            Task::Parity { bits } => {
++                let x: Vec<f32> = (0..*bits)
++                    .map(|_| if rng.next_u64() & 1 == 0 { -1.0 } else { 1.0 })
++                    .collect();
++                let t = x.iter().fold(1.0f64, |a, &v| a * v as f64);
++                (x, t)
++            }
++            Task::Smooth { inputs } => {
++                let x: Vec<f32> = (0..*inputs)
++                    .map(|_| (rng.next_f64() * 2.0 - 1.0) as f32)
++                    .collect();
++                let (x0, x1, x2) = (x[0] as f64, x[1] as f64, x[2] as f64);
++                let t = (std::f64::consts::PI * x0).sin() * x1 + 0.5 * x2 * x2;
++                (x, t)
++            }
++        }
++    }
++}
++
++pub struct Dataset {
++    pub train_x: Vec<Vec<f32>>,
++    pub train_y: Vec<f64>,
++    pub test_x: Vec<Vec<f32>>,
++    pub test_y: Vec<f64>,
++}
++
++pub fn make_dataset(task: &Task, seed: u64, train: usize, test: usize) -> Dataset {
++    let mut rng = Rng::new(seed);
++    let mut ds = Dataset {
++        train_x: Vec::new(),
++        train_y: Vec::new(),
++        test_x: Vec::new(),
++        test_y: Vec::new(),
++    };
++    for _ in 0..train {
++        let (x, y) = task.sample(&mut rng);
++        ds.train_x.push(x);
++        ds.train_y.push(y);
++    }
++    for _ in 0..test {
++        let (x, y) = task.sample(&mut rng);
++        ds.test_x.push(x);
++        ds.test_y.push(y);
++    }
++    ds
++}
++
++#[derive(Debug)]
++pub enum EvalError {
++    NonFinite(String),
++    Fit(String),
++}
++
++impl EvalError {
++    pub fn reason(&self) -> String {
++        match self {
++            EvalError::NonFinite(s) | EvalError::Fit(s) => s.clone(),
++        }
++    }
++}
++
++pub fn fmt_f32(x: f32) -> String {
++    if x.is_nan() {
++        "NaN".into()
++    } else if x == f32::INFINITY {
++        "inf".into()
++    } else if x == f32::NEG_INFINITY {
++        "-inf".into()
++    } else {
++        format!("{x:?}")
++    }
++}
++
++fn features(
++    g: &Graph,
++    p: &Prepared,
++    scale: f32,
++    x: &[f32],
++    acts: &mut Vec<f32>,
++) -> Result<Vec<f64>, EvalError> {
++    forward_scalar(g, p, scale, x, acts);
++    let h = &acts[g.inputs..];
++    if let Some(i) = h.iter().position(|v| !v.is_finite()) {
++        return Err(EvalError::NonFinite(format!(
++            "hidden node {i} produced {} for a finite input",
++            fmt_f32(h[i])
++        )));
++    }
++    let mut f: Vec<f64> = h.iter().map(|&v| v as f64).collect();
++    f.push(1.0);
++    Ok(f)
++}
++
++/// Fit the readout on the train split and score the test split.
++pub fn evaluate(
++    task: &Task,
++    g: &Graph,
++    ds: &Dataset,
++    p: &Prepared,
++    scale: f32,
++    lambda: f64,
++) -> Result<f64, EvalError> {
++    let mut acts = Vec::new();
++    let mut rows = Vec::with_capacity(ds.train_x.len());
++    for x in &ds.train_x {
++        rows.push(features(g, p, scale, x, &mut acts)?);
++    }
++    let w = ridge_fit(&rows, &ds.train_y, lambda).map_err(EvalError::Fit)?;
++    let mut preds = Vec::with_capacity(ds.test_x.len());
++    for x in &ds.test_x {
++        let f = features(g, p, scale, x, &mut acts)?;
++        preds.push(f.iter().zip(&w).map(|(a, b)| a * b).sum::<f64>());
++    }
++    let n = preds.len() as f64;
++    match task {
++        Task::Parity { .. } => {
++            let ok = preds
++                .iter()
++                .zip(&ds.test_y)
++                .filter(|(p, t)| (if **p >= 0.0 { 1.0 } else { -1.0 }) == **t)
++                .count();
++            Ok(ok as f64 / n)
++        }
++        Task::Smooth { .. } => {
++            let mean = ds.test_y.iter().sum::<f64>() / n;
++            let var = ds.test_y.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / n;
++            let mse = preds
++                .iter()
++                .zip(&ds.test_y)
++                .map(|(p, t)| (p - t).powi(2))
++                .sum::<f64>()
++                / n;
++            Ok(mse / var.max(1e-12))
++        }
++    }
++}
++
++// --------------------------------------------------------------- manifest
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Timing {
++    pub records: usize,
++    pub micro_len: usize,
++    pub warmup: u32,
++    pub repetitions: u32,
++    pub seed: u64,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Fitness {
++    pub tasks: Vec<Task>,
++    pub hidden_override: u32,
++    pub train: usize,
++    pub test: usize,
++    pub ridge_lambda: f64,
++    pub input_scales: Vec<f64>,
++    pub calibration_seeds: Vec<u64>,
++    pub validation_seeds: Vec<u64>,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Bootstrap {
++    pub iters: u32,
++    pub seed: u64,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Criteria {
++    pub speed_ratio_max: f64,
++    pub fitness_margin_accuracy: f64,
++    pub fitness_margin_nmse: f64,
++    pub fitness_better_required: bool,
++    pub required_platforms: Vec<String>,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Manifest {
++    pub protocol_version: u32,
++    pub issue: u32,
++    pub source: String,
++    pub activations: Vec<String>,
++    pub control: String,
++    pub graph_specs: Vec<GraphSpec>,
++    pub timing: Timing,
++    pub fitness: Fitness,
++    pub bootstrap: Bootstrap,
++    pub criteria: Criteria,
++}
++
++pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
++    let m: Manifest = serde_json::from_str(text).map_err(|e| format!("manifest: {e}"))?;
++    if m.protocol_version != 1 {
++        return Err(format!(
++            "manifest: protocol_version must be 1, got {}",
++            m.protocol_version
++        ));
++    }
++    if m.activations.is_empty() {
++        return Err("manifest: activations is empty".into());
++    }
++    for a in &m.activations {
++        Act::parse(a).map_err(|e| format!("manifest: {e}"))?;
++    }
++    if !m.activations.contains(&m.control) {
++        return Err(format!(
++            "manifest: control '{}' is not in activations",
++            m.control
++        ));
++    }
++    if m.graph_specs.is_empty() {
++        return Err("manifest: graph_specs is empty".into());
++    }
++    for s in &m.graph_specs {
++        s.validate().map_err(|e| format!("manifest: {e}"))?;
++    }
++    let f = &m.fitness;
++    if f.tasks.is_empty() || f.input_scales.is_empty() {
++        return Err("manifest: fitness needs tasks and input_scales".into());
++    }
++    for t in &f.tasks {
++        t.validate().map_err(|e| format!("manifest: {e}"))?;
++    }
++    if f.input_scales.iter().any(|s| !(*s > 0.0 && s.is_finite())) {
++        return Err("manifest: input_scales must be positive and finite".into());
++    }
++    if f.calibration_seeds.is_empty() || f.validation_seeds.is_empty() {
++        return Err("manifest: calibration_seeds and validation_seeds must be non-empty".into());
++    }
++    if let Some(s) = f
++        .calibration_seeds
++        .iter()
++        .find(|s| f.validation_seeds.contains(s))
++    {
++        return Err(format!(
++            "manifest: seed {s} is in both calibration_seeds and validation_seeds"
++        ));
++    }
++    if f.hidden_override == 0
++        || f.train == 0
++        || f.test == 0
++        || f.ridge_lambda.is_nan()
++        || f.ridge_lambda < 0.0
++    {
++        return Err("manifest: fitness sizes must be >= 1 and ridge_lambda >= 0".into());
++    }
++    let t = &m.timing;
++    if t.records == 0 || t.micro_len == 0 || t.repetitions == 0 {
++        return Err("manifest: timing records, micro_len and repetitions must be >= 1".into());
++    }
++    Ok(m)
++}
++
++// ---------------------------------------------------------------- results
++
++#[derive(Clone, Debug, Serialize)]
++pub struct BoundaryRow {
++    pub activation: String,
++    pub input: String,
++    pub output: String,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct TimingRow {
++    pub bench: String,
++    pub spec: String,
++    pub path: String,
++    pub activation: String,
++    pub samples_ns: Vec<f64>,
++    pub ratio_to_control: Vec<f64>,
++    pub median_ratio: f64,
++    pub ci_lo: f64,
++    pub ci_hi: f64,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct ScaleMean {
++    pub scale: f64,
++    /// `None` when a fit at this scale failed.
++    pub mean: Option<f64>,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct CalibRow {
++    pub task: String,
++    pub spec: String,
++    pub activation: String,
++    pub chosen_scale: Option<f64>,
++    pub per_scale_mean: Vec<ScaleMean>,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct Paired {
++    pub median: f64,
++    pub ci_lo: f64,
++    pub ci_hi: f64,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct ValidationRow {
++    pub task: String,
++    pub metric: String,
++    pub spec: String,
++    pub activation: String,
++    pub per_seed: Vec<f64>,
++    pub paired_vs_control: Option<Paired>,
++    /// Why this cell is excluded from fitness, if it is.
++    pub excluded: Option<String>,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct FailureRow {
++    pub phase: String,
++    pub task: String,
++    pub spec: String,
++    pub activation: String,
++    pub seed: u64,
++    pub reason: String,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct Coverage {
++    pub planned_cells: u64,
++    pub completed_cells: u64,
++    pub search_fits: u64,
++    pub validation_fits: u64,
++    pub wall_seconds: f64,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct VariantAssessment {
++    pub activation: String,
++    pub speed_pass: bool,
++    pub fitness_pass: bool,
++    pub local_candidate: bool,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct Assessment {
++    pub status: String,
++    pub per_variant: Vec<VariantAssessment>,
++    pub reasons: Vec<String>,
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct Results {
++    pub protocol_version: u32,
++    pub quick: bool,
++    pub platform: String,
++    pub code_rev: String,
++    pub rustc: String,
++    pub manifest: Manifest,
++    pub boundaries: Vec<BoundaryRow>,
++    pub micro: Vec<TimingRow>,
++    pub end_to_end: Vec<TimingRow>,
++    pub fitness_calibration: Vec<CalibRow>,
++    pub fitness_validation: Vec<ValidationRow>,
++    pub failures: Vec<FailureRow>,
++    pub coverage: Coverage,
++    pub assessment: Assessment,
++}
++
++impl Results {
++    /// Empty results, handy for feeding `assess` synthetic rows.
++    pub fn empty(manifest: Manifest, quick: bool) -> Results {
++        Results {
++            protocol_version: 1,
++            quick,
++            platform: platform(),
++            code_rev: "unknown".into(),
++            rustc: "unknown".into(),
++            manifest,
++            boundaries: vec![],
++            micro: vec![],
++            end_to_end: vec![],
++            fitness_calibration: vec![],
++            fitness_validation: vec![],
++            failures: vec![],
++            coverage: Coverage {
++                planned_cells: 0,
++                completed_cells: 0,
++                search_fits: 0,
++                validation_fits: 0,
++                wall_seconds: 0.0,
++            },
++            assessment: Assessment {
++                status: "unassessed".into(),
++                per_variant: vec![],
++                reasons: vec![],
++            },
++        }
++    }
++}
++
++pub fn platform() -> String {
++    format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
++}
++
++// ------------------------------------------------------------- assessment
++
++pub const CANDIDATES: [&str; 2] = ["mulclip_d2", "mulclip_d3"];
++
++pub fn assess(r: &Results, c: &Criteria) -> Assessment {
++    if r.quick {
++        return Assessment {
++            status: "not-assessable-quick".into(),
++            per_variant: vec![],
++            reasons: vec!["quick run: scaled-down sizes cannot be assessed".into()],
++        };
++    }
++    let mut specs: Vec<&str> = r.end_to_end.iter().map(|t| t.spec.as_str()).collect();
++    specs.sort();
++    specs.dedup();
++    let mut reasons = Vec::new();
++    let mut per_variant = Vec::new();
++    for v in CANDIDATES {
++        let mut speed_pass = !specs.is_empty();
++        if specs.is_empty() {
++            reasons.push(format!("{v}: speed: no end-to-end rows"));
++        }
++        for spec in &specs {
++            let row = r
++                .end_to_end
++                .iter()
++                .find(|t| t.spec == *spec && t.path == "lanes8" && t.activation == v);
++            match row {
++                None => {
++                    speed_pass = false;
++                    reasons.push(format!("{v}: speed: no lanes8 row for spec {spec}"));
++                }
++                Some(t) => {
++                    if !(t.median_ratio <= c.speed_ratio_max && t.ci_hi < 1.0) {
++                        speed_pass = false;
++                        reasons.push(format!(
++                            "{v}: speed: spec {spec} median ratio {:.3}, CI upper {:.3} \
++                             (needs median <= {} and CI upper < 1.0)",
++                            t.median_ratio, t.ci_hi, c.speed_ratio_max
++                        ));
++                    }
++                }
++            }
++        }
++        let rows: Vec<&ValidationRow> = r
++            .fitness_validation
++            .iter()
++            .filter(|x| x.activation == v)
++            .collect();
++        let mut fitness_pass = !rows.is_empty();
++        if rows.is_empty() {
++            reasons.push(format!("{v}: fitness: no validation rows"));
++        }
++        let mut better = false;
++        for row in &rows {
++            let cell = format!("{v}: fitness: {} x {}", row.task, row.spec);
++            if let Some(why) = &row.excluded {
++                fitness_pass = false;
++                reasons.push(format!("{cell} excluded ({why})"));
++                continue;
++            }
++            let Some(p) = &row.paired_vs_control else {
++                fitness_pass = false;
++                reasons.push(format!("{cell} has no paired difference"));
++                continue;
++            };
++            let margin = if row.metric == "accuracy" {
++                c.fitness_margin_accuracy
++            } else {
++                c.fitness_margin_nmse
++            };
++            if p.median.is_nan() || p.median <= -margin {
++                fitness_pass = false;
++                reasons.push(format!(
++                    "{cell} median paired difference {:.4} is not above -{margin}",
++                    p.median
++                ));
++            }
++            if p.ci_lo > 0.0 {
++                better = true;
++            }
++        }
++        if c.fitness_better_required && !better && !rows.is_empty() {
++            fitness_pass = false;
++            reasons.push(format!(
++                "{v}: fitness: no task x spec with CI lower bound above 0"
++            ));
++        }
++        per_variant.push(VariantAssessment {
++            activation: v.to_string(),
++            speed_pass,
++            fitness_pass,
++            local_candidate: speed_pass && fitness_pass,
++        });
++    }
++    let any = per_variant.iter().any(|v| v.local_candidate);
++    let status = if any {
++        let me = platform();
++        let missing: Vec<&String> = c.required_platforms.iter().filter(|p| **p != me).collect();
++        reasons.push(format!(
++            "local candidate on {me}; still needs results from {missing:?}"
++        ));
++        "candidate-pending-platforms"
++    } else {
++        "no-candidate"
++    };
++    Assessment {
++        status: status.into(),
++        per_variant,
++        reasons,
++    }
++}
++
++// ------------------------------------------------------------- experiment
++
++fn boundary_inputs(mc: &MulClip) -> Vec<f32> {
++    let ulp = |x: f32, up: bool| f32::from_bits(if up { x.to_bits() + 1 } else { x.to_bits() - 1 });
++    vec![
++        0.0,
++        -0.0,
++        1e-40,
++        mc.peak,
++        mc.c,
++        ulp(mc.c, false),
++        ulp(mc.c, true),
++        1e6,
++        f32::MAX,
++        f32::INFINITY,
++        f32::NEG_INFINITY,
++        f32::NAN,
++    ]
++}
++
++fn boundaries(acts: &[Prepared]) -> Vec<BoundaryRow> {
++    let default = MulClip::new(2).expect("order 2 is valid");
++    let mut rows = Vec::new();
++    for p in acts {
++        let mc = p.mc.unwrap_or(default);
++        for x in boundary_inputs(&mc) {
++            rows.push(BoundaryRow {
++                activation: p.act.name(),
++                input: fmt_f32(x),
++                output: fmt_f32(p.apply(x)),
++            });
++        }
++    }
++    rows
++}
++
++/// Scale the manifest down for `--quick`.
++pub fn quick_manifest(m: &Manifest) -> Manifest {
++    let mut q = m.clone();
++    q.timing.repetitions = 3;
++    q.timing.warmup = 1;
++    q.timing.records = 64;
++    q.timing.micro_len = 512;
++    q.fitness.validation_seeds.truncate(2);
++    q.fitness.calibration_seeds.truncate(1);
++    q.fitness.train = 256;
++    q.fitness.test = 128;
++    q.bootstrap.iters = 200;
++    q
++}
++
++fn shuffle(order: &mut [usize], rng: &mut Rng) {
++    for i in (1..order.len()).rev() {
++        order.swap(i, rng.below(i + 1));
++    }
++}
++
++struct TimingScratch {
++    s: Vec<f32>,
++    l: Vec<[f32; 8]>,
++    out: Vec<f32>,
++    sink: f32,
++}
++
++fn micro_scalar(p: &Prepared, buf: &[f32], out: &mut [f32]) {
++    for (o, &x) in out.iter_mut().zip(buf) {
++        *o = p.apply(x);
++    }
++}
++
++fn micro_lanes(p: &Prepared, buf: &[f32], out: &mut [f32]) {
++    let (bc, brem) = buf.as_chunks::<8>();
++    let (oc, orem) = out.as_chunks_mut::<8>();
++    for (b, o) in bc.iter().zip(oc.iter_mut()) {
++        *o = p.apply_lanes(*b);
++    }
++    for (o, &x) in orem.iter_mut().zip(brem) {
++        *o = p.apply(x);
++    }
++}
++
++fn e2e_scalar(g: &Graph, p: &Prepared, recs: &[Vec<f32>], sc: &mut TimingScratch) {
++    for r in recs {
++        forward_scalar(g, p, 1.0, r, &mut sc.s);
++        sc.sink += sc.s[sc.s.len() - 1];
++    }
++}
++
++fn e2e_lanes8(g: &Graph, p: &Prepared, recs: &[Vec<f32>], sc: &mut TimingScratch) {
++    let (chunks, rem) = recs.as_chunks::<8>();
++    for c in chunks {
++        let arr: [&[f32]; 8] = std::array::from_fn(|i| c[i].as_slice());
++        forward_lanes::<8>(g, p, 1.0, &arr, &mut sc.l);
++        sc.sink += sc.l[sc.l.len() - 1][0];
++    }
++    for r in rem {
++        forward_scalar(g, p, 1.0, r, &mut sc.s);
++        sc.sink += sc.s[sc.s.len() - 1];
++    }
++}
++
++const PATHS: [&str; 2] = ["scalar", "lanes8"];
++
++fn run_timing(m: &Manifest, acts: &[Prepared], control: usize) -> (Vec<TimingRow>, Vec<TimingRow>) {
++    let t = &m.timing;
++    let na = acts.len();
++    let mut rng = Rng::new(t.seed);
++    let micro_buf: Vec<f32> = (0..t.micro_len)
++        .map(|_| (rng.normal() * 3.0) as f32)
++        .collect();
++    let graphs: Vec<Graph> = m
++        .graph_specs
++        .iter()
++        .enumerate()
++        .map(|(i, s)| Graph::generate(s, t.seed + 1 + i as u64))
++        .collect();
++    let records: Vec<Vec<Vec<f32>>> = m
++        .graph_specs
++        .iter()
++        .map(|s| {
++            (0..t.records)
++                .map(|_| {
++                    (0..s.inputs)
++                        .map(|_| (rng.next_f64() * 2.0 - 1.0) as f32)
++                        .collect()
++                })
++                .collect()
++        })
++        .collect();
++    let units = 1 + graphs.len();
++    let mut samples: Vec<Vec<f64>> = vec![Vec::new(); units * 2 * na];
++    let mut sc = TimingScratch {
++        s: Vec::new(),
++        l: Vec::new(),
++        out: vec![0.0; t.micro_len],
++        sink: 0.0,
++    };
++    let mut order: Vec<usize> = (0..na).collect();
++    let mut shuffle_rng = Rng::new(t.seed ^ 0xA5A5_A5A5);
++    for pass in 0..t.warmup + t.repetitions {
++        let record = pass >= t.warmup;
++        shuffle(&mut order, &mut shuffle_rng);
++        for &a in &order {
++            let p = &acts[a];
++            for path in 0..2 {
++                let t0 = Instant::now();
++                if path == 0 {
++                    micro_scalar(p, black_box(&micro_buf), &mut sc.out);
++                } else {
++                    micro_lanes(p, black_box(&micro_buf), &mut sc.out);
++                }
++                black_box(&sc.out);
++                let ns = t0.elapsed().as_nanos() as f64 / t.micro_len as f64;
++                if record {
++                    samples[path * na + a].push(ns);
++                }
++            }
++            for (gi, g) in graphs.iter().enumerate() {
++                for path in 0..2 {
++                    let recs = &records[gi];
++                    let t0 = Instant::now();
++                    if path == 0 {
++                        e2e_scalar(g, p, black_box(recs), &mut sc);
++                    } else {
++                        e2e_lanes8(g, p, black_box(recs), &mut sc);
++                    }
++                    black_box(sc.sink);
++                    let ns = t0.elapsed().as_nanos() as f64 / recs.len() as f64;
++                    if record {
++                        samples[((gi + 1) * 2 + path) * na + a].push(ns);
++                    }
++                }
++            }
++        }
++    }
++    let mut counter = 0u64;
++    let mut rows_for = |unit: usize, bench: &str, spec: &str| -> Vec<TimingRow> {
++        let mut rows = Vec::new();
++        for path in 0..2 {
++            let ctl = samples[(unit * 2 + path) * na + control].clone();
++            for a in 0..na {
++                let s = samples[(unit * 2 + path) * na + a].clone();
++                let ratios: Vec<f64> = s.iter().zip(&ctl).map(|(x, c)| x / c.max(1e-9)).collect();
++                counter += 1;
++                let (lo, hi) = bootstrap_median_ci(
++                    &ratios,
++                    m.bootstrap.iters,
++                    m.bootstrap.seed + counter,
++                    0.95,
++                );
++                rows.push(TimingRow {
++                    bench: bench.into(),
++                    spec: spec.into(),
++                    path: PATHS[path].into(),
++                    activation: acts[a].act.name(),
++                    median_ratio: median(&ratios),
++                    ratio_to_control: ratios,
++                    samples_ns: s,
++                    ci_lo: lo,
++                    ci_hi: hi,
++                });
++            }
++        }
++        rows
++    };
++    let micro = rows_for(0, "micro", "micro");
++    let mut e2e = Vec::new();
++    for (gi, s) in m.graph_specs.iter().enumerate() {
++        e2e.extend(rows_for(gi + 1, "end_to_end", &s.name));
++    }
++    (micro, e2e)
++}
++
++fn fitness_graph(task: &Task, spec: &GraphSpec, hidden: u32, seed: u64, si: usize) -> Graph {
++    let s = GraphSpec {
++        name: spec.name.clone(),
++        inputs: task.input_count(),
++        hidden,
++        degree: spec.degree.clone(),
++    };
++    Graph::generate(&s, seed + 1000 * si as u64)
++}
++
++fn fitness_data(task: &Task, f: &Fitness, seed: u64, ti: usize) -> Dataset {
++    make_dataset(task, seed + 7_000_000 + 100 * ti as u64, f.train, f.test)
++}
++
++struct FitnessOut {
++    calib: Vec<CalibRow>,
++    valid: Vec<ValidationRow>,
++    search_fits: u64,
++    validation_fits: u64,
++}
++
++fn run_fitness(
++    m: &Manifest,
++    acts: &[Prepared],
++    control: usize,
++    failures: &mut Vec<FailureRow>,
++) -> FitnessOut {
++    let f = &m.fitness;
++    let (nt, ns, na, nk) = (
++        f.tasks.len(),
++        m.graph_specs.len(),
++        acts.len(),
++        f.input_scales.len(),
++    );
++    let cell = |t: usize, s: usize, a: usize| (t * ns + s) * na + a;
++    let mut metrics: Vec<Vec<Vec<f64>>> = vec![vec![Vec::new(); nk]; nt * ns * na];
++    let mut failed: Vec<Vec<bool>> = vec![vec![false; nk]; nt * ns * na];
++    let mut search_fits = 0u64;
++    for &seed in &f.calibration_seeds {
++        for (ti, task) in f.tasks.iter().enumerate() {
++            let ds = fitness_data(task, f, seed, ti);
++            for (si, spec) in m.graph_specs.iter().enumerate() {
++                let g = fitness_graph(task, spec, f.hidden_override, seed, si);
++                for (ai, p) in acts.iter().enumerate() {
++                    for (k, &scale) in f.input_scales.iter().enumerate() {
++                        search_fits += 1;
++                        match evaluate(task, &g, &ds, p, scale as f32, f.ridge_lambda) {
++                            Ok(v) => metrics[cell(ti, si, ai)][k].push(v),
++                            Err(e) => {
++                                failed[cell(ti, si, ai)][k] = true;
++                                failures.push(FailureRow {
++                                    phase: "calibration".into(),
++                                    task: task.name(),
++                                    spec: spec.name.clone(),
++                                    activation: p.act.name(),
++                                    seed,
++                                    reason: format!("scale {scale}: {}", e.reason()),
++                                });
++                            }
++                        }
++                    }
++                }
++            }
++        }
++    }
++    let mut calib = Vec::new();
++    let mut chosen: Vec<Option<f32>> = vec![None; nt * ns * na];
++    for (ti, task) in f.tasks.iter().enumerate() {
++        let higher = task.metric() == "accuracy";
++        for (si, spec) in m.graph_specs.iter().enumerate() {
++            for (ai, p) in acts.iter().enumerate() {
++                let c = cell(ti, si, ai);
++                let means: Vec<ScaleMean> = (0..nk)
++                    .map(|k| ScaleMean {
++                        scale: f.input_scales[k],
++                        mean: if failed[c][k] || metrics[c][k].is_empty() {
++                            None
++                        } else {
++                            Some(metrics[c][k].iter().sum::<f64>() / metrics[c][k].len() as f64)
++                        },
++                    })
++                    .collect();
++                let mut best: Option<(f64, f64)> = None;
++                for sm in &means {
++                    if let Some(v) = sm.mean {
++                        let better = match best {
++                            None => true,
++                            Some((_, b)) => (higher && v > b) || (!higher && v < b),
++                        };
++                        if better {
++                            best = Some((sm.scale, v));
++                        }
++                    }
++                }
++                chosen[c] = best.map(|(s, _)| s as f32);
++                calib.push(CalibRow {
++                    task: task.name(),
++                    spec: spec.name.clone(),
++                    activation: p.act.name(),
++                    chosen_scale: best.map(|(s, _)| s),
++                    per_scale_mean: means,
++                });
++            }
++        }
++    }
++    let mut per_seed: Vec<Vec<f64>> = vec![Vec::new(); nt * ns * na];
++    let mut excluded: Vec<Option<String>> = vec![None; nt * ns * na];
++    let mut validation_fits = 0u64;
++    for &seed in &f.validation_seeds {
++        for (ti, task) in f.tasks.iter().enumerate() {
++            let ds = fitness_data(task, f, seed, ti);
++            for (si, spec) in m.graph_specs.iter().enumerate() {
++                let g = fitness_graph(task, spec, f.hidden_override, seed, si);
++                for (ai, p) in acts.iter().enumerate() {
++                    let c = cell(ti, si, ai);
++                    if excluded[c].is_some() {
++                        continue;
++                    }
++                    let Some(scale) = chosen[c] else {
++                        excluded[c] =
++                            Some("no calibration scale completed without a failure".into());
++                        continue;
++                    };
++                    validation_fits += 1;
++                    match evaluate(task, &g, &ds, p, scale, f.ridge_lambda) {
++                        Ok(v) => per_seed[c].push(v),
++                        Err(e) => {
++                            excluded[c] = Some(format!("seed {seed}: {}", e.reason()));
++                            failures.push(FailureRow {
++                                phase: "validation".into(),
++                                task: task.name(),
++                                spec: spec.name.clone(),
++                                activation: p.act.name(),
++                                seed,
++                                reason: e.reason(),
++                            });
++                        }
++                    }
++                }
++            }
++        }
++    }
++    let mut valid = Vec::new();
++    let mut counter = 0u64;
++    for (ti, task) in f.tasks.iter().enumerate() {
++        let higher = task.metric() == "accuracy";
++        for (si, spec) in m.graph_specs.iter().enumerate() {
++            for (ai, p) in acts.iter().enumerate() {
++                let c = cell(ti, si, ai);
++                let cc = cell(ti, si, control);
++                let mut why = excluded[c].clone();
++                if why.is_none() && excluded[cc].is_some() {
++                    why = Some("control cell excluded".into());
++                }
++                let paired = if why.is_none() && ai != control {
++                    let diffs: Vec<f64> = per_seed[c]
++                        .iter()
++                        .zip(&per_seed[cc])
++                        .map(|(a, t)| if higher { a - t } else { t - a })
++                        .collect();
++                    counter += 1;
++                    let (lo, hi) = bootstrap_median_ci(
++                        &diffs,
++                        m.bootstrap.iters,
++                        m.bootstrap.seed + 100_000 + counter,
++                        0.95,
++                    );
++                    Some(Paired {
++                        median: median(&diffs),
++                        ci_lo: lo,
++                        ci_hi: hi,
++                    })
++                } else {
++                    None
++                };
++                valid.push(ValidationRow {
++                    task: task.name(),
++                    metric: task.metric().into(),
++                    spec: spec.name.clone(),
++                    activation: p.act.name(),
++                    per_seed: if why.is_some() {
++                        Vec::new()
++                    } else {
++                        per_seed[c].clone()
++                    },
++                    paired_vs_control: paired,
++                    excluded: why,
++                });
++            }
++        }
++    }
++    FitnessOut {
++        calib,
++        valid,
++        search_fits,
++        validation_fits,
++    }
++}
++
++/// Run the whole experiment. `quick` scales the manifest down and makes the
++/// assessment "not-assessable-quick".
++pub fn run_experiment(manifest: &Manifest, quick: bool) -> Results {
++    let started = Instant::now();
++    let m = if quick {
++        quick_manifest(manifest)
++    } else {
++        manifest.clone()
++    };
++    let acts: Vec<Prepared> = m
++        .activations
++        .iter()
++        .map(|n| Prepared::from_name(n).expect("manifest was validated"))
++        .collect();
++    let control = m
++        .activations
++        .iter()
++        .position(|a| *a == m.control)
++        .expect("manifest was validated");
++    let mut r = Results::empty(m.clone(), quick);
++    r.boundaries = boundaries(&acts);
++    let (micro, e2e) = run_timing(&m, &acts, control);
++    r.micro = micro;
++    r.end_to_end = e2e;
++    let fout = run_fitness(&m, &acts, control, &mut r.failures);
++    r.fitness_calibration = fout.calib;
++    r.fitness_validation = fout.valid;
++    let na = acts.len() as u64;
++    let planned = na * 2
++        + m.graph_specs.len() as u64 * na * 2
++        + m.fitness.tasks.len() as u64 * m.graph_specs.len() as u64 * na;
++    let completed = (r.micro.len() + r.end_to_end.len()) as u64
++        + r.fitness_validation
++            .iter()
++            .filter(|v| v.excluded.is_none())
++            .count() as u64;
++    r.coverage = Coverage {
++        planned_cells: planned,
++        completed_cells: completed,
++        search_fits: fout.search_fits,
++        validation_fits: fout.validation_fits,
++        wall_seconds: started.elapsed().as_secs_f64(),
++    };
++    r.assessment = assess(&r, &m.criteria);
++    r
++}
++
++/// Short human-readable summary for the runner.
++pub fn summary_table(r: &Results) -> String {
++    let mut s = String::new();
++    s.push_str(&format!(
++        "platform {} quick {} wall {:.1}s\n",
++        r.platform, r.quick, r.coverage.wall_seconds
++    ));
++    s.push_str("end-to-end median ratio to control (CI)\n");
++    for t in &r.end_to_end {
++        s.push_str(&format!(
++            "  {:<12} {:<7} {:<18} {:.3} [{:.3}, {:.3}]\n",
++            t.spec, t.path, t.activation, t.median_ratio, t.ci_lo, t.ci_hi
++        ));
++    }
++    s.push_str("fitness paired median vs control, positive = better (CI)\n");
++    for v in &r.fitness_validation {
++        match (&v.paired_vs_control, &v.excluded) {
++            (Some(p), _) => s.push_str(&format!(
++                "  {:<9} {:<12} {:<18} {:+.4} [{:+.4}, {:+.4}]\n",
++                v.task, v.spec, v.activation, p.median, p.ci_lo, p.ci_hi
++            )),
++            (None, Some(why)) => s.push_str(&format!(
++                "  {:<9} {:<12} {:<18} excluded: {why}\n",
++                v.task, v.spec, v.activation
++            )),
++            _ => {}
++        }
++    }
++    s.push_str(&format!(
++        "cells {}/{} failures {}\nassessment: {}\n",
++        r.coverage.completed_cells,
++        r.coverage.planned_cells,
++        r.failures.len(),
++        r.assessment.status
++    ));
++    for reason in &r.assessment.reasons {
++        s.push_str(&format!("  - {reason}\n"));
++    }
++    s
++}
+diff --git a/neat-core/examples/mulclip_experiment.rs b/neat-core/examples/mulclip_experiment.rs
+new file mode 100644
+index 0000000..d1f0a89
+--- /dev/null
++++ b/neat-core/examples/mulclip_experiment.rs
+@@ -0,0 +1,62 @@
++//! Issue #760: runs the opt-in MulClip benchmark and writes the results JSON.
++//!
++//! cargo run --release -p neat-core --example mulclip_experiment -- \
++//!   --manifest docs/research/mulclip/manifest.json --out results.json [--quick]
++#[path = "../benches/mulclip_experiment/mod.rs"]
++mod harness;
++
++const USAGE: &str = "usage: mulclip_experiment --manifest <path> --out <path> [--quick] \
++[--code-rev <s>] [--rustc <s>]";
++
++fn main() {
++    let mut manifest = None;
++    let mut out = None;
++    let mut quick = false;
++    let mut code_rev = "unknown".to_string();
++    let mut rustc = "unknown".to_string();
++    let mut args = std::env::args().skip(1);
++    while let Some(a) = args.next() {
++        let mut value = |name: &str| {
++            args.next().unwrap_or_else(|| {
++                eprintln!("{name} needs a value\n{USAGE}");
++                std::process::exit(2)
++            })
++        };
++        match a.as_str() {
++            "--manifest" => manifest = Some(value("--manifest")),
++            "--out" => out = Some(value("--out")),
++            "--code-rev" => code_rev = value("--code-rev"),
++            "--rustc" => rustc = value("--rustc"),
++            "--quick" => quick = true,
++            other => {
++                eprintln!("unknown argument '{other}'\n{USAGE}");
++                std::process::exit(2);
++            }
++        }
++    }
++    let (Some(manifest), Some(out)) = (manifest, out) else {
++        eprintln!("{USAGE}");
++        std::process::exit(2);
++    };
++    let text = std::fs::read_to_string(&manifest).unwrap_or_else(|e| {
++        eprintln!("cannot read manifest {manifest}: {e}");
++        std::process::exit(1)
++    });
++    let m = harness::parse_manifest(&text).unwrap_or_else(|e| {
++        eprintln!("{manifest}: {e}");
++        std::process::exit(1)
++    });
++    let mut r = harness::run_experiment(&m, quick);
++    r.code_rev = code_rev;
++    r.rustc = rustc;
++    let json = serde_json::to_string_pretty(&r).unwrap_or_else(|e| {
++        eprintln!("cannot serialise results: {e}");
++        std::process::exit(1)
++    });
++    std::fs::write(&out, json).unwrap_or_else(|e| {
++        eprintln!("cannot write {out}: {e}");
++        std::process::exit(1)
++    });
++    print!("{}", harness::summary_table(&r));
++    println!("wrote {out}");
++}
+diff --git a/neat-core/tests/mulclip_experiment.rs b/neat-core/tests/mulclip_experiment.rs
+new file mode 100644
+index 0000000..9eee26e
+--- /dev/null
++++ b/neat-core/tests/mulclip_experiment.rs
+@@ -0,0 +1,627 @@
++//! Issue #760: behaviour tests for the MulClip experiment harness.
++#[path = "../benches/mulclip_experiment/mod.rs"]
++mod harness;
++
++use harness::*;
++
++fn mc(d: u32) -> MulClip {
++    MulClip::new(d).unwrap()
++}
++
++fn same(a: f32, b: f32) -> bool {
++    (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
++}
++
++fn grid() -> Vec<f32> {
++    let mut v: Vec<f32> = (-1200..=1200).map(|i| i as f32 * 0.005).collect();
++    for d in 2..=8 {
++        let m = mc(d);
++        for x in [m.peak, m.c] {
++            v.push(x);
++            v.push(-x);
++            v.push(f32::from_bits(x.to_bits() - 1));
++            v.push(f32::from_bits(x.to_bits() + 1));
++        }
++    }
++    v.extend([
++        1e-40,
++        1e6,
++        f32::MAX,
++        f32::INFINITY,
++        f32::NEG_INFINITY,
++        f32::NAN,
++    ]);
++    v
++}
++
++#[test]
++fn coefficients_match_closed_forms() {
++    // d=2: b = 1/4, c = 2^2/1 = 4, peak 2. d=3: b = 4/27, c = 3^1.5/2, peak 3/2.
++    let a = mc(2);
++    assert!((a.b - 0.25).abs() < 1e-6 && (a.c - 4.0).abs() < 1e-6 && (a.peak - 2.0).abs() < 1e-6);
++    let b = mc(3);
++    assert!((b.b - 4.0 / 27.0).abs() < 1e-6);
++    assert!((b.c - 3.0 * 3f32.sqrt() / 2.0).abs() < 1e-6);
++    assert!((b.peak - 1.5).abs() < 1e-6);
++}
++
++#[test]
++fn slope_is_one_at_zero_and_peak_is_one() {
++    for d in 2..=5 {
++        let m = mc(d);
++        assert!((m.derivative(0.0) - 1.0).abs() < 1e-6, "slope d={d}");
++        assert!((m.apply(m.peak) - 1.0).abs() < 1e-6, "peak d={d}");
++    }
++}
++
++#[test]
++fn mulclip_is_odd() {
++    for d in [2, 3] {
++        for x in grid().into_iter().filter(|x| !x.is_nan()) {
++            assert_eq!(mc(d).apply(-x), -mc(d).apply(x), "d={d} x={x}");
++        }
++    }
++}
++
++#[test]
++fn regimes_rise_fall_and_clip() {
++    for d in [2, 3] {
++        let m = mc(d);
++        let mut prev = 0.0f32;
++        for i in 1..=100 {
++            let x = m.peak * 0.99 * i as f32 / 100.0;
++            let y = m.apply(x);
++            assert!(y > prev, "rising d={d} x={x}");
++            prev = y;
++        }
++        let mut prev = m.apply(m.peak * 1.001);
++        for i in 1..=99 {
++            let x = m.peak * 1.001 + (m.c * 0.999 - m.peak * 1.001) * i as f32 / 99.0;
++            let y = m.apply(x);
++            assert!(y < prev, "falling d={d} x={x}");
++            prev = y;
++        }
++        for x in [m.c, m.c * 1.5, 100.0] {
++            assert_eq!(m.apply(x), 0.0);
++            assert_eq!(m.apply(-x), 0.0);
++        }
++        for x in [m.peak, m.peak * 1.2, m.c, 50.0] {
++            assert_eq!(m.apply_mono(x), 1.0);
++            assert_eq!(m.apply_mono(-x), -1.0);
++        }
++        for x in [0.0f32, 0.3, -0.7, m.peak * 0.9] {
++            assert_eq!(m.apply_mono(x), m.apply(x));
++        }
++    }
++}
++
++#[test]
++fn hand_oracle_values() {
++    // d=2: x(1 - x/4): 1 -> 0.75; 3 -> 3 * 0.25 = 0.75 (same output, so the
++    // function is not injective and cannot be inverted from its output).
++    assert_eq!(mc(2).apply(1.0), 0.75);
++    assert_eq!(mc(2).apply(3.0), 0.75);
++    // d=3: 1 - (4/27) * 1.
++    assert!((mc(3).apply(1.0) - (1.0 - 4.0 / 27.0)).abs() < 1e-6);
++}
++
++#[test]
++fn non_finite_inputs() {
++    for d in [2, 3] {
++        let m = mc(d);
++        assert!(m.apply(f32::NAN).is_nan() && m.apply_mono(f32::NAN).is_nan());
++        assert!(m.apply_lanes([f32::NAN; 4])[0].is_nan());
++        assert!(m.apply_mono_lanes([f32::NAN; 4])[3].is_nan());
++        for x in [f32::INFINITY, f32::NEG_INFINITY, f32::MAX, f32::MIN] {
++            assert_eq!(m.apply(x), 0.0);
++            assert_eq!(m.apply_mono(x), x.signum());
++        }
++        for x in grid().into_iter().filter(|x| x.is_finite()) {
++            assert!(m.apply(x).is_finite() && m.apply_mono(x).is_finite());
++        }
++    }
++}
++
++#[test]
++fn lanes_pin_agreement_with_scalar_bit_for_bit() {
++    // Pins lane/scalar agreement only; the independent oracle is
++    // `lanes_match_independent_closed_form`.
++    let g = grid();
++    for d in 2..=8 {
++        let m = mc(d);
++        for a in g.as_chunks::<8>().0.iter().copied() {
++            let (l, lm) = (m.apply_lanes(a), m.apply_mono_lanes(a));
++            for i in 0..8 {
++                assert!(same(l[i], m.apply(a[i])), "d={d} x={}", a[i]);
++                assert!(same(lm[i], m.apply_mono(a[i])), "mono d={d} x={}", a[i]);
++            }
++        }
++        for a in g.as_chunks::<4>().0.iter().copied() {
++            let l = m.apply_lanes(a);
++            for i in 0..4 {
++                assert!(same(l[i], m.apply(a[i])));
++            }
++        }
++    }
++}
++
++/// Independent f64 oracle: closed form computed from scratch, sharing nothing
++/// with the harness. b = (d-1)^(d-1)/d^d, c = d^(d/(d-1))/(d-1), peak = d/(d-1).
++fn ref_consts(d: u32) -> (f64, f64, f64) {
++    let df = d as f64;
++    (
++        (df - 1.0).powf(df - 1.0) / df.powf(df),
++        df.powf(df / (df - 1.0)) / (df - 1.0),
++        df / (df - 1.0),
++    )
++}
++
++fn mulclip_ref(x: f64, d: u32) -> f64 {
++    if x.is_nan() {
++        return f64::NAN;
++    }
++    let (b, c, _) = ref_consts(d);
++    if x.abs() >= c {
++        0.0
++    } else {
++        x * (1.0 - b * x.abs().powf(d as f64 - 1.0))
++    }
++}
++
++fn mulclip_mono_ref(x: f64, d: u32) -> f64 {
++    if x.is_nan() {
++        return f64::NAN;
++    }
++    let (b, _, peak) = ref_consts(d);
++    if x.abs() >= peak {
++        x.signum()
++    } else {
++        x * (1.0 - b * x.abs().powf(d as f64 - 1.0))
++    }
++}
++
++#[test]
++fn lanes_match_independent_closed_form() {
++    // 2001 points on [-6, 6] plus seven specials = 2008 = 251 chunks of 8.
++    let mut xs: Vec<f32> = (0..2001)
++        .map(|i| (-6.0 + 12.0 * i as f64 / 2000.0) as f32)
++        .collect();
++    xs.extend([
++        f32::NAN,
++        f32::INFINITY,
++        f32::NEG_INFINITY,
++        f32::MAX,
++        f32::MIN,
++        0.0,
++        -0.0,
++    ]);
++    assert_eq!(xs.len() % 8, 0);
++    let mut compared = 0usize;
++    for d in [2u32, 3, 4] {
++        let m = mc(d);
++        let (_, c, peak) = ref_consts(d);
++        for chunk in xs.as_chunks::<8>().0 {
++            let (l, lm) = (m.apply_lanes(*chunk), m.apply_mono_lanes(*chunk));
++            for i in 0..8 {
++                let x = chunk[i] as f64;
++                // f32 rounding of the threshold may legitimately flip the branch.
++                if x.is_finite() && (x.abs() - c).abs() < 1e-4 {
++                    continue;
++                }
++                let (want, got) = (mulclip_ref(x, d), l[i] as f64);
++                if want.is_nan() {
++                    assert!(got.is_nan(), "d={d} x={x}");
++                } else {
++                    assert!((got - want).abs() < 1e-5, "d={d} x={x} {got} vs {want}");
++                    compared += 1;
++                }
++                if x.is_finite() && (x.abs() - peak).abs() < 1e-4 {
++                    continue;
++                }
++                let (want, got) = (mulclip_mono_ref(x, d), lm[i] as f64);
++                if want.is_nan() {
++                    assert!(got.is_nan(), "mono d={d} x={x}");
++                } else {
++                    assert!(
++                        (got - want).abs() < 1e-5,
++                        "mono d={d} x={x} {got} vs {want}"
++                    );
++                }
++            }
++        }
++    }
++    assert!(
++        compared > 3 * 1900,
++        "oracle must cover the grid, got {compared}"
++    );
++}
++
++#[test]
++fn derivative_matches_finite_difference() {
++    for d in [2, 3] {
++        let m = mc(d);
++        let f = |x: f64| {
++            let (b, d) = (m.b as f64, m.d as i32);
++            x * (1.0 - b * x.abs().powi(d - 1))
++        };
++        for i in -9..=9 {
++            let x = m.c as f64 * 0.99 * i as f64 / 9.0;
++            let h = 1e-5;
++            let fd = (f(x + h) - f(x - h)) / (2.0 * h);
++            assert!(
++                (m.derivative(x as f32) as f64 - fd).abs() < 1e-3,
++                "d={d} x={x}"
++            );
++        }
++        assert_eq!(m.derivative(m.c * 1.01), 0.0);
++        assert_eq!(m.derivative(-m.c * 1.01), 0.0);
++    }
++}
++
++#[test]
++fn invalid_names_and_orders_are_refused() {
++    for d in [0, 1, 9] {
++        assert!(MulClip::new(d).unwrap_err().contains("2..=8"));
++    }
++    assert!(Act::parse("bogus").unwrap_err().contains("bogus"));
++    assert_eq!(
++        Act::parse("mulclip_mono_d3").unwrap().name(),
++        "mulclip_mono_d3"
++    );
++}
++
++#[test]
++fn tiny_hand_graph_scores_as_derived() {
++    // sum = 0 + 0.5*1 + 0.25*2 = 1.0 -> mulclip_d2 0.75, relu 1.0, hard_tanh 1.0.
++    let g = Graph {
++        inputs: 2,
++        hidden: 1,
++        start: vec![0],
++        len: vec![2],
++        from: vec![0, 1],
++        weight: vec![0.5, 0.25],
++        bias: vec![0.0],
++    };
++    let mut acts = Vec::new();
++    for (name, want) in [("mulclip_d2", 0.75), ("relu", 1.0), ("hard_tanh", 1.0)] {
++        let p = Prepared::from_name(name).unwrap();
++        forward_scalar(&g, &p, 1.0, &[1.0, 2.0], &mut acts);
++        assert_eq!(acts[2], want, "{name}");
++    }
++}
++
++fn heavy_spec() -> GraphSpec {
++    GraphSpec {
++        name: "heavy".into(),
++        inputs: 16,
++        hidden: 64,
++        degree: Degree::HeavyTail {
++            min: 2,
++            max: 40,
++            alpha: 2.0,
++        },
++    }
++}
++
++#[test]
++fn lanes_forward_matches_scalar_forward() {
++    let g = Graph::generate(&heavy_spec(), 5);
++    let mut rng = Rng::new(9);
++    let recs: Vec<Vec<f32>> = (0..8)
++        .map(|_| {
++            (0..16)
++                .map(|_| (rng.next_f64() * 2.0 - 1.0) as f32)
++                .collect()
++        })
++        .collect();
++    let arr: [&[f32]; 8] = std::array::from_fn(|i| recs[i].as_slice());
++    for name in ["mulclip_d2", "mulclip_mono_d3", "relu", "hard_tanh", "tanh"] {
++        let p = Prepared::from_name(name).unwrap();
++        let mut la = Vec::new();
++        forward_lanes::<8>(&g, &p, 1.5, &arr, &mut la);
++        let mut sa = Vec::new();
++        for l in 0..8 {
++            forward_scalar(&g, &p, 1.5, &recs[l], &mut sa);
++            for i in 0..sa.len() {
++                if name == "tanh" {
++                    // Lane tanh is a vectorised approximation, not bit-identical.
++                    assert!((la[i][l] - sa[i]).abs() < 1e-3, "{name} node {i}");
++                } else {
++                    assert!(same(la[i][l], sa[i]), "{name} lane {l} node {i}");
++                }
++            }
++        }
++    }
++}
++
++/// Independent f64 forward pass over the CSR fields, using the closed-form
++/// reference rather than any harness activation.
++fn forward_ref(g: &Graph, name: &str, scale: f64, input: &[f32]) -> Vec<f64> {
++    let act = |x: f64| -> f64 {
++        match name {
++            "mulclip_d2" => mulclip_ref(x, 2),
++            "mulclip_d3" => mulclip_ref(x, 3),
++            "relu" => x.max(0.0),
++            "hard_tanh" => x.clamp(-1.0, 1.0),
++            _ => unreachable!("{name}"),
++        }
++    };
++    let mut a = vec![0.0f64; g.inputs + g.hidden];
++    for i in 0..g.inputs {
++        a[i] = input[i] as f64 * scale;
++    }
++    for j in 0..g.hidden {
++        let s = g.start[j] as usize;
++        let mut sum = g.bias[j] as f64;
++        for e in s..s + g.len[j] as usize {
++            sum += g.weight[e] as f64 * a[g.from[e] as usize];
++        }
++        a[g.inputs + j] = act(sum);
++    }
++    a
++}
++
++#[test]
++fn lanes_forward_matches_independent_f64_forward() {
++    // Fixed seeds (graph 5, records 9); if a pre-activation ever lands within
++    // 1e-4 of +/-c and flips the branch, change the seed rather than the bound.
++    let g = Graph::generate(&heavy_spec(), 5);
++    let mut rng = Rng::new(9);
++    let recs: Vec<Vec<f32>> = (0..8)
++        .map(|_| {
++            (0..16)
++                .map(|_| (rng.next_f64() * 2.0 - 1.0) as f32)
++                .collect()
++        })
++        .collect();
++    let arr: [&[f32]; 8] = std::array::from_fn(|i| recs[i].as_slice());
++    for name in ["mulclip_d2", "mulclip_d3", "relu", "hard_tanh"] {
++        let p = Prepared::from_name(name).unwrap();
++        let mut la = Vec::new();
++        forward_lanes::<8>(&g, &p, 1.5, &arr, &mut la);
++        for l in 0..8 {
++            let want = forward_ref(&g, name, 1.5, &recs[l]);
++            for i in g.inputs..g.inputs + g.hidden {
++                assert!(
++                    (la[i][l] as f64 - want[i]).abs() < 1e-4,
++                    "{name} lane {l} node {i}: {} vs {}",
++                    la[i][l],
++                    want[i]
++                );
++            }
++        }
++    }
++}
++
++#[test]
++fn graph_generation_is_deterministic_and_well_formed() {
++    let s = heavy_spec();
++    assert_eq!(Graph::generate(&s, 1), Graph::generate(&s, 1));
++    assert_ne!(Graph::generate(&s, 1), Graph::generate(&s, 2));
++    let g = Graph::generate(&s, 3);
++    for j in 0..g.hidden {
++        let (st, n) = (g.start[j] as usize, g.len[j] as usize);
++        let src = &g.from[st..st + n];
++        assert!(src.iter().all(|&f| (f as usize) < g.inputs + j));
++        let mut u = src.to_vec();
++        u.sort();
++        u.dedup();
++        assert_eq!(u.len(), n, "sources are distinct");
++        // fan-in is within [min, max] but capped by the nodes available.
++        assert!(n >= 2.min(g.inputs + j) && n <= 40);
++    }
++    let u = GraphSpec {
++        name: "u".into(),
++        inputs: 3,
++        hidden: 6,
++        degree: Degree::Uniform { fan_in: 4 },
++    };
++    let g = Graph::generate(&u, 1);
++    for j in 0..6 {
++        assert_eq!(g.len[j] as usize, 4.min(3 + j));
++    }
++}
++
++#[test]
++fn ridge_recovers_known_weights_and_rejects_singular() {
++    // y = 2 a - 3 b + 0.5, noiseless.
++    let mut rng = Rng::new(4);
++    let rows: Vec<Vec<f64>> = (0..50)
++        .map(|_| vec![rng.normal(), rng.normal(), 1.0])
++        .collect();
++    let y: Vec<f64> = rows.iter().map(|r| 2.0 * r[0] - 3.0 * r[1] + 0.5).collect();
++    let w = ridge_fit(&rows, &y, 0.0).unwrap();
++    for (got, want) in w.iter().zip([2.0, -3.0, 0.5]) {
++        assert!((got - want).abs() < 1e-6, "{got} vs {want}");
++    }
++    let bad = vec![vec![1.0, 0.0], vec![2.0, 0.0]];
++    assert!(ridge_fit(&bad, &[1.0, 2.0], 0.0).is_err());
++}
++
++#[test]
++fn statistics_are_as_defined() {
++    // Type-7: h = (4-1)*0.25 = 0.75 -> 1 + 0.75 = 1.75.
++    assert_eq!(quantile(&[1.0, 2.0, 3.0, 4.0], 0.25), 1.75);
++    let v: Vec<f64> = (1..=9).map(|x| x as f64).collect();
++    let a = bootstrap_median_ci(&v, 500, 7, 0.95);
++    assert_eq!(a, bootstrap_median_ci(&v, 500, 7, 0.95));
++    let m = median(&v);
++    assert_eq!(m, 5.0);
++    assert!(a.0 <= m && m <= a.1);
++}
++
++fn committed() -> String {
++    let p = concat!(
++        env!("CARGO_MANIFEST_DIR"),
++        "/../docs/research/mulclip/manifest.json"
++    );
++    std::fs::read_to_string(p).unwrap()
++}
++
++#[test]
++fn manifest_parser_accepts_committed_and_rejects_bad() {
++    let text = committed();
++    let m = parse_manifest(&text).unwrap();
++    assert_eq!(m.fitness.validation_seeds.len(), 10);
++    let extra = text.replacen("\"issue\": 760,", "\"issue\": 760, \"surprise\": 1,", 1);
++    assert!(parse_manifest(&extra).unwrap_err().contains("surprise"));
++    let overlap = text.replace("[11, 12, 13]", "[11, 12, 101]");
++    assert!(parse_manifest(&overlap).unwrap_err().contains("101"));
++    let d1 = text.replace("\"mulclip_d3\"", "\"mulclip_d1\"");
++    assert!(parse_manifest(&d1).unwrap_err().contains("2..=8"));
++}
++
++fn e2e(act: &str, spec: &str, median_ratio: f64, ci_hi: f64) -> TimingRow {
++    TimingRow {
++        bench: "end_to_end".into(),
++        spec: spec.into(),
++        path: "lanes8".into(),
++        activation: act.into(),
++        samples_ns: vec![],
++        ratio_to_control: vec![],
++        median_ratio,
++        ci_lo: 0.0,
++        ci_hi,
++    }
++}
++
++fn fit(act: &str, median: f64, ci_lo: f64) -> ValidationRow {
++    ValidationRow {
++        task: "parity6".into(),
++        metric: "accuracy".into(),
++        spec: "s".into(),
++        activation: act.into(),
++        per_seed: vec![],
++        paired_vs_control: Some(Paired {
++            median,
++            ci_lo,
++            ci_hi: median + 0.1,
++        }),
++        excluded: None,
++    }
++}
++
++fn synthetic(speed_hi: f64, fit_median: f64, quick: bool) -> Results {
++    let m = parse_manifest(&committed()).unwrap();
++    let mut r = Results::empty(m, quick);
++    for v in ["mulclip_d2", "mulclip_d3"] {
++        r.end_to_end.push(e2e(v, "s", 0.8, speed_hi));
++        r.fitness_validation
++            .push(fit(v, fit_median, fit_median.max(0.0) * 0.5));
++    }
++    r
++}
++
++#[test]
++fn assessment_statuses() {
++    let c = parse_manifest(&committed()).unwrap().criteria;
++    let a = assess(&synthetic(0.9, 0.05, false), &c);
++    assert_eq!(a.status, "candidate-pending-platforms");
++    assert!(a.per_variant.iter().all(|v| v.local_candidate));
++
++    let a = assess(&synthetic(1.0, 0.05, false), &c);
++    assert_eq!(a.status, "no-candidate");
++    assert!(a.reasons.iter().any(|r| r.contains("speed")));
++
++    // Margin 0.02: -0.05 is worse than allowed.
++    let a = assess(&synthetic(0.9, -0.05, false), &c);
++    assert_eq!(a.status, "no-candidate");
++    assert!(a.reasons.iter().any(|r| r.contains("fitness")));
++
++    let a = assess(&synthetic(0.9, 0.05, true), &c);
++    assert_eq!(a.status, "not-assessable-quick");
++}
++
++#[test]
++fn assessment_rules_are_isolated() {
++    let base = parse_manifest(&committed()).unwrap().criteria;
++    let strict = Criteria {
++        fitness_better_required: true,
++        ..base.clone()
++    };
++    let lax = Criteria {
++        fitness_better_required: false,
++        ..base.clone()
++    };
++    // Baseline: passes under the strict criteria.
++    let a = assess(&synthetic(0.9, 0.05, false), &strict);
++    assert_eq!(a.status, "candidate-pending-platforms");
++
++    // (a) Only median_ratio changes: above the limit while ci_hi stays < 1.0.
++    let mut r = synthetic(0.9, 0.05, false);
++    for t in r.end_to_end.iter_mut() {
++        t.median_ratio = strict.speed_ratio_max + 0.01;
++    }
++    let a = assess(&r, &strict);
++    assert_eq!(a.status, "no-candidate");
++    assert!(
++        a.reasons.iter().any(|x| x.contains("speed")),
++        "{:?}",
++        a.reasons
++    );
++
++    // (b) Only ci_lo changes: every row within margin, none with ci_lo > 0.
++    let mut r = synthetic(0.9, 0.05, false);
++    for v in r.fitness_validation.iter_mut() {
++        v.paired_vs_control.as_mut().unwrap().ci_lo = 0.0;
++    }
++    let a = assess(&r, &strict);
++    assert_eq!(a.status, "no-candidate");
++    assert!(
++        a.reasons
++            .iter()
++            .any(|x| x.contains("CI lower bound above 0")),
++        "{:?}",
++        a.reasons
++    );
++    let a = assess(&r, &lax);
++    assert_eq!(a.status, "candidate-pending-platforms");
++
++    // (c) Only `excluded` changes on one candidate's row.
++    let mut r = synthetic(0.9, 0.05, false);
++    r.fitness_validation[0].excluded = Some("probe".into());
++    let a = assess(&r, &strict);
++    assert!(
++        a.reasons.iter().any(|x| x.contains("excluded")),
++        "{:?}",
++        a.reasons
++    );
++    assert!(!a.per_variant[0].local_candidate);
++    assert!(a.per_variant[1].local_candidate);
++    let mut r = synthetic(0.9, 0.05, false);
++    for v in r.fitness_validation.iter_mut() {
++        v.excluded = Some("probe".into());
++    }
++    let a = assess(&r, &strict);
++    assert_eq!(a.status, "no-candidate");
++    assert!(a.reasons.iter().any(|x| x.contains("excluded")));
++}
++
++#[test]
++fn quick_run_completes_every_planned_cell() {
++    // Shrink the committed manifest so the debug build stays fast.
++    let mut m = parse_manifest(&committed()).unwrap();
++    for s in m.graph_specs.iter_mut() {
++        s.hidden = 16;
++    }
++    m.fitness.hidden_override = 12;
++    let r = run_experiment(&m, true);
++    assert!(r.quick);
++    assert_eq!(r.coverage.completed_cells, r.coverage.planned_cells);
++    assert!(r.coverage.planned_cells > 0);
++    assert!(r.failures.is_empty(), "{:?}", r.failures);
++    assert_eq!(r.assessment.status, "not-assessable-quick");
++    // Option fields legitimately serialise as null; every float must be finite.
++    for t in r.micro.iter().chain(&r.end_to_end) {
++        let all = t.samples_ns.iter().chain(&t.ratio_to_control);
++        assert!(
++            all.chain([&t.median_ratio, &t.ci_lo, &t.ci_hi])
++                .all(|v| v.is_finite())
++        );
++    }
++    assert!(
++        r.fitness_validation
++            .iter()
++            .all(|v| v.per_seed.iter().all(|x| x.is_finite()))
++    );
++}

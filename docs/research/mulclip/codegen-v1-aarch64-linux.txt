@@ -1,0 +1,25 @@
+V1 code generation audit, aarch64-linux, rustc 1.99.1 (58cf8f9c3 2026-10-13)
+Source: 21714ce (harness unchanged from 9e506f9)
+Command: cargo rustc --release -p neat-core --example mulclip_experiment -- --emit=asm,llvm-ir
+Prepared::apply_lanes::<8>, MulClip arm (d stored at runtime):
+	ldr	s3, [x2]
+	movi	d2, #0000000000000000
+	movi	d5, #0000000000000000
+	fabs	s4, s3
+	fcmp	s4, s0
+	b.ge	.LBB0_9
+	fmov	s5, #1.00000000
+	mov	w9, w8
+.LBB0_7:
+	fmul	s5, s4, s5
+	subs	w9, w9, #1
+	b.ne	.LBB0_7
+	fmul	s4, s1, s5
+	fmov	s5, #1.00000000
+	fsub	s4, s5, s4
+	fmul	s5, s3, s4
+
+This scalar s-register multiply loop is repeated per lane. The tanh arm
+contains fmul/fadd/fdiv on v*.4s and v*.2s (plus scalar tail lanes).
+The end-to-end dot loop uses fmul/fadd v*.4s, but calls the same scalar
+MulClip activation arm above. Eight record lanes did not imply SIMD MulClip.
