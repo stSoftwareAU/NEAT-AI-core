@@ -1,0 +1,3920 @@
+diff --git a/.codespellrc b/.codespellrc
+index 4b261ef48aa8bd558baf36bb740e0a8c79cdec39..cce2c189cf45761d0486be76fab83b5132acdfc9 100644
+--- a/.codespellrc
++++ b/.codespellrc
+@@ -9,4 +9,5 @@ check-hidden =
+ # renderD: serde/JSON field name; mape: MAPE (mean absolute percentage error) acronym
+ # froms: variable name storing "from" versions in bump-deps.sh, intentional plural
+ # indx: variable name from TypeScript code being referenced
+-ignore-words-list = renderD,mape,froms,indx
++# coo: COO, the coordinate-format sparse-matrix layout (Issue #758 experiment)
++ignore-words-list = renderD,mape,froms,indx,coo
+diff --git a/.github/dependabot.yml b/.github/dependabot.yml
+index 12662a8819cb8c9100cf68034b0d8b25cd7cd9cb..5cec41e9c477ec3d560d1764d9934e3ade93bd12 100644
+--- a/.github/dependabot.yml
++++ b/.github/dependabot.yml
+@@ -39,3 +39,15 @@ updates:
+       - "dependencies"
+     commit-message:
+       prefix: "chore(deps)"
++
++  - package-ecosystem: "cargo"
++    directory: "/experiments/sparse_metal"
++    schedule:
++      interval: "weekly"
++    cooldown:
++      default-days: 7
++    open-pull-requests-limit: 10
++    labels:
++      - "dependencies"
++    commit-message:
++      prefix: "chore(deps)"
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index a21ecd29e89125bf3215fc03bfeb92b52fb21ba7..9d1544a04bddbeedfcd9a9a0ef7fa4668a4b2193 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -21,6 +21,15 @@ on:
+       # branch; `*` never crosses `/`, so this single-level glob gates them too.
+       - milestone/*
+   workflow_dispatch:
++    inputs:
++      metal_probe:
++        description: Query native Metal device availability
++        type: boolean
++        default: false
++      sparse_metal:
++        description: Run the frozen scorer Metal supplement
++        type: boolean
++        default: false
+ 
+ # Issue #334 — the heaviest gate in the repo: one run compiles the workspace
+ # several times over (quality + rust-gates). Every `synchronize` push to an open
+@@ -36,6 +45,58 @@ env:
+   CARGO_TERM_COLOR: always
+ 
+ jobs:
++  sparse-metal-research:
++    name: Scorer Metal supplement
++    if: github.event_name == 'workflow_dispatch' && inputs.sparse_metal
++    runs-on: macos-15
++    timeout-minutes: 35
++    permissions:
++      contents: read
++    env:
++      WGPU_BACKEND: metal
++    steps:
++      - name: Checkout frozen adapter
++        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        with:
++          persist-credentials: false
++      - name: Install Rust
++        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
++        with:
++          toolchain: stable
++      - name: Measure existing scorer Metal backend
++        id: adapter
++        run: bash experiments/sparse_metal/run.sh < /dev/null
++      - name: Preserve Metal supplement including failed cells
++        if: always()
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: sparse-metal-supplement
++          path: sparse-metal-results/
++          if-no-files-found: error
++
++  metal-capability-probe:
++    name: Native Metal capability probe
++    if: github.event_name == 'workflow_dispatch' && inputs.metal_probe
++    runs-on: macos-15
++    timeout-minutes: 10
++    permissions:
++      contents: read
++    steps:
++      - name: Checkout capability probe
++        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        with:
++          persist-credentials: false
++      - name: Query native Metal devices
++        id: query
++        run: mkdir metal-probe && swift --version > metal-probe/compiler.txt && sysctl -n machdep.cpu.brand_string > metal-probe/cpu.txt && uname -a > metal-probe/kernel.txt && git rev-parse HEAD > metal-probe/revision.txt && swift docs/research/sparse-precision/metal-probe.swift > metal-probe/result.json < /dev/null
++      - name: Preserve capability result
++        if: always()
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: metal-capability
++          path: metal-probe/
++          if-no-files-found: error
++
+   version-increment:
+     name: Auto-increment Versions
+     runs-on: ubuntu-latest
+@@ -421,6 +482,9 @@ jobs:
+       - name: cargo deny (wasm-bench)
+         run: cargo deny --manifest-path wasm-bench/Cargo.toml check
+ 
++      - name: Audit temporary scorer Metal adapter
++        run: cargo deny --manifest-path experiments/sparse_metal/Cargo.toml check
++
+       # Issue #695 — every committed lockfile must still resolve against the
+       # manifest beside it. version-increment re-locks the siblings its version
+       # bump stales; this gate is what stops that silently regressing, and it
+diff --git a/.github/workflows/security.yml b/.github/workflows/security.yml
+index eac2b861ba2759288f16f8139eeb3de3ed5c3e7d..95d5af28c037a3d260abf6fca02a7637031e5bd6 100644
+--- a/.github/workflows/security.yml
++++ b/.github/workflows/security.yml
+@@ -59,6 +59,9 @@ jobs:
+       - name: Run cargo audit (wasm-bench lockfile)
+         run: cargo audit --file wasm-bench/Cargo.lock
+ 
++      - name: Audit temporary scorer Metal adapter
++        run: cargo audit --file experiments/sparse_metal/Cargo.lock
++
+       - name: Dependency review (GitHub Advisory / license diff on PR)
+         if: ${{ inputs.include-dependency-review && github.event_name == 'pull_request' }}
+         # actions/dependency-review-action@v5.0.0
+diff --git a/SECURITY.md b/SECURITY.md
+index e9d7f97c199774c06c047dd7d97740cb7aa6e114..d605d7e95f3e223f65c8141c653f0545c1048c80 100644
+--- a/SECURITY.md
++++ b/SECURITY.md
+@@ -178,7 +178,8 @@ flowchart TD
+ 
+ ## Supply-chain audit scope
+ 
+-Two Cargo lockfiles live in this repository, and **both** are audited. The root
++Three Cargo lockfiles currently live in this repository, including the
++temporary Metal experiment; each is audited. The root
+ `Cargo.toml` is a virtual workspace that `exclude`s `wasm-bench`, so the
+ research harness resolves its own dependency graph — packages the root
+ lockfile never names, and which a root-only audit therefore never reads
+@@ -188,9 +189,12 @@ lockfile never names, and which a root-only audit therefore never reads
+ | --- | --- | --- | --- | --- |
+ | `Cargo.lock` | the `neat-core` workspace | `cargo audit` (`security.yml`) | `cargo deny check` | Dependabot `directory: "/"` |
+ | `wasm-bench/Cargo.lock` | the Issue #509 wasm A/B harness | `cargo audit --file wasm-bench/Cargo.lock` (`security.yml`) | `cargo deny --manifest-path wasm-bench/Cargo.toml check` | Dependabot `directory: "/wasm-bench"` |
++| `experiments/sparse_metal/Cargo.lock` | temporary opt-in scorer adapter | `cargo audit --file experiments/sparse_metal/Cargo.lock` (`security.yml`) | `cargo deny --manifest-path experiments/sparse_metal/Cargo.toml check` | Dependabot `directory: "/experiments/sparse_metal"` |
+ 
+-Both `cargo deny` passes read the one root `deny.toml`, so the licence
+-allow-list and `unknown-registry = "deny"` apply identically to each graph.
++These `cargo deny` passes read the one root `deny.toml`, so the licence
++allow-list and `unknown-registry = "deny"` apply identically to each graph. The
++temporary adapter pins the scorer and core sources; its two internal Git URLs
++are explicitly allowed while that research graph exists.
+ 
+ ```mermaid
+ flowchart LR
+diff --git a/deny.toml b/deny.toml
+index 5bba162269f8ab119a0eb6e8bd6a8c19610a0a44..bf2c6a5acc8f7eea73ee4a4cfb438cf1b3ae3cc3 100644
+--- a/deny.toml
++++ b/deny.toml
+@@ -67,4 +67,4 @@ ignore = []
+ unknown-registry = "deny"
+ unknown-git = "deny"
+ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+-allow-git = []
++allow-git = ["https://github.com/stSoftwareAU/NEAT-AI-core", "https://github.com/stSoftwareAU/NEAT-AI-scorer"]
+diff --git a/experiments/sparse_metal/Cargo.lock b/experiments/sparse_metal/Cargo.lock
+new file mode 100644
+index 0000000000000000000000000000000000000000..3c116bbc5bea4d3cf75c0b909885f64b10d6e969
+--- /dev/null
++++ b/experiments/sparse_metal/Cargo.lock
+@@ -0,0 +1,1459 @@
++# This file is automatically @generated by Cargo.
++# It is not intended for manual editing.
++version = 4
++
++[[package]]
++name = "allocator-api2"
++version = "0.2.21"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
++
++[[package]]
++name = "android_system_properties"
++version = "0.1.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ae221649c9976a6f6c56ae1facf410f3ddb33cc661c4b7b61020a912d4237fbc"
++dependencies = [
++ "libc",
++]
++
++[[package]]
++name = "anstream"
++version = "1.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "824a212faf96e9acacdbd09febd34438f8f711fb84e09a8916013cd7815ca28d"
++dependencies = [
++ "anstyle",
++ "anstyle-parse",
++ "anstyle-query",
++ "anstyle-wincon",
++ "colorchoice",
++ "is_terminal_polyfill",
++ "utf8parse",
++]
++
++[[package]]
++name = "anstyle"
++version = "1.0.14"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
++
++[[package]]
++name = "anstyle-parse"
++version = "1.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "52ce7f38b242319f7cabaa6813055467063ecdc9d355bbb4ce0c68908cd8130e"
++dependencies = [
++ "utf8parse",
++]
++
++[[package]]
++name = "anstyle-query"
++version = "1.1.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
++dependencies = [
++ "windows-sys",
++]
++
++[[package]]
++name = "anstyle-wincon"
++version = "3.0.11"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
++dependencies = [
++ "anstyle",
++ "once_cell_polyfill",
++ "windows-sys",
++]
++
++[[package]]
++name = "arrayvec"
++version = "0.7.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
++
++[[package]]
++name = "ash"
++version = "0.38.0+1.3.281"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
++dependencies = [
++ "libloading",
++]
++
++[[package]]
++name = "autocfg"
++version = "1.5.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
++
++[[package]]
++name = "bit-set"
++version = "0.10.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "09ec2f926cc3060f09db9ebc5b52823d85268d24bb917e472c0c4bea35780a7d"
++dependencies = [
++ "bit-vec",
++]
++
++[[package]]
++name = "bit-vec"
++version = "0.9.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
++
++[[package]]
++name = "bitflags"
++version = "2.13.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
++
++[[package]]
++name = "block2"
++version = "0.6.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
++dependencies = [
++ "objc2",
++]
++
++[[package]]
++name = "bumpalo"
++version = "3.20.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
++
++[[package]]
++name = "bytemuck"
++version = "1.25.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
++dependencies = [
++ "bytemuck_derive",
++]
++
++[[package]]
++name = "bytemuck_derive"
++version = "1.12.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 3.0.3",
++]
++
++[[package]]
++name = "cfg-if"
++version = "1.0.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
++
++[[package]]
++name = "cfg_aliases"
++version = "0.2.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
++
++[[package]]
++name = "clap"
++version = "4.6.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
++dependencies = [
++ "clap_builder",
++ "clap_derive",
++]
++
++[[package]]
++name = "clap_builder"
++version = "4.6.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ec0797fb7aeb1406c84efac526901f7ec3ead2124f946b494e72879d4b54704d"
++dependencies = [
++ "anstream",
++ "anstyle",
++ "clap_lex",
++ "strsim",
++]
++
++[[package]]
++name = "clap_derive"
++version = "4.6.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f9c751b79415d4e559e3d1fcf128e09e720eb673a06d26cf6f392d37d75b66e0"
++dependencies = [
++ "heck",
++ "proc-macro2",
++ "quote",
++ "syn 3.0.3",
++]
++
++[[package]]
++name = "clap_lex"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
++
++[[package]]
++name = "codespan-reporting"
++version = "0.13.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
++dependencies = [
++ "serde",
++ "termcolor",
++ "unicode-width",
++]
++
++[[package]]
++name = "colorchoice"
++version = "1.0.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
++
++[[package]]
++name = "crossbeam-deque"
++version = "0.8.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "622f3fc73690be383c7214310406f28a90e6edeadc3cea882f9d71e495b9711a"
++dependencies = [
++ "crossbeam-epoch",
++ "crossbeam-utils",
++]
++
++[[package]]
++name = "crossbeam-epoch"
++version = "0.9.21"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "dc74980687109a3b14c72fd458107bf0baa1da1a1a805e178d15501ba9b86d9d"
++dependencies = [
++ "crossbeam-utils",
++]
++
++[[package]]
++name = "crossbeam-utils"
++version = "0.8.23"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
++
++[[package]]
++name = "crunchy"
++version = "0.2.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
++
++[[package]]
++name = "dispatch2"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
++dependencies = [
++ "bitflags",
++ "objc2",
++]
++
++[[package]]
++name = "dlib"
++version = "0.5.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
++dependencies = [
++ "libloading",
++]
++
++[[package]]
++name = "document-features"
++version = "0.2.12"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
++dependencies = [
++ "litrs",
++]
++
++[[package]]
++name = "either"
++version = "1.18.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
++
++[[package]]
++name = "equivalent"
++version = "1.0.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
++
++[[package]]
++name = "foldhash"
++version = "0.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
++
++[[package]]
++name = "futures-core"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
++
++[[package]]
++name = "futures-task"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
++
++[[package]]
++name = "futures-util"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
++dependencies = [
++ "futures-core",
++ "futures-task",
++ "pin-project-lite",
++ "slab",
++]
++
++[[package]]
++name = "gl_generator"
++version = "0.14.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1a95dfc23a2b4a9a2f5ab41d194f8bfda3cabec42af4e39f08c339eb2a0c124d"
++dependencies = [
++ "khronos_api",
++ "log",
++ "xml-rs",
++]
++
++[[package]]
++name = "glow"
++version = "0.17.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "29038e1c483364cc6bb3cf78feee1816002e127c331a1eec55a4d202b9e1adb5"
++dependencies = [
++ "js-sys",
++ "slotmap",
++ "wasm-bindgen",
++ "web-sys",
++]
++
++[[package]]
++name = "glutin_wgl_sys"
++version = "0.6.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2c4ee00b289aba7a9e5306d57c2d05499b2e5dc427f84ac708bd2c090212cf3e"
++dependencies = [
++ "gl_generator",
++]
++
++[[package]]
++name = "gpu-allocator"
++version = "0.28.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "51255ea7cfaadb6c5f1528d43e92a82acb2b96c43365989a28b2d44ee38f8795"
++dependencies = [
++ "ash",
++ "hashbrown 0.16.1",
++ "log",
++ "presser",
++ "thiserror",
++ "windows",
++]
++
++[[package]]
++name = "half"
++version = "2.7.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
++dependencies = [
++ "cfg-if",
++ "crunchy",
++ "num-traits",
++ "zerocopy",
++]
++
++[[package]]
++name = "hashbrown"
++version = "0.16.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
++dependencies = [
++ "allocator-api2",
++ "equivalent",
++ "foldhash",
++]
++
++[[package]]
++name = "hashbrown"
++version = "0.17.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
++dependencies = [
++ "foldhash",
++]
++
++[[package]]
++name = "heck"
++version = "0.5.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
++
++[[package]]
++name = "indexmap"
++version = "2.14.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
++dependencies = [
++ "equivalent",
++ "hashbrown 0.17.1",
++]
++
++[[package]]
++name = "is_terminal_polyfill"
++version = "1.70.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
++
++[[package]]
++name = "itoa"
++version = "1.0.18"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
++
++[[package]]
++name = "jni-sys"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "41a652e1f9b6e0275df1f15b32661cf0d4b78d4d87ddec5e0c3c20f097433258"
++dependencies = [
++ "jni-sys 0.4.1",
++]
++
++[[package]]
++name = "jni-sys"
++version = "0.4.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c6377a88cb3910bee9b0fa88d4f42e1d2da8e79915598f65fb0c7ee14c878af2"
++dependencies = [
++ "jni-sys-macros",
++]
++
++[[package]]
++name = "jni-sys-macros"
++version = "0.4.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264"
++dependencies = [
++ "quote",
++ "syn 2.0.118",
++]
++
++[[package]]
++name = "js-sys"
++version = "0.3.105"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ce57d20d1ea864ce2ac172ab472d409214f4fd359f0b2a2775abdf522e2af99e"
++dependencies = [
++ "cfg-if",
++ "futures-util",
++ "wasm-bindgen",
++]
++
++[[package]]
++name = "khronos-egl"
++version = "6.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6aae1df220ece3c0ada96b8153459b67eebe9ae9212258bb0134ae60416fdf76"
++dependencies = [
++ "libc",
++ "libloading",
++ "pkg-config",
++]
++
++[[package]]
++name = "khronos_api"
++version = "3.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
++
++[[package]]
++name = "libc"
++version = "0.2.191"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
++
++[[package]]
++name = "libloading"
++version = "0.8.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
++dependencies = [
++ "cfg-if",
++ "windows-link",
++]
++
++[[package]]
++name = "libm"
++version = "0.2.16"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
++
++[[package]]
++name = "litrs"
++version = "1.0.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
++
++[[package]]
++name = "lock_api"
++version = "0.4.14"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
++dependencies = [
++ "scopeguard",
++]
++
++[[package]]
++name = "log"
++version = "0.4.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
++
++[[package]]
++name = "memchr"
++version = "2.8.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
++
++[[package]]
++name = "naga"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a616d2fb8c89516ac2723a581f69d6c18576046bed761bd6b305e5618e6ae130"
++dependencies = [
++ "arrayvec",
++ "bit-set",
++ "bitflags",
++ "cfg-if",
++ "cfg_aliases",
++ "codespan-reporting",
++ "half",
++ "hashbrown 0.17.1",
++ "indexmap",
++ "libm",
++ "log",
++ "naga-types",
++ "num-traits",
++ "once_cell",
++ "rustc-hash",
++ "spirv",
++ "thiserror",
++ "unicode-ident",
++]
++
++[[package]]
++name = "naga-types"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "590afbf58a6f4f62873cd5cff4468061844bafa1cdf399cc954537c22d768d49"
++dependencies = [
++ "hashbrown 0.17.1",
++ "indexmap",
++ "rustc-hash",
++ "thiserror",
++]
++
++[[package]]
++name = "ndk-sys"
++version = "0.6.0+11769913"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
++dependencies = [
++ "jni-sys 0.3.1",
++]
++
++[[package]]
++name = "neat-core"
++version = "0.23.4"
++source = "git+https://github.com/stSoftwareAU/NEAT-AI-core?tag=v0.23.4#e86c342e72e85172b2f9e557329aca3b15bf5229"
++dependencies = [
++ "serde",
++ "serde_json",
++ "wasm-bindgen",
++]
++
++[[package]]
++name = "num-traits"
++version = "0.2.19"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
++dependencies = [
++ "autocfg",
++ "libm",
++]
++
++[[package]]
++name = "objc2"
++version = "0.6.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3a12a8ed07aefc768292f076dc3ac8c48f3781c8f2d5851dd3d98950e8c5a89f"
++dependencies = [
++ "objc2-encode",
++]
++
++[[package]]
++name = "objc2-core-foundation"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
++dependencies = [
++ "bitflags",
++ "dispatch2",
++ "objc2",
++]
++
++[[package]]
++name = "objc2-core-graphics"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e022c9d066895efa1345f8e33e584b9f958da2fd4cd116792e15e07e4720a807"
++dependencies = [
++ "dispatch2",
++ "objc2",
++ "objc2-core-foundation",
++ "objc2-io-surface",
++]
++
++[[package]]
++name = "objc2-encode"
++version = "4.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ef25abbcd74fb2609453eb695bd2f860d389e457f67dc17cafc8b8cbc89d0c33"
++
++[[package]]
++name = "objc2-foundation"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
++dependencies = [
++ "bitflags",
++ "objc2",
++ "objc2-core-foundation",
++]
++
++[[package]]
++name = "objc2-io-surface"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "180788110936d59bab6bd83b6060ffdfffb3b922ba1396b312ae795e1de9d81d"
++dependencies = [
++ "bitflags",
++ "objc2",
++ "objc2-core-foundation",
++]
++
++[[package]]
++name = "objc2-metal"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a0125f776a10d00af4152d74616409f0d4a2053a6f57fa5b7d6aa2854ac04794"
++dependencies = [
++ "bitflags",
++ "block2",
++ "objc2",
++ "objc2-foundation",
++]
++
++[[package]]
++name = "objc2-quartz-core"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "96c1358452b371bf9f104e21ec536d37a650eb10f7ee379fff67d2e08d537f1f"
++dependencies = [
++ "bitflags",
++ "objc2",
++ "objc2-core-foundation",
++ "objc2-core-graphics",
++ "objc2-foundation",
++ "objc2-metal",
++]
++
++[[package]]
++name = "once_cell"
++version = "1.21.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
++
++[[package]]
++name = "once_cell_polyfill"
++version = "1.70.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
++
++[[package]]
++name = "ordered-float"
++version = "5.5.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8c7c9e0d9b23589f26070720bac724174bfec1083e82f7854cdd0267518343c0"
++dependencies = [
++ "num-traits",
++]
++
++[[package]]
++name = "parking_lot"
++version = "0.12.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
++dependencies = [
++ "lock_api",
++ "parking_lot_core",
++]
++
++[[package]]
++name = "parking_lot_core"
++version = "0.9.12"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
++dependencies = [
++ "cfg-if",
++ "libc",
++ "redox_syscall",
++ "smallvec",
++ "windows-link",
++]
++
++[[package]]
++name = "pin-project-lite"
++version = "0.2.17"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
++
++[[package]]
++name = "pkg-config"
++version = "0.3.34"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
++
++[[package]]
++name = "pollster"
++version = "1.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
++
++[[package]]
++name = "portable-atomic"
++version = "1.15.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
++
++[[package]]
++name = "portable-atomic-util"
++version = "0.2.8"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "10ab3eb7f3becc3a1cbc4f2c6f20267996cfc1a6467a873763411b136a122715"
++dependencies = [
++ "portable-atomic",
++]
++
++[[package]]
++name = "presser"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
++
++[[package]]
++name = "proc-macro2"
++version = "1.0.107"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
++dependencies = [
++ "unicode-ident",
++]
++
++[[package]]
++name = "profiling"
++version = "1.0.18"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
++
++[[package]]
++name = "quote"
++version = "1.0.47"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
++dependencies = [
++ "proc-macro2",
++]
++
++[[package]]
++name = "range-alloc"
++version = "0.1.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
++
++[[package]]
++name = "raw-window-handle"
++version = "0.6.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
++
++[[package]]
++name = "raw-window-metal"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "40d213455a5f1dc59214213c7330e074ddf8114c9a42411eb890c767357ce135"
++dependencies = [
++ "objc2",
++ "objc2-core-foundation",
++ "objc2-foundation",
++ "objc2-quartz-core",
++]
++
++[[package]]
++name = "rayon"
++version = "1.12.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "fb39b166781f92d482534ef4b4b1b2568f42613b53e5b6c160e24cfbfa30926d"
++dependencies = [
++ "either",
++ "rayon-core",
++]
++
++[[package]]
++name = "rayon-core"
++version = "1.13.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
++dependencies = [
++ "crossbeam-deque",
++ "crossbeam-utils",
++]
++
++[[package]]
++name = "redox_syscall"
++version = "0.5.18"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
++dependencies = [
++ "bitflags",
++]
++
++[[package]]
++name = "renderdoc-sys"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
++
++[[package]]
++name = "rust_scorer"
++version = "1.1.103"
++source = "git+https://github.com/stSoftwareAU/NEAT-AI-scorer?rev=742c5df30fc98ece3afe784be1aca18f925b47b3#742c5df30fc98ece3afe784be1aca18f925b47b3"
++dependencies = [
++ "bytemuck",
++ "clap",
++ "libc",
++ "neat-core",
++ "pollster",
++ "rayon",
++ "serde",
++ "serde_json",
++ "wgpu",
++]
++
++[[package]]
++name = "rustc-hash"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
++
++[[package]]
++name = "rustversion"
++version = "1.0.23"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
++
++[[package]]
++name = "scopeguard"
++version = "1.2.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
++
++[[package]]
++name = "serde"
++version = "1.0.229"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
++dependencies = [
++ "serde_core",
++ "serde_derive",
++]
++
++[[package]]
++name = "serde_core"
++version = "1.0.229"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
++dependencies = [
++ "serde_derive",
++]
++
++[[package]]
++name = "serde_derive"
++version = "1.0.229"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 3.0.3",
++]
++
++[[package]]
++name = "serde_json"
++version = "1.0.154"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
++dependencies = [
++ "itoa",
++ "memchr",
++ "serde",
++ "serde_core",
++ "zmij",
++]
++
++[[package]]
++name = "slab"
++version = "0.4.12"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
++
++[[package]]
++name = "slotmap"
++version = "1.1.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
++dependencies = [
++ "version_check",
++]
++
++[[package]]
++name = "smallvec"
++version = "1.16.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
++
++[[package]]
++name = "sparse-metal-experiment"
++version = "0.0.0"
++dependencies = [
++ "neat-core",
++ "rust_scorer",
++ "serde",
++ "serde_json",
++]
++
++[[package]]
++name = "spirv"
++version = "0.4.0+sdk-1.4.341.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f"
++dependencies = [
++ "bitflags",
++]
++
++[[package]]
++name = "static_assertions"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
++
++[[package]]
++name = "strsim"
++version = "0.11.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
++
++[[package]]
++name = "syn"
++version = "2.0.118"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "unicode-ident",
++]
++
++[[package]]
++name = "syn"
++version = "3.0.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "unicode-ident",
++]
++
++[[package]]
++name = "termcolor"
++version = "1.4.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
++dependencies = [
++ "winapi-util",
++]
++
++[[package]]
++name = "thiserror"
++version = "2.0.20"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
++dependencies = [
++ "thiserror-impl",
++]
++
++[[package]]
++name = "thiserror-impl"
++version = "2.0.20"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 3.0.3",
++]
++
++[[package]]
++name = "unicode-ident"
++version = "1.0.24"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
++
++[[package]]
++name = "unicode-width"
++version = "0.2.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
++
++[[package]]
++name = "utf8parse"
++version = "0.2.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
++
++[[package]]
++name = "version_check"
++version = "0.9.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
++
++[[package]]
++name = "wasm-bindgen"
++version = "0.2.128"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "aecb87a33d3b0c5e3b7aa46336eaf486cffafbd281b195e4c8b80d50df2351bf"
++dependencies = [
++ "cfg-if",
++ "once_cell",
++ "rustversion",
++ "wasm-bindgen-macro",
++ "wasm-bindgen-shared",
++]
++
++[[package]]
++name = "wasm-bindgen-futures"
++version = "0.4.78"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6ef4c5d3d2cdf5c54f4231181768f5510842e350db025faf1f7163b1030ed928"
++dependencies = [
++ "js-sys",
++ "wasm-bindgen",
++]
++
++[[package]]
++name = "wasm-bindgen-macro"
++version = "0.2.128"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a690d511e3c1a8b3a55e33511e3c2c00c78415cd23650f32b808627f5696b9ed"
++dependencies = [
++ "quote",
++ "wasm-bindgen-macro-support",
++]
++
++[[package]]
++name = "wasm-bindgen-macro-support"
++version = "0.2.128"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "411e4887f0071ef2d2164a9d5fdf2d20efbef78fccd3a78b0c10a1dc5295e48a"
++dependencies = [
++ "bumpalo",
++ "proc-macro2",
++ "quote",
++ "syn 3.0.3",
++ "wasm-bindgen-shared",
++]
++
++[[package]]
++name = "wasm-bindgen-shared"
++version = "0.2.128"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "81941cd78d0c92026c33e5e01312845a4cb1e9af3407f9134b100dd03144103e"
++dependencies = [
++ "unicode-ident",
++]
++
++[[package]]
++name = "wayland-sys"
++version = "0.31.11"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d8eab23fefc9e41f8e841df4a9c707e8a8c4ed26e944ef69297184de2785e3be"
++dependencies = [
++ "dlib",
++ "log",
++ "once_cell",
++ "pkg-config",
++]
++
++[[package]]
++name = "web-sys"
++version = "0.3.105"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9fbddc4a036f00ec4f18c83445bd3115cb306a91da554919a099d9222fe4a7f8"
++dependencies = [
++ "js-sys",
++ "wasm-bindgen",
++]
++
++[[package]]
++name = "wgpu"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "527ccdf43dd5b2e8676eed9984ce00e2bbb0a1b85b70c1969dcb6cd2eb55ab9e"
++dependencies = [
++ "arrayvec",
++ "bitflags",
++ "bytemuck",
++ "cfg-if",
++ "cfg_aliases",
++ "document-features",
++ "hashbrown 0.17.1",
++ "js-sys",
++ "log",
++ "naga",
++ "parking_lot",
++ "portable-atomic",
++ "profiling",
++ "raw-window-handle",
++ "smallvec",
++ "static_assertions",
++ "wasm-bindgen",
++ "wasm-bindgen-futures",
++ "web-sys",
++ "wgpu-core",
++ "wgpu-hal",
++ "wgpu-types",
++]
++
++[[package]]
++name = "wgpu-core"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "14c018fce9b6270aa203c2fdd56f3cce996713534bd757e4ea58c8560b121f14"
++dependencies = [
++ "arrayvec",
++ "bit-set",
++ "bit-vec",
++ "bitflags",
++ "bytemuck",
++ "cfg_aliases",
++ "document-features",
++ "hashbrown 0.17.1",
++ "indexmap",
++ "log",
++ "naga",
++ "naga-types",
++ "once_cell",
++ "parking_lot",
++ "portable-atomic",
++ "profiling",
++ "raw-window-handle",
++ "rustc-hash",
++ "smallvec",
++ "thiserror",
++ "wgpu-core-deps-apple",
++ "wgpu-core-deps-emscripten",
++ "wgpu-core-deps-windows-linux-android",
++ "wgpu-hal",
++ "wgpu-naga-bridge",
++ "wgpu-types",
++]
++
++[[package]]
++name = "wgpu-core-deps-apple"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "061f3d319a40d39d00b1ecc2c33b89fe21d4e6fe01859df3500a3a8ecccd6b68"
++dependencies = [
++ "wgpu-hal",
++]
++
++[[package]]
++name = "wgpu-core-deps-emscripten"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d98b86cf4abf524a902dd35f18ca6a3f08fc2ae9847c8f10b48e30491b1f0b86"
++dependencies = [
++ "wgpu-hal",
++]
++
++[[package]]
++name = "wgpu-core-deps-windows-linux-android"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7586165fd5f6d881cb9ce4bb71f40d6caab2c0f1837e3fc1d9788a197fb6004f"
++dependencies = [
++ "wgpu-hal",
++]
++
++[[package]]
++name = "wgpu-hal"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58"
++dependencies = [
++ "android_system_properties",
++ "arrayvec",
++ "ash",
++ "bit-set",
++ "bitflags",
++ "block2",
++ "bytemuck",
++ "cfg-if",
++ "cfg_aliases",
++ "glow",
++ "glutin_wgl_sys",
++ "gpu-allocator",
++ "hashbrown 0.17.1",
++ "js-sys",
++ "khronos-egl",
++ "libc",
++ "libloading",
++ "log",
++ "naga",
++ "naga-types",
++ "ndk-sys",
++ "objc2",
++ "objc2-core-foundation",
++ "objc2-core-graphics",
++ "objc2-foundation",
++ "objc2-metal",
++ "objc2-quartz-core",
++ "once_cell",
++ "ordered-float",
++ "parking_lot",
++ "portable-atomic",
++ "portable-atomic-util",
++ "profiling",
++ "range-alloc",
++ "raw-window-handle",
++ "raw-window-metal",
++ "renderdoc-sys",
++ "smallvec",
++ "static_assertions",
++ "thiserror",
++ "wasm-bindgen",
++ "wayland-sys",
++ "web-sys",
++ "wgpu-naga-bridge",
++ "wgpu-types",
++ "windows",
++ "windows-core",
++ "windows-result",
++]
++
++[[package]]
++name = "wgpu-naga-bridge"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d2f62e73117bb7a62bfd9c5a5841438a823f6566c6442a808ee269d2d055c081"
++dependencies = [
++ "naga",
++ "wgpu-types",
++]
++
++[[package]]
++name = "wgpu-types"
++version = "30.0.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "99dad6f1fbdbbdb4c278a6508b059d44688f5cebddf78d005a46a31340269286"
++dependencies = [
++ "bitflags",
++ "bytemuck",
++ "js-sys",
++ "log",
++ "naga-types",
++ "raw-window-handle",
++ "static_assertions",
++ "web-sys",
++]
++
++[[package]]
++name = "winapi-util"
++version = "0.1.11"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
++dependencies = [
++ "windows-sys",
++]
++
++[[package]]
++name = "windows"
++version = "0.62.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
++dependencies = [
++ "windows-collections",
++ "windows-core",
++ "windows-future",
++ "windows-numerics",
++]
++
++[[package]]
++name = "windows-collections"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
++dependencies = [
++ "windows-core",
++]
++
++[[package]]
++name = "windows-core"
++version = "0.62.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
++dependencies = [
++ "windows-implement",
++ "windows-interface",
++ "windows-link",
++ "windows-result",
++ "windows-strings",
++]
++
++[[package]]
++name = "windows-future"
++version = "0.3.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
++dependencies = [
++ "windows-core",
++ "windows-link",
++ "windows-threading",
++]
++
++[[package]]
++name = "windows-implement"
++version = "0.60.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.118",
++]
++
++[[package]]
++name = "windows-interface"
++version = "0.59.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.118",
++]
++
++[[package]]
++name = "windows-link"
++version = "0.2.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
++
++[[package]]
++name = "windows-numerics"
++version = "0.3.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
++dependencies = [
++ "windows-core",
++ "windows-link",
++]
++
++[[package]]
++name = "windows-result"
++version = "0.4.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
++dependencies = [
++ "windows-link",
++]
++
++[[package]]
++name = "windows-strings"
++version = "0.5.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
++dependencies = [
++ "windows-link",
++]
++
++[[package]]
++name = "windows-sys"
++version = "0.61.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
++dependencies = [
++ "windows-link",
++]
++
++[[package]]
++name = "windows-threading"
++version = "0.2.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
++dependencies = [
++ "windows-link",
++]
++
++[[package]]
++name = "xml-rs"
++version = "0.8.29"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
++
++[[package]]
++name = "zerocopy"
++version = "0.8.57"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "d35102a9f36d089ccae9e4c6802bc118be4487b80aaffc0ab4e0cf5ce92d2873"
++dependencies = [
++ "zerocopy-derive",
++]
++
++[[package]]
++name = "zerocopy-derive"
++version = "0.8.57"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "146c01f5ab44258da43cf276c74a2763db2ff3969c9c652c3f2de07041d0b2bc"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.118",
++]
++
++[[package]]
++name = "zmij"
++version = "1.0.23"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+diff --git a/experiments/sparse_metal/Cargo.toml b/experiments/sparse_metal/Cargo.toml
+new file mode 100644
+index 0000000000000000000000000000000000000000..9d35554f2be5e68721e00588123180615df925b1
+--- /dev/null
++++ b/experiments/sparse_metal/Cargo.toml
+@@ -0,0 +1,22 @@
++[package]
++name = "sparse-metal-experiment"
++version = "0.0.0"
++edition = "2024"
++publish = false
++license = "Apache-2.0"
++
++[workspace]
++
++[dependencies]
++neat-core = { git = "https://github.com/stSoftwareAU/NEAT-AI-core", tag = "v0.23.4" }
++rust_scorer = { git = "https://github.com/stSoftwareAU/NEAT-AI-scorer", rev = "742c5df30fc98ece3afe784be1aca18f925b47b3" }
++serde = { version = "1", features = ["derive"] }
++serde_json = { version = "1", features = ["float_roundtrip"] }
++
++[profile.dev]
++debug = "line-tables-only"
++
++[profile.release]
++opt-level = 3
++lto = "fat"
++codegen-units = 1
+diff --git a/experiments/sparse_metal/run.sh b/experiments/sparse_metal/run.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..a8aad78c78398bc7c11714e0c0f3650aef5db7a4
+--- /dev/null
++++ b/experiments/sparse_metal/run.sh
+@@ -0,0 +1,41 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++TIMEOUT_CMD=""
++for candidate in timeout gtimeout; do
++  if command -v "$candidate" >/dev/null 2>&1; then
++    TIMEOUT_CMD="$candidate"
++    break
++  fi
++done
++bounded() {
++  local seconds="$1"
++  shift
++  if [[ -n "$TIMEOUT_CMD" ]]; then
++    "$TIMEOUT_CMD" "$seconds" "$@"
++  else
++    "$@"
++  fi
++}
++
++if ! git diff --quiet HEAD; then
++  echo "commit the Metal protocol and source before validation" >&2
++  exit 1
++fi
++mkdir sparse-metal-results
++git rev-parse HEAD > sparse-metal-results/revision.txt
++git hash-object experiments/sparse_metal/src/main.rs experiments/sparse_metal/Cargo.lock \
++  neat-core/benches/common/mod.rs neat-core/benches/sparse_precision/mod.rs \
++  docs/research/sparse-precision/manifest-metal-v6.json > sparse-metal-results/source-blobs.txt
++rustc -vV > sparse-metal-results/compiler.txt
++uname -a > sparse-metal-results/kernel.txt
++sysctl -n machdep.cpu.brand_string > sparse-metal-results/cpu.txt
++bounded 900 python3 scripts/sparse_precision_resources.py sparse-metal-results/build-rss.json \
++  cargo build --locked --release --manifest-path experiments/sparse_metal/Cargo.toml \
++  > sparse-metal-results/build-stdout.txt 2> sparse-metal-results/build-stderr.txt < /dev/null
++task_target=$(cargo metadata --locked --no-deps --format-version 1 \
++  --manifest-path experiments/sparse_metal/Cargo.toml | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
++bounded 900 python3 scripts/sparse_precision_resources.py sparse-metal-results/run-rss.json \
++  "$task_target/release/sparse-metal-experiment" \
++  docs/research/sparse-precision/manifest-metal-v6.json sparse-metal-results/results.json \
++  > sparse-metal-results/run-stdout.txt 2> sparse-metal-results/run-stderr.txt < /dev/null
+diff --git a/experiments/sparse_metal/src/main.rs b/experiments/sparse_metal/src/main.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ef0e0bb432d329def823cec3fbc9baf65175a9fa
+--- /dev/null
++++ b/experiments/sparse_metal/src/main.rs
+@@ -0,0 +1,519 @@
++//! Opt-in adapter to the scorer's existing f32 Metal loss runner; no GPU kernel.
++#[path = "../../../neat-core/benches/common/mod.rs"]
++#[allow(dead_code)]
++mod common;
++#[path = "../../../neat-core/benches/sparse_precision/mod.rs"]
++// Match the root workspace's existing lint allowances for this frozen harness.
++#[allow(dead_code, clippy::too_many_arguments, clippy::manual_is_multiple_of)]
++mod sparse_precision;
++
++use common::{Lcg, NetSpec, build_network};
++use neat_core::loss::mse_sum_batch_packed;
++use neat_core::network::CompiledNetwork;
++use rust_scorer::cost::CostKind;
++use rust_scorer::gpu::device_loss::catch_gpu_panic;
++use rust_scorer::gpu::forward_mse_batched::BatchedRunner;
++use rust_scorer::gpu::{GpuBackendLabel, select_adapter};
++use serde_json::{Value, json};
++use sparse_precision::execution::flat_records;
++use sparse_precision::*;
++use std::sync::Arc;
++use std::time::Instant;
++
++fn validation_target_seed(m: &Manifest) -> u64 {
++    m.validation_record_seed.wrapping_add(m.calibration_seed)
++}
++
++fn require_metal(backend: Option<GpuBackendLabel>) -> Result<(), String> {
++    match backend {
++        Some(GpuBackendLabel::Metal) => Ok(()),
++        Some(other) => Err(format!(
++            "scorer selected {}, expected metal",
++            other.as_str()
++        )),
++        None => Err("scorer found no compatible GPU adapter".into()),
++    }
++}
++
++fn pack(records: &[f32], targets: &[f32], inputs: usize, outputs: usize) -> Vec<f32> {
++    assert_eq!(records.len() / inputs * outputs, targets.len());
++    records
++        .chunks_exact(inputs)
++        .zip(targets.chunks_exact(outputs))
++        .flat_map(|(r, t)| r.iter().copied().chain(t.iter().copied()))
++        .collect()
++}
++
++fn reference_loss(
++    net: &CompiledNetwork,
++    records: &[f32],
++    targets: &[f32],
++    outputs: usize,
++) -> Result<f64, String> {
++    let mut sum = 0.0;
++    for (record, target) in records
++        .chunks_exact(net.num_inputs())
++        .zip(targets.chunks_exact(outputs))
++    {
++        let predictions = reference_forward_f64(net, record, outputs)?;
++        sum += predictions
++            .iter()
++            .zip(target)
++            .map(|(x, t)| (x - f64::from(*t)).powi(2))
++            .sum::<f64>()
++            / outputs as f64;
++    }
++    Ok(sum)
++}
++
++fn check_loss(got: f64, expected: f64, records: usize, tolerance: f64) -> Result<f64, String> {
++    if !got.is_finite() || !expected.is_finite() {
++        return Err("non-finite loss or reference".into());
++    }
++    let error = (got - expected).abs() / records as f64;
++    if error > tolerance {
++        Err(format!("mean loss error {error} exceeds {tolerance}"))
++    } else {
++        Ok(error)
++    }
++}
++
++fn cpu_scan(
++    net: &mut CompiledNetwork,
++    records: &[f32],
++    inputs: usize,
++    outputs: usize,
++    width: usize,
++) -> f64 {
++    records
++        .chunks(width * (inputs + outputs))
++        .map(|chunk| mse_sum_batch_packed(net, chunk, inputs, outputs, true))
++        .sum()
++}
++
++fn gpu_scan(
++    runner: &mut BatchedRunner,
++    records: &[f32],
++    stride: usize,
++    width: usize,
++) -> Result<f64, String> {
++    let mut sum = 0.0;
++    for chunk in records.chunks(width * stride) {
++        let values = runner.score_chunk(chunk, chunk.len() / stride)?;
++        if values.len() != 1 {
++            return Err(format!(
++                "GPU returned {} creature sums, expected 1",
++                values.len()
++            ));
++        }
++        sum += values[0];
++    }
++    Ok(sum)
++}
++
++fn parts(net: &CompiledNetwork) -> CompiledNetwork {
++    CompiledNetwork::from_parts(
++        net.num_inputs(),
++        net.neurons().to_vec(),
++        net.synapses().to_vec(),
++    )
++    .unwrap()
++}
++
++fn classify(complete: bool, warm: RatioSummary, end: RatioSummary, threshold: f64) -> &'static str {
++    if !complete {
++        "incomplete"
++    } else if warm.ci_high <= threshold && end.ci_high <= threshold {
++        "both_faster"
++    } else {
++        "no_joint_win"
++    }
++}
++
++fn cell(
++    m: &Manifest,
++    graph: usize,
++    shape: &ShapeSpec,
++    fraction: f64,
++    width: usize,
++    ctx: Arc<rust_scorer::gpu::GpuContext>,
++) -> Result<Value, String> {
++    let start = Instant::now();
++    let spec = NetSpec {
++        label: "metal-manifest",
++        num_neurons: shape.num_neurons,
++        num_inputs: shape.num_inputs,
++        num_outputs: shape.num_outputs,
++        fan_in: shape.fan_in()?,
++    };
++    let (ni, no) = (shape.num_inputs, shape.num_outputs);
++    // Calibration uses a different network and records; it cannot select thresholds.
++    let calibration = build_network(&spec, m.calibration_seed.wrapping_add(graph as u64));
++    let cal_records = flat_records(m.calibration_records, ni, m.calibration_seed ^ 0xCA11);
++    let cal_targets = flat_records(m.calibration_records, no, 44004 ^ 0xCA11);
++    let mut cal_runner = BatchedRunner::new(
++        ctx.clone(),
++        std::slice::from_ref(&calibration),
++        ni,
++        no,
++        CostKind::Mse,
++    )
++    .map_err(|e| format!("calibration preparation: {e}"))?;
++    let cal_loss = gpu_scan(
++        &mut cal_runner,
++        &pack(&cal_records, &cal_targets, ni, no),
++        ni + no,
++        width,
++    )
++    .map_err(|e| format!("calibration scan: {e}"))?;
++    check_loss(
++        cal_loss,
++        reference_loss(&calibration, &cal_records, &cal_targets, no)?,
++        m.calibration_records,
++        m.criteria.tolerance_f32,
++    )
++    .map_err(|e| format!("calibration accuracy: {e}"))?;
++    drop(cal_runner);
++    let net = apply_sparsity(
++        &build_network(&spec, m.validation_seed.wrapping_add(graph as u64)),
++        fraction,
++        m.validation_seed
++            .wrapping_add(77)
++            .wrapping_add(graph as u64),
++    );
++    let inputs = flat_records(m.records_per_sample, ni, m.validation_record_seed);
++    let targets = flat_records(m.records_per_sample, no, validation_target_seed(m));
++    let expected = reference_loss(&net, &inputs, &targets, no)?;
++    let records = pack(&inputs, &targets, ni, no);
++    let preparation = Instant::now();
++    let mut gpu = BatchedRunner::new(
++        ctx.clone(),
++        std::slice::from_ref(&net),
++        ni,
++        no,
++        CostKind::Mse,
++    )
++    .map_err(|e| format!("validation preparation: {e}"))?;
++    let gpu_preparation_ns = preparation.elapsed().as_nanos() as u64;
++    let mut cpu = parts(&net);
++    let first = Instant::now();
++    let first_gpu =
++        gpu_scan(&mut gpu, &records, ni + no, width).map_err(|e| format!("first GPU scan: {e}"))?;
++    let first_gpu_ns = first.elapsed().as_nanos() as u64;
++    let gpu_error = check_loss(
++        first_gpu,
++        expected,
++        m.records_per_sample,
++        m.criteria.tolerance_f32,
++    )
++    .map_err(|e| format!("validation GPU accuracy: {e}"))?;
++    let cpu_error = check_loss(
++        cpu_scan(&mut cpu, &records, ni, no, width),
++        expected,
++        m.records_per_sample,
++        m.criteria.tolerance_f32,
++    )
++    .map_err(|e| format!("validation CPU accuracy: {e}"))?;
++    let prep_seconds = start.elapsed().as_secs_f64();
++    let (mut cpu_times, mut gpu_times, mut cpu_end, mut gpu_end) =
++        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
++    for rep in 0..m.reps {
++        let gpu_first = Lcg::new(
++            m.shuffle_seed
++                .wrapping_add(graph as u64 * 1_000_003)
++                .wrapping_add(rep as u64),
++        )
++        .next_below(2)
++            == 1;
++        for is_gpu in if gpu_first {
++            [true, false]
++        } else {
++            [false, true]
++        } {
++            if is_gpu {
++                let t = Instant::now();
++                let got = gpu_scan(&mut gpu, &records, ni + no, width)?;
++                gpu_times.push(t.elapsed().as_nanos() as f64);
++                check_loss(
++                    got,
++                    expected,
++                    m.records_per_sample,
++                    m.criteria.tolerance_f32,
++                )?;
++                let t = Instant::now();
++                let compiled = parts(&net);
++                let mut fresh = BatchedRunner::new(
++                    ctx.clone(),
++                    std::slice::from_ref(&compiled),
++                    ni,
++                    no,
++                    CostKind::Mse,
++                )
++                .map_err(|e| e.to_string())?;
++                let got = gpu_scan(&mut fresh, &records, ni + no, width)?;
++                gpu_end.push(t.elapsed().as_nanos() as f64);
++                check_loss(
++                    got,
++                    expected,
++                    m.records_per_sample,
++                    m.criteria.tolerance_f32,
++                )?;
++            } else {
++                let t = Instant::now();
++                let got = cpu_scan(&mut cpu, &records, ni, no, width);
++                cpu_times.push(t.elapsed().as_nanos() as f64);
++                check_loss(
++                    got,
++                    expected,
++                    m.records_per_sample,
++                    m.criteria.tolerance_f32,
++                )?;
++                let t = Instant::now();
++                let mut fresh = parts(&net);
++                let got = cpu_scan(&mut fresh, &records, ni, no, width);
++                cpu_end.push(t.elapsed().as_nanos() as f64);
++                check_loss(
++                    got,
++                    expected,
++                    m.records_per_sample,
++                    m.criteria.tolerance_f32,
++                )?;
++            }
++        }
++        if start.elapsed().as_secs_f64() > m.max_cell_seconds {
++            break;
++        }
++    }
++    let complete = cpu_times.len() == m.reps;
++    let warm = paired_ratio_ci(
++        &gpu_times,
++        &cpu_times,
++        m.bootstrap_resamples,
++        m.bootstrap_seed,
++    );
++    let end = paired_ratio_ci(&gpu_end, &cpu_end, m.bootstrap_resamples, m.bootstrap_seed);
++    Ok(
++        json!({"shape":shape.label,"inactive_fraction":fraction,"batch_width":width,
++        "network_seed":m.validation_seed.wrapping_add(graph as u64),"record_seed":m.validation_record_seed,
++        "complete":complete,"reps_done":cpu_times.len(),"reps_planned":m.reps,
++        "reference_sum":expected,"gpu_mean_loss_error":gpu_error,"cpu_mean_loss_error":cpu_error,
++        "gpu_preparation_ns":gpu_preparation_ns,"first_gpu_scan_ns":first_gpu_ns,"preparation_seconds":prep_seconds,
++        "cpu_sample_ns":cpu_times,"gpu_sample_ns":gpu_times,"cpu_end_to_end_ns":cpu_end,"gpu_end_to_end_ns":gpu_end,
++        "warm_ratio":warm,"end_to_end_ratio":end,
++        "verdict":classify(complete,warm,end,m.criteria.speed_win_ratio)}),
++    )
++}
++
++fn run(manifest: Manifest) -> Value {
++    let started = Instant::now();
++    let init = catch_gpu_panic(select_adapter)
++        .map_err(|e| e.to_string())
++        .and_then(|r| r.map_err(|e| e.to_string()));
++    let mut result = json!({"schema_version":1,"protocol":"sparse-metal-v6","manifest":manifest,
++        "scorer_revision":"742c5df30fc98ece3afe784be1aca18f925b47b3","core_release":"v0.23.4",
++        "supported_variant":"canonical f32 scorer loss path; independently seeded targets, same batch width on CPU/GPU",
++        "target_seed":validation_target_seed(&manifest),
++        "unsupported":"alternate sparse layouts and bf16/f16 storage are not accepted by the scorer GPU API; v4 whole-scan control is not selected in this supplement",
++        "cells_planned":manifest.shapes.len()*manifest.inactive_fractions.len()*manifest.batch_widths.len(),
++        "cells":[],"failures":[],"not_run":[],
++        "unsupported_combinations":{"count":manifest.shapes.len()*manifest.batch_widths.len()*manifest.inactive_fractions.iter().map(|&f| sparse_precision::execution::variants(f).len()-2).sum::<usize>(),
++            "layouts":["csr_dst","coo_src","blocked4"],"precisions":["f32","bf16","f16"],"edge_modes":"all_edges and active_only where inactive_fraction > 0", "reason":"scorer GPU API accepts canonical f32 networks, not experimental layout or weight-storage types"},
++        "not_selected_controls":{"count":manifest.shapes.len()*manifest.inactive_fractions.len()*manifest.batch_widths.len(),"variant":"current_whole_scan","reason":"supplement chunks both CPU and GPU by requested width"}});
++    let ctx = match init {
++        Ok(ctx) => match require_metal(ctx.as_ref().map(|c| c.backend)) {
++            Ok(()) => Arc::new(ctx.unwrap()),
++            Err(e) => {
++                result["status"] = json!("unavailable");
++                result["initialisation_failure"] = json!(e);
++                return result;
++            }
++        },
++        Err(e) => {
++            result["status"] = json!("unavailable");
++            result["initialisation_failure"] = json!(e);
++            return result;
++        }
++    };
++    result["device_initialisation_ns"] = json!(started.elapsed().as_nanos() as u64);
++    result["backend"] = json!(ctx.backend.as_str());
++    result["max_storage_buffer_binding_size"] =
++        json!(ctx.device.limits().max_storage_buffer_binding_size);
++
++    for (si, shape) in manifest.shapes.iter().enumerate() {
++        for (fi, &fraction) in manifest.inactive_fractions.iter().enumerate() {
++            for &width in &manifest.batch_widths {
++                let id =
++                    json!({"shape":shape.label,"inactive_fraction":fraction,"batch_width":width});
++                if started.elapsed().as_secs_f64() > manifest.max_total_seconds {
++                    result["not_run"].as_array_mut().unwrap().push(id);
++                    continue;
++                }
++                let outcome = catch_gpu_panic(|| {
++                    cell(
++                        &manifest,
++                        si * manifest.inactive_fractions.len() + fi,
++                        shape,
++                        fraction,
++                        width,
++                        ctx.clone(),
++                    )
++                })
++                .map_err(|e| e.to_string())
++                .and_then(|r| r);
++                match outcome {
++                    Ok(value) => result["cells"].as_array_mut().unwrap().push(value),
++                    Err(reason) => result["failures"]
++                        .as_array_mut()
++                        .unwrap()
++                        .push(json!({"cell":id,"reason":reason})),
++                }
++            }
++        }
++    }
++    let incomplete = result["cells"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .any(|c| c["complete"] != true)
++        || !result["not_run"].as_array().unwrap().is_empty();
++    result["status"] = json!(if incomplete {
++        "incomplete"
++    } else if result["failures"].as_array().unwrap().is_empty() {
++        "complete"
++    } else {
++        "completed_with_failures"
++    });
++    result["wall_seconds"] = json!(started.elapsed().as_secs_f64());
++    result
++}
++
++fn main() -> Result<(), String> {
++    let args: Vec<_> = std::env::args().skip(1).collect();
++    if args.len() != 2 {
++        return Err("usage: sparse-metal-experiment <manifest> <out>".into());
++    }
++    let manifest = parse_manifest(&std::fs::read_to_string(&args[0]).map_err(|e| e.to_string())?)?;
++    let result = run(manifest);
++    std::fs::write(&args[1], serde_json::to_string(&result).unwrap() + "\n")
++        .map_err(|e| e.to_string())?;
++    if result["status"] != "complete" {
++        return Err(format!(
++            "[EXPERIMENT_FAILURE] status={}; raw results saved",
++            result["status"]
++        ));
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use neat_core::network::{NeuronData, SynapseData};
++
++    #[test]
++    fn packed_targets_and_independent_loss_preserve_record_boundaries() {
++        let net = CompiledNetwork::from_parts(
++            1,
++            vec![NeuronData {
++                squash_type: 0,
++                bias: 1.0,
++                start_synapse: 0,
++                num_synapses: 1,
++                is_constant: false,
++            }],
++            vec![SynapseData {
++                weight: 2.0,
++                from_index: 0,
++                synapse_type: 0,
++            }],
++        )
++        .unwrap();
++        // Outputs 3 and -1 against targets 1 and 2: (3-1)^2+(-1-2)^2=13.
++        assert_eq!(
++            pack(&[1.0, -1.0], &[1.0, 2.0], 1, 1),
++            vec![1.0, 1.0, -1.0, 2.0]
++        );
++        assert_eq!(
++            reference_loss(&net, &[1.0, -1.0], &[1.0, 2.0], 1).unwrap(),
++            13.0
++        );
++        assert_eq!(
++            cpu_scan(&mut net.clone(), &[1.0, 1.0, -1.0, 2.0], 1, 1, 1),
++            13.0
++        );
++    }
++
++    #[test]
++    fn gpu_selection_refuses_absence_and_another_backend_without_fallback() {
++        assert_eq!(require_metal(Some(GpuBackendLabel::Metal)), Ok(()));
++        assert_eq!(
++            require_metal(None),
++            Err("scorer found no compatible GPU adapter".into())
++        );
++        assert_eq!(
++            require_metal(Some(GpuBackendLabel::Vulkan)),
++            Err("scorer selected vulkan, expected metal".into())
++        );
++    }
++
++    #[test]
++    fn numerical_refusal_reports_the_error_and_cannot_treat_nan_as_success() {
++        assert_eq!(check_loss(10.0, 10.0, 2, 0.001), Ok(0.0));
++        assert!(
++            check_loss(12.0, 10.0, 2, 0.001)
++                .unwrap_err()
++                .contains("mean loss error 1 exceeds 0.001")
++        );
++        assert!(
++            check_loss(f64::NAN, 10.0, 2, 0.001)
++                .unwrap_err()
++                .contains("non-finite")
++        );
++        assert!(
++            check_loss(10.0, f64::INFINITY, 2, 0.001)
++                .unwrap_err()
++                .contains("non-finite")
++        );
++    }
++
++    #[test]
++    fn partial_samples_cannot_qualify_even_when_both_intervals_win() {
++        let fast = RatioSummary {
++            median_ratio: 0.5,
++            ci_low: 0.4,
++            ci_high: 0.6,
++        };
++        let uncertain = RatioSummary {
++            median_ratio: 0.8,
++            ci_low: 0.7,
++            ci_high: 0.95,
++        };
++        assert_eq!(classify(false, fast, fast, 0.9), "incomplete");
++        assert_eq!(classify(true, fast, fast, 0.9), "both_faster");
++        assert_eq!(classify(true, fast, uncertain, 0.9), "no_joint_win");
++        assert_eq!(classify(true, uncertain, fast, 0.9), "no_joint_win");
++    }
++    #[test]
++    fn v6_uses_fresh_inputs_targets_and_graphs_without_changing_acceptance() {
++        let before = parse_manifest(include_str!(
++            "../../../docs/research/sparse-precision/manifest-metal-v5.json"
++        ))
++        .unwrap();
++        let mut after = parse_manifest(include_str!(
++            "../../../docs/research/sparse-precision/manifest-metal-v6.json"
++        ))
++        .unwrap();
++        assert_ne!(before.validation_seed, after.validation_seed);
++        assert_ne!(before.validation_record_seed, after.validation_record_seed);
++        assert_eq!(validation_target_seed(&before), 44004);
++        assert_eq!(validation_target_seed(&after), 54004);
++        after.validation_seed = before.validation_seed;
++        after.validation_record_seed = before.validation_record_seed;
++        after.max_cell_seconds = before.max_cell_seconds;
++        after.max_total_seconds = before.max_total_seconds;
++        assert_eq!(
++            serde_json::to_value(after).unwrap(),
++            serde_json::to_value(before).unwrap()
++        );
++    }
++}
+diff --git a/neat-core/benches/README.md b/neat-core/benches/README.md
+index fde94a5126b173aa9778db12667abc547c0e8a5f..a2c9a9d17c5cd33b00498f09f3fb0755cda7d0cc 100644
+--- a/neat-core/benches/README.md
++++ b/neat-core/benches/README.md
+@@ -218,3 +218,17 @@ cargo bench -p neat-core --bench hot_paths -- --baseline before
+ Criterion prints the percentage change and whether it is statistically
+ significant. HTML reports (enabled via the `html_reports` feature) are written
+ to `target/criterion/report/index.html`.
++
++## Completed sparse layout/precision study (Issue #758)
++
++The [research record](../../docs/research/sparse-layouts-reduced-precision.md)
++compares concrete sparse kernels and software bf16/f16 weight storage with
++production on Apple Silicon CPU, x86_64 Linux and aarch64 Linux. Across 162
++cells, 2,727/2,754 slots were timed and 27 numerical failures retained. No
++variant met the frozen adoption rule. Metal and hardware reduced-precision
++arithmetic remain unmeasured.
++
++The optional experiment code and research CI job were retired. The record
++links the immutable tested replay revision, manifests, raw paired distributions,
++process/conversion memory evidence and reproduction commands. Ordinary benchmark
++commands and production behaviour are unchanged.
+diff --git a/neat-core/benches/sparse_precision/execution.rs b/neat-core/benches/sparse_precision/execution.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..15cd23aa4e1a5fa7e4b7e8d169a32d32ef33cdb0
+--- /dev/null
++++ b/neat-core/benches/sparse_precision/execution.rs
+@@ -0,0 +1,140 @@
++//! Execution shared by the timing and separate allocation probes.
++
++use super::*;
++use crate::common::build_inputs;
++
++/// One variant of a cell: the baseline or a converted sparse network.
++pub(crate) enum Exec {
++    Current(Box<CompiledNetwork>),
++    CurrentWholeScan(Box<CompiledNetwork>),
++    Sparse(SparseNet, Scratch),
++}
++
++#[derive(Clone, Copy)]
++pub(crate) struct VariantSpec {
++    /// `None` is the baseline `current`.
++    pub(crate) config: Option<(Layout, Precision, bool)>,
++    pub(crate) whole_scan: bool,
++}
++
++impl VariantSpec {
++    pub(crate) fn name(&self) -> String {
++        match self.config {
++            None => if self.whole_scan {
++                "current_whole_scan"
++            } else {
++                "current"
++            }
++            .into(),
++            Some((l, p, a)) => format!(
++                "{}/{}/{}",
++                l.name(),
++                p.name(),
++                if a { "active_only" } else { "all_edges" }
++            ),
++        }
++    }
++
++    pub(crate) fn precision(&self) -> Precision {
++        self.config.map_or(Precision::F32, |c| c.1)
++    }
++
++    pub(crate) fn is_baseline(&self) -> bool {
++        self.config.is_none() && !self.whole_scan
++    }
++
++    pub(crate) fn prepare_current(&self, net: CompiledNetwork) -> Exec {
++        if self.whole_scan {
++            Exec::CurrentWholeScan(Box::new(net))
++        } else {
++            Exec::Current(Box::new(net))
++        }
++    }
++
++    pub(crate) fn convert(&self, net: &CompiledNetwork) -> Result<Exec, String> {
++        match self.config {
++            None => Ok(self.prepare_current(net.clone())),
++            Some((l, p, a)) => SparseNet::from_network(net, l, p, a)
++                .map(|s| Exec::Sparse(s, Scratch::default()))
++                .map_err(|e| e.to_string()),
++        }
++    }
++}
++
++impl Exec {
++    pub(crate) fn run(
++        &mut self,
++        records: &[f32],
++        stride: usize,
++        width: usize,
++        no: usize,
++        out: &mut [f32],
++    ) {
++        match self {
++            Exec::Current(net) => {
++                if width == 1 {
++                    for (r, o) in records.chunks(stride).zip(out.chunks_mut(no)) {
++                        net.activate_into(r, o);
++                    }
++                } else {
++                    for (r, o) in records
++                        .chunks(width * stride)
++                        .zip(out.chunks_mut(width * no))
++                    {
++                        net.score_records_flat_into(r, stride, no, o);
++                    }
++                }
++            }
++            Exec::CurrentWholeScan(net) => {
++                if width == 1 {
++                    for (r, o) in records.chunks(stride).zip(out.chunks_mut(no)) {
++                        net.activate_into(r, o);
++                    }
++                } else {
++                    net.score_records_flat_into(records, stride, no, out);
++                }
++            }
++            Exec::Sparse(s, scratch) => s.forward_batch(records, stride, width, scratch, out),
++        }
++    }
++
++    pub(crate) fn memory(&self) -> MemoryBreakdown {
++        match self {
++            Exec::Current(n) | Exec::CurrentWholeScan(n) => current_memory(n),
++            Exec::Sparse(s, _) => s.memory(),
++        }
++    }
++}
++
++pub(crate) fn variants(inactive: f64) -> Vec<VariantSpec> {
++    let mut v = vec![
++        VariantSpec {
++            config: None,
++            whole_scan: false,
++        },
++        VariantSpec {
++            config: None,
++            whole_scan: true,
++        },
++    ];
++    for l in Layout::ALL {
++        for p in Precision::ALL {
++            for a in [false, true] {
++                if a && inactive == 0.0 {
++                    continue; // identical to all_edges when no weight is zero
++                }
++                v.push(VariantSpec {
++                    config: Some((l, p, a)),
++                    whole_scan: false,
++                });
++            }
++        }
++    }
++    v
++}
++
++pub(crate) fn flat_records(count: usize, stride: usize, seed: u64) -> Vec<f32> {
++    (0..count)
++        .flat_map(|i| build_inputs(stride, seed.wrapping_add(i as u64)))
++        .collect()
++}
+diff --git a/neat-core/benches/sparse_precision/mod.rs b/neat-core/benches/sparse_precision/mod.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..433eb148739584b35e8e7bcbf9d6136d4febca28
+--- /dev/null
++++ b/neat-core/benches/sparse_precision/mod.rs
+@@ -0,0 +1,1236 @@
++//! Opt-in research harness for Issue #758: do sparse layouts and reduced-precision
++//! weight storage beat the current `CompiledNetwork` forward pass, end to end?
++//!
++//! This is a **measurement** library. It changes no public API of `neat-core` and
++//! no default; it lives in `benches/sparse_precision/` (a subdirectory, so Cargo
++//! does not auto-discover it as a bench target) and is included by
++//! `tests/sparse_precision_experiment.rs`, `examples/sparse_precision_experiment.rs`
++//! and `examples/sparse_precision_memory.rs` through `#[path]`, the same pattern
++//! as `benches/common/mod.rs`. The includers declare `mod common;` at the crate
++//! root, which is where `crate::common` below resolves.
++//!
++//! Scope, stated once:
++//!
++//! - **Feed-forward only.** Every edge must satisfy `from < destination` (global
++//!   indices). A backward or self edge is refused for every layout.
++//! - **Standard weighted-sum neurons only.** Aggregate squashes (Minimum, Maximum,
++//!   If, Hypotenuse, HypotenuseV2, Mean) are refused. A *constant* neuron is
++//!   supported: its squash is never read, so its activation is
++//!   `limit_range(Identity, bias)` whatever squash it declares, and its edges
++//!   (never read by `CompiledNetwork`) are not carried.
++//! - **Reduced precision is weight storage only.** Weights are stored as `u16`
++//!   bit patterns and decoded to `f32` for the multiply; all accumulation, all
++//!   activations and all biases stay `f32`.
++
++#![allow(clippy::needless_range_loop)]
++
++pub(crate) mod execution;
++
++use crate::common::{FanIn, Lcg};
++use neat_core::network::{CompiledNetwork, MAX_NODE_COUNT, SynapseData};
++use neat_core::range::{apply_get_range, apply_limit_range_bounds};
++use neat_core::squash::{SquashType, apply_squash};
++use serde::{Deserialize, Serialize};
++
++// ---------------------------------------------------------------------------
++// Software codecs (stable Rust has no `f16` primitive)
++// ---------------------------------------------------------------------------
++
++/// `f32` to bfloat16, round-to-nearest-even. NaN stays NaN (forced quiet), the
++/// infinities are preserved, and a finite value that rounds past the largest
++/// bfloat16 becomes an infinity.
++pub fn f32_to_bf16(value: f32) -> u16 {
++    let bits = value.to_bits();
++    if value.is_nan() {
++        // Keep the sign and top payload bits, set the quiet bit so a payload that
++        // lived only in the discarded low half cannot truncate to an infinity.
++        return ((bits >> 16) | 0x0040) as u16;
++    }
++    let lsb = (bits >> 16) & 1;
++    // Adding 0x7FFF plus the retained LSB rounds ties to even.
++    (bits.wrapping_add(0x7FFF + lsb) >> 16) as u16
++}
++
++/// bfloat16 to `f32`: exact, the 16 bits are the top half of the `f32`.
++pub fn bf16_to_f32(bits: u16) -> f32 {
++    f32::from_bits((bits as u32) << 16)
++}
++
++/// `f32` to IEEE 754 binary16, round-to-nearest-even, including subnormals.
++/// Overflow becomes an infinity of the same sign; NaN becomes a quiet NaN.
++pub fn f32_to_f16(value: f32) -> u16 {
++    let bits = value.to_bits();
++    let sign = ((bits >> 16) & 0x8000) as u16;
++    let exp = ((bits >> 23) & 0xFF) as i32;
++    let man = bits & 0x007F_FFFF;
++
++    if exp == 0xFF {
++        if man == 0 {
++            return sign | 0x7C00;
++        }
++        return sign | 0x7E00 | (man >> 13) as u16;
++    }
++
++    // Re-bias from 127 to 15.
++    let e = exp - 127 + 15;
++    if e >= 31 {
++        return sign | 0x7C00;
++    }
++    if e <= 0 {
++        // Subnormal result (or zero). The 24-bit significand `m` times
++        // 2^(exp-150), in units of 2^-24, is `m >> (14 - e)`.
++        if e < -10 {
++            return sign;
++        }
++        let m = man | 0x0080_0000;
++        let shift = (14 - e) as u32;
++        let mut q = m >> shift;
++        let rem = m & ((1u32 << shift) - 1);
++        let half = 1u32 << (shift - 1);
++        if rem > half || (rem == half && (q & 1) == 1) {
++            q += 1; // may carry into the smallest normal, which is correct
++        }
++        return sign | q as u16;
++    }
++
++    let mut h = ((e as u32) << 10) | (man >> 13);
++    let rem = man & 0x1FFF;
++    if rem > 0x1000 || (rem == 0x1000 && (h & 1) == 1) {
++        h += 1; // a carry into the exponent (and on to infinity) is correct
++    }
++    sign | h as u16
++}
++
++/// IEEE 754 binary16 to `f32`: exact for normals, subnormals, infinities, NaN.
++pub fn f16_to_f32(bits: u16) -> f32 {
++    let sign = ((bits as u32) & 0x8000) << 16;
++    let exp = ((bits >> 10) & 0x1F) as u32;
++    let man = (bits & 0x03FF) as u32;
++    match exp {
++        0 => {
++            // value = man * 2^-24, exact in f32.
++            let magnitude = man as f32 * (1.0 / 16_777_216.0);
++            f32::from_bits(magnitude.to_bits() | sign)
++        }
++        31 => {
++            if man == 0 {
++                f32::from_bits(sign | 0x7F80_0000)
++            } else {
++                f32::from_bits(sign | 0x7FC0_0000 | (man << 13))
++            }
++        }
++        _ => f32::from_bits(sign | ((exp + 112) << 23) | (man << 13)),
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Weight representations (monomorphised, so precision is never a per-weight branch)
++// ---------------------------------------------------------------------------
++
++/// A stored weight that decodes to `f32` for the multiply.
++pub trait WeightRepr: Copy {
++    /// Bytes one stored weight occupies.
++    const BYTES: usize;
++    fn encode(weight: f32) -> Self;
++    fn to_f32(self) -> f32;
++}
++
++impl WeightRepr for f32 {
++    const BYTES: usize = 4;
++    #[inline(always)]
++    fn encode(weight: f32) -> Self {
++        weight
++    }
++    #[inline(always)]
++    fn to_f32(self) -> f32 {
++        self
++    }
++}
++
++/// bfloat16 weight storage.
++#[derive(Clone, Copy)]
++pub struct Bf16(u16);
++
++impl WeightRepr for Bf16 {
++    const BYTES: usize = 2;
++    #[inline(always)]
++    fn encode(weight: f32) -> Self {
++        Bf16(f32_to_bf16(weight))
++    }
++    #[inline(always)]
++    fn to_f32(self) -> f32 {
++        bf16_to_f32(self.0)
++    }
++}
++
++/// IEEE binary16 weight storage.
++#[derive(Clone, Copy)]
++pub struct F16(u16);
++
++impl WeightRepr for F16 {
++    const BYTES: usize = 2;
++    #[inline(always)]
++    fn encode(weight: f32) -> Self {
++        F16(f32_to_f16(weight))
++    }
++    #[inline(always)]
++    fn to_f32(self) -> f32 {
++        f16_to_f32(self.0)
++    }
++}
++
++/// Weight storage precision. Accumulation is always `f32`.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++pub enum Precision {
++    F32,
++    Bf16,
++    F16,
++}
++
++impl Precision {
++    pub const ALL: [Precision; 3] = [Precision::F32, Precision::Bf16, Precision::F16];
++
++    pub fn name(self) -> &'static str {
++        match self {
++            Precision::F32 => "f32",
++            Precision::Bf16 => "bf16",
++            Precision::F16 => "f16",
++        }
++    }
++}
++
++/// Sparse edge layout under test (the baseline `current` is the real
++/// `CompiledNetwork`, handled by the runner).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++pub enum Layout {
++    /// Destination-grouped CSR owned by the experiment, plain scalar kernel.
++    /// Same CSR family as current, with different metadata and kernel code.
++    CsrDst,
++    /// Source-sorted COO triples with no offset array; push/scatter forward pass.
++    CooSrc,
++    /// Per-destination rows packed into fixed 4-wide blocks, the last block of a
++    /// row padded with weight 0 and source 0.
++    Blocked4,
++}
++
++impl Layout {
++    pub const ALL: [Layout; 3] = [Layout::CsrDst, Layout::CooSrc, Layout::Blocked4];
++
++    pub fn name(self) -> &'static str {
++        match self {
++            Layout::CsrDst => "csr_dst",
++            Layout::CooSrc => "coo_src",
++            Layout::Blocked4 => "blocked4",
++        }
++    }
++}
++
++/// Block width of [`Layout::Blocked4`].
++pub const BLOCK: usize = 4;
++
++// ---------------------------------------------------------------------------
++// Conversion
++// ---------------------------------------------------------------------------
++
++/// Why a network cannot be represented in the experiment.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum ConvertError {
++    /// A non-constant neuron uses an aggregate squash. `neuron` is the **global**
++    /// neuron index (inputs included).
++    AggregateSquash { neuron: usize, squash: u8 },
++    /// An edge does not satisfy `from < to` (global indices).
++    NotFeedForward { from: usize, to: usize },
++    /// A value would be hidden by a saturating activation or range clamp.
++    InvalidNumber { neuron: usize, reason: &'static str },
++}
++
++impl std::fmt::Display for ConvertError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            ConvertError::AggregateSquash { neuron, squash } => write!(
++                f,
++                "neuron {neuron} uses aggregate squash {squash}; the experiment covers standard \
++                 weighted-sum neurons only"
++            ),
++            ConvertError::InvalidNumber { neuron, reason } => {
++                write!(f, "neuron {neuron}: {reason}")
++            }
++            ConvertError::NotFeedForward { from, to } => write!(
++                f,
++                "edge {from} -> {to} is not feed-forward (from must be below the destination)"
++            ),
++        }
++    }
++}
++
++impl std::error::Error for ConvertError {}
++
++/// Per-neuron data the experiment keeps: bias and the squash. A constant neuron
++/// is stored as `Identity` with no edges, which yields `limit_range(Identity,
++/// bias)` exactly as `CompiledNetwork` does.
++#[derive(Clone, Copy)]
++pub struct SparseNeuron {
++    pub bias: f32,
++    pub squash: SquashType,
++}
++
++enum Edges<W> {
++    Csr {
++        row_ptr: Vec<u32>,
++        col: Vec<u16>,
++        w: Vec<W>,
++    },
++    Coo {
++        src: Vec<u16>,
++        dst: Vec<u16>,
++        w: Vec<W>,
++    },
++    Blocked {
++        row_block_ptr: Vec<u32>,
++        cols: Vec<u16>,
++        w: Vec<W>,
++        edges: usize,
++    },
++}
++
++enum EdgeStore {
++    F32(Edges<f32>),
++    Bf16(Edges<Bf16>),
++    F16(Edges<F16>),
++}
++
++/// Reusable working buffers for [`SparseNet::forward_batch`].
++#[derive(Default)]
++pub struct Scratch {
++    act: Vec<f32>,
++    acc: Vec<f32>,
++}
++
++impl Scratch {
++    /// Allocated payload after warm-up, including any retained capacity.
++    pub fn allocated_bytes(&self) -> usize {
++        (self.act.capacity() + self.acc.capacity()) * std::mem::size_of::<f32>()
++    }
++}
++
++/// Memory accounting, computed from vector lengths times element sizes so it is
++/// deterministic. `weight_bytes` includes padding slots; `padding_slots` counts
++/// them; `edges` counts real edges only.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++pub struct MemoryBreakdown {
++    pub weight_bytes: usize,
++    pub index_bytes: usize,
++    pub neuron_bytes: usize,
++    pub padding_slots: usize,
++    pub edges: usize,
++}
++
++impl MemoryBreakdown {
++    pub fn total_bytes(&self) -> usize {
++        self.weight_bytes + self.index_bytes + self.neuron_bytes
++    }
++}
++
++/// Memory of the real `CompiledNetwork`, with n synapses and m non-input neurons.
++///
++/// - the `SynapseData` table is `n * size_of::<SynapseData>()` (8 B each), split
++///   4 B weight / 4 B index (`u16` from + `u8` type + 1 B padding);
++/// - the hot view duplicates `weight` (4 B) and `from` (2 B) per synapse;
++/// - so `weight_bytes = 8n`, `index_bytes = 6n`, `neuron_bytes =
++///   m * size_of::<NeuronData>()`. The hot view is counted because it is what the
++///   batched kernel streams, and it is resident either way.
++pub fn current_memory(net: &CompiledNetwork) -> MemoryBreakdown {
++    let n = net.num_synapses();
++    let aos_weight = std::mem::size_of::<f32>() * n;
++    let aos_index = (std::mem::size_of::<SynapseData>() - std::mem::size_of::<f32>()) * n;
++    let hot_weight = std::mem::size_of::<f32>() * n;
++    let hot_index = std::mem::size_of::<u16>() * n;
++    MemoryBreakdown {
++        weight_bytes: aos_weight + hot_weight,
++        index_bytes: aos_index + hot_index,
++        neuron_bytes: std::mem::size_of_val(net.neurons()),
++        padding_slots: 0,
++        edges: n,
++    }
++}
++
++/// A network converted into one experiment layout and precision.
++pub struct SparseNet {
++    layout: Layout,
++    precision: Precision,
++    num_inputs: usize,
++    neurons: Vec<SparseNeuron>,
++    store: EdgeStore,
++}
++
++impl<W: WeightRepr> Edges<W> {
++    fn build(layout: Layout, num_inputs: usize, rows: &[Vec<(u16, f32)>]) -> Self {
++        match layout {
++            Layout::CsrDst => {
++                let mut row_ptr = Vec::with_capacity(rows.len() + 1);
++                let mut col = Vec::new();
++                let mut w = Vec::new();
++                row_ptr.push(0u32);
++                for row in rows {
++                    for &(s, weight) in row {
++                        col.push(s);
++                        w.push(W::encode(weight));
++                    }
++                    row_ptr.push(col.len() as u32);
++                }
++                Edges::Csr { row_ptr, col, w }
++            }
++            Layout::CooSrc => {
++                let mut triples: Vec<(u16, u16, f32)> = Vec::new();
++                for (n, row) in rows.iter().enumerate() {
++                    let dst = (num_inputs + n) as u16;
++                    for &(s, weight) in row {
++                        triples.push((s, dst, weight));
++                    }
++                }
++                triples.sort_by_key(|&(s, d, _)| (s, d));
++                Edges::Coo {
++                    src: triples.iter().map(|t| t.0).collect(),
++                    dst: triples.iter().map(|t| t.1).collect(),
++                    w: triples.iter().map(|t| W::encode(t.2)).collect(),
++                }
++            }
++            Layout::Blocked4 => {
++                let mut row_block_ptr = Vec::with_capacity(rows.len() + 1);
++                let mut cols = Vec::new();
++                let mut w = Vec::new();
++                let mut edges = 0usize;
++                row_block_ptr.push(0u32);
++                for row in rows {
++                    for chunk in row.chunks(BLOCK) {
++                        for k in 0..BLOCK {
++                            match chunk.get(k) {
++                                Some(&(s, weight)) => {
++                                    cols.push(s);
++                                    w.push(W::encode(weight));
++                                }
++                                None => {
++                                    cols.push(0);
++                                    w.push(W::encode(0.0));
++                                }
++                            }
++                        }
++                    }
++                    edges += row.len();
++                    row_block_ptr.push((cols.len() / BLOCK) as u32);
++                }
++                Edges::Blocked {
++                    row_block_ptr,
++                    cols,
++                    w,
++                    edges,
++                }
++            }
++        }
++    }
++
++    /// `(weight_bytes, index_bytes, padding_slots, edges)`.
++    fn memory_parts(&self) -> (usize, usize, usize, usize) {
++        match self {
++            Edges::Csr { row_ptr, col, w } => (
++                w.len() * W::BYTES,
++                row_ptr.len() * 4 + col.len() * 2,
++                0,
++                col.len(),
++            ),
++            Edges::Coo { src, dst, w } => {
++                (w.len() * W::BYTES, (src.len() + dst.len()) * 2, 0, w.len())
++            }
++            Edges::Blocked {
++                row_block_ptr,
++                cols,
++                w,
++                edges,
++            } => (
++                w.len() * W::BYTES,
++                row_block_ptr.len() * 4 + cols.len() * 2,
++                cols.len() - edges,
++                *edges,
++            ),
++        }
++    }
++
++    #[inline(always)]
++    fn run_group(
++        &self,
++        neurons: &[SparseNeuron],
++        num_inputs: usize,
++        width: usize,
++        act: &mut [f32],
++        acc: &mut [f32],
++    ) {
++        match self {
++            Edges::Csr { row_ptr, col, w } => {
++                run_csr(neurons, num_inputs, row_ptr, col, w, width, act, acc)
++            }
++            Edges::Coo { src, dst, w } => {
++                run_coo(neurons, num_inputs, src, dst, w, width, act, acc)
++            }
++            Edges::Blocked {
++                row_block_ptr,
++                cols,
++                w,
++                ..
++            } => run_blocked(neurons, num_inputs, row_block_ptr, cols, w, width, act, acc),
++        }
++    }
++}
++
++/// `limit_range(squash, squash(sum))` for one lane, with the range already resolved.
++#[inline(always)]
++fn finish(squash: SquashType, low: f32, high: f32, sum: f32) -> f32 {
++    apply_limit_range_bounds(low, high, apply_squash(squash, sum))
++}
++
++#[inline(always)]
++fn run_csr<W: WeightRepr>(
++    neurons: &[SparseNeuron],
++    ni: usize,
++    row_ptr: &[u32],
++    col: &[u16],
++    w: &[W],
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    let acc = &mut acc[..width];
++    for (n, neuron) in neurons.iter().enumerate() {
++        acc.fill(neuron.bias);
++        for e in row_ptr[n] as usize..row_ptr[n + 1] as usize {
++            let wt = w[e].to_f32();
++            let s = col[e] as usize * width;
++            for (a, x) in acc.iter_mut().zip(&act[s..s + width]) {
++                *a += wt * *x;
++            }
++        }
++        let (low, high) = apply_get_range(neuron.squash);
++        let g = (ni + n) * width;
++        for (d, a) in act[g..g + width].iter_mut().zip(acc.iter()) {
++            *d = finish(neuron.squash, low, high, *a);
++        }
++    }
++}
++
++#[inline(always)]
++fn run_blocked<W: WeightRepr>(
++    neurons: &[SparseNeuron],
++    ni: usize,
++    row_block_ptr: &[u32],
++    cols: &[u16],
++    w: &[W],
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    let acc = &mut acc[..width];
++    for (n, neuron) in neurons.iter().enumerate() {
++        acc.fill(neuron.bias);
++        for b in row_block_ptr[n] as usize..row_block_ptr[n + 1] as usize {
++            let o = b * BLOCK;
++            let w0 = w[o].to_f32();
++            let w1 = w[o + 1].to_f32();
++            let w2 = w[o + 2].to_f32();
++            let w3 = w[o + 3].to_f32();
++            let s0 = cols[o] as usize * width;
++            let s1 = cols[o + 1] as usize * width;
++            let s2 = cols[o + 2] as usize * width;
++            let s3 = cols[o + 3] as usize * width;
++            let a0 = &act[s0..s0 + width];
++            let a1 = &act[s1..s1 + width];
++            let a2 = &act[s2..s2 + width];
++            let a3 = &act[s3..s3 + width];
++            for l in 0..width {
++                let mut a = acc[l];
++                a += w0 * a0[l];
++                a += w1 * a1[l];
++                a += w2 * a2[l];
++                a += w3 * a3[l];
++                acc[l] = a;
++            }
++        }
++        let (low, high) = apply_get_range(neuron.squash);
++        let g = (ni + n) * width;
++        for (d, a) in act[g..g + width].iter_mut().zip(acc.iter()) {
++            *d = finish(neuron.squash, low, high, *a);
++        }
++    }
++}
++
++/// Push/scatter forward pass over source-sorted edges. `acc` holds one
++/// accumulator row per non-input neuron, re-initialised to the bias every group.
++#[inline(always)]
++fn run_coo<W: WeightRepr>(
++    neurons: &[SparseNeuron],
++    ni: usize,
++    src: &[u16],
++    dst: &[u16],
++    w: &[W],
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    for (n, neuron) in neurons.iter().enumerate() {
++        acc[n * width..(n + 1) * width].fill(neuron.bias);
++    }
++    let mut next = ni; // every neuron below `next` is final
++    let finalise = |g: usize, act: &mut [f32], acc: &[f32]| {
++        let neuron = &neurons[g - ni];
++        let (low, high) = apply_get_range(neuron.squash);
++        let row = &acc[(g - ni) * width..(g - ni + 1) * width];
++        for (d, a) in act[g * width..(g + 1) * width].iter_mut().zip(row) {
++            *d = finish(neuron.squash, low, high, *a);
++        }
++    };
++    for e in 0..src.len() {
++        let s = src[e] as usize;
++        // Every in-edge of a neuron <= s has a smaller source, so it is already
++        // applied: the neuron is complete.
++        while next <= s {
++            finalise(next, act, acc);
++            next += 1;
++        }
++        let wt = w[e].to_f32();
++        let d = (dst[e] as usize - ni) * width;
++        let sa = s * width;
++        for l in 0..width {
++            acc[d + l] += wt * act[sa + l];
++        }
++    }
++    while next < ni + neurons.len() {
++        finalise(next, act, acc);
++        next += 1;
++    }
++}
++
++#[inline(always)]
++fn run_dispatch<W: WeightRepr>(
++    edges: &Edges<W>,
++    neurons: &[SparseNeuron],
++    ni: usize,
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    // Literal widths let the inlined kernel constant-fold the lane loop.
++    match width {
++        1 => edges.run_group(neurons, ni, 1, act, acc),
++        8 => edges.run_group(neurons, ni, 8, act, acc),
++        32 => edges.run_group(neurons, ni, 32, act, acc),
++        w => edges.run_group(neurons, ni, w, act, acc),
++    }
++}
++
++impl SparseNet {
++    /// Convert `net` into `layout` and `precision`.
++    ///
++    /// With `active_only`, synapses whose weight is exactly `0.0` (or `-0.0`) are
++    /// dropped **before** precision encoding. A weight that merely rounds to zero
++    /// in a reduced precision is *not* dropped: it stays as a stored zero.
++    ///
++    /// Feed-forward only: any edge with `from >= destination` (global indices) is
++    /// refused for every layout. Non-constant aggregate-squash neurons are refused.
++    /// Biases and live weights must be finite; encoding overflow is refused.
++    pub fn from_network(
++        net: &CompiledNetwork,
++        layout: Layout,
++        precision: Precision,
++        active_only: bool,
++    ) -> Result<SparseNet, ConvertError> {
++        let ni = net.num_inputs();
++        let mut neurons = Vec::with_capacity(net.neurons().len());
++        let mut rows: Vec<Vec<(u16, f32)>> = Vec::with_capacity(net.neurons().len());
++        for (n, neuron_data) in net.neurons().iter().enumerate() {
++            let g = ni + n;
++            if !neuron_data.bias.is_finite() {
++                return Err(ConvertError::InvalidNumber {
++                    neuron: g,
++                    reason: "non-finite bias",
++                });
++            }
++            if neuron_data.is_constant {
++                neurons.push(SparseNeuron {
++                    bias: neuron_data.bias,
++                    squash: SquashType::Identity,
++                });
++                rows.push(Vec::new());
++                continue;
++            }
++            let squash = SquashType::from(neuron_data.squash_type);
++            if squash.is_aggregate() {
++                return Err(ConvertError::AggregateSquash {
++                    neuron: g,
++                    squash: neuron_data.squash_type,
++                });
++            }
++            let start = neuron_data.start_synapse as usize;
++            let mut row = Vec::with_capacity(neuron_data.num_synapses as usize);
++            for s in &net.synapses()[start..start + neuron_data.num_synapses as usize] {
++                if s.from_index as usize >= g {
++                    return Err(ConvertError::NotFeedForward {
++                        from: s.from_index as usize,
++                        to: g,
++                    });
++                }
++                if !s.weight.is_finite() {
++                    return Err(ConvertError::InvalidNumber {
++                        neuron: g,
++                        reason: "non-finite weight",
++                    });
++                }
++                let decoded = match precision {
++                    Precision::F32 => s.weight,
++                    Precision::Bf16 => bf16_to_f32(f32_to_bf16(s.weight)),
++                    Precision::F16 => f16_to_f32(f32_to_f16(s.weight)),
++                };
++                if !decoded.is_finite() {
++                    return Err(ConvertError::InvalidNumber {
++                        neuron: g,
++                        reason: "weight encoding overflow",
++                    });
++                }
++                if active_only && s.weight == 0.0 {
++                    continue;
++                }
++                row.push((s.from_index, s.weight));
++            }
++            neurons.push(SparseNeuron {
++                bias: neuron_data.bias,
++                squash,
++            });
++            rows.push(row);
++        }
++        let store = match precision {
++            Precision::F32 => EdgeStore::F32(Edges::build(layout, ni, &rows)),
++            Precision::Bf16 => EdgeStore::Bf16(Edges::build(layout, ni, &rows)),
++            Precision::F16 => EdgeStore::F16(Edges::build(layout, ni, &rows)),
++        };
++        Ok(SparseNet {
++            layout,
++            precision,
++            num_inputs: ni,
++            neurons,
++            store,
++        })
++    }
++
++    pub fn layout(&self) -> Layout {
++        self.layout
++    }
++
++    pub fn precision(&self) -> Precision {
++        self.precision
++    }
++
++    /// Memory from vector lengths times element sizes. `neuron_bytes` is
++    /// `size_of::<SparseNeuron>()` per non-input neuron; offsets and indices are
++    /// `u32` / `u16` as stored.
++    pub fn memory(&self) -> MemoryBreakdown {
++        let (weight_bytes, index_bytes, padding_slots, edges) = match &self.store {
++            EdgeStore::F32(e) => e.memory_parts(),
++            EdgeStore::Bf16(e) => e.memory_parts(),
++            EdgeStore::F16(e) => e.memory_parts(),
++        };
++        MemoryBreakdown {
++            weight_bytes,
++            index_bytes,
++            neuron_bytes: std::mem::size_of::<SparseNeuron>() * self.neurons.len(),
++            padding_slots,
++            edges,
++        }
++    }
++
++    /// Forward `records.len() / stride` records in groups of `width` lanes using a
++    /// record-interleaved activation buffer `act[neuron * width + lane]`.
++    ///
++    /// `out` is record-major with `num_outputs` per record; `num_outputs` is
++    /// `out.len() / record_count` (outputs are the last `num_outputs` neurons). A
++    /// partial final group works: lanes beyond the record count are computed on
++    /// zero inputs and never written to `out`. Inputs beyond `stride` are zero,
++    /// matching `CompiledNetwork`'s short-record fill.
++    ///
++    /// Every activation slot is rewritten for every group (inputs fully, then each
++    /// non-input neuron in order; COO accumulators are re-seeded to the bias), so
++    /// no state survives between groups or calls.
++    ///
++    /// # Panics
++    ///
++    /// On a non-finite record value, `width == 0`, `stride == 0`, a `records` length that is not a multiple of
++    /// `stride`, or an `out` length that is not a whole, non-zero number of outputs
++    /// per record no larger than the non-input neuron count.
++    pub fn forward_batch(
++        &self,
++        records: &[f32],
++        stride: usize,
++        width: usize,
++        scratch: &mut Scratch,
++        out: &mut [f32],
++    ) {
++        assert!(width > 0, "forward_batch: width must be at least 1");
++        assert!(stride > 0, "forward_batch: stride must be at least 1");
++        assert!(
++            records.len() % stride == 0,
++            "forward_batch: records length {} is not a multiple of stride {}",
++            records.len(),
++            stride
++        );
++        assert!(
++            records.iter().all(|x| x.is_finite()),
++            "forward_batch: non-finite record"
++        );
++        let nrec = records.len() / stride;
++        if nrec == 0 {
++            assert!(
++                out.is_empty(),
++                "forward_batch: out must be empty for no records"
++            );
++            return;
++        }
++        assert!(
++            out.len() % nrec == 0,
++            "forward_batch: out length {} is not a multiple of the record count {}",
++            out.len(),
++            nrec
++        );
++        let no = out.len() / nrec;
++        assert!(
++            no >= 1 && no <= self.neurons.len(),
++            "forward_batch: {no} outputs per record is outside 1..={}",
++            self.neurons.len()
++        );
++
++        let ni = self.num_inputs;
++        let total = ni + self.neurons.len();
++        let acc_len = match self.layout {
++            Layout::CooSrc => self.neurons.len() * width,
++            _ => width,
++        };
++        scratch.act.resize(total * width, 0.0);
++        scratch.acc.resize(acc_len, 0.0);
++        let copy = stride.min(ni);
++
++        let mut start = 0;
++        while start < nrec {
++            let lanes = width.min(nrec - start);
++            scratch.act[..ni * width].fill(0.0);
++            for l in 0..lanes {
++                let rec = &records[(start + l) * stride..(start + l + 1) * stride];
++                for i in 0..copy {
++                    scratch.act[i * width + l] = rec[i];
++                }
++            }
++            let (act, acc) = (&mut scratch.act[..], &mut scratch.acc[..]);
++            match &self.store {
++                EdgeStore::F32(e) => run_dispatch(e, &self.neurons, ni, width, act, acc),
++                EdgeStore::Bf16(e) => run_dispatch(e, &self.neurons, ni, width, act, acc),
++                EdgeStore::F16(e) => run_dispatch(e, &self.neurons, ni, width, act, acc),
++            }
++            for o in 0..no {
++                let g = (total - no + o) * width;
++                for l in 0..lanes {
++                    out[(start + l) * no + o] = scratch.act[g + l];
++                }
++            }
++            start += width;
++        }
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Sparsity
++// ---------------------------------------------------------------------------
++
++/// Rebuild `net` with exactly `round(fraction * synapses)` seeded-selected
++/// synapses set to weight `0.0`. Topology and every other value are unchanged.
++pub fn apply_sparsity(net: &CompiledNetwork, fraction: f64, seed: u64) -> CompiledNetwork {
++    let mut synapses = net.synapses().to_vec();
++    let n = synapses.len();
++    let k = ((fraction * n as f64).round() as usize).min(n);
++    let mut idx: Vec<usize> = (0..n).collect();
++    let mut rng = Lcg::new(seed);
++    for i in 0..k {
++        let j = i + rng.next_below(n - i);
++        idx.swap(i, j);
++        synapses[idx[i]].weight = 0.0;
++    }
++    CompiledNetwork::from_parts(net.num_inputs(), net.neurons().to_vec(), synapses)
++        .expect("zeroing weights cannot break the index invariant")
++}
++
++// ---------------------------------------------------------------------------
++// Independent f64 oracle
++// ---------------------------------------------------------------------------
++
++/// Plain f64 forward pass over `net.neurons()` / `net.synapses()`. Supports
++/// Identity, Tanh, ReLU and Logistic only; anything else is an `Err` naming the
++/// squash. It calls no crate squash or kernel, so it shares no code path with
++/// what it checks (AGENTS.md oracle rule 1). Range clamps mirror
++/// `squash_profile`: Tanh `[-1, 1]`, Logistic `[0, 1]`, ReLU `[0, +inf)`, Identity
++/// unbounded. A constant neuron yields its bias.
++pub fn reference_forward_f64(
++    net: &CompiledNetwork,
++    record: &[f32],
++    num_outputs: usize,
++) -> Result<Vec<f64>, String> {
++    let ni = net.num_inputs();
++    let mut act = vec![0.0f64; net.num_neurons()];
++    for i in 0..ni.min(record.len()) {
++        act[i] = record[i] as f64;
++    }
++    for (n, neuron_data) in net.neurons().iter().enumerate() {
++        if neuron_data.is_constant {
++            act[ni + n] = neuron_data.bias as f64;
++            continue;
++        }
++        let mut sum = neuron_data.bias as f64;
++        let start = neuron_data.start_synapse as usize;
++        for s in &net.synapses()[start..start + neuron_data.num_synapses as usize] {
++            sum += s.weight as f64 * act[s.from_index as usize];
++        }
++        act[ni + n] = match neuron_data.squash_type {
++            0 => sum,
++            1 => sum.max(0.0),
++            6 => (1.0 / (1.0 + (-sum).exp())).clamp(0.0, 1.0),
++            7 => sum.tanh().clamp(-1.0, 1.0),
++            other => {
++                return Err(format!(
++                    "reference_forward_f64 does not support squash {:?} ({other})",
++                    SquashType::from(other)
++                ));
++            }
++        };
++    }
++    if num_outputs > act.len() {
++        return Err(format!(
++            "num_outputs {num_outputs} exceeds neuron count {}",
++            act.len()
++        ));
++    }
++    Ok(act[act.len() - num_outputs..].to_vec())
++}
++
++// ---------------------------------------------------------------------------
++// Statistics
++// ---------------------------------------------------------------------------
++
++/// Median (mean of the two middle values for an even count). Panics when empty.
++pub fn median(values: &[f64]) -> f64 {
++    quantile(values, 0.5)
++}
++
++/// Quantile with linear interpolation between order statistics (the "type 7"
++/// definition): position `q * (n - 1)` in the sorted values, interpolated between
++/// the two neighbours. `q` is clamped to `[0, 1]`. Panics when empty.
++pub fn quantile(values: &[f64], q: f64) -> f64 {
++    assert!(!values.is_empty(), "quantile: no values");
++    let mut v = values.to_vec();
++    v.sort_by(|a, b| a.total_cmp(b));
++    let pos = q.clamp(0.0, 1.0) * (v.len() - 1) as f64;
++    let lo = pos.floor() as usize;
++    let hi = pos.ceil() as usize;
++    v[lo] + (v[hi] - v[lo]) * (pos - lo as f64)
++}
++
++/// Paired ratio summary: median of per-rep `variant / baseline` ratios and its
++/// bootstrap percentile 95% interval.
++#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
++pub struct RatioSummary {
++    pub median_ratio: f64,
++    pub ci_low: f64,
++    pub ci_high: f64,
++}
++
++/// Ratios are formed per rep (rep `i` of the variant over rep `i` of the
++/// baseline), then the reps are resampled with replacement `resamples` times
++/// (indices drawn from `Lcg::new(seed)`); the interval is the 2.5th and 97.5th
++/// percentile of the resampled medians. Panics if the lengths differ or are empty.
++pub fn paired_ratio_ci(
++    variant_ns: &[f64],
++    baseline_ns: &[f64],
++    resamples: usize,
++    seed: u64,
++) -> RatioSummary {
++    assert_eq!(
++        variant_ns.len(),
++        baseline_ns.len(),
++        "paired_ratio_ci: variant and baseline must have the same number of reps"
++    );
++    assert!(!variant_ns.is_empty(), "paired_ratio_ci: no reps");
++    let ratios: Vec<f64> = variant_ns
++        .iter()
++        .zip(baseline_ns)
++        .map(|(v, b)| v / b)
++        .collect();
++    let mut rng = Lcg::new(seed);
++    let n = ratios.len();
++    let mut medians = Vec::with_capacity(resamples.max(1));
++    let mut buf = vec![0.0; n];
++    for _ in 0..resamples.max(1) {
++        for slot in buf.iter_mut() {
++            *slot = ratios[rng.next_below(n)];
++        }
++        medians.push(median(&buf));
++    }
++    RatioSummary {
++        median_ratio: median(&ratios),
++        ci_low: quantile(&medians, 0.025),
++        ci_high: quantile(&medians, 0.975),
++    }
++}
++
++/// Error of `got` against an f64 reference. A NaN difference counts as infinite
++/// so it can never pass a tolerance.
++#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
++pub struct ErrorStats {
++    pub max_abs: f64,
++    pub rmse: f64,
++}
++
++pub fn error_stats(got: &[f32], reference: &[f64]) -> ErrorStats {
++    assert_eq!(got.len(), reference.len(), "error_stats: length mismatch");
++    let mut max_abs = 0.0f64;
++    let mut sq = 0.0f64;
++    for (g, r) in got.iter().zip(reference) {
++        let d = (*g as f64 - r).abs();
++        let d = if d.is_nan() { f64::INFINITY } else { d };
++        max_abs = max_abs.max(d);
++        sq += d * d;
++    }
++    let rmse = if got.is_empty() {
++        0.0
++    } else {
++        (sq / got.len() as f64).sqrt()
++    };
++    ErrorStats { max_abs, rmse }
++}
++
++// ---------------------------------------------------------------------------
++// Manifest
++// ---------------------------------------------------------------------------
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct ShapeSpec {
++    pub label: String,
++    pub num_neurons: usize,
++    pub num_inputs: usize,
++    pub num_outputs: usize,
++    pub fan_in_kind: String,
++    pub fan_in: usize,
++}
++
++impl ShapeSpec {
++    /// Map `fan_in_kind` to a [`FanIn`]; an unknown kind is an error.
++    pub fn fan_in(&self) -> Result<FanIn, String> {
++        match self.fan_in_kind.as_str() {
++            "fixed" => Ok(FanIn::Fixed(self.fan_in)),
++            "varied_around" => Ok(FanIn::VariedAround(self.fan_in)),
++            "exact_total" => Ok(FanIn::ExactTotal(self.fan_in)),
++            other => Err(format!(
++                "shape {}: unknown fan_in_kind {other:?} (expected fixed, varied_around or exact_total)",
++                self.label
++            )),
++        }
++    }
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Criteria {
++    pub speed_win_ratio: f64,
++    pub tolerance_f32: f64,
++    pub tolerance_reduced: f64,
++    pub representative_shape: String,
++    pub adopt_rule: String,
++    pub platforms_required: Vec<String>,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Manifest {
++    pub schema_version: u32,
++    pub issue: u32,
++    pub shapes: Vec<ShapeSpec>,
++    pub inactive_fractions: Vec<f64>,
++    pub batch_widths: Vec<usize>,
++    pub calibration_seed: u64,
++    pub validation_seed: u64,
++    pub validation_record_seed: u64,
++    pub shuffle_seed: u64,
++    pub bootstrap_seed: u64,
++    pub calibration_records: usize,
++    pub records_per_sample: usize,
++    pub reps: usize,
++    pub conversion_reps: usize,
++    pub bootstrap_resamples: usize,
++    pub max_cell_seconds: f64,
++    pub max_total_seconds: f64,
++    pub criteria: Criteria,
++}
++
++/// Parse and validate a manifest; every problem is an `Err` naming it.
++pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
++    let m: Manifest = serde_json::from_str(text).map_err(|e| format!("invalid manifest: {e}"))?;
++    if m.schema_version != 1 {
++        return Err(format!(
++            "unsupported manifest schema_version {}",
++            m.schema_version
++        ));
++    }
++    if m.shapes.is_empty() || m.inactive_fractions.is_empty() || m.batch_widths.is_empty() {
++        return Err("manifest needs at least one shape, inactive fraction and batch width".into());
++    }
++    for s in &m.shapes {
++        s.fan_in()?;
++        if s.num_neurons > MAX_NODE_COUNT {
++            return Err(format!(
++                "shape {}: neuron count exceeds {MAX_NODE_COUNT}",
++                s.label
++            ));
++        }
++        if s.num_inputs == 0
++            || s.num_inputs >= s.num_neurons
++            || s.num_outputs == 0
++            || s.num_outputs > s.num_neurons - s.num_inputs
++        {
++            return Err(format!(
++                "shape {}: inconsistent neuron/input/output counts",
++                s.label
++            ));
++        }
++    }
++    let unique = |values: Vec<String>, field: &str| -> Result<(), String> {
++        let mut seen = std::collections::BTreeSet::new();
++        for value in values {
++            if value.trim().is_empty() {
++                return Err(format!("{field} must not be empty"));
++            }
++            if !seen.insert(value) {
++                return Err(format!("duplicate {field}"));
++            }
++        }
++        Ok(())
++    };
++    unique(
++        m.shapes.iter().map(|s| s.label.clone()).collect(),
++        "shape label",
++    )?;
++    unique(
++        m.batch_widths.iter().map(ToString::to_string).collect(),
++        "batch_widths",
++    )?;
++    unique(
++        m.inactive_fractions
++            .iter()
++            .map(ToString::to_string)
++            .collect(),
++        "inactive_fractions",
++    )?;
++    unique(m.criteria.platforms_required.clone(), "platforms_required")?;
++    for s in &m.shapes {
++        let non_inputs = s.num_neurons - s.num_inputs;
++        let max_fan = match s.fan_in_kind.as_str() {
++            "exact_total" => s.fan_in.div_ceil(non_inputs),
++            "varied_around" => s
++                .fan_in
++                .checked_mul(2)
++                .and_then(|n| n.checked_sub(1))
++                .ok_or_else(|| format!("shape {}: fan_in overflow", s.label))?,
++            _ => s.fan_in,
++        };
++        if max_fan > u16::MAX as usize {
++            return Err(format!("shape {}: fan_in exceeds u16", s.label));
++        }
++        // Bound the simultaneous live variants and conversion temporaries before allocating.
++        let bytes = (max_fan as u128 * non_inputs as u128 * 32 * 20)
++            + (s.num_neurons as u128 * *m.batch_widths.iter().max().unwrap() as u128 * 8 * 20)
++            + (m.records_per_sample.max(m.calibration_records) as u128
++                * s.num_neurons as u128
++                * 16);
++        if bytes > 512 * 1024 * 1024 {
++            return Err(format!(
++                "shape {}: estimated experiment memory exceeds 512 MiB",
++                s.label
++            ));
++        }
++        if s.fan_in_kind == "exact_total" {
++            let schedule = s.fan_in()?.exact_schedule(non_inputs).unwrap();
++            if schedule
++                .iter()
++                .enumerate()
++                .any(|(i, &n)| n > s.num_inputs + i)
++            {
++                return Err(format!(
++                    "shape {}: exact fan_in would be truncated",
++                    s.label
++                ));
++            }
++        }
++    }
++    if m.inactive_fractions.iter().any(|f| !(0.0..1.0).contains(f)) {
++        return Err("inactive_fractions must lie in [0, 1)".into());
++    }
++    if m.batch_widths.contains(&0) {
++        return Err("batch_widths must be at least 1".into());
++    }
++    if m.reps < 2
++        || m.records_per_sample == 0
++        || m.calibration_records == 0
++        || m.conversion_reps == 0
++    {
++        return Err(
++            "reps must be at least 2; records_per_sample, calibration_records and conversion_reps must be positive"
++                .into(),
++        );
++    }
++    if m.reps > 10_000 || m.conversion_reps > 100 || m.bootstrap_resamples > 1_000_000 {
++        return Err(
++            "reps/conversion_reps/bootstrap_resamples exceed experiment work limits".into(),
++        );
++    }
++    if m.shapes.len() as u128 * m.batch_widths.len() as u128 * m.inactive_fractions.len() as u128
++        > 10_000
++    {
++        return Err("manifest exceeds 10000 cells".into());
++    }
++    if m.bootstrap_resamples == 0 {
++        return Err("bootstrap_resamples must be positive".into());
++    }
++    for (name, value) in [
++        ("max_cell_seconds", m.max_cell_seconds),
++        ("max_total_seconds", m.max_total_seconds),
++    ] {
++        if !value.is_finite() || value <= 0.0 {
++            return Err(format!("{name} must be finite and positive"));
++        }
++    }
++    if !(0.0..1.0).contains(&m.criteria.speed_win_ratio) || m.criteria.speed_win_ratio == 0.0 {
++        return Err("speed_win_ratio must lie in (0, 1)".into());
++    }
++    for tol in [m.criteria.tolerance_f32, m.criteria.tolerance_reduced] {
++        if !tol.is_finite() || tol < 0.0 {
++            return Err("tolerance must be finite and non-negative".into());
++        }
++    }
++    if m.criteria.platforms_required.is_empty() {
++        return Err("platforms_required must not be empty".into());
++    }
++    if m.calibration_seed == m.validation_seed || m.calibration_seed == m.validation_record_seed {
++        return Err("calibration and validation seeds must differ".into());
++    }
++    if !m
++        .shapes
++        .iter()
++        .any(|s| s.label == m.criteria.representative_shape)
++    {
++        return Err(format!(
++            "representative_shape {:?} is not a declared shape",
++            m.criteria.representative_shape
++        ));
++    }
++    Ok(m)
++}
+diff --git a/quality.sh b/quality.sh
+index 2791280e1185295269386d55fb1e6ecee2ba0ed3..ebeddb696b6ca8cb4e36e15a609f3b8ea9b82512 100755
+--- a/quality.sh
++++ b/quality.sh
+@@ -162,6 +162,7 @@ cargo deny check
+ # so its own dependency graph needs its own pass under this same deny.toml —
+ # the licence allow-list and unknown-registry = "deny" included.
+ cargo deny --manifest-path wasm-bench/Cargo.toml check
++cargo deny --manifest-path experiments/sparse_metal/Cargo.toml check
+ 
+ # Use workspace for faster builds
+ echo "🏗️ Building (debug) for quick feedback..."
+diff --git a/scripts/sparse_precision_resources.py b/scripts/sparse_precision_resources.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7ea894704c06d7e4aa117f402ca9f518be8f8db2
+--- /dev/null
++++ b/scripts/sparse_precision_resources.py
+@@ -0,0 +1,20 @@
++"""Collect the OS child high-water RSS; Deno's subprocess API has no rusage."""
++
++import json
++import resource
++import subprocess
++import sys
++
++
++def main():
++    if len(sys.argv) < 3:
++        raise SystemExit("usage: sparse_precision_resources.py <rss.json> <command> [args...]")
++    result = subprocess.run(sys.argv[2:], stdin=subprocess.DEVNULL, check=False)
++    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
++    with open(sys.argv[1], "x", encoding="utf-8") as output:
++        json.dump({"max_rss": usage.ru_maxrss, "platform": sys.platform}, output)
++    raise SystemExit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/scripts/metal_probe_workflow.bats b/tests/scripts/metal_probe_workflow.bats
+new file mode 100644
+index 0000000000000000000000000000000000000000..6482430227c10294c9b551e1ef7627a13055df84
+--- /dev/null
++++ b/tests/scripts/metal_probe_workflow.bats
+@@ -0,0 +1,63 @@
++#!/usr/bin/env bats
++
++setup() {
++  load helpers
++  export REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
++  export METAL_WORKFLOW_CHECKER
++  METAL_WORKFLOW_CHECKER=$(cat <<'PY'
++import os, yaml
++
++def validate(data):
++    on = data.get("on", data.get(True))
++    assert on["workflow_dispatch"]["inputs"]["metal_probe"] == {
++        "description": "Query native Metal device availability", "type": "boolean", "default": False}
++    job = data["jobs"]["metal-capability-probe"]
++    assert job["if"] == "github.event_name == 'workflow_dispatch' && inputs.metal_probe"
++    assert job["runs-on"] == "macos-15"
++    assert job["permissions"] == {"contents": "read"}
++    query = next(s for s in job["steps"] if s.get("id") == "query")
++    assert query["run"] == 'mkdir metal-probe && swift --version > metal-probe/compiler.txt && sysctl -n machdep.cpu.brand_string > metal-probe/cpu.txt && uname -a > metal-probe/kernel.txt && git rev-parse HEAD > metal-probe/revision.txt && swift docs/research/sparse-precision/metal-probe.swift > metal-probe/result.json < /dev/null'
++    upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
++    assert upload["if"] == "always()"
++    assert upload["with"]["path"] == "metal-probe/"
++    assert upload["with"]["if-no-files-found"] == "error"
++
++with open(os.path.join(os.environ["REPO_ROOT"], ".github/workflows/ci.yml")) as source:
++    data = yaml.safe_load(source)
++validate(data)
++PY
++)
++}
++
++@test "Metal capability probe is opt-in and preserves the real query result" {
++  run python3 -c "$METAL_WORKFLOW_CHECKER"
++  [ "$status" -eq 0 ]
++}
++
++@test "Metal capability validator refuses incorrect opt-in and artefact settings" {
++  run python3 - <<'PY'
++import copy, os
++exec(os.environ["METAL_WORKFLOW_CHECKER"])
++on = data.get("on", data.get(True))
++job = data["jobs"]["metal-capability-probe"]
++upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
++query = next(s for s in job["steps"] if s.get("id") == "query")
++cases = [(job, "if", "true"), (job, "runs-on", "ubuntu-24.04"),
++         (job, "permissions", {"contents": "write"}),
++         (on["workflow_dispatch"]["inputs"]["metal_probe"], "default", True),
++         (query, "run", "true"), (upload, "if", "success()"),
++         (upload["with"], "path", "."), (upload["with"], "if-no-files-found", "ignore")]
++for target, key, wrong in cases:
++    original = copy.deepcopy(target[key])
++    target[key] = wrong
++    try:
++        validate(data)
++    except AssertionError:
++        pass
++    else:
++        raise AssertionError(f"accepted incorrect {key}: {wrong!r}")
++    finally:
++        target[key] = original
++PY
++  [ "$status" -eq 0 ]
++}
+diff --git a/tests/scripts/sparse_metal_workflow.bats b/tests/scripts/sparse_metal_workflow.bats
+new file mode 100644
+index 0000000000000000000000000000000000000000..2255ac7591df4147210166fd8d8373a0985b47af
+--- /dev/null
++++ b/tests/scripts/sparse_metal_workflow.bats
+@@ -0,0 +1,65 @@
++#!/usr/bin/env bats
++
++setup() {
++  load helpers
++  export REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
++  export METAL_ADAPTER_CHECKER
++  METAL_ADAPTER_CHECKER=$(cat <<'PY'
++import os, yaml
++
++def validate(data):
++    on = data.get("on", data.get(True))
++    assert on["workflow_dispatch"]["inputs"]["sparse_metal"]["default"] is False
++    job = data["jobs"]["sparse-metal-research"]
++    assert job["if"] == "github.event_name == 'workflow_dispatch' && inputs.sparse_metal"
++    assert job["runs-on"] == "macos-15"
++    assert job["env"]["WGPU_BACKEND"] == "metal"
++    steps = job["steps"]
++    run = next(s for s in steps if s.get("id") == "adapter")
++    assert run["run"] == "bash experiments/sparse_metal/run.sh < /dev/null"
++    upload = next(s for s in steps if s.get("uses", "").startswith("actions/upload-artifact@"))
++    assert upload["if"] == "always()"
++    assert upload["with"]["path"] == "sparse-metal-results/"
++    assert upload["with"]["if-no-files-found"] == "error"
++
++with open(os.path.join(os.environ["REPO_ROOT"], ".github/workflows/ci.yml")) as source:
++    data = yaml.safe_load(source)
++validate(data)
++PY
++)
++}
++
++@test "Metal adapter is opt-in and preserves failed research evidence" {
++  run python3 -c "$METAL_ADAPTER_CHECKER"
++  [ "$status" -eq 0 ]
++  run assert_job_least_privilege "${REPO_ROOT}/.github/workflows/ci.yml" sparse-metal-research
++  [ "$status" -eq 0 ]
++}
++
++@test "Metal adapter validator refuses wrong backend, event and evidence settings" {
++  run python3 - <<'PY'
++import copy, os
++exec(os.environ["METAL_ADAPTER_CHECKER"])
++on = data.get("on", data.get(True))
++job = data["jobs"]["sparse-metal-research"]
++upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
++adapter = next(s for s in job["steps"] if s.get("id") == "adapter")
++cases = [(job, "if", "true"), (job, "runs-on", "ubuntu-24.04"),
++         (job["env"], "WGPU_BACKEND", "vulkan"),
++         (on["workflow_dispatch"]["inputs"]["sparse_metal"], "default", True),
++         (adapter, "run", "true"), (upload, "if", "success()"),
++         (upload["with"], "path", "."), (upload["with"], "if-no-files-found", "ignore")]
++for target, key, wrong in cases:
++    original = copy.deepcopy(target[key])
++    target[key] = wrong
++    try:
++        validate(data)
++    except AssertionError:
++        pass
++    else:
++        raise AssertionError(f"accepted incorrect {key}: {wrong!r}")
++    finally:
++        target[key] = original
++PY
++  [ "$status" -eq 0 ]
++}
+diff --git a/docs/research/sparse-precision/manifest-metal-v6.json b/docs/research/sparse-precision/manifest-metal-v6.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..19a96fd92b0fdefb95274886b33276c48829f777
+--- /dev/null
++++ b/docs/research/sparse-precision/manifest-metal-v6.json
+@@ -0,0 +1,88 @@
++{
++  "schema_version": 1,
++  "issue": 758,
++  "shapes": [
++    {
++      "label": "small_50",
++      "num_neurons": 50,
++      "num_inputs": 8,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 12
++    },
++    {
++      "label": "fanin_4",
++      "num_neurons": 1000,
++      "num_inputs": 64,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 4
++    },
++    {
++      "label": "fanin_16",
++      "num_neurons": 1000,
++      "num_inputs": 64,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 16
++    },
++    {
++      "label": "fanin_64",
++      "num_neurons": 1000,
++      "num_inputs": 64,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 64
++    },
++    {
++      "label": "large_5000",
++      "num_neurons": 5000,
++      "num_inputs": 32,
++      "num_outputs": 16,
++      "fan_in_kind": "fixed",
++      "fan_in": 24
++    },
++    {
++      "label": "production_exact",
++      "num_neurons": 4127,
++      "num_inputs": 2461,
++      "num_outputs": 1,
++      "fan_in_kind": "exact_total",
++      "fan_in": 21513
++    }
++  ],
++  "inactive_fractions": [
++    0.0,
++    0.5,
++    0.9
++  ],
++  "batch_widths": [
++    1,
++    8,
++    32
++  ],
++  "calibration_seed": 1001,
++  "validation_seed": 52002,
++  "validation_record_seed": 53003,
++  "shuffle_seed": 4004,
++  "bootstrap_seed": 5005,
++  "calibration_records": 8,
++  "records_per_sample": 64,
++  "reps": 15,
++  "conversion_reps": 5,
++  "bootstrap_resamples": 2000,
++  "max_cell_seconds": 120,
++  "max_total_seconds": 720,
++  "criteria": {
++    "speed_win_ratio": 0.9,
++    "tolerance_f32": 0.001,
++    "tolerance_reduced": 0.02,
++    "representative_shape": "production_exact",
++    "adopt_rule": "A variant is an adoption candidate only if warm and end-to-end CI upper bounds are at most speed_win_ratio with accuracy_pass in at least 75% of planned representative_shape cells on EVERY platform in platforms_required. Incomplete, failed and unavailable cells cannot qualify. No default changes either way.",
++    "platforms_required": [
++      "aarch64-macos",
++      "x86_64-linux",
++      "aarch64-linux"
++    ]
++  }
++}

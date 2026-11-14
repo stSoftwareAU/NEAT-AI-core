@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "neat-core",
+    "--example",
+    "sparse_precision_experiment"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 21.519233343999986,
+  "cache_state": "no cache purge; shared core/dependency build cache from v2 and quality gates",
+  "code_rev": "c5f03aa5018906390a7f5f769ffbeccefb27f99a",
+  "rustc_vv": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "stderr": "   Compiling neat-core v0.23.4 (/home/vibe/auto-issue-work/worktrees/s2/NEAT-AI-core/neat-core)\n    Finished `release` profile [optimized] target(s) in 21.49s\n",
+  "validation": {
+    "command": [
+      "cargo",
+      "run",
+      "--release",
+      "-p",
+      "neat-core",
+      "--example",
+      "sparse_precision_experiment",
+      "--",
+      "--manifest",
+      "docs/research/sparse-precision/manifest-v3.json",
+      "--out",
+      "docs/research/sparse-precision/results-aarch64-linux-v3.json",
+      "--code-rev",
+      "c5f03aa5018906390a7f5f769ffbeccefb27f99a",
+      "--rustc",
+      "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    ],
+    "exit_code": 1,
+    "wall_seconds": 57.28512973399938,
+    "stderr": "    Finished `release` profile [optimized] target(s) in 0.03s\n     Running `/var/tmp/vibe-cargo-target/NEAT-AI-core-facc6d3b/release/examples/sparse_precision_experiment --manifest docs/research/sparse-precision/manifest-v3.json --out docs/research/sparse-precision/results-aarch64-linux-v3.json --code-rev c5f03aa5018906390a7f5f769ffbeccefb27f99a --rustc 'rustc 1.99.1 (58cf8f9c3 2026-10-13)'`\ncell 1: small_50 frac=0 w=1: 11/11 variants timed\ncell 2: small_50 frac=0 w=8: 11/11 variants timed\ncell 3: small_50 frac=0 w=32: 11/11 variants timed\ncell 4: small_50 frac=0.5 w=1: 20/20 variants timed\ncell 5: small_50 frac=0.5 w=8: 20/20 variants timed\ncell 6: small_50 frac=0.5 w=32: 20/20 variants timed\ncell 7: small_50 frac=0.9 w=1: 20/20 variants timed\ncell 8: small_50 frac=0.9 w=8: 20/20 variants timed\ncell 9: small_50 frac=0.9 w=32: 20/20 variants timed\ncell 10: fanin_4 frac=0 w=1: 11/11 variants timed\ncell 11: fanin_4 frac=0 w=8: 11/11 variants timed\ncell 12: fanin_4 frac=0 w=32: 11/11 variants timed\ncell 13: fanin_4 frac=0.5 w=1: 20/20 variants timed\ncell 14: fanin_4 frac=0.5 w=8: 20/20 variants timed\ncell 15: fanin_4 frac=0.5 w=32: 20/20 variants timed\ncell 16: fanin_4 frac=0.9 w=1: 20/20 variants timed\ncell 17: fanin_4 frac=0.9 w=8: 20/20 variants timed\ncell 18: fanin_4 frac=0.9 w=32: 20/20 variants timed\ncell 19: fanin_16 frac=0 w=1: 11/11 variants timed\ncell 20: fanin_16 frac=0 w=8: 11/11 variants timed\ncell 21: fanin_16 frac=0 w=32: 11/11 variants timed\ncell 22: fanin_16 frac=0.5 w=1: 20/20 variants timed\ncell 23: fanin_16 frac=0.5 w=8: 20/20 variants timed\ncell 24: fanin_16 frac=0.5 w=32: 20/20 variants timed\ncell 25: fanin_16 frac=0.9 w=1: 20/20 variants timed\ncell 26: fanin_16 frac=0.9 w=8: 20/20 variants timed\ncell 27: fanin_16 frac=0.9 w=32: 20/20 variants timed\ncell 28: fanin_64 frac=0 w=1: 8/11 variants timed\ncell 29: fanin_64 frac=0 w=8: 8/11 variants timed\ncell 30: fanin_64 frac=0 w=32: 8/11 variants timed\ncell 31: fanin_64 frac=0.5 w=1: 20/20 variants timed\ncell 32: fanin_64 frac=0.5 w=8: 20/20 variants timed\ncell 33: fanin_64 frac=0.5 w=32: 20/20 variants timed\ncell 34: fanin_64 frac=0.9 w=1: 20/20 variants timed\ncell 35: fanin_64 frac=0.9 w=8: 20/20 variants timed\ncell 36: fanin_64 frac=0.9 w=32: 20/20 variants timed\ncell 37: large_5000 frac=0 w=1: 11/11 variants timed\ncell 38: large_5000 frac=0 w=8: 11/11 variants timed\ncell 39: large_5000 frac=0 w=32: 11/11 variants timed\ncell 40: large_5000 frac=0.5 w=1: 20/20 variants timed\ncell 41: large_5000 frac=0.5 w=8: 20/20 variants timed\ncell 42: large_5000 frac=0.5 w=32: 20/20 variants timed\ncell 43: large_5000 frac=0.9 w=1: 20/20 variants timed\ncell 44: large_5000 frac=0.9 w=8: 20/20 variants timed\ncell 45: large_5000 frac=0.9 w=32: 20/20 variants timed\ncell 46: production_exact frac=0 w=1: 11/11 variants timed\ncell 47: production_exact frac=0 w=8: 11/11 variants timed\ncell 48: production_exact frac=0 w=32: 11/11 variants timed\ncell 49: production_exact frac=0.5 w=1: 20/20 variants timed\ncell 50: production_exact frac=0.5 w=8: 20/20 variants timed\ncell 51: production_exact frac=0.5 w=32: 20/20 variants timed\ncell 52: production_exact frac=0.9 w=1: 20/20 variants timed\ncell 53: production_exact frac=0.9 w=8: 20/20 variants timed\ncell 54: production_exact frac=0.9 w=32: 20/20 variants timed\nwrote docs/research/sparse-precision/results-aarch64-linux-v3.json\nsparse_precision_experiment: [EXPERIMENT_FAILURE] status=\"completed_with_failures\" failures=9; raw results saved\n"
+  }
+}

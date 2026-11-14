@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "source": "results.json",
+  "memory_source": "memory.json",
+  "protocol": "sparse-precision-v4",
+  "code_rev": "17d222db0ad8ae5c6a5681b58f6184ea7d9035eb",
+  "host": {
+    "arch": "aarch64",
+    "available_parallelism": 3,
+    "os": "macos",
+    "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)"
+  },
+  "cpu": "Apple M1 (Virtual)",
+  "rule": "Both paired warm and end-to-end 95% CI upper bounds <= speed_win_ratio, accuracy_pass, complete paired rounds, in ceil(0.75 * planned representative cells). Failures remain in the denominator. Every required platform must qualify.",
+  "representative_shape": "production_exact",
+  "speed_win_ratio": 0.9,
+  "representative": {
+    "blocked4/bf16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "blocked4/bf16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "blocked4/f16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "blocked4/f16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "blocked4/f32/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "blocked4/f32/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "coo_src/bf16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "coo_src/bf16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "coo_src/f16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "coo_src/f16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "coo_src/f32/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "coo_src/f32/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "csr_dst/bf16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "csr_dst/bf16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "csr_dst/f16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "csr_dst/f16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "csr_dst/f32/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 1,
+      "both_pass": 1,
+      "required": 5
+    },
+    "csr_dst/f32/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "current_whole_scan": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    }
+  },
+  "local_candidates": [],
+  "timed_coverage": {
+    "cells_complete": 54,
+    "cells_planned": 54,
+    "cells_run": 54,
+    "metal": {
+      "reason": "no factorial adapter for the scorer GPU backend",
+      "status": "not_run"
+    },
+    "platforms_covered": [
+      "aarch64-macos"
+    ],
+    "platforms_not_covered": [
+      "x86_64-linux",
+      "aarch64-linux"
+    ],
+    "skipped_by_design": "active_only variants are skipped when inactive_fraction == 0 (identical to all_edges)",
+    "variants_planned": 918,
+    "variants_timed": 909
+  },
+  "memory_cells": 54,
+  "memory_variants_measured": 918,
+  "memory_numerical_failures": 9,
+  "process_peaks": {
+    "build": 641269760,
+    "validation": 112099328,
+    "memory": 38797312
+  },
+  "memory_basis": "System allocator requested live bytes; includes conversion temporaries, excludes allocator metadata, internal realloc overlap, stacks and RSS; one variant live per scope",
+  "hardware_reduced_precision_compute": "not_measured"
+}
