@@ -6,8 +6,9 @@ to restore it in an isolated worktree. The scientific protocol below is unchange
 
 Issue #760. The accompanying `manifest-v2.json` defines the complete run.
 Protocol v1, its manifest, three platform results and cross-platform assessment
-remain historical evidence; they do not establish a v2 candidate. Replay v1 at
-commit `9e506f9`. The current example refuses to label a new run as v1.
+remain historical evidence; they do not establish a v2 candidate. Replay v1 from
+`harness-v1.patch` (see [replay.md](replay.md#replay-v1)). The current example
+refuses to label a new run as v1.
 
 ## Method and controls
 

@@ -45,5 +45,31 @@ provenance; do not relabel a replay as one of the committed measurements.
 The source and data are frozen, while hosted timing noise is not reproducible
 bit for bit.
 
-For v1, use its historical source revision `9e506f9` and original manifest;
-`harness-v2.patch` intentionally reproduces the corrected v2 method.
+## Replay v1
+
+The v1 sources are archived the same way in `harness-v1.patch`: the v1
+harness, example, integration test and `manifest.json`, as they stood at
+historical revision `9e506f9484d7a01c6bac5b00bce25d79bca2d32d` (an
+unreferenced commit that may stop being fetchable, so the patch is the durable
+copy). It applies to the same base,
+`b426a98ceb8707204231f8e7ebdcd8d1665f9612`.
+
+Patch SHA-256: `160fe6a7eb86ed2dd6c2a05bc7c5a40d73a82f4e801ccd3977ca1ed6204b0b50`.
+
+The patch carries only those four files; v1's hosted CI lane and
+`neat-core/benches/README.md` note are not archived. The replay was exercised
+in a separate worktree: the patch applied, the four files matched the
+historical blobs byte for byte, and the archived suite passed 20 tests.
+
+```bash
+TASK_ROOT="$(pwd)"
+REPLAY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mulclip-v1.XXXXXX")"
+git fetch origin b426a98ceb8707204231f8e7ebdcd8d1665f9612
+git worktree add --detach "$REPLAY_ROOT/worktree" b426a98ceb8707204231f8e7ebdcd8d1665f9612
+cd "$REPLAY_ROOT/worktree"
+git apply --check "$TASK_ROOT/docs/research/mulclip/harness-v1.patch"
+git apply "$TASK_ROOT/docs/research/mulclip/harness-v1.patch"
+cargo test -p neat-core --test mulclip_experiment < /dev/null
+```
+
+`harness-v2.patch` intentionally reproduces the corrected v2 method, not v1.
