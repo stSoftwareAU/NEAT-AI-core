@@ -74,14 +74,17 @@ fn an_unmeasured_evaluation_rate_is_unknown() {
 #[test]
 fn useful_bias_driven_structure_is_not_reported_as_dead() {
     let result = ArmResult {
-        final_bias_driven: 3,
+        final_bias_driven: 5,
         final_dead_end: 2,
         final_isolated: 1,
         ..ArmResult::default()
     }
     .to_json();
+    // Dead structure is DeadEnd + Isolated = 2 + 1; BiasDriven (5) is separate.
     assert_eq!(result["final_dead_structure"], 3);
-    assert_eq!(result["final_interior"]["bias_driven"], 3);
+    assert_eq!(result["final_interior"]["bias_driven"], 5);
+    assert_eq!(result["final_interior"]["dead_end"], 2);
+    assert_eq!(result["final_interior"]["isolated"], 1);
 }
 
 #[test]
@@ -324,16 +327,16 @@ fn evaluation_and_preparation_costs_have_distinct_denominators() {
         initial_cal_mse: 4.0,
         final_cal_mse: 2.0,
         wall_seconds: 20.0,
-        preparation_share_seconds: 10.0,
+        preparation_share_seconds: 5.0,
         ..ArmResult::default()
     };
     r.calibration_cost.add(4.0, 256);
     r.calibration_cost.add(6.0, 256);
     r.validation_cost.add(3.0, 256);
     let json = r.to_json();
-    assert_eq!(json["total_seconds_indicative"], 30.0);
+    assert_eq!(json["total_seconds_indicative"], 25.0); // 20 search + 5 preparation share.
     assert_eq!(json["improvement_per_eval_hour_indicative"], 720.0); // 2 * 3600 / (4 + 6).
-    assert_eq!(json["improvement_per_total_hour_indicative"], 240.0); // 2 * 3600 / (20 + 10).
+    assert_eq!(json["improvement_per_total_hour_indicative"], 288.0); // 2 * 3600 / (20 + 5).
     assert_eq!(json["calibration_scoring"]["calls"], 2);
     assert_eq!(json["calibration_scoring"]["records"], 512);
 }
