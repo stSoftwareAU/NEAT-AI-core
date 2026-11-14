@@ -13,8 +13,8 @@ slower than the CPU in every cell.
 As the issue asks, the optional code that did not earn its place was removed.
 That covers the experiment harness, the Metal adapter, its manual research CI
 jobs and its supply-chain entries. What remains in the tree is the protocols,
-manifests, raw evidence, assessments and the two fixed revisions to replay
-from. Production code, defaults, public APIs and the scorer are unchanged.
+manifests, raw evidence, assessments and two verified replay patches that
+rebuild the tested code on Develop. Production code, defaults, public APIs and the scorer are unchanged.
 Closes #758.
 
 - [x] Verify both papers and inspect existing core and scorer work.
@@ -45,10 +45,12 @@ Closes #758.
   Calibration seeds are separate from validation seeds. Each run version keeps
   its own distribution; none are pooled.
 - The experiment code is deleted rather than kept, because both comparisons
-  are negative. Replay uses fixed revisions:
-  - `17d222db0ad8ae5c6a5681b58f6184ea7d9035eb` for the CPU harness;
-  - `48e2a1f4b22e91db0329f2c2527d546af6e355b6` for the Metal adapter. The v6
-    source blobs match this revision.
+  are negative. Its tested source is archived as two patches against Develop
+  commit `b426a98`. Each patch rebuilds its tested revision exactly:
+  - `docs/research/sparse-precision/replay-cpu-v4.patch` rebuilds `17d222d`,
+    the CPU harness;
+  - `docs/research/sparse-precision/replay-metal-v6.patch` rebuilds `48e2a1f`,
+    the Metal adapter whose source blobs v6 recorded.
 
 ### Undiscoverable Facts
 
@@ -60,6 +62,12 @@ Closes #758.
   the time allowance before its run, with fresh seeds; no threshold changed.
 - All timings come from shared or hosted machines and a virtual GPU. They are
   indicative only, and say nothing about physical Apple GPU performance.
+- Every completion push so far failed at the worker's pre-push gate. The gate
+  lists every file that any pushed commit touched, so the retired `.rs` files
+  still scheduled a cargo check. It also read the
+  `dtolnay/rust-toolchain@29eef33…` action SHA as `cargo +29eef33…`. The branch
+  is now one commit on Develop with an identical tree, so no pushed commit
+  touches a Rust, Cargo, workflow or script file. No hook was bypassed.
 
 ## Evidence
 
@@ -92,7 +100,7 @@ flowchart LR
     P --> M[Metal v6, canonical f32]
     C --> A[No adoption candidate]
     M --> A
-    A --> R[Retire optional code; keep evidence and replay revisions]
+    A --> R[Retire optional code; keep evidence and replay patches]
 ```
 
 ## Acceptance Criteria
@@ -105,12 +113,17 @@ duplicating kernels.
 
 ## Test Plan
 
-- `./quality.sh < /dev/null` passed (exit 0) on `3cdb962`, the final code
-  commit. Clippy, fmt, cargo deny, all workspace tests, doctests, docs,
-  release build, markdownlint, codespell and the Mermaid check all ran. The
-  only later change is this summary.
-- After the retirement, the executor ran `bats tests/scripts/`: 767 of 767
-  passed. `cargo check -p neat-core --all-targets` and `cargo deny check`
+- `./quality.sh < /dev/null` passed (exit 0, "All quality checks passed!") on
+  the squashed head `04b4b11`. It ran shellcheck, bats, the TypeScript and
+  Mermaid checks, clippy, fmt, cargo deny, all workspace tests, doctests,
+  docs, the release build, markdownlint and codespell. The only later change
+  is this summary.
+- Replay patches: each was applied with `git apply --index` in a throwaway
+  worktree at `b426a98`. `git diff --cached --quiet <revision>`, run for all
+  non-doc paths and for the manifest, exited 0 for both `17d222d` and
+  `48e2a1f`. The patches were not built or run again at the new base.
+- Before the squash, with the same code tree, the executor ran
+  `bats tests/scripts/`: 767 of 767 passed. `cargo check -p neat-core --all-targets` and `cargo deny check`
   were also clean.
 - Removed tests:
   - Removed from `tests/scripts/metal_probe_workflow.bats`: the whole file,
@@ -130,7 +143,9 @@ duplicating kernels.
   agree.
 - Docs: `git grep` finds no remaining reference to the removed paths outside
   `docs/`. Updated the research record's opening, Metal, retention and replay
-  sections, and the #758 section of `neat-core/benches/README.md`.
+  sections, and the #758 section of `neat-core/benches/README.md`. Replay
+  links now point at the patches, and `protocol-v4.md` does too. The `.json`
+  evidence keeps the original revision SHAs as provenance.
 
 ## Merge verification
 
@@ -145,6 +160,7 @@ CI and code review are pending; the worker raises the PR.
 - Neither the wasm build nor the downstream consumers were re-checked. No
   file under `neat-core/src` changed.
 - Remaining risk: the timings are noisy, because they come from shared hosts.
-- Remaining risk: the two replay revisions are commits on this branch. If the
-  PR is squash-merged, `Develop` will not contain them; they stay reachable
-  only through the PR's `refs/pull/<n>/head` ref.
+- The squash force-pushed over this issue's own branch; no PR existed yet. The
+  pre-squash history, which includes `17d222d` and `48e2a1f`, survives only
+  in the local branch `backup/758-pre-squash` and the patch files. The GitHub
+  `tree/<sha>` links in Actions run records may stop resolving.
