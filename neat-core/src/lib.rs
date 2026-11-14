@@ -41,6 +41,7 @@ pub mod prune_neuron;
 pub mod prune_rewrite;
 pub mod prune_synapse;
 pub mod range;
+pub mod reachability;
 pub mod safe_zone;
 pub mod score_scan;
 pub mod simd;
