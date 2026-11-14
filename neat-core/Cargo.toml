@@ -80,3 +80,7 @@ harness = false
 [[bench]]
 name = "aggregate_frequency"
 harness = false
+
+[[example]]
+name = "reachability_mutation_experiment"
+test = true
