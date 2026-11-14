@@ -2,29 +2,28 @@
 
 ## Summary
 
-This PR runs the controlled experiment issue #759 asks for. It first audited the existing fixed-point cleanup. It then added the missing O(V+E) input→output reachability diagnostics as `neat_core::reachability`, and compared unbiased connection addition with bridge-biased proposals in a paired, seeded, opt-in experiment. The verdict on the synthetic task is **inconclusive**, and the write-up records the findings as negative or inconclusive. No default, interface or cleanup behaviour changes. A representative run on real corpora has not been done, so no success is claimed. Part of #759.
+This PR runs the controlled experiment issue #759 asks for. It audited the existing fixed-point cleanup, added the missing O(V+E) input→output reachability diagnostics as `neat_core::reachability`, and compared unbiased connection addition with bridge-biased proposals in a paired, seeded, opt-in experiment. On the synthetic task the verdict is **inconclusive**, and the negative findings are recorded. The bridge filter did not earn its maintenance cost, so it is not core API. It lives only inside the example harness, which keeps the comparison reproducible. No default, interface or cleanup behaviour changes, and no success is claimed. Closes #759.
 
 ## Spec
 
 ### Intent and Rationale
 
-- **The audit found the pruning half already in place.** `cleanup_creature` (`neat-core/src/prune_cleanup.rs`) removes nodes with no outward edge, repeating until nothing changes. In a `forwardOnly` creature that is the same as "cannot reach an output". It also folds a bias-only hidden neuron exactly into a support constant, so constant-driven computation is kept. A second pruning implementation was therefore not added.
+- **The audit found the pruning half already in place.** `cleanup_creature` (`neat-core/src/prune_cleanup.rs`) removes nodes with no outward edge, repeating until nothing changes. In a `forwardOnly` creature that is the same as "cannot reach an output". It folds a bias-only hidden neuron exactly into a support constant, so constant-driven computation is kept. No second pruning implementation was added.
 - **Missing piece 1: a reachability diagnostic.** Core had no way to report which structure no input reaches, which inputs are unused, or which outputs are constant.
-- **Missing piece 2: a policy comparison.** Nothing compared connection-proposal policies. `topology_ops::scan_available_connections` was already the unbiased candidate pool, and it is reused as the experiment's baseline.
+- **Missing piece 2: a policy comparison.** Nothing compared connection-proposal policies. `topology_ops::scan_available_connections` already served as the unbiased candidate pool, and the experiment reuses it as the baseline.
 
 ### Essential Design Decisions
 
-- **A diagnostic, never a rewrite.** `reachability_diagnostics` only classifies neurons, and `prune_cleanup` stays the sole rewrite owner. A neuron classed `BiasDriven` (it reaches an output, but no input reaches it) is documented as not removable on reachability alone.
-- **Index-based API.** The API takes the same parallel `from`/`to` index arrays as `topology_ops`, so NEAT-AI (through its own `wasm_activation`) and Ockham can call it without a creature-JSON round trip. Cycles, duplicate edges and unsorted edges are handled.
-- **Typed refusals.** Malformed input fails with a typed `ReachabilityError`, never an empty result. A neuron count above `u32::MAX` is refused before anything is allocated.
-- **How "bridge" was defined.** The paper could not be fetched, so the definition comes from the issue text. A bridge candidate is a pair whose source an input reaches and whose target reaches an output, excluding Live→Live pairs. Adding it puts a currently non-Live endpoint on an input→output path.
-- **The experiment is opt-in and reproducible.** It is an example binary, not a test, so it never gates CI. The two arms share the teacher, data, initial student and weight draws for each seed; only the selection policy differs. A child is accepted only if it improves on the full calibration set, and the untouched validation set is scored only on the first and final creature. The seeds, budgets and verdict rule are fixed in code before the run.
+- **A diagnostic, never a rewrite.** `reachability_diagnostics` only classifies neurons, and `prune_cleanup` stays the sole rewrite owner. A `BiasDriven` neuron (it reaches an output, but no input reaches it) is documented as not removable on reachability alone. The API takes the same parallel `from`/`to` index arrays as `topology_ops`, so NEAT-AI and Ockham can call it without a creature-JSON round trip. Malformed input is a typed `ReachabilityError`, and a neuron count above `u32::MAX` is refused before anything is allocated.
+- **`bridge_candidates` is private to the harness.** The results were inconclusive, and 96% of bridge-arm proposals fell back to the unbiased pool. Under the issue's "remove optional code that does not earn its maintenance cost", the filter stays out of the public crate. Releasing it and removing it later would need the three-PR public-API flow (`RELEASING.md`). Its rule and tests moved unchanged into `neat-core/examples/reachability_mutation_experiment.rs`. `[[example]] test = true` in `neat-core/Cargo.toml` keeps those tests in `cargo test`.
+- **How "bridge" was defined.** The paper could not be fetched, so the definition comes from the issue text. A bridge is a pair whose source an input reaches and whose target reaches an output, excluding Live→Live pairs.
+- **Experiment shape.** The experiment is an example binary, not a test, so its numbers never gate CI. Per seed, both arms share the teacher, the data, the initial student and the weight draws; only the selection policy differs. A child is accepted only on strict improvement of the full calibration MSE. The untouched validation set is scored only on the first and final creatures. Seeds, budgets and the verdict rule are fixed in code and echoed in the JSON manifest.
 
 ### Undiscoverable Facts
 
-- **Paper unverified.** <https://arxiv.org/abs/2610.17425> could not be fetched in this run (`proxy refused the connection`), and the issue audit had already failed to fetch it. The method here does not rely on it.
-- **A `Standard` edge into an `IF` target is valid.** It counts as the `IF`'s positive role (`neat-core/src/topology_invariants.rs:157`). As a result, every candidate `scan_available_connections` proposed passed `validate_creature_topology`, in both arms.
-- **Owner step:** run the harness, or its operators, on representative private NEAT-AI/Ockham corpora, including mutation operators that create dead structure (add-neuron, remove-connection). Then decide whether `bridge_candidates` stays (see the decision in the research doc).
+- **Paper unverified.** <https://arxiv.org/abs/2610.17425> could not be fetched in this work (`proxy refused the connection`), and the issue audit had already failed to fetch it. The method does not rely on it.
+- **A `Standard` edge into an `IF` target is valid.** It counts as the `IF`'s positive role (`neat-core/src/topology_invariants.rs:157`). As a result, `validate_creature_topology` accepted every candidate `scan_available_connections` proposed, in both arms.
+- **Owner step:** rerun the harness on representative private NEAT-AI/Ockham corpora, with operators that create dead structure (add-neuron, remove-connection). Its results stay private, as the issue requires.
 
 ## Evidence
 
@@ -34,7 +33,7 @@ This is a backend/CLI change; no UI files are touched.
 flowchart LR
     P["parent (immutable)"] --> S["scan_available_connections"]
     S --> U["unbiased: uniform pick"]
-    S --> R["reachability_diagnostics → bridge_candidates"]
+    S --> R["reachability_diagnostics → bridge_candidates<br/>(example-private)"]
     R --> B["bridge: uniform pick,<br/>fallback to full pool"]
     U --> O["offspring = parent + 1 synapse"]
     B --> O
@@ -45,36 +44,32 @@ flowchart LR
     A -- yes --> P
 ```
 
-- **Command:** `cargo run --release -p neat-core --example reachability_mutation_experiment -- --rev <sha> --out docs/research/reachability-mutation-experiment-results.json` ran 40 of 40 seeds with 0 failures.
-- **Validation MSE (bridge − unbiased):** mean −0.00821, 95% bootstrap CI [−0.0252, 0.0039], bridge won 21 seeds and lost 19. The verdict is `inconclusive`.
+- **Command:** `cargo run --release -p neat-core --example reachability_mutation_experiment -- --rev <sha> --out docs/research/reachability-mutation-experiment-results.json` completed all 40 seeds with 0 failures. The output is committed as `docs/research/reachability-mutation-experiment-results.json`. The filter's move into the example kept its selection rule unchanged, so the recorded run is reproducible from the head.
+- **Validation MSE (bridge − unbiased):** mean −0.00821, 95% bootstrap CI [−0.0252, 0.0039]. Bridge won 21 seeds and lost 19, so the verdict is `inconclusive`.
 - **Invalid offspring:** 0 in both arms on every seed.
 - **Dead structure:** the final non-Live interior count was tied on all 40 seeds.
-- **Bridge candidates:** they existed on only 224 of the 5 939 bridge-arm proposals; the other 96% fell back to the unbiased pool.
-- **Wall clock:** wall-clock and per-evaluation-hour figures in the JSON were taken on a shared, parallel host and are indicative only.
-- **Write-up:** the audit, the fixed design and the findings are in `docs/research/reachability-guided-mutation.md`.
-
-## Acceptance Criteria
-
-- **missing** — "Do not claim success before representative runs." — reason: only the synthetic, application-agnostic task ran here. Representative runs need the private NEAT-AI/Ockham corpora, which stay private, so no success is claimed.
-- **missing** — "Record negative findings and remove optional code that does not earn its maintenance cost." — reason: the negative and inconclusive findings are recorded. Removing `bridge_candidates` and the example harness waits on that representative run, as the research doc's decision section says.
+- **Bridge candidates:** found on only 224 of 5 939 bridge-arm proposals.
+- **Wall-clock figures:** wall-clock and per-evaluation-hour figures in the JSON come from a shared, parallel host and are indicative only.
+- **Write-up:** the audit, design, findings and decision are in `docs/research/reachability-guided-mutation.md`.
 
 ## Test Plan
 
-- **New test file:** `neat-core/tests/reachability_diagnostics.rs` (12 tests). Its expected classes are derived by hand rather than taken from the code under test. It covers:
-  - all four classes in one fixture, plus `interior_counts`;
+- **`neat-core/tests/reachability_diagnostics.rs`: 10 tests.** Expected classes are derived by hand. Coverage:
+  - all four classes and `interior_counts`;
   - unused inputs and input-independent outputs;
-  - recurrent cycles, including an island that feeds only itself;
+  - recurrent cycles, including a self-feeding island;
   - duplicate and unsorted edges matching the clean list;
-  - each `ReachabilityError` variant, each paired with an accepted legal control;
-  - the neuron count above `u32::MAX`, refused before allocation, with a legal control;
-  - `bridge_candidates`: the exact pairs kept and their order, plus refusals of an odd buffer and an out-of-range pair;
+  - each `ReachabilityError` variant, paired with an accepted legal control;
+  - a count above `u32::MAX`, refused before allocation;
   - a creature passed through `cleanup_creature` having only Live or BiasDriven interior neurons.
+- **`neat-core/examples/reachability_mutation_experiment.rs`: 2 tests.** `bridge_candidates_keep_only_pairs_that_join_a_path` checks the exact kept pairs and their order. `bridge_candidates_refuse_bad_buffers` checks that the odd-buffer and out-of-range refusals name their cause, each with an accepted control.
 - **Red runs:** the tests and the module were written together, so no red run was observed before implementing.
-- **Gate:** `./quality.sh < /dev/null` exited 0 on the final code commit, with `All quality checks passed!`. That covers fmt, clippy `--all-targets -D warnings` (the example included), workspace tests, doctests, docs, the Mermaid check and markdownlint.
-- **Existing tests:** none were edited or removed.
+- **Gate:** `./quality.sh < /dev/null` exited 0 on the final code commit `ad5b54e`, printing `All quality checks passed!`. The run covered fmt, clippy `--all-targets -D warnings`, workspace tests (including both suites above), doctests, docs, the Mermaid check and markdownlint.
+- **Existing tests:** no test that predates this branch was edited or removed.
 
 ## Not checked
 
 - **Representative corpora:** no run on representative or private corpora (owner step above).
 - **Wasm:** no wasm build was checked, because no wasm-gated code changed.
-- **Independent reviewers:** no Spec or Standards reviewer was dispatched. The issue states no acceptance-criteria heading.
+- **Independent review:** no Spec or Standards reviewer was dispatched, because the issue has no acceptance-criteria heading.
+- **Downstream consumers:** `scripts/check-downstream-consumers.sh` was not run locally. The PR only adds API, so no consumer can break, and CI runs that job.
