@@ -151,6 +151,13 @@ here so the levers are **not re-attempted** and the numbers are read correctly.
   cost. That is where scoring effort on aggregate creatures belongs — tracked as
   [#514](https://github.com/stSoftwareAU/NEAT-AI-core/issues/514).
 
+- **MulClip activation experiment (Issue #760, completed research).** The
+  corrected v2 comparison found no qualifying candidate on ARM Linux,
+  x86 Linux or Apple Silicon macOS. No activation was exposed. The optional
+  live harness was retired; frozen source, raw results and replay instructions
+  remain in
+  [`docs/research/mulclip-activation.md`](../../docs/research/mulclip-activation.md).
+
 ## Running
 
 ```bash

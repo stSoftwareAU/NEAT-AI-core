@@ -1,0 +1,60 @@
+{
+  "conclusion": "success",
+  "createdAt": "2026-11-14T07:48:11Z",
+  "headSha": "5a259b1413d80e0ad06811310aa3d91e7f4fdf43",
+  "jobs": [
+    {
+      "name": "MulClip experiment (x86_64-linux)",
+      "conclusion": "success",
+      "startedAt": "2026-11-14T07:48:14Z",
+      "completedAt": "2026-11-14T07:49:37Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572780033/job/132380555149"
+    },
+    {
+      "name": "MulClip experiment (aarch64-macos)",
+      "conclusion": "success",
+      "startedAt": "2026-11-14T07:48:15Z",
+      "completedAt": "2026-11-14T07:50:36Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572780033/job/132380555180"
+    }
+  ],
+  "status": "completed",
+  "updatedAt": "2026-11-14T07:50:37Z",
+  "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572780033",
+  "measurement_started": true,
+  "protocol_version": 2,
+  "manifest_sha256": "5c1d21e54b91becdf5b8c659288c9878829be36667ebbc494e2eeeb97a6c804a",
+  "hosts": {
+    "x86_64-linux": "Linux runnervm8axu0 7.0.0-1017-azure #17~24.04.1-Ubuntu SMP PREEMPT Thu Sep 24 18:46:57 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  4\nOn-line CPU(s) list:                     0-3\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 9V74 80-Core Processor\nCPU family:                              25\nModel:                                   17\nThread(s) per core:                      2\nCore(s) per socket:                      2\nSocket(s):                               1\nStepping:                                1\nBogoMIPS:                                5192.28\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid extd_apicid aperfmperf tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves user_shstk avx512_bf16 clzero xsaveerptr rdpru arat npt nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold v_vmsave_vmload avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid fsrm\nVirtualization:                          AMD-V\nHypervisor vendor:                       Microsoft\nVirtualization type:                     full\nL1d cache:                               64 KiB (2 instances)\nL1i cache:                               64 KiB (2 instances)\nL2 cache:                                2 MiB (2 instances)\nL3 cache:                                32 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-3\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Vulnerable: Safe RET, no microcode\nVulnerability Spec store bypass:         Vulnerable\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Vulnerable: No microcode\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected",
+    "aarch64-macos": "Darwin iad20-gt1024-309a582a-a4b9-4736-8b23-a00cd5195ba0-3E22CE1A00A9.local 24.6.0 Darwin Kernel Version 24.6.0: Sun Oct 11 23:44:11 PDT 2026; root:xnu-11417.140.69.713.47~2/RELEASE_ARM64_VMAPPLE arm64\nApple M1 (Virtual)"
+  },
+  "toolchains": {
+    "x86_64-linux": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5\ncargo 1.100.0 (3acc79c0c 2026-11-05)",
+    "aarch64-macos": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: aarch64-apple-darwin\nrelease: 1.100.0\nLLVM version: 23.1.5\ncargo 1.100.0 (3acc79c0c 2026-11-05)"
+  },
+  "preparation_failures": [
+    "execution-ci-43572175098.json",
+    "execution-ci-43572393572.json"
+  ],
+  "limits_note": "Manifest: 1400 fits and 300 seconds checked between fits/passes. Hosted job timeout: 30 minutes including installation/build. The reproduction command additionally uses timeout 600; hosted runs had no separate process timeout.",
+  "process_exit_codes": {
+    "aarch64-macos": 0,
+    "x86_64-linux": 0
+  },
+  "costs": {
+    "x86_64-linux": {
+      "job_wall_seconds_including_setup_build_and_upload": 83.0,
+      "scientific_wall_seconds": 11.396268384,
+      "other_job_wall_seconds": 71.603731616,
+      "search_fits": 840,
+      "validation_fits": 560
+    },
+    "aarch64-macos": {
+      "job_wall_seconds_including_setup_build_and_upload": 141.0,
+      "scientific_wall_seconds": 13.910230917,
+      "other_job_wall_seconds": 127.089769083,
+      "search_fits": 840,
+      "validation_fits": 560
+    }
+  }
+}

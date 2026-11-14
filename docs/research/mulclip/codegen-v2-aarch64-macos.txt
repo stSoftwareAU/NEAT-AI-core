@@ -1,0 +1,142 @@
+Protocol v2 SIMD audit: aarch64-macos
+Source: 5a259b1413d80e0ad06811310aa3d91e7f4fdf43
+rustc 1.100.0 (0ef1bc386 2026-11-09)
+binary: rustc
+commit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a
+commit-date: 2026-11-09
+host: aarch64-apple-darwin
+release: 1.100.0
+LLVM version: 23.1.5
+
+Prepared::apply_lanes::<8>: d2/d3 polynomial arms.
+Command: cargo rustc --target-dir mulclip-target --release -p neat-core --example mulclip_experiment -- --emit=asm=<explicit artifact path>
+
+LBB1_49:
+	dup.2s	v5, v2[0]
+	ldur	d6, [x2, #4]
+	fcmgt.2s	v7, v5, v6
+	bit.8b	v6, v5, v7
+	dup.2s	v7, v1[0]
+	fcmgt.2s	v16, v6, v7
+	bit.8b	v6, v7, v16
+	ldr	s16, [x2, #12]
+	fcmp	s16, s2
+	fcsel	s16, s2, s16, mi
+	fcmp	s16, s1
+	fcsel	s16, s1, s16, gt
+	fabs	s17, s16
+	dup.4s	v18, v0[0]
+	fabs.2s	v19, v6
+	ext.16b	v4, v4, v4, #4
+	ext.16b	v4, v4, v19, #12
+	mov.s	v4[3], v17[0]
+	ext.16b	v3, v3, v3, #4
+	ext.16b	v3, v3, v6, #12
+	mov.s	v3[3], v16[0]
+	fmul.4s	v4, v4, v0[0]
+	fmul.4s	v4, v3, v4
+	fsub.4s	v3, v3, v4
+	str	q3, [x0]
+	ldr	d3, [x2, #16]
+	fcmgt.2s	v4, v5, v3
+	bit.8b	v3, v5, v4
+	fcmgt.2s	v4, v3, v7
+	bit.8b	v3, v7, v4
+	fabs.2s	v4, v3
+	fmul.2s	v4, v18, v4
+	fmul.2s	v4, v3, v4
+	fsub.2s	v3, v3, v4
+	str	d3, [x0, #16]
+	ldp	s3, s4, [x2, #24]
+	fcmp	s3, s2
+	fcsel	s3, s2, s3, mi
+	fcmp	s3, s1
+	fcsel	s3, s1, s3, gt
+	fabs	s5, s3
+	fmul	s5, s0, s5
+	fmul	s5, s3, s5
+	fsub	s3, s3, s5
+	str	s3, [x0, #24]
+	fcmp	s4, s2
+	fcsel	s2, s2, s4, mi
+	fcmp	s2, s1
+	fcsel	s1, s1, s2, gt
+	fabs	s2, s1
+	b	LBB1_51
+LBB1_50:
+	ldp	s4, s5, [x2, #4]
+	fcmp	s4, s2
+	fcsel	s4, s2, s4, mi
+	fcmp	s4, s1
+	fcsel	s4, s1, s4, gt
+	fcmp	s5, s2
+	fcsel	s5, s2, s5, mi
+	fcmp	s5, s1
+	fcsel	s5, s1, s5, gt
+	ldr	s6, [x2, #12]
+	fcmp	s6, s2
+	fcsel	s6, s2, s6, mi
+	fcmp	s6, s1
+	mov.s	v3[1], v4[0]
+	fcsel	s4, s1, s6, gt
+	mov.s	v3[2], v5[0]
+	mov.s	v3[3], v4[0]
+	ldr	d4, [x2, #16]
+	dup.2s	v5, v2[0]
+	fcmgt.2s	v6, v5, v4
+	bit.8b	v4, v5, v6
+	dup.4s	v5, v0[0]
+	fmul.4s	v6, v3, v3
+	fmul.4s	v6, v6, v0[0]
+	fmul.4s	v6, v3, v6
+	fsub.4s	v3, v3, v6
+	dup.2s	v6, v1[0]
+	str	q3, [x0]
+	fcmgt.2s	v3, v4, v6
+	bsl.8b	v3, v6, v4
+	fmul.2s	v4, v3, v3
+	fmul.2s	v4, v5, v4
+	fmul.2s	v4, v3, v4
+	fsub.2s	v3, v3, v4
+	str	d3, [x0, #16]
+	ldp	s3, s4, [x2, #24]
+	fcmp	s3, s2
+	fcsel	s3, s2, s3, mi
+	fcmp	s3, s1
+	fcsel	s3, s1, s3, gt
+	fmul	s5, s3, s3
+	fmul	s5, s0, s5
+	fmul	s5, s3, s5
+	fsub	s3, s3, s5
+	str	s3, [x0, #24]
+	fcmp	s4, s2
+	fcsel	s2, s2, s4, mi
+	fcmp	s2, s1
+	fcsel	s1, s1, s2, gt
+	fmul	s2, s1, s1
+LBB1_51:
+	fmul	s0, s0, s2
+	fmul	s0, s1, s0
+	fsub	s4, s1, s0
+LBB1_52:
+	str	s4, [x0, #28]
+	.cfi_def_cfa wsp, 112
+	ldp	x29, x30, [sp, #96]
+	ldp	d9, d8, [sp, #80]
+	ldp	d11, d10, [sp, #64]
+	ldp	d13, d12, [sp, #48]
+	add	sp, sp, #112
+	.cfi_def_cfa_offset 0
+	.cfi_restore w30
+	.cfi_restore w29
+	.cfi_restore b8
+	.cfi_restore b9
+	.cfi_restore b10
+	.cfi_restore b11
+	.cfi_restore b12
+	.cfi_restore b13
+	ret
+
+The polynomial arithmetic is packed for four lanes and two lanes, with
+two scalar lanes. No activation FMA contraction appears in these arms.
+These excerpts describe this build, not a portable vectorisation guarantee.

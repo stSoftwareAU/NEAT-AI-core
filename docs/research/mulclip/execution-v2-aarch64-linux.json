@@ -1,0 +1,48 @@
+{
+  "protocol_version": 2,
+  "platform": "aarch64-linux",
+  "code_rev": "c269da95b8217ef865273c9ee3519a1bac78e3eb",
+  "manifest_sha256": "5c1d21e54b91becdf5b8c659288c9878829be36667ebbc494e2eeeb97a6c804a",
+  "host": {
+    "system": "Linux",
+    "node": "vibe-coder-2349",
+    "release": "6.18.15",
+    "version": "#1 SMP Tue Mar 17 01:36:53 UTC 2026",
+    "machine": "aarch64",
+    "processor": ""
+  },
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "command": "timeout 600 cargo run --release -p neat-core --example mulclip_experiment -- --manifest docs/research/mulclip/manifest-v2.json --out docs/research/mulclip/results-v2-aarch64-linux.json --code-rev <git HEAD> --rustc <rustc -vV> < /dev/null",
+  "exit_code": 0,
+  "coverage": {
+    "planned_cells": 140,
+    "completed_cells": 140,
+    "search_fits": 840,
+    "validation_fits": 560,
+    "wall_seconds": 6.3260708359999995,
+    "preparation_seconds": 0.0016775,
+    "timing_seconds": 1.631198292,
+    "fitness_seconds": 4.693168961
+  },
+  "preparation_outside_run": {
+    "release_build_seconds": 13.56,
+    "assembly_build_seconds": 11.67,
+    "workspace_test_build_seconds": 25.36,
+    "note": "Compilation is outside the in-process wall total. The full quality gate ran before measurement; the explicit workspace test run and final assembly emission ran afterwards."
+  },
+  "shared_host": true,
+  "cpu": {
+    "Architecture": "aarch64",
+    "CPU(s)": "7",
+    "Vendor ID": "Apple",
+    "Model name": "-",
+    "Flags": "fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres"
+  },
+  "build_profile": {
+    "opt_level": 3,
+    "lto": "fat",
+    "codegen_units": 1,
+    "target_cpu": "portable default"
+  }
+}
