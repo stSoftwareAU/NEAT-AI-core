@@ -22,7 +22,7 @@ Added generic O(V+E) reachability diagnostics and an opt-in paired connection-mu
 - The paper was accessible on 14 November 2026. Its identity and pruning/regrowth method were verified against arXiv v1; the research record links the sources and explains the method differences.
 - The manifest was declared before execution at `0d7f98e0eda1bcd3f7374c413fd3a02fc124a272`. The subsequent empty-offspring-mean serialisation fix did not affect these trials: the smallest arm had 98 calibration evaluations, including its initial parent. Policies, seeds and generators were unchanged.
 - Timings came from a shared, parallel host and are indicative only. Build and declaration costs are recorded separately; the harness does not time engineering labour.
-- Ten earlier completion attempts ended `infrastructure-error` in the worker's pre-push gate, which read the pinned `dtolnay/rust-toolchain@29eef336…` SHA in `.github/workflows/ci.yml` as a toolchain name (`cargo +29eef336… --version` exited 101). That is a worker defect outside this repository; this PR does not change the workflows and no gate was bypassed.
+- Twelve earlier completion attempts ended `infrastructure-error` in the worker's pre-push gate, which read the pinned `dtolnay/rust-toolchain@29eef336…` SHA in `.github/workflows/ci.yml` as a toolchain name (`cargo +29eef336… --version` exited 101). That is a worker defect outside this repository; this PR does not change the workflows and no gate was bypassed.
 
 ## Evidence
 
