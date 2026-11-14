@@ -1,0 +1,1 @@
+Darwin sat12-bq163-505e2fd6-1727-436b-b7b1-7b9881df65e7-2E3B4D0FA805.local 24.6.0 Darwin Kernel Version 24.6.0: Sun Oct 11 23:44:11 PDT 2026; root:xnu-11417.140.69.713.47~2/RELEASE_ARM64_VMAPPLE arm64

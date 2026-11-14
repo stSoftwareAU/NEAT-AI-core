@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "checked": [
+    {
+      "platform": "aarch64-linux",
+      "complete_cells": 54,
+      "planned_slots_independently_derived": 918,
+      "timed_rows": 909,
+      "memory_rows": 918,
+      "numerical_failures": 9,
+      "paired_sample_lengths": 15,
+      "ratio_medians_recomputed": true,
+      "intervals_contain_medians": true,
+      "command_exit_codes": [
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "platform": "aarch64-macos",
+      "complete_cells": 54,
+      "planned_slots_independently_derived": 918,
+      "timed_rows": 909,
+      "memory_rows": 918,
+      "numerical_failures": 9,
+      "paired_sample_lengths": 15,
+      "ratio_medians_recomputed": true,
+      "intervals_contain_medians": true,
+      "command_exit_codes": [
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "platform": "x86_64-linux",
+      "complete_cells": 54,
+      "planned_slots_independently_derived": 918,
+      "timed_rows": 909,
+      "memory_rows": 918,
+      "numerical_failures": 9,
+      "paired_sample_lengths": 15,
+      "ratio_medians_recomputed": true,
+      "intervals_contain_medians": true,
+      "command_exit_codes": [
+        0,
+        1,
+        1
+      ]
+    }
+  ],
+  "file_sha256": {
+    "v4-aarch64-linux/results.json": "043bb4caecead3d474c488ee5585c66e3afed70c307057a8b05903becec1605c",
+    "v4-aarch64-linux/memory.json": "b564f17bcc100995ab1164108d7e9edacf7e393216da9757ee704232d9ae7f30",
+    "v4-aarch64-linux/execution.json": "753b3f4f211c992319ff60422b650d233d9a52017ff1da6e2308cfc80b8a1f6a",
+    "v4-aarch64-macos/results.json": "f8cef442659a03be37f1ea8bcf75e0e08041dd46d3266301d14f2027c3630de4",
+    "v4-aarch64-macos/memory.json": "426c4d6b3e9ee46df1e6de9b7fa29f16a823ccc4a0bd41c295b0532af0ce638e",
+    "v4-aarch64-macos/execution.json": "6e9b5167ff3b0123e465f1d131ddaa66fd03cebfa73163385ae524ed07a85466",
+    "v4-x86_64-linux/results.json": "446321d347f34df162b3336da3ce7ad2060203beab8298524c32b52ac9391116",
+    "v4-x86_64-linux/memory.json": "5cf2c33df417c13f68c70894ef759d1d8e87ca3e606c4c8e471115decdb005b6",
+    "v4-x86_64-linux/execution.json": "f514c9578feb405470e052b32204126ad4cefd9d2db41a01f7d270733d1c3303"
+  },
+  "source_manifest_and_validation_identity_match": true
+}

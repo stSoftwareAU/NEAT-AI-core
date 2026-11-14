@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "source": "results.json",
+  "memory_source": "memory.json",
+  "protocol": "sparse-precision-v4",
+  "code_rev": "a6d407a7cc326d09ec822c3629fbe89eb2cd96a6",
+  "host": {
+    "arch": "aarch64",
+    "available_parallelism": 6,
+    "os": "linux",
+    "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "cpu": "processor\t: 0\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\nprocessor\t: 1\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\nprocessor\t: 2\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\nprocessor\t: 3\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\nprocessor\t: 4\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\nprocessor\t: 5\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\nprocessor\t: 6\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 asimddp sha512 asimdfhm dit uscat ilrcpc flagm sb dcpodp flagm2 frint i8mm bf16 afp rpres\nCPU implementer\t: 0x61\nCPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n",
+  "rule": "Both paired warm and end-to-end 95% CI upper bounds <= speed_win_ratio, accuracy_pass, complete paired rounds, in ceil(0.75 * planned representative cells). Failures remain in the denominator. Every required platform must qualify.",
+  "representative_shape": "production_exact",
+  "speed_win_ratio": 0.9,
+  "representative": {
+    "blocked4/bf16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "blocked4/bf16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "blocked4/f16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "blocked4/f16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "blocked4/f32/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "blocked4/f32/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "coo_src/bf16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "coo_src/bf16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "coo_src/f16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "coo_src/f16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "coo_src/f32/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "coo_src/f32/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "csr_dst/bf16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 1,
+      "both_pass": 1,
+      "required": 5
+    },
+    "csr_dst/bf16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "csr_dst/f16/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 5
+    },
+    "csr_dst/f16/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "csr_dst/f32/active_only": {
+      "planned": 6,
+      "timed": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 1,
+      "both_pass": 1,
+      "required": 5
+    },
+    "csr_dst/f32/all_edges": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    },
+    "current_whole_scan": {
+      "planned": 9,
+      "timed": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required": 7
+    }
+  },
+  "local_candidates": [],
+  "timed_coverage": {
+    "cells_complete": 54,
+    "cells_planned": 54,
+    "cells_run": 54,
+    "metal": {
+      "reason": "requires an Apple Metal host; this process runs on another OS",
+      "status": "not_run"
+    },
+    "platforms_covered": [
+      "aarch64-linux"
+    ],
+    "platforms_not_covered": [
+      "aarch64-macos",
+      "x86_64-linux"
+    ],
+    "skipped_by_design": "active_only variants are skipped when inactive_fraction == 0 (identical to all_edges)",
+    "variants_planned": 918,
+    "variants_timed": 909
+  },
+  "memory_cells": 54,
+  "memory_variants_measured": 918,
+  "memory_numerical_failures": 9,
+  "process_peaks": {
+    "build": 648482816,
+    "validation": 64970752,
+    "memory": 14671872
+  },
+  "memory_basis": "System allocator requested live bytes; includes conversion temporaries, excludes allocator metadata, internal realloc overlap, stacks and RSS; one variant live per scope",
+  "hardware_reduced_precision_compute": "not_measured"
+}

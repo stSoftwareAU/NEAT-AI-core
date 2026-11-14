@@ -1,0 +1,7 @@
+{
+  "default_device" : "Apple Paravirtual device",
+  "devices" : [
+    "Apple Paravirtual device"
+  ],
+  "schema_version" : 1
+}

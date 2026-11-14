@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "revision": "17d222db0ad8ae5c6a5681b58f6184ea7d9035eb",
+  "checks": [
+    {
+      "name": "integration",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "neat-core",
+        "--test",
+        "sparse_precision_experiment"
+      ],
+      "passed": 31,
+      "failed": 0
+    },
+    {
+      "name": "timing_runner",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "neat-core",
+        "--example",
+        "sparse_precision_experiment"
+      ],
+      "passed": 4,
+      "failed": 0
+    },
+    {
+      "name": "memory_probe",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "neat-core",
+        "--example",
+        "sparse_precision_memory"
+      ],
+      "passed": 5,
+      "failed": 0
+    }
+  ]
+}

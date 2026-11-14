@@ -218,3 +218,19 @@ cargo bench -p neat-core --bench hot_paths -- --baseline before
 Criterion prints the percentage change and whether it is statistically
 significant. HTML reports (enabled via the `html_reports` feature) are written
 to `target/criterion/report/index.html`.
+
+## Completed sparse layout/precision study (Issue #758)
+
+The [research record](../../docs/research/sparse-layouts-reduced-precision.md)
+compares concrete sparse kernels and software bf16/f16 weight storage with
+production on Apple Silicon CPU, x86_64 Linux and aarch64 Linux. Across 162
+cells, 2,727/2,754 slots were timed and 27 numerical failures retained. No
+variant met the frozen adoption rule. A Metal supplement (canonical f32 only,
+on a virtual Apple GPU) ran 54/54 cells and the GPU was slower than the CPU in
+every one. Hardware reduced-precision arithmetic remains unmeasured.
+
+All optional experiment code, including the Metal adapter and its research CI
+jobs, was retired. The record links the tested replay patches (each applies to a Develop commit and reproduces its tested revision exactly),
+manifests, raw paired distributions, process/conversion memory evidence and
+reproduction commands. Ordinary benchmark commands and production behaviour are
+unchanged.
