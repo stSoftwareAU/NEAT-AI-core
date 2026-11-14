@@ -20,7 +20,7 @@ harness. No consumer activation or public interface changes. Closes #760.
 ### Undiscoverable Facts
 
 - Hosted Apple Silicon is virtualised; all timings are indicative on shared hosts. Repeated fitness seeds across platforms are replication, not additional independent trials.
-- Eight completion pushes failed on the worker's pre-push gate: it lists every file any pushed commit touched, so the retired harness `.rs` files still planned `cargo clippy`, and it read the `dtolnay/rust-toolchain@29eef33…` action SHA as `cargo +29eef33…`. The branch is squashed into one commit with an identical tree, so the pushed history carries no Rust file. Hooks were not bypassed. The harness source survives in `harness-v2.patch`.
+- Nine completion attempts ended `infrastructure-error` in the worker's pre-push gate, including one after the branch was squashed, so squashing did not fix it. The worker's CI-cargo scan (`stSoftwareAU/VibeCoder` `worker/deno/lib/ci_cargo_checks.ts`, `jobToolchain`) takes a `dtolnay/rust-toolchain` step's toolchain as `with.toolchain` or else the ref, so this repo's SHA pin is probed as `cargo +29eef33… --version`. This container's cargo is not managed by rustup, so `cargo +stable --version` fails too (observed). No workflow change here can fix it without breaking CI. The diff against Develop has no Rust-relevant path, so the cargo plan comes from a commit the worker adds at completion (which one is unverified). Hooks were not bypassed. The harness source survives in `harness-v2.patch`.
 - Hosted jobs bounded installation/build at 30 minutes and scientific work cooperatively at 300 seconds; they lacked the replay command's separate 600-second process wrapper. Actual scientific runs took 6–14 seconds.
 
 ## Evidence
