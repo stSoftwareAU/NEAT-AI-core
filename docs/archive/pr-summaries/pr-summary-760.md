@@ -55,7 +55,8 @@ flowchart LR
 
 ## Merge verification
 
-Required PR CI and downstream-consumer CI remain pending until observed.
+- [x] Required PR CI on #763 passed on `75df6f7` (CI's version bump over the summary commit), including Quality Checks, Downstream consumers, CodeQL, semgrep and gitleaks ([run 43591711616](https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43591711616)).
+- [ ] Code review: pending.
 
 ## Limits and checks not run
 
