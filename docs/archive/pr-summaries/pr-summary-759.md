@@ -64,7 +64,7 @@ flowchart LR
   - a creature passed through `cleanup_creature` having only Live or BiasDriven interior neurons.
 - **`neat-core/examples/reachability_mutation_experiment.rs`: 2 tests.** `bridge_candidates_keep_only_pairs_that_join_a_path` checks the exact kept pairs and their order. `bridge_candidates_refuse_bad_buffers` checks that the odd-buffer and out-of-range refusals name their cause, each with an accepted control.
 - **Red runs:** the tests and the module were written together, so no red run was observed before implementing.
-- **Gate:** `./quality.sh < /dev/null` exited 0 on the final code commit `ad5b54e`, printing `All quality checks passed!`. The run covered fmt, clippy `--all-targets -D warnings`, workspace tests (including both suites above), doctests, docs, the Mermaid check and markdownlint.
+- **Gate:** `./quality.sh < /dev/null` exited 0 on the final code commit `ad5b54e`, and again on `fe80476` (summary-only change since), printing `All quality checks passed!` both times. The run covered fmt, clippy `--all-targets -D warnings`, workspace tests (including both suites above), doctests, docs, the Mermaid check and markdownlint.
 - **Existing tests:** no test that predates this branch was edited or removed.
 
 ## Not checked
