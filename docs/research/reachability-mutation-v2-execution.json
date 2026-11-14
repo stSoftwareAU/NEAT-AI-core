@@ -1,0 +1,57 @@
+{
+  "source_commit": "0d7f98e0eda1bcd3f7374c413fd3a02fc124a272",
+  "source_tree": "813b24a44cb6e5dea44691a7e55b4445f29520ba",
+  "timing_context": "indicative; shared parallel host",
+  "commands": [
+    {
+      "phase": "build",
+      "argv": [
+        "cargo",
+        "build",
+        "--release",
+        "-p",
+        "neat-core",
+        "--example",
+        "reachability_mutation_experiment"
+      ],
+      "seconds_indicative": 31.554682472999957,
+      "exit_code": 0
+    },
+    {
+      "phase": "declaration",
+      "argv": [
+        "cargo",
+        "run",
+        "--release",
+        "-p",
+        "neat-core",
+        "--example",
+        "reachability_mutation_experiment",
+        "--",
+        "--declare",
+        "docs/research/reachability-mutation-v2-manifest.json"
+      ],
+      "seconds_indicative": 0.03271849999987353,
+      "exit_code": 0
+    },
+    {
+      "phase": "comparison",
+      "argv": [
+        "cargo",
+        "run",
+        "--release",
+        "-p",
+        "neat-core",
+        "--example",
+        "reachability_mutation_experiment",
+        "--",
+        "--manifest",
+        "docs/research/reachability-mutation-v2-manifest.json",
+        "--out",
+        "docs/research/reachability-mutation-v2-results.json"
+      ],
+      "seconds_indicative": 7.510224378999965,
+      "exit_code": 0
+    }
+  ]
+}
