@@ -1,0 +1,71 @@
+{
+  "acceptance": "topology validation + cleanup/full validation + finite strictly lower calibration MSE",
+  "arm_order": "unbiased then bridge on even seeds; reversed on odd seeds",
+  "bootstrap": {
+    "confidence": 0.9875,
+    "percentile_indices": [
+      75,
+      11924
+    ],
+    "resamples": 12000,
+    "seed": 756037391019
+  },
+  "calibration_records": 256,
+  "costs": "shared teacher/data/cleanup preparation charged half to each arm; separate calibration/validation scoring including compilation; total process excludes cargo build",
+  "crate_version": "0.23.4",
+  "decision": "family: validation interval below zero, invalid difference <= 0, bridge subset >= 20% of proposals; adoption requires all extended families; any incomplete pair withholds verdict",
+  "num_inputs": 4,
+  "num_outputs": 1,
+  "offspring_evaluation_limit": 150,
+  "paired_trials": 160,
+  "paper": {
+    "relation": "Independent bridge-only experiment; not a replication of guided DST",
+    "title": "When Sparsity Breaks Connectivity: Functional Reachability and Guided Topology Dynamics in Extreme Sparse Training",
+    "url": "https://arxiv.org/abs/2610.17425",
+    "verified": "2026-11-14",
+    "version": "v1"
+  },
+  "proposal_limit": 600,
+  "protocol": "docs/research/reachability-mutation-protocol-v2.md",
+  "random_streams": {
+    "data": 2,
+    "selection": 5,
+    "student": 3,
+    "teacher": 1,
+    "weights": 4
+  },
+  "schema_version": 2,
+  "seeds": [
+    0,
+    40
+  ],
+  "source": {
+    "arch": "aarch64",
+    "cargo_lock_blob": "558dce566f720722785a67bd2e7f2fe4e18817c9",
+    "commit": "0d7f98e0eda1bcd3f7374c413fd3a02fc124a272",
+    "compiled_tree": "813b24a44cb6e5dea44691a7e55b4445f29520ba",
+    "compiler_available_at_execution": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+    "executable_blob": "052019604f15a176809e0a01861fc92ae91d8df8",
+    "os": "linux",
+    "tree": "813b24a44cb6e5dea44691a7e55b4445f29520ba"
+  },
+  "untouched_validation_records": 256,
+  "workloads": [
+    {
+      "hidden": 4,
+      "name": "legacy"
+    },
+    {
+      "hidden": 24,
+      "name": "sparse"
+    },
+    {
+      "hidden": 48,
+      "name": "mixed"
+    },
+    {
+      "hidden": 24,
+      "name": "conditional"
+    }
+  ]
+}
