@@ -1,0 +1,103 @@
+{
+  "protocol_version": 2,
+  "status": "no-candidate-all-platforms",
+  "required_platforms": [
+    "aarch64-linux",
+    "x86_64-linux",
+    "aarch64-macos"
+  ],
+  "actual_platforms": [
+    "aarch64-linux",
+    "x86_64-linux",
+    "aarch64-macos"
+  ],
+  "complete_cells": 420,
+  "calibration_fits": 2520,
+  "validation_fits": 1680,
+  "failed_preparation_host_attempts": 4,
+  "per_platform": {
+    "aarch64-linux": {
+      "status": "no-candidate",
+      "per_variant": [
+        {
+          "activation": "mulclip_d2",
+          "speed_pass": true,
+          "fitness_pass": false,
+          "local_candidate": false
+        },
+        {
+          "activation": "mulclip_d3",
+          "speed_pass": true,
+          "fitness_pass": false,
+          "local_candidate": false
+        }
+      ],
+      "reasons": [
+        "mulclip_d2: fitness: no task x spec with CI lower bound above 0",
+        "mulclip_d3: fitness: smooth4 x uniform_k4 median paired difference -0.0337 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x uniform_k32 median paired difference -0.0458 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x heavy_tail median paired difference -0.0561 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x wide_varied median paired difference -0.0481 is not above -0.02",
+        "mulclip_d3: fitness: no task x spec with CI lower bound above 0"
+      ]
+    },
+    "x86_64-linux": {
+      "status": "no-candidate",
+      "per_variant": [
+        {
+          "activation": "mulclip_d2",
+          "speed_pass": true,
+          "fitness_pass": false,
+          "local_candidate": false
+        },
+        {
+          "activation": "mulclip_d3",
+          "speed_pass": true,
+          "fitness_pass": false,
+          "local_candidate": false
+        }
+      ],
+      "reasons": [
+        "mulclip_d2: fitness: no task x spec with CI lower bound above 0",
+        "mulclip_d3: fitness: smooth4 x uniform_k4 median paired difference -0.0337 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x uniform_k32 median paired difference -0.0458 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x heavy_tail median paired difference -0.0561 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x wide_varied median paired difference -0.0482 is not above -0.02",
+        "mulclip_d3: fitness: no task x spec with CI lower bound above 0"
+      ]
+    },
+    "aarch64-macos": {
+      "status": "no-candidate",
+      "per_variant": [
+        {
+          "activation": "mulclip_d2",
+          "speed_pass": false,
+          "fitness_pass": false,
+          "local_candidate": false
+        },
+        {
+          "activation": "mulclip_d3",
+          "speed_pass": false,
+          "fitness_pass": false,
+          "local_candidate": false
+        }
+      ],
+      "reasons": [
+        "mulclip_d2: speed: spec uniform_k32 lanes8 median ratio 0.817, CI upper 1.058 (needs median <= 0.95 and CI upper < 1.0)",
+        "mulclip_d2: fitness: no task x spec with CI lower bound above 0",
+        "mulclip_d3: speed: spec heavy_tail lanes8 median ratio 0.691, CI upper 1.093 (needs median <= 0.95 and CI upper < 1.0)",
+        "mulclip_d3: fitness: smooth4 x uniform_k4 median paired difference -0.0337 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x uniform_k32 median paired difference -0.0458 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x heavy_tail median paired difference -0.0561 is not above -0.02",
+        "mulclip_d3: fitness: smooth4 x wide_varied median paired difference -0.0481 is not above -0.02",
+        "mulclip_d3: fitness: no task x spec with CI lower bound above 0"
+      ]
+    }
+  },
+  "consumer_decision": "Do not expose MulClip; retire the optional live harness and preserve its frozen replay artifact.",
+  "limitations": [
+    "Shared/virtualised host timings are indicative.",
+    "Parity10 is non-saturating but near chance in this static random-feature model.",
+    "No NEAT evolution, temporal reservoir or backpropagation training was evaluated."
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "protocol_version": 2,
+  "issue": 760,
+  "source": "https://arxiv.org/html/2610.39343v1#S2 and Appendix A (29 October 2026; verified 14 November 2026)",
+  "activations": [
+    "tanh",
+    "hard_tanh",
+    "relu",
+    "mulclip_d2",
+    "mulclip_d3",
+    "mulclip_mono_d2",
+    "mulclip_mono_d3"
+  ],
+  "control": "tanh",
+  "graph_specs": [
+    {
+      "name": "uniform_k4",
+      "inputs": 16,
+      "hidden": 256,
+      "degree": {
+        "kind": "uniform",
+        "fan_in": 4
+      }
+    },
+    {
+      "name": "uniform_k32",
+      "inputs": 16,
+      "hidden": 256,
+      "degree": {
+        "kind": "uniform",
+        "fan_in": 32
+      }
+    },
+    {
+      "name": "heavy_tail",
+      "inputs": 16,
+      "hidden": 256,
+      "degree": {
+        "kind": "heavy_tail",
+        "min": 2,
+        "max": 128,
+        "alpha": 2.0
+      }
+    },
+    {
+      "name": "wide_varied",
+      "inputs": 2461,
+      "hidden": 1673,
+      "degree": {
+        "kind": "core_fixture",
+        "label": "production"
+      }
+    }
+  ],
+  "timing": {
+    "records": 512,
+    "micro_len": 4096,
+    "warmup": 3,
+    "repetitions": 21,
+    "seed": 7602001
+  },
+  "fitness": {
+    "tasks": [
+      {
+        "kind": "parity",
+        "bits": 10
+      },
+      {
+        "kind": "smooth",
+        "inputs": 4
+      }
+    ],
+    "hidden_override": 128,
+    "train": 1024,
+    "test": 512,
+    "ridge_lambda": 0.001,
+    "input_scales": [
+      0.25,
+      0.5,
+      1.0,
+      2.0,
+      4.0
+    ],
+    "calibration_seeds": [
+      7602011,
+      7602012,
+      7602013
+    ],
+    "validation_seeds": [
+      7602101,
+      7602102,
+      7602103,
+      7602104,
+      7602105,
+      7602106,
+      7602107,
+      7602108,
+      7602109,
+      7602110
+    ]
+  },
+  "bootstrap": {
+    "iters": 10000,
+    "seed": 7602002,
+    "level": 0.996875
+  },
+  "criteria": {
+    "speed_ratio_max": 0.95,
+    "fitness_margin_accuracy": 0.02,
+    "fitness_margin_nmse": 0.02,
+    "fitness_better_required": true,
+    "required_platforms": [
+      "aarch64-linux",
+      "x86_64-linux",
+      "aarch64-macos"
+    ]
+  },
+  "limits": {
+    "max_fits": 1400,
+    "max_wall_seconds": 300
+  }
+}
