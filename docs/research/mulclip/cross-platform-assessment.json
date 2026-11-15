@@ -1,0 +1,86 @@
+{
+  "protocol_version": 1,
+  "rule": "a variant is a cross-platform candidate only if assessment.per_variant[].local_candidate is true in the results file of every platform in manifest.criteria.required_platforms",
+  "sources": [
+    {
+      "platform": "aarch64-linux",
+      "file": "results-aarch64-linux.json",
+      "sha256": "65b08e3044a439521a5b7bf773cd757357e08c72cee427cb2d87e24aac66c09d",
+      "code_rev": "7d01b8c83f5d01c1c090ce5c9989dae587f47f0b",
+      "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+      "completed_cells": 98,
+      "planned_cells": 98,
+      "failures": 0
+    },
+    {
+      "platform": "aarch64-macos",
+      "file": "results-aarch64-macos.json",
+      "sha256": "eca1bbdfc12c2f54eba0c9ad594463315ea1f0a90c1765be3245595c2b53b722",
+      "code_rev": "9e506f9484d7a01c6bac5b00bce25d79bca2d32d",
+      "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+      "completed_cells": 98,
+      "planned_cells": 98,
+      "failures": 0
+    },
+    {
+      "platform": "x86_64-linux",
+      "file": "results-x86_64-linux.json",
+      "sha256": "f9be48491b76428e674377937b8312dfdbfde4d5dc1f0065e4602939fbe7e971",
+      "code_rev": "9e506f9484d7a01c6bac5b00bce25d79bca2d32d",
+      "rustc": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+      "completed_cells": 98,
+      "planned_cells": 98,
+      "failures": 0
+    }
+  ],
+  "per_variant": [
+    {
+      "activation": "mulclip_d2",
+      "per_platform": {
+        "aarch64-linux": {
+          "speed_pass": true,
+          "fitness_pass": true,
+          "local_candidate": true
+        },
+        "aarch64-macos": {
+          "speed_pass": true,
+          "fitness_pass": true,
+          "local_candidate": true
+        },
+        "x86_64-linux": {
+          "speed_pass": true,
+          "fitness_pass": true,
+          "local_candidate": true
+        }
+      },
+      "cross_platform_candidate": true
+    },
+    {
+      "activation": "mulclip_d3",
+      "per_platform": {
+        "aarch64-linux": {
+          "speed_pass": true,
+          "fitness_pass": false,
+          "local_candidate": false
+        },
+        "aarch64-macos": {
+          "speed_pass": true,
+          "fitness_pass": false,
+          "local_candidate": false
+        },
+        "x86_64-linux": {
+          "speed_pass": false,
+          "fitness_pass": false,
+          "local_candidate": false
+        }
+      },
+      "cross_platform_candidate": false
+    }
+  ],
+  "status": "candidate-all-platforms",
+  "max_abs_fitness_per_seed_difference_vs_aarch64_linux": {
+    "aarch64-macos": 2.8892494358112586e-07,
+    "x86_64-linux": 7.274205776619524e-07
+  },
+  "exposed_to_consumers": false
+}

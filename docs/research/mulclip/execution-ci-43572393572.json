@@ -1,0 +1,34 @@
+{
+  "conclusion": "failure",
+  "headSha": "3baf1c972e969ad056f8ccaa499797451eb24986",
+  "jobs": [
+    {
+      "name": "MulClip experiment (aarch64-macos)",
+      "conclusion": "failure",
+      "startedAt": "2026-11-14T07:43:08Z",
+      "completedAt": "2026-11-14T07:44:55Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572393572/job/132379380900"
+    },
+    {
+      "name": "MulClip experiment (x86_64-linux)",
+      "conclusion": "failure",
+      "startedAt": "2026-11-14T07:43:07Z",
+      "completedAt": "2026-11-14T07:44:27Z",
+      "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572393572/job/132379380962"
+    }
+  ],
+  "status": "completed",
+  "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43572393572",
+  "measurement_started": false,
+  "failure_cause": "No emitted assembly matched mulclip-target/release/examples/mulclip_experiment-*.s",
+  "repair": "Ask rustc to emit assembly at an explicit named path; verified locally before retry.",
+  "counts": {
+    "timing_cells": 0,
+    "calibration_fits": 0,
+    "validation_fits": 0
+  },
+  "release_build_seconds": {
+    "x86_64-linux": 63,
+    "aarch64-macos": 86
+  }
+}
