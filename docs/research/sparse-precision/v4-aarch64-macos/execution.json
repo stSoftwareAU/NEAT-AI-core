@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "protocol": "sparse-precision-v4",
+  "code_rev": "17d222db0ad8ae5c6a5681b58f6184ea7d9035eb",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: aarch64-apple-darwin\nrelease: 1.100.0\nLLVM version: 23.1.5",
+  "host": "Darwin sat12-bq150-5d663dcb-995e-4534-a505-ff788f28dff3-5234610163E9.local 24.6.0 Darwin Kernel Version 24.6.0: Sun Oct 11 23:44:11 PDT 2026; root:xnu-11417.140.69.713.47~2/RELEASE_ARM64_VMAPPLE arm64",
+  "gpu_inventory": "{\n  \"SPDisplaysDataType\" : [\n\n  ]\n}",
+  "manifest": "docs/research/sparse-precision/manifest-v4.json",
+  "manifest_git_blob": "e2c5e25a496aba362e301550d3d5c3189431fa1d",
+  "cache_state": "no cache purge; fresh hosted runner or existing local cache",
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "neat-core",
+        "--example",
+        "sparse_precision_experiment",
+        "--example",
+        "sparse_precision_memory"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 78.83839,
+      "peak_process_rss_bytes": 641269760
+    },
+    {
+      "name": "validation",
+      "command": [
+        "/Users/runner/work/NEAT-AI-core/NEAT-AI-core/target/release/examples/sparse_precision_experiment",
+        "--manifest",
+        "docs/research/sparse-precision/manifest-v4.json",
+        "--out",
+        "sparse-precision-results/results.json",
+        "--code-rev",
+        "17d222db0ad8ae5c6a5681b58f6184ea7d9035eb",
+        "--rustc",
+        "rustc 1.100.0 (0ef1bc386 2026-11-09)"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 89.24016816599999,
+      "peak_process_rss_bytes": 112099328
+    },
+    {
+      "name": "memory",
+      "command": [
+        "/Users/runner/work/NEAT-AI-core/NEAT-AI-core/target/release/examples/sparse_precision_memory",
+        "docs/research/sparse-precision/manifest-v4.json",
+        "sparse-precision-results/memory.json"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 8.193100082999997,
+      "peak_process_rss_bytes": 38797312
+    }
+  ],
+  "status": "completed_with_failures"
+}

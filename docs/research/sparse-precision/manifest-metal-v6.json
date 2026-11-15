@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "issue": 758,
+  "shapes": [
+    {
+      "label": "small_50",
+      "num_neurons": 50,
+      "num_inputs": 8,
+      "num_outputs": 4,
+      "fan_in_kind": "fixed",
+      "fan_in": 12
+    },
+    {
+      "label": "fanin_4",
+      "num_neurons": 1000,
+      "num_inputs": 64,
+      "num_outputs": 4,
+      "fan_in_kind": "fixed",
+      "fan_in": 4
+    },
+    {
+      "label": "fanin_16",
+      "num_neurons": 1000,
+      "num_inputs": 64,
+      "num_outputs": 4,
+      "fan_in_kind": "fixed",
+      "fan_in": 16
+    },
+    {
+      "label": "fanin_64",
+      "num_neurons": 1000,
+      "num_inputs": 64,
+      "num_outputs": 4,
+      "fan_in_kind": "fixed",
+      "fan_in": 64
+    },
+    {
+      "label": "large_5000",
+      "num_neurons": 5000,
+      "num_inputs": 32,
+      "num_outputs": 16,
+      "fan_in_kind": "fixed",
+      "fan_in": 24
+    },
+    {
+      "label": "production_exact",
+      "num_neurons": 4127,
+      "num_inputs": 2461,
+      "num_outputs": 1,
+      "fan_in_kind": "exact_total",
+      "fan_in": 21513
+    }
+  ],
+  "inactive_fractions": [
+    0.0,
+    0.5,
+    0.9
+  ],
+  "batch_widths": [
+    1,
+    8,
+    32
+  ],
+  "calibration_seed": 1001,
+  "validation_seed": 52002,
+  "validation_record_seed": 53003,
+  "shuffle_seed": 4004,
+  "bootstrap_seed": 5005,
+  "calibration_records": 8,
+  "records_per_sample": 64,
+  "reps": 15,
+  "conversion_reps": 5,
+  "bootstrap_resamples": 2000,
+  "max_cell_seconds": 120,
+  "max_total_seconds": 720,
+  "criteria": {
+    "speed_win_ratio": 0.9,
+    "tolerance_f32": 0.001,
+    "tolerance_reduced": 0.02,
+    "representative_shape": "production_exact",
+    "adopt_rule": "A variant is an adoption candidate only if warm and end-to-end CI upper bounds are at most speed_win_ratio with accuracy_pass in at least 75% of planned representative_shape cells on EVERY platform in platforms_required. Incomplete, failed and unavailable cells cannot qualify. No default changes either way.",
+    "platforms_required": [
+      "aarch64-macos",
+      "x86_64-linux",
+      "aarch64-linux"
+    ]
+  }
+}

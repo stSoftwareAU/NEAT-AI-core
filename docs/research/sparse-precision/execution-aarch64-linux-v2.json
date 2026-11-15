@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "neat-core",
+    "--example",
+    "sparse_precision_experiment"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 34.06724580700029,
+  "cache_state": "no cache purge; compiler log shows dependency and core rebuilds with default flags after quality.sh used -D warnings",
+  "code_rev": "ea8acd14af4e659ecbcfee207ffc6ae1568e6259",
+  "rustc_vv": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "stderr": "   Compiling proc-macro2 v1.0.107\n   Compiling unicode-ident v1.0.24\n   Compiling quote v1.0.47\n   Compiling serde_core v1.0.229\n   Compiling crossbeam-utils v0.8.23\n   Compiling syn v3.0.5\n   Compiling syn v2.0.119\n   Compiling zmij v1.0.23\n   Compiling zerocopy v0.8.56\n   Compiling serde v1.0.229\n   Compiling crossbeam-epoch v0.9.21\n   Compiling cfg-if v1.0.4\n   Compiling libc v0.2.189\n   Compiling serde_derive v1.0.229\n   Compiling zerocopy-derive v0.8.56\n   Compiling shlex v2.0.1\n   Compiling find-msvc-tools v0.1.12\n   Compiling serde_json v1.0.154\n   Compiling crossbeam-deque v0.8.8\n   Compiling autocfg v1.5.1\n   Compiling num-traits v0.2.19\n   Compiling cc v1.4.5\n   Compiling itoa v1.0.18\n   Compiling either v1.18.0\n   Compiling rayon-core v1.13.0\n   Compiling memchr v2.8.3\n   Compiling half v2.7.1\n   Compiling alloca v0.4.0\n   Compiling clap_lex v1.1.0\n   Compiling anstyle v1.0.14\n   Compiling rustix v1.1.4\n   Compiling getrandom v0.4.3\n   Compiling ciborium-io v0.2.2\n   Compiling plotters-backend v0.3.7\n   Compiling regex-syntax v0.8.11\n   Compiling plotters-svg v0.3.7\n   Compiling ciborium-ll v0.2.2\n   Compiling regex-automata v0.4.18\n   Compiling clap_builder v4.6.6\n   Compiling itertools v0.13.0\n   Compiling cast v0.3.0\n   Compiling bitflags v2.13.1\n   Compiling same-file v1.0.6\n   Compiling linux-raw-sys v0.12.1\n   Compiling walkdir v2.5.0\n   Compiling criterion-plot v0.8.2\n   Compiling rayon v1.12.0\n   Compiling plotters v0.3.7\n   Compiling clap v4.6.6\n   Compiling regex v1.13.1\n   Compiling ciborium v0.2.2\n   Compiling tinytemplate v1.2.1\n   Compiling page_size v0.6.0\n   Compiling once_cell v1.21.4\n   Compiling anes v0.1.6\n   Compiling oorandom v11.1.5\n   Compiling fastrand v2.5.0\n   Compiling criterion v0.8.2\n   Compiling tempfile v3.27.0\n   Compiling neat-core v0.23.4 (/home/vibe/auto-issue-work/worktrees/s2/NEAT-AI-core/neat-core)\n    Finished `release` profile [optimized] target(s) in 34.05s\n",
+  "validation": {
+    "command": [
+      "cargo",
+      "run",
+      "--release",
+      "-p",
+      "neat-core",
+      "--example",
+      "sparse_precision_experiment",
+      "--",
+      "--manifest",
+      "docs/research/sparse-precision/manifest-v2.json",
+      "--out",
+      "docs/research/sparse-precision/results-aarch64-linux-v2.json",
+      "--code-rev",
+      "ea8acd14af4e659ecbcfee207ffc6ae1568e6259",
+      "--rustc",
+      "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 42.96971981100069,
+    "stderr": "    Finished `release` profile [optimized] target(s) in 0.04s\n     Running `/var/tmp/vibe-cargo-target/NEAT-AI-core-facc6d3b/release/examples/sparse_precision_experiment --manifest docs/research/sparse-precision/manifest-v2.json --out docs/research/sparse-precision/results-aarch64-linux-v2.json --code-rev ea8acd14af4e659ecbcfee207ffc6ae1568e6259 --rustc 'rustc 1.99.1 (58cf8f9c3 2026-10-13)'`\ncell 1: small_50 frac=0 w=1: 11/11 variants timed\ncell 2: small_50 frac=0 w=8: 11/11 variants timed\ncell 3: small_50 frac=0 w=32: 11/11 variants timed\ncell 4: small_50 frac=0.5 w=1: 20/20 variants timed\ncell 5: small_50 frac=0.5 w=8: 20/20 variants timed\ncell 6: small_50 frac=0.5 w=32: 20/20 variants timed\ncell 7: small_50 frac=0.9 w=1: 20/20 variants timed\ncell 8: small_50 frac=0.9 w=8: 20/20 variants timed\ncell 9: small_50 frac=0.9 w=32: 20/20 variants timed\ncell 10: fanin_4 frac=0 w=1: 11/11 variants timed\ncell 11: fanin_4 frac=0 w=8: 11/11 variants timed\ncell 12: fanin_4 frac=0 w=32: 11/11 variants timed\ncell 13: fanin_4 frac=0.5 w=1: 20/20 variants timed\ncell 14: fanin_4 frac=0.5 w=8: 20/20 variants timed\ncell 15: fanin_4 frac=0.5 w=32: 20/20 variants timed\ncell 16: fanin_4 frac=0.9 w=1: 20/20 variants timed\ncell 17: fanin_4 frac=0.9 w=8: 20/20 variants timed\ncell 18: fanin_4 frac=0.9 w=32: 20/20 variants timed\ncell 19: fanin_16 frac=0 w=1: 11/11 variants timed\ncell 20: fanin_16 frac=0 w=8: 11/11 variants timed\ncell 21: fanin_16 frac=0 w=32: 11/11 variants timed\ncell 22: fanin_16 frac=0.5 w=1: 20/20 variants timed\ncell 23: fanin_16 frac=0.5 w=8: 20/20 variants timed\ncell 24: fanin_16 frac=0.5 w=32: 20/20 variants timed\ncell 25: fanin_16 frac=0.9 w=1: 20/20 variants timed\ncell 26: fanin_16 frac=0.9 w=8: 20/20 variants timed\ncell 27: fanin_16 frac=0.9 w=32: 20/20 variants timed\ncell 28: fanin_64 frac=0 w=1: 11/11 variants timed\ncell 29: fanin_64 frac=0 w=8: 11/11 variants timed\ncell 30: fanin_64 frac=0 w=32: 11/11 variants timed\ncell 31: fanin_64 frac=0.5 w=1: 20/20 variants timed\ncell 32: fanin_64 frac=0.5 w=8: 20/20 variants timed\ncell 33: fanin_64 frac=0.5 w=32: 20/20 variants timed\ncell 34: fanin_64 frac=0.9 w=1: 20/20 variants timed\ncell 35: fanin_64 frac=0.9 w=8: 20/20 variants timed\ncell 36: fanin_64 frac=0.9 w=32: 20/20 variants timed\ncell 37: large_5000 frac=0 w=1: 11/11 variants timed\ncell 38: large_5000 frac=0 w=8: 11/11 variants timed\ncell 39: large_5000 frac=0 w=32: 11/11 variants timed\ncell 40: large_5000 frac=0.5 w=1: 20/20 variants timed\ncell 41: large_5000 frac=0.5 w=8: 20/20 variants timed\ncell 42: large_5000 frac=0.5 w=32: 20/20 variants timed\ncell 43: large_5000 frac=0.9 w=1: 20/20 variants timed\ncell 44: large_5000 frac=0.9 w=8: 20/20 variants timed\ncell 45: large_5000 frac=0.9 w=32: 20/20 variants timed\ncell 46: production_exact frac=0 w=1: 11/11 variants timed\ncell 47: production_exact frac=0 w=8: 11/11 variants timed\ncell 48: production_exact frac=0 w=32: 11/11 variants timed\ncell 49: production_exact frac=0.5 w=1: 20/20 variants timed\ncell 50: production_exact frac=0.5 w=8: 20/20 variants timed\ncell 51: production_exact frac=0.5 w=32: 20/20 variants timed\ncell 52: production_exact frac=0.9 w=1: 20/20 variants timed\ncell 53: production_exact frac=0.9 w=8: 20/20 variants timed\ncell 54: production_exact frac=0.9 w=32: 20/20 variants timed\nwrote docs/research/sparse-precision/results-aarch64-linux-v2.json\n"
+  }
+}

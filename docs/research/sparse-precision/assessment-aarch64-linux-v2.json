@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "protocol": "sparse-precision-v2",
+  "code_rev": "ea8acd14af4e659ecbcfee207ffc6ae1568e6259",
+  "source_results": "results-aarch64-linux-v2.json",
+  "representative_shape": "production_exact",
+  "ci_upper_threshold": 0.9,
+  "required_fraction": 0.75,
+  "host": "aarch64-linux",
+  "host_verdict": "no_variant_meets_local_adoption_criteria",
+  "cross_platform_verdict": "inconclusive",
+  "platforms_missing": [
+    "aarch64-macos",
+    "x86_64-linux"
+  ],
+  "metal": {
+    "reason": "requires an Apple Metal host; this process runs on Linux",
+    "status": "not_run"
+  },
+  "variants": {
+    "blocked4/bf16/active_only": {
+      "planned": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "blocked4/bf16/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "blocked4/f16/active_only": {
+      "planned": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "blocked4/f16/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "blocked4/f32/active_only": {
+      "planned": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "blocked4/f32/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "coo_src/bf16/active_only": {
+      "planned": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "coo_src/bf16/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "coo_src/f16/active_only": {
+      "planned": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "coo_src/f16/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "coo_src/f32/active_only": {
+      "planned": 6,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "coo_src/f32/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "csr_dst/bf16/active_only": {
+      "planned": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 1,
+      "both_pass": 1,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "csr_dst/bf16/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "csr_dst/f16/active_only": {
+      "planned": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "csr_dst/f16/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "csr_dst/f32/active_only": {
+      "planned": 6,
+      "warm_pass": 1,
+      "end_to_end_pass": 1,
+      "both_pass": 1,
+      "required_passes": 5,
+      "local_candidate": false
+    },
+    "csr_dst/f32/all_edges": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    },
+    "current_whole_scan": {
+      "planned": 9,
+      "warm_pass": 0,
+      "end_to_end_pass": 0,
+      "both_pass": 0,
+      "required_passes": 7,
+      "local_candidate": false
+    }
+  },
+  "decision": "no_default_or_scorer_change; retain_opt_in_experiment_while_required_platforms_are_missing"
+}

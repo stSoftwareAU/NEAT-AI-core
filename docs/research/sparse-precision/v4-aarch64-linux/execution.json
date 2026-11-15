@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "protocol": "sparse-precision-v4",
+  "code_rev": "a6d407a7cc326d09ec822c3629fbe89eb2cd96a6",
+  "compiler": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-unknown-linux-gnu\nrelease: 1.99.1\nLLVM version: 23.1.1",
+  "host": "Linux vibe-coder-54876 6.18.15 #1 SMP Tue Mar 17 01:36:53 UTC 2026 aarch64 GNU/Linux",
+  "gpu_inventory": "Metal is unavailable on Linux",
+  "manifest": "docs/research/sparse-precision/manifest-v4.json",
+  "manifest_git_blob": "e2c5e25a496aba362e301550d3d5c3189431fa1d",
+  "cache_state": "no cache purge; fresh hosted runner or existing local cache",
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "neat-core",
+        "--example",
+        "sparse_precision_experiment",
+        "--example",
+        "sparse_precision_memory"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 32.606529348,
+      "peak_process_rss_bytes": 648482816
+    },
+    {
+      "name": "validation",
+      "command": [
+        "/var/tmp/vibe-cargo-target/NEAT-AI-core-50fbb018/release/examples/sparse_precision_experiment",
+        "--manifest",
+        "docs/research/sparse-precision/manifest-v4.json",
+        "--out",
+        "docs/research/sparse-precision/v4-aarch64-linux/results.json",
+        "--code-rev",
+        "a6d407a7cc326d09ec822c3629fbe89eb2cd96a6",
+        "--rustc",
+        "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 41.858782894,
+      "peak_process_rss_bytes": 64970752
+    },
+    {
+      "name": "memory",
+      "command": [
+        "/var/tmp/vibe-cargo-target/NEAT-AI-core-50fbb018/release/examples/sparse_precision_memory",
+        "docs/research/sparse-precision/manifest-v4.json",
+        "docs/research/sparse-precision/v4-aarch64-linux/memory.json"
+      ],
+      "exit_code": 1,
+      "wall_seconds": 4.804427127000003,
+      "peak_process_rss_bytes": 14671872
+    }
+  ],
+  "status": "completed_with_failures"
+}

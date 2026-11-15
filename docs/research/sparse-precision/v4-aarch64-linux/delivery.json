@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "frozen_revision": "a6d407a7cc326d09ec822c3629fbe89eb2cd96a6",
+  "push": {
+    "command": [
+      "git",
+      "push",
+      "origin",
+      "HEAD"
+    ],
+    "exit_code": 1,
+    "reason": "[PRE_PUSH_BLOCKED] Rust toolchain unavailable here: `cargo +29eef336d9b2848a0b548edc03f92a220660cdb8 --version` exited 101: error: no such command: `+29eef336d9b2848a0b548edc03f92a220660cdb8`",
+    "hook_bypassed": false
+  },
+  "remote_matrix": {
+    "status": "dispatched",
+    "run_id": 43558246094,
+    "url": "https://github.com/stSoftwareAU/NEAT-AI-core/actions/runs/43558246094",
+    "command": [
+      "gh",
+      "workflow",
+      "run",
+      "ci.yml",
+      "--ref",
+      "issue-758-experiment-benchmark-sparse-layouts-and-reduced-pr",
+      "-f",
+      "sparse_precision=true"
+    ]
+  },
+  "runner_inventory": {
+    "command": [
+      "gh",
+      "api",
+      "repos/stSoftwareAU/NEAT-AI-core/actions/runners"
+    ],
+    "exit_code": 1,
+    "http_status": 403,
+    "reason": "You must have repository read permissions or have the repository runners fine-grained permission."
+  },
+  "checkpoint": {
+    "published_revision": "17d222db0ad8ae5c6a5681b58f6184ea7d9035eb",
+    "mechanism": "worker periodic checkpoint, independently verified using git ls-remote and gh api; the agent did not bypass the hook"
+  },
+  "subsequent_push": {
+    "revision": "53ce2419c8c7756364687a7300a55fbc833db95a",
+    "exit_code": 0,
+    "hook": "pre-push gate passed (1 changed-file checks, 0 pre-flight commands)",
+    "scope": "native probe source and workflow; the Rust action-SHA/toolchain parsing defect was not repaired"
+  },
+  "metal_supplement": {
+    "status": "dispatched",
+    "revision": "60e045c7474ee7a1616920ed47869027e128122a",
+    "run_id": 43562144572
+  }
+}

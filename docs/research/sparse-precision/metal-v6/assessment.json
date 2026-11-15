@@ -1,0 +1,39 @@
+{
+ "schema_version": 1,
+ "source": "results.json",
+ "protocol": "sparse-metal-v6",
+ "backend": "metal",
+ "planned_cells": 54,
+ "visited_cells": 54,
+ "complete_cells": 54,
+ "numerical_or_driver_failures": 0,
+ "not_run": 0,
+ "joint_wins": 0,
+ "max_gpu_mean_loss_error": 6.98099243967576e-08,
+ "max_cpu_mean_loss_error": 8.377880889032241e-08,
+ "incomplete_cells": [],
+ "min_warm_median_ratio": {
+  "shape": "production_exact",
+  "inactive_fraction": 0.9,
+  "batch_width": 32,
+  "median": 16.57765175196368,
+  "ci_high": 20.295215480485407
+ },
+ "min_end_to_end_median_ratio": {
+  "shape": "production_exact",
+  "inactive_fraction": 0.9,
+  "batch_width": 32,
+  "median": 23.18004944427132,
+  "ci_high": 26.55079405092009
+ },
+ "max_warm_median_ratio": {
+  "shape": "small_50",
+  "inactive_fraction": 0.0,
+  "batch_width": 1,
+  "median": 1288.282793867121,
+  "ci_high": 1515.207245109824
+ },
+ "unsupported_sparse_slots": 810,
+ "unselected_whole_scan_controls": 54,
+ "verdict": "Complete; no cell met both speed thresholds. The virtual Metal GPU was slower than the CPU path in every cell."
+}

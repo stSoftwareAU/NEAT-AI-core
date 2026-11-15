@@ -1,0 +1,3981 @@
+diff --git a/.codespellrc b/.codespellrc
+index 4b261ef48aa8bd558baf36bb740e0a8c79cdec39..cce2c189cf45761d0486be76fab83b5132acdfc9 100644
+--- a/.codespellrc
++++ b/.codespellrc
+@@ -9,4 +9,5 @@ check-hidden =
+ # renderD: serde/JSON field name; mape: MAPE (mean absolute percentage error) acronym
+ # froms: variable name storing "from" versions in bump-deps.sh, intentional plural
+ # indx: variable name from TypeScript code being referenced
+-ignore-words-list = renderD,mape,froms,indx
++# coo: COO, the coordinate-format sparse-matrix layout (Issue #758 experiment)
++ignore-words-list = renderD,mape,froms,indx,coo
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index a21ecd29e89125bf3215fc03bfeb92b52fb21ba7..ea53f087b4ace964331f81b6ec8efcf1622b7cb8 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -21,6 +21,11 @@ on:
+       # branch; `*` never crosses `/`, so this single-level glob gates them too.
+       - milestone/*
+   workflow_dispatch:
++    inputs:
++      sparse_precision:
++        description: Run the frozen sparse precision research matrix
++        type: boolean
++        default: false
+ 
+ # Issue #334 — the heaviest gate in the repo: one run compiles the workspace
+ # several times over (quality + rust-gates). Every `synchronize` push to an open
+@@ -36,6 +41,48 @@ env:
+   CARGO_TERM_COLOR: always
+ 
+ jobs:
++  sparse-precision-research:
++    name: Sparse precision research (${{ matrix.runner }})
++    if: github.event_name == 'workflow_dispatch' && inputs.sparse_precision
++    runs-on: ${{ matrix.runner }}
++    timeout-minutes: 45
++    permissions:
++      contents: read
++    strategy:
++      fail-fast: false
++      matrix:
++        runner: [macos-15, ubuntu-24.04]
++    steps:
++      - name: Checkout frozen source
++        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
++        with:
++          persist-credentials: false
++      - name: Install Rust
++        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
++        with:
++          toolchain: stable
++      - name: Install Deno
++        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
++        with:
++          deno-version: "2.9.3"
++      - name: Cache Deno modules
++        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
++        with:
++          path: ~/.cache/deno
++          key: ${{ runner.os }}-deno-${{ hashFiles('deno.lock') }}
++          restore-keys: |
++            ${{ runner.os }}-deno-
++      - name: Measure frozen matrix and separate allocation probe
++        id: research
++        run: deno run --allow-read --allow-write --allow-run --allow-env scripts/run_sparse_precision.ts docs/research/sparse-precision/manifest-v4.json sparse-precision-results < /dev/null
++      - name: Preserve research results including failed combinations
++        if: always()
++        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
++        with:
++          name: sparse-precision-${{ matrix.runner }}
++          path: sparse-precision-results/
++          if-no-files-found: error
++
+   version-increment:
+     name: Auto-increment Versions
+     runs-on: ubuntu-latest
+diff --git a/neat-core/benches/README.md b/neat-core/benches/README.md
+index fde94a5126b173aa9778db12667abc547c0e8a5f..b7e85db0a4be2b2dfc678241a9b1e5faee85e7e1 100644
+--- a/neat-core/benches/README.md
++++ b/neat-core/benches/README.md
+@@ -150,6 +150,12 @@ here so the levers are **not re-attempted** and the numbers are read correctly.
+   for all of its neurons: 35.8 ms → 85.9 ms per 4,096-record shard, a **2.4×**
+   cost. That is where scoring effort on aggregate creatures belongs — tracked as
+   [#514](https://github.com/stSoftwareAU/NEAT-AI-core/issues/514).
++- **Sparse layout/precision evidence is provisional (Issue #758).** The original
++  aarch64 Linux samples compare concrete layout/kernel combinations, with
++  software reduced-precision weight storage. The revised protocol adds a caller allocation
++  control, end-to-end samples and truthful incomplete-run coverage. Apple Silicon
++  and x86_64 results remain outstanding; see the
++  [research record](../../docs/research/sparse-layouts-reduced-precision.md).
+ 
+ ## Running
+ 
+@@ -195,6 +201,23 @@ The `production` filter is a regex over benchmark ids, so it matches both the
+ `production` and `production_2x` shapes in `forward_pass`, `batched_scoring`,
+ `backprop` and `scoring`.
+ 
++### Sparse layout and reduced-precision experiment (Issue #758)
++
++`sparse_precision_experiment` is an opt-in **example**, not a Criterion bench
++target, so it adds nothing to the three bench targets above. It times sparse
++layouts and reduced-precision weight storage against `CompiledNetwork` under a
++predeclared manifest and writes schema-v2 results JSON. It requires a committed
++tracked tree before measurement; `--quick` produces smoke evidence only. Numerical
++failures and incomplete runs save raw results then exit non-zero. See
++[`docs/research/sparse-layouts-reduced-precision.md`](../../docs/research/sparse-layouts-reduced-precision.md).
++
++```bash
++cargo run --release -p neat-core --example sparse_precision_experiment -- \
++  --manifest docs/research/sparse-precision/manifest-v3.json \
++  --out docs/research/sparse-precision/results-<arch>-<os>-v3.json \
++  --code-rev "$(git rev-parse HEAD)" --rustc "$(rustc --version)"
++```
++
+ ## Documented baseline (Issue #228)
+ 
+ [`BASELINE.md`](BASELINE.md) records the committed production/production_2x
+@@ -218,3 +241,19 @@ cargo bench -p neat-core --bench hot_paths -- --baseline before
+ Criterion prints the percentage change and whether it is statistically
+ significant. HTML reports (enabled via the `html_reports` feature) are written
+ to `target/criterion/report/index.html`.
++
++## Separate process and conversion memory evidence
++
++The opt-in [v4 protocol](../../docs/research/sparse-precision/protocol-v4.md)
++adds process high-water RSS and a separate allocator probe. It reuses the timing
++runner's converter and executor; allocation instrumentation stays out of timing.
++After committing the protocol and source, run:
++
++```bash
++deno run --allow-read --allow-write --allow-run --allow-env \
++  scripts/run_sparse_precision.ts \
++  docs/research/sparse-precision/manifest-v4.json <new-output-directory>
++```
++
++The manual CI input `sparse_precision=true` runs this protocol on Apple Silicon
++and x86_64 hosted runners. It defaults to false and is separate from feature CI.
+diff --git a/neat-core/benches/sparse_precision/allocation.rs b/neat-core/benches/sparse_precision/allocation.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..c174823cd0df6e6aa6a9af42b2980f4d4793baa6
+--- /dev/null
++++ b/neat-core/benches/sparse_precision/allocation.rs
+@@ -0,0 +1,145 @@
++//! Requested heap bytes, measured only by the separate memory executable.
++
++use serde::Serialize;
++use std::alloc::{GlobalAlloc, Layout, System};
++use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
++
++#[derive(Default)]
++pub(crate) struct CountingAllocator {
++    live: AtomicUsize,
++    peak: AtomicUsize,
++}
++
++#[derive(Debug, Serialize)]
++pub(crate) struct AllocationPeak {
++    pub live_before_bytes: usize,
++    pub live_after_bytes: usize,
++    pub peak_live_bytes: usize,
++    pub additional_peak_bytes: usize,
++}
++
++impl CountingAllocator {
++    pub const fn new() -> Self {
++        Self {
++            live: AtomicUsize::new(0),
++            peak: AtomicUsize::new(0),
++        }
++    }
++
++    fn add(&self, bytes: usize) {
++        let live = self.live.fetch_add(bytes, SeqCst) + bytes;
++        self.peak.fetch_max(live, SeqCst);
++    }
++
++    /// The probe is single-threaded; callers must not overlap measurement scopes.
++    pub fn measure<T>(&self, f: impl FnOnce() -> T) -> (T, AllocationPeak) {
++        let before = self.live.load(SeqCst);
++        self.peak.store(before, SeqCst);
++        let result = f();
++        let after = self.live.load(SeqCst);
++        let peak = self.peak.load(SeqCst);
++        (
++            result,
++            AllocationPeak {
++                live_before_bytes: before,
++                live_after_bytes: after,
++                peak_live_bytes: peak,
++                additional_peak_bytes: peak.saturating_sub(before),
++            },
++        )
++    }
++}
++
++// SAFETY: every allocation is forwarded unchanged to System; counters never allocate.
++unsafe impl GlobalAlloc for CountingAllocator {
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++        // SAFETY: the caller supplies the valid allocation layout.
++        let ptr = unsafe { System.alloc(layout) };
++        if !ptr.is_null() {
++            self.add(layout.size());
++        }
++        ptr
++    }
++
++    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++        // SAFETY: the caller supplies the valid allocation layout.
++        let ptr = unsafe { System.alloc_zeroed(layout) };
++        if !ptr.is_null() {
++            self.add(layout.size());
++        }
++        ptr
++    }
++
++    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++        self.live.fetch_sub(layout.size(), SeqCst);
++        // SAFETY: the pointer and layout belong to this System-backed allocator.
++        unsafe { System.dealloc(ptr, layout) }
++    }
++
++    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
++        // SAFETY: the caller supplies an owned pointer, its layout and a valid size.
++        let replacement = unsafe { System.realloc(ptr, layout, size) };
++        if !replacement.is_null() {
++            if size >= layout.size() {
++                self.add(size - layout.size());
++            } else {
++                self.live.fetch_sub(layout.size() - size, SeqCst);
++            }
++        }
++        replacement
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn conversion_peak_includes_temporaries_and_preserves_the_parent_allocation() {
++        let allocator = CountingAllocator::default();
++        let parent = Layout::from_size_align(32, 8).unwrap();
++        let temp = Layout::from_size_align(64, 8).unwrap();
++        let result = Layout::from_size_align(16, 8).unwrap();
++        // SAFETY: each successful allocation is freed once with its original layout.
++        unsafe {
++            let p = allocator.alloc(parent);
++            assert!(!p.is_null());
++            let (r, peak) = allocator.measure(|| {
++                let t = allocator.alloc(temp);
++                let r = allocator.alloc_zeroed(result);
++                assert!(!t.is_null() && !r.is_null());
++                allocator.dealloc(t, temp);
++                r
++            });
++            assert_eq!(peak.live_before_bytes, 32);
++            assert_eq!(peak.live_after_bytes, 32 + 16);
++            assert_eq!(peak.peak_live_bytes, 32 + 64 + 16);
++            assert_eq!(peak.additional_peak_bytes, 64 + 16);
++            allocator.dealloc(r, result);
++            allocator.dealloc(p, parent);
++            let (_, empty) = allocator.measure(|| ());
++            assert_eq!(empty.peak_live_bytes, 0);
++        }
++    }
++
++    #[test]
++    fn growing_and_shrinking_an_allocation_updates_live_bytes() {
++        let allocator = CountingAllocator::default();
++        let small = Layout::from_size_align(16, 8).unwrap();
++        let large = Layout::from_size_align(128, 8).unwrap();
++        // SAFETY: reallocations retain alignment; each call uses the current layout.
++        unsafe {
++            let p = allocator.alloc(small);
++            assert!(!p.is_null());
++            let (p, growth) = allocator.measure(|| allocator.realloc(p, small, 128));
++            assert!(!p.is_null());
++            assert_eq!(growth.additional_peak_bytes, 128 - 16);
++            assert_eq!(growth.live_after_bytes, 128);
++            let (p, shrink) = allocator.measure(|| allocator.realloc(p, large, 16));
++            assert!(!p.is_null());
++            assert_eq!(shrink.additional_peak_bytes, 0);
++            assert_eq!(shrink.live_after_bytes, 16);
++            allocator.dealloc(p, small);
++        }
++    }
++}
+diff --git a/neat-core/benches/sparse_precision/execution.rs b/neat-core/benches/sparse_precision/execution.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..15cd23aa4e1a5fa7e4b7e8d169a32d32ef33cdb0
+--- /dev/null
++++ b/neat-core/benches/sparse_precision/execution.rs
+@@ -0,0 +1,140 @@
++//! Execution shared by the timing and separate allocation probes.
++
++use super::*;
++use crate::common::build_inputs;
++
++/// One variant of a cell: the baseline or a converted sparse network.
++pub(crate) enum Exec {
++    Current(Box<CompiledNetwork>),
++    CurrentWholeScan(Box<CompiledNetwork>),
++    Sparse(SparseNet, Scratch),
++}
++
++#[derive(Clone, Copy)]
++pub(crate) struct VariantSpec {
++    /// `None` is the baseline `current`.
++    pub(crate) config: Option<(Layout, Precision, bool)>,
++    pub(crate) whole_scan: bool,
++}
++
++impl VariantSpec {
++    pub(crate) fn name(&self) -> String {
++        match self.config {
++            None => if self.whole_scan {
++                "current_whole_scan"
++            } else {
++                "current"
++            }
++            .into(),
++            Some((l, p, a)) => format!(
++                "{}/{}/{}",
++                l.name(),
++                p.name(),
++                if a { "active_only" } else { "all_edges" }
++            ),
++        }
++    }
++
++    pub(crate) fn precision(&self) -> Precision {
++        self.config.map_or(Precision::F32, |c| c.1)
++    }
++
++    pub(crate) fn is_baseline(&self) -> bool {
++        self.config.is_none() && !self.whole_scan
++    }
++
++    pub(crate) fn prepare_current(&self, net: CompiledNetwork) -> Exec {
++        if self.whole_scan {
++            Exec::CurrentWholeScan(Box::new(net))
++        } else {
++            Exec::Current(Box::new(net))
++        }
++    }
++
++    pub(crate) fn convert(&self, net: &CompiledNetwork) -> Result<Exec, String> {
++        match self.config {
++            None => Ok(self.prepare_current(net.clone())),
++            Some((l, p, a)) => SparseNet::from_network(net, l, p, a)
++                .map(|s| Exec::Sparse(s, Scratch::default()))
++                .map_err(|e| e.to_string()),
++        }
++    }
++}
++
++impl Exec {
++    pub(crate) fn run(
++        &mut self,
++        records: &[f32],
++        stride: usize,
++        width: usize,
++        no: usize,
++        out: &mut [f32],
++    ) {
++        match self {
++            Exec::Current(net) => {
++                if width == 1 {
++                    for (r, o) in records.chunks(stride).zip(out.chunks_mut(no)) {
++                        net.activate_into(r, o);
++                    }
++                } else {
++                    for (r, o) in records
++                        .chunks(width * stride)
++                        .zip(out.chunks_mut(width * no))
++                    {
++                        net.score_records_flat_into(r, stride, no, o);
++                    }
++                }
++            }
++            Exec::CurrentWholeScan(net) => {
++                if width == 1 {
++                    for (r, o) in records.chunks(stride).zip(out.chunks_mut(no)) {
++                        net.activate_into(r, o);
++                    }
++                } else {
++                    net.score_records_flat_into(records, stride, no, out);
++                }
++            }
++            Exec::Sparse(s, scratch) => s.forward_batch(records, stride, width, scratch, out),
++        }
++    }
++
++    pub(crate) fn memory(&self) -> MemoryBreakdown {
++        match self {
++            Exec::Current(n) | Exec::CurrentWholeScan(n) => current_memory(n),
++            Exec::Sparse(s, _) => s.memory(),
++        }
++    }
++}
++
++pub(crate) fn variants(inactive: f64) -> Vec<VariantSpec> {
++    let mut v = vec![
++        VariantSpec {
++            config: None,
++            whole_scan: false,
++        },
++        VariantSpec {
++            config: None,
++            whole_scan: true,
++        },
++    ];
++    for l in Layout::ALL {
++        for p in Precision::ALL {
++            for a in [false, true] {
++                if a && inactive == 0.0 {
++                    continue; // identical to all_edges when no weight is zero
++                }
++                v.push(VariantSpec {
++                    config: Some((l, p, a)),
++                    whole_scan: false,
++                });
++            }
++        }
++    }
++    v
++}
++
++pub(crate) fn flat_records(count: usize, stride: usize, seed: u64) -> Vec<f32> {
++    (0..count)
++        .flat_map(|i| build_inputs(stride, seed.wrapping_add(i as u64)))
++        .collect()
++}
+diff --git a/neat-core/benches/sparse_precision/mod.rs b/neat-core/benches/sparse_precision/mod.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..433eb148739584b35e8e7bcbf9d6136d4febca28
+--- /dev/null
++++ b/neat-core/benches/sparse_precision/mod.rs
+@@ -0,0 +1,1236 @@
++//! Opt-in research harness for Issue #758: do sparse layouts and reduced-precision
++//! weight storage beat the current `CompiledNetwork` forward pass, end to end?
++//!
++//! This is a **measurement** library. It changes no public API of `neat-core` and
++//! no default; it lives in `benches/sparse_precision/` (a subdirectory, so Cargo
++//! does not auto-discover it as a bench target) and is included by
++//! `tests/sparse_precision_experiment.rs`, `examples/sparse_precision_experiment.rs`
++//! and `examples/sparse_precision_memory.rs` through `#[path]`, the same pattern
++//! as `benches/common/mod.rs`. The includers declare `mod common;` at the crate
++//! root, which is where `crate::common` below resolves.
++//!
++//! Scope, stated once:
++//!
++//! - **Feed-forward only.** Every edge must satisfy `from < destination` (global
++//!   indices). A backward or self edge is refused for every layout.
++//! - **Standard weighted-sum neurons only.** Aggregate squashes (Minimum, Maximum,
++//!   If, Hypotenuse, HypotenuseV2, Mean) are refused. A *constant* neuron is
++//!   supported: its squash is never read, so its activation is
++//!   `limit_range(Identity, bias)` whatever squash it declares, and its edges
++//!   (never read by `CompiledNetwork`) are not carried.
++//! - **Reduced precision is weight storage only.** Weights are stored as `u16`
++//!   bit patterns and decoded to `f32` for the multiply; all accumulation, all
++//!   activations and all biases stay `f32`.
++
++#![allow(clippy::needless_range_loop)]
++
++pub(crate) mod execution;
++
++use crate::common::{FanIn, Lcg};
++use neat_core::network::{CompiledNetwork, MAX_NODE_COUNT, SynapseData};
++use neat_core::range::{apply_get_range, apply_limit_range_bounds};
++use neat_core::squash::{SquashType, apply_squash};
++use serde::{Deserialize, Serialize};
++
++// ---------------------------------------------------------------------------
++// Software codecs (stable Rust has no `f16` primitive)
++// ---------------------------------------------------------------------------
++
++/// `f32` to bfloat16, round-to-nearest-even. NaN stays NaN (forced quiet), the
++/// infinities are preserved, and a finite value that rounds past the largest
++/// bfloat16 becomes an infinity.
++pub fn f32_to_bf16(value: f32) -> u16 {
++    let bits = value.to_bits();
++    if value.is_nan() {
++        // Keep the sign and top payload bits, set the quiet bit so a payload that
++        // lived only in the discarded low half cannot truncate to an infinity.
++        return ((bits >> 16) | 0x0040) as u16;
++    }
++    let lsb = (bits >> 16) & 1;
++    // Adding 0x7FFF plus the retained LSB rounds ties to even.
++    (bits.wrapping_add(0x7FFF + lsb) >> 16) as u16
++}
++
++/// bfloat16 to `f32`: exact, the 16 bits are the top half of the `f32`.
++pub fn bf16_to_f32(bits: u16) -> f32 {
++    f32::from_bits((bits as u32) << 16)
++}
++
++/// `f32` to IEEE 754 binary16, round-to-nearest-even, including subnormals.
++/// Overflow becomes an infinity of the same sign; NaN becomes a quiet NaN.
++pub fn f32_to_f16(value: f32) -> u16 {
++    let bits = value.to_bits();
++    let sign = ((bits >> 16) & 0x8000) as u16;
++    let exp = ((bits >> 23) & 0xFF) as i32;
++    let man = bits & 0x007F_FFFF;
++
++    if exp == 0xFF {
++        if man == 0 {
++            return sign | 0x7C00;
++        }
++        return sign | 0x7E00 | (man >> 13) as u16;
++    }
++
++    // Re-bias from 127 to 15.
++    let e = exp - 127 + 15;
++    if e >= 31 {
++        return sign | 0x7C00;
++    }
++    if e <= 0 {
++        // Subnormal result (or zero). The 24-bit significand `m` times
++        // 2^(exp-150), in units of 2^-24, is `m >> (14 - e)`.
++        if e < -10 {
++            return sign;
++        }
++        let m = man | 0x0080_0000;
++        let shift = (14 - e) as u32;
++        let mut q = m >> shift;
++        let rem = m & ((1u32 << shift) - 1);
++        let half = 1u32 << (shift - 1);
++        if rem > half || (rem == half && (q & 1) == 1) {
++            q += 1; // may carry into the smallest normal, which is correct
++        }
++        return sign | q as u16;
++    }
++
++    let mut h = ((e as u32) << 10) | (man >> 13);
++    let rem = man & 0x1FFF;
++    if rem > 0x1000 || (rem == 0x1000 && (h & 1) == 1) {
++        h += 1; // a carry into the exponent (and on to infinity) is correct
++    }
++    sign | h as u16
++}
++
++/// IEEE 754 binary16 to `f32`: exact for normals, subnormals, infinities, NaN.
++pub fn f16_to_f32(bits: u16) -> f32 {
++    let sign = ((bits as u32) & 0x8000) << 16;
++    let exp = ((bits >> 10) & 0x1F) as u32;
++    let man = (bits & 0x03FF) as u32;
++    match exp {
++        0 => {
++            // value = man * 2^-24, exact in f32.
++            let magnitude = man as f32 * (1.0 / 16_777_216.0);
++            f32::from_bits(magnitude.to_bits() | sign)
++        }
++        31 => {
++            if man == 0 {
++                f32::from_bits(sign | 0x7F80_0000)
++            } else {
++                f32::from_bits(sign | 0x7FC0_0000 | (man << 13))
++            }
++        }
++        _ => f32::from_bits(sign | ((exp + 112) << 23) | (man << 13)),
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Weight representations (monomorphised, so precision is never a per-weight branch)
++// ---------------------------------------------------------------------------
++
++/// A stored weight that decodes to `f32` for the multiply.
++pub trait WeightRepr: Copy {
++    /// Bytes one stored weight occupies.
++    const BYTES: usize;
++    fn encode(weight: f32) -> Self;
++    fn to_f32(self) -> f32;
++}
++
++impl WeightRepr for f32 {
++    const BYTES: usize = 4;
++    #[inline(always)]
++    fn encode(weight: f32) -> Self {
++        weight
++    }
++    #[inline(always)]
++    fn to_f32(self) -> f32 {
++        self
++    }
++}
++
++/// bfloat16 weight storage.
++#[derive(Clone, Copy)]
++pub struct Bf16(u16);
++
++impl WeightRepr for Bf16 {
++    const BYTES: usize = 2;
++    #[inline(always)]
++    fn encode(weight: f32) -> Self {
++        Bf16(f32_to_bf16(weight))
++    }
++    #[inline(always)]
++    fn to_f32(self) -> f32 {
++        bf16_to_f32(self.0)
++    }
++}
++
++/// IEEE binary16 weight storage.
++#[derive(Clone, Copy)]
++pub struct F16(u16);
++
++impl WeightRepr for F16 {
++    const BYTES: usize = 2;
++    #[inline(always)]
++    fn encode(weight: f32) -> Self {
++        F16(f32_to_f16(weight))
++    }
++    #[inline(always)]
++    fn to_f32(self) -> f32 {
++        f16_to_f32(self.0)
++    }
++}
++
++/// Weight storage precision. Accumulation is always `f32`.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++pub enum Precision {
++    F32,
++    Bf16,
++    F16,
++}
++
++impl Precision {
++    pub const ALL: [Precision; 3] = [Precision::F32, Precision::Bf16, Precision::F16];
++
++    pub fn name(self) -> &'static str {
++        match self {
++            Precision::F32 => "f32",
++            Precision::Bf16 => "bf16",
++            Precision::F16 => "f16",
++        }
++    }
++}
++
++/// Sparse edge layout under test (the baseline `current` is the real
++/// `CompiledNetwork`, handled by the runner).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++pub enum Layout {
++    /// Destination-grouped CSR owned by the experiment, plain scalar kernel.
++    /// Same CSR family as current, with different metadata and kernel code.
++    CsrDst,
++    /// Source-sorted COO triples with no offset array; push/scatter forward pass.
++    CooSrc,
++    /// Per-destination rows packed into fixed 4-wide blocks, the last block of a
++    /// row padded with weight 0 and source 0.
++    Blocked4,
++}
++
++impl Layout {
++    pub const ALL: [Layout; 3] = [Layout::CsrDst, Layout::CooSrc, Layout::Blocked4];
++
++    pub fn name(self) -> &'static str {
++        match self {
++            Layout::CsrDst => "csr_dst",
++            Layout::CooSrc => "coo_src",
++            Layout::Blocked4 => "blocked4",
++        }
++    }
++}
++
++/// Block width of [`Layout::Blocked4`].
++pub const BLOCK: usize = 4;
++
++// ---------------------------------------------------------------------------
++// Conversion
++// ---------------------------------------------------------------------------
++
++/// Why a network cannot be represented in the experiment.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum ConvertError {
++    /// A non-constant neuron uses an aggregate squash. `neuron` is the **global**
++    /// neuron index (inputs included).
++    AggregateSquash { neuron: usize, squash: u8 },
++    /// An edge does not satisfy `from < to` (global indices).
++    NotFeedForward { from: usize, to: usize },
++    /// A value would be hidden by a saturating activation or range clamp.
++    InvalidNumber { neuron: usize, reason: &'static str },
++}
++
++impl std::fmt::Display for ConvertError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            ConvertError::AggregateSquash { neuron, squash } => write!(
++                f,
++                "neuron {neuron} uses aggregate squash {squash}; the experiment covers standard \
++                 weighted-sum neurons only"
++            ),
++            ConvertError::InvalidNumber { neuron, reason } => {
++                write!(f, "neuron {neuron}: {reason}")
++            }
++            ConvertError::NotFeedForward { from, to } => write!(
++                f,
++                "edge {from} -> {to} is not feed-forward (from must be below the destination)"
++            ),
++        }
++    }
++}
++
++impl std::error::Error for ConvertError {}
++
++/// Per-neuron data the experiment keeps: bias and the squash. A constant neuron
++/// is stored as `Identity` with no edges, which yields `limit_range(Identity,
++/// bias)` exactly as `CompiledNetwork` does.
++#[derive(Clone, Copy)]
++pub struct SparseNeuron {
++    pub bias: f32,
++    pub squash: SquashType,
++}
++
++enum Edges<W> {
++    Csr {
++        row_ptr: Vec<u32>,
++        col: Vec<u16>,
++        w: Vec<W>,
++    },
++    Coo {
++        src: Vec<u16>,
++        dst: Vec<u16>,
++        w: Vec<W>,
++    },
++    Blocked {
++        row_block_ptr: Vec<u32>,
++        cols: Vec<u16>,
++        w: Vec<W>,
++        edges: usize,
++    },
++}
++
++enum EdgeStore {
++    F32(Edges<f32>),
++    Bf16(Edges<Bf16>),
++    F16(Edges<F16>),
++}
++
++/// Reusable working buffers for [`SparseNet::forward_batch`].
++#[derive(Default)]
++pub struct Scratch {
++    act: Vec<f32>,
++    acc: Vec<f32>,
++}
++
++impl Scratch {
++    /// Allocated payload after warm-up, including any retained capacity.
++    pub fn allocated_bytes(&self) -> usize {
++        (self.act.capacity() + self.acc.capacity()) * std::mem::size_of::<f32>()
++    }
++}
++
++/// Memory accounting, computed from vector lengths times element sizes so it is
++/// deterministic. `weight_bytes` includes padding slots; `padding_slots` counts
++/// them; `edges` counts real edges only.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
++pub struct MemoryBreakdown {
++    pub weight_bytes: usize,
++    pub index_bytes: usize,
++    pub neuron_bytes: usize,
++    pub padding_slots: usize,
++    pub edges: usize,
++}
++
++impl MemoryBreakdown {
++    pub fn total_bytes(&self) -> usize {
++        self.weight_bytes + self.index_bytes + self.neuron_bytes
++    }
++}
++
++/// Memory of the real `CompiledNetwork`, with n synapses and m non-input neurons.
++///
++/// - the `SynapseData` table is `n * size_of::<SynapseData>()` (8 B each), split
++///   4 B weight / 4 B index (`u16` from + `u8` type + 1 B padding);
++/// - the hot view duplicates `weight` (4 B) and `from` (2 B) per synapse;
++/// - so `weight_bytes = 8n`, `index_bytes = 6n`, `neuron_bytes =
++///   m * size_of::<NeuronData>()`. The hot view is counted because it is what the
++///   batched kernel streams, and it is resident either way.
++pub fn current_memory(net: &CompiledNetwork) -> MemoryBreakdown {
++    let n = net.num_synapses();
++    let aos_weight = std::mem::size_of::<f32>() * n;
++    let aos_index = (std::mem::size_of::<SynapseData>() - std::mem::size_of::<f32>()) * n;
++    let hot_weight = std::mem::size_of::<f32>() * n;
++    let hot_index = std::mem::size_of::<u16>() * n;
++    MemoryBreakdown {
++        weight_bytes: aos_weight + hot_weight,
++        index_bytes: aos_index + hot_index,
++        neuron_bytes: std::mem::size_of_val(net.neurons()),
++        padding_slots: 0,
++        edges: n,
++    }
++}
++
++/// A network converted into one experiment layout and precision.
++pub struct SparseNet {
++    layout: Layout,
++    precision: Precision,
++    num_inputs: usize,
++    neurons: Vec<SparseNeuron>,
++    store: EdgeStore,
++}
++
++impl<W: WeightRepr> Edges<W> {
++    fn build(layout: Layout, num_inputs: usize, rows: &[Vec<(u16, f32)>]) -> Self {
++        match layout {
++            Layout::CsrDst => {
++                let mut row_ptr = Vec::with_capacity(rows.len() + 1);
++                let mut col = Vec::new();
++                let mut w = Vec::new();
++                row_ptr.push(0u32);
++                for row in rows {
++                    for &(s, weight) in row {
++                        col.push(s);
++                        w.push(W::encode(weight));
++                    }
++                    row_ptr.push(col.len() as u32);
++                }
++                Edges::Csr { row_ptr, col, w }
++            }
++            Layout::CooSrc => {
++                let mut triples: Vec<(u16, u16, f32)> = Vec::new();
++                for (n, row) in rows.iter().enumerate() {
++                    let dst = (num_inputs + n) as u16;
++                    for &(s, weight) in row {
++                        triples.push((s, dst, weight));
++                    }
++                }
++                triples.sort_by_key(|&(s, d, _)| (s, d));
++                Edges::Coo {
++                    src: triples.iter().map(|t| t.0).collect(),
++                    dst: triples.iter().map(|t| t.1).collect(),
++                    w: triples.iter().map(|t| W::encode(t.2)).collect(),
++                }
++            }
++            Layout::Blocked4 => {
++                let mut row_block_ptr = Vec::with_capacity(rows.len() + 1);
++                let mut cols = Vec::new();
++                let mut w = Vec::new();
++                let mut edges = 0usize;
++                row_block_ptr.push(0u32);
++                for row in rows {
++                    for chunk in row.chunks(BLOCK) {
++                        for k in 0..BLOCK {
++                            match chunk.get(k) {
++                                Some(&(s, weight)) => {
++                                    cols.push(s);
++                                    w.push(W::encode(weight));
++                                }
++                                None => {
++                                    cols.push(0);
++                                    w.push(W::encode(0.0));
++                                }
++                            }
++                        }
++                    }
++                    edges += row.len();
++                    row_block_ptr.push((cols.len() / BLOCK) as u32);
++                }
++                Edges::Blocked {
++                    row_block_ptr,
++                    cols,
++                    w,
++                    edges,
++                }
++            }
++        }
++    }
++
++    /// `(weight_bytes, index_bytes, padding_slots, edges)`.
++    fn memory_parts(&self) -> (usize, usize, usize, usize) {
++        match self {
++            Edges::Csr { row_ptr, col, w } => (
++                w.len() * W::BYTES,
++                row_ptr.len() * 4 + col.len() * 2,
++                0,
++                col.len(),
++            ),
++            Edges::Coo { src, dst, w } => {
++                (w.len() * W::BYTES, (src.len() + dst.len()) * 2, 0, w.len())
++            }
++            Edges::Blocked {
++                row_block_ptr,
++                cols,
++                w,
++                edges,
++            } => (
++                w.len() * W::BYTES,
++                row_block_ptr.len() * 4 + cols.len() * 2,
++                cols.len() - edges,
++                *edges,
++            ),
++        }
++    }
++
++    #[inline(always)]
++    fn run_group(
++        &self,
++        neurons: &[SparseNeuron],
++        num_inputs: usize,
++        width: usize,
++        act: &mut [f32],
++        acc: &mut [f32],
++    ) {
++        match self {
++            Edges::Csr { row_ptr, col, w } => {
++                run_csr(neurons, num_inputs, row_ptr, col, w, width, act, acc)
++            }
++            Edges::Coo { src, dst, w } => {
++                run_coo(neurons, num_inputs, src, dst, w, width, act, acc)
++            }
++            Edges::Blocked {
++                row_block_ptr,
++                cols,
++                w,
++                ..
++            } => run_blocked(neurons, num_inputs, row_block_ptr, cols, w, width, act, acc),
++        }
++    }
++}
++
++/// `limit_range(squash, squash(sum))` for one lane, with the range already resolved.
++#[inline(always)]
++fn finish(squash: SquashType, low: f32, high: f32, sum: f32) -> f32 {
++    apply_limit_range_bounds(low, high, apply_squash(squash, sum))
++}
++
++#[inline(always)]
++fn run_csr<W: WeightRepr>(
++    neurons: &[SparseNeuron],
++    ni: usize,
++    row_ptr: &[u32],
++    col: &[u16],
++    w: &[W],
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    let acc = &mut acc[..width];
++    for (n, neuron) in neurons.iter().enumerate() {
++        acc.fill(neuron.bias);
++        for e in row_ptr[n] as usize..row_ptr[n + 1] as usize {
++            let wt = w[e].to_f32();
++            let s = col[e] as usize * width;
++            for (a, x) in acc.iter_mut().zip(&act[s..s + width]) {
++                *a += wt * *x;
++            }
++        }
++        let (low, high) = apply_get_range(neuron.squash);
++        let g = (ni + n) * width;
++        for (d, a) in act[g..g + width].iter_mut().zip(acc.iter()) {
++            *d = finish(neuron.squash, low, high, *a);
++        }
++    }
++}
++
++#[inline(always)]
++fn run_blocked<W: WeightRepr>(
++    neurons: &[SparseNeuron],
++    ni: usize,
++    row_block_ptr: &[u32],
++    cols: &[u16],
++    w: &[W],
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    let acc = &mut acc[..width];
++    for (n, neuron) in neurons.iter().enumerate() {
++        acc.fill(neuron.bias);
++        for b in row_block_ptr[n] as usize..row_block_ptr[n + 1] as usize {
++            let o = b * BLOCK;
++            let w0 = w[o].to_f32();
++            let w1 = w[o + 1].to_f32();
++            let w2 = w[o + 2].to_f32();
++            let w3 = w[o + 3].to_f32();
++            let s0 = cols[o] as usize * width;
++            let s1 = cols[o + 1] as usize * width;
++            let s2 = cols[o + 2] as usize * width;
++            let s3 = cols[o + 3] as usize * width;
++            let a0 = &act[s0..s0 + width];
++            let a1 = &act[s1..s1 + width];
++            let a2 = &act[s2..s2 + width];
++            let a3 = &act[s3..s3 + width];
++            for l in 0..width {
++                let mut a = acc[l];
++                a += w0 * a0[l];
++                a += w1 * a1[l];
++                a += w2 * a2[l];
++                a += w3 * a3[l];
++                acc[l] = a;
++            }
++        }
++        let (low, high) = apply_get_range(neuron.squash);
++        let g = (ni + n) * width;
++        for (d, a) in act[g..g + width].iter_mut().zip(acc.iter()) {
++            *d = finish(neuron.squash, low, high, *a);
++        }
++    }
++}
++
++/// Push/scatter forward pass over source-sorted edges. `acc` holds one
++/// accumulator row per non-input neuron, re-initialised to the bias every group.
++#[inline(always)]
++fn run_coo<W: WeightRepr>(
++    neurons: &[SparseNeuron],
++    ni: usize,
++    src: &[u16],
++    dst: &[u16],
++    w: &[W],
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    for (n, neuron) in neurons.iter().enumerate() {
++        acc[n * width..(n + 1) * width].fill(neuron.bias);
++    }
++    let mut next = ni; // every neuron below `next` is final
++    let finalise = |g: usize, act: &mut [f32], acc: &[f32]| {
++        let neuron = &neurons[g - ni];
++        let (low, high) = apply_get_range(neuron.squash);
++        let row = &acc[(g - ni) * width..(g - ni + 1) * width];
++        for (d, a) in act[g * width..(g + 1) * width].iter_mut().zip(row) {
++            *d = finish(neuron.squash, low, high, *a);
++        }
++    };
++    for e in 0..src.len() {
++        let s = src[e] as usize;
++        // Every in-edge of a neuron <= s has a smaller source, so it is already
++        // applied: the neuron is complete.
++        while next <= s {
++            finalise(next, act, acc);
++            next += 1;
++        }
++        let wt = w[e].to_f32();
++        let d = (dst[e] as usize - ni) * width;
++        let sa = s * width;
++        for l in 0..width {
++            acc[d + l] += wt * act[sa + l];
++        }
++    }
++    while next < ni + neurons.len() {
++        finalise(next, act, acc);
++        next += 1;
++    }
++}
++
++#[inline(always)]
++fn run_dispatch<W: WeightRepr>(
++    edges: &Edges<W>,
++    neurons: &[SparseNeuron],
++    ni: usize,
++    width: usize,
++    act: &mut [f32],
++    acc: &mut [f32],
++) {
++    // Literal widths let the inlined kernel constant-fold the lane loop.
++    match width {
++        1 => edges.run_group(neurons, ni, 1, act, acc),
++        8 => edges.run_group(neurons, ni, 8, act, acc),
++        32 => edges.run_group(neurons, ni, 32, act, acc),
++        w => edges.run_group(neurons, ni, w, act, acc),
++    }
++}
++
++impl SparseNet {
++    /// Convert `net` into `layout` and `precision`.
++    ///
++    /// With `active_only`, synapses whose weight is exactly `0.0` (or `-0.0`) are
++    /// dropped **before** precision encoding. A weight that merely rounds to zero
++    /// in a reduced precision is *not* dropped: it stays as a stored zero.
++    ///
++    /// Feed-forward only: any edge with `from >= destination` (global indices) is
++    /// refused for every layout. Non-constant aggregate-squash neurons are refused.
++    /// Biases and live weights must be finite; encoding overflow is refused.
++    pub fn from_network(
++        net: &CompiledNetwork,
++        layout: Layout,
++        precision: Precision,
++        active_only: bool,
++    ) -> Result<SparseNet, ConvertError> {
++        let ni = net.num_inputs();
++        let mut neurons = Vec::with_capacity(net.neurons().len());
++        let mut rows: Vec<Vec<(u16, f32)>> = Vec::with_capacity(net.neurons().len());
++        for (n, neuron_data) in net.neurons().iter().enumerate() {
++            let g = ni + n;
++            if !neuron_data.bias.is_finite() {
++                return Err(ConvertError::InvalidNumber {
++                    neuron: g,
++                    reason: "non-finite bias",
++                });
++            }
++            if neuron_data.is_constant {
++                neurons.push(SparseNeuron {
++                    bias: neuron_data.bias,
++                    squash: SquashType::Identity,
++                });
++                rows.push(Vec::new());
++                continue;
++            }
++            let squash = SquashType::from(neuron_data.squash_type);
++            if squash.is_aggregate() {
++                return Err(ConvertError::AggregateSquash {
++                    neuron: g,
++                    squash: neuron_data.squash_type,
++                });
++            }
++            let start = neuron_data.start_synapse as usize;
++            let mut row = Vec::with_capacity(neuron_data.num_synapses as usize);
++            for s in &net.synapses()[start..start + neuron_data.num_synapses as usize] {
++                if s.from_index as usize >= g {
++                    return Err(ConvertError::NotFeedForward {
++                        from: s.from_index as usize,
++                        to: g,
++                    });
++                }
++                if !s.weight.is_finite() {
++                    return Err(ConvertError::InvalidNumber {
++                        neuron: g,
++                        reason: "non-finite weight",
++                    });
++                }
++                let decoded = match precision {
++                    Precision::F32 => s.weight,
++                    Precision::Bf16 => bf16_to_f32(f32_to_bf16(s.weight)),
++                    Precision::F16 => f16_to_f32(f32_to_f16(s.weight)),
++                };
++                if !decoded.is_finite() {
++                    return Err(ConvertError::InvalidNumber {
++                        neuron: g,
++                        reason: "weight encoding overflow",
++                    });
++                }
++                if active_only && s.weight == 0.0 {
++                    continue;
++                }
++                row.push((s.from_index, s.weight));
++            }
++            neurons.push(SparseNeuron {
++                bias: neuron_data.bias,
++                squash,
++            });
++            rows.push(row);
++        }
++        let store = match precision {
++            Precision::F32 => EdgeStore::F32(Edges::build(layout, ni, &rows)),
++            Precision::Bf16 => EdgeStore::Bf16(Edges::build(layout, ni, &rows)),
++            Precision::F16 => EdgeStore::F16(Edges::build(layout, ni, &rows)),
++        };
++        Ok(SparseNet {
++            layout,
++            precision,
++            num_inputs: ni,
++            neurons,
++            store,
++        })
++    }
++
++    pub fn layout(&self) -> Layout {
++        self.layout
++    }
++
++    pub fn precision(&self) -> Precision {
++        self.precision
++    }
++
++    /// Memory from vector lengths times element sizes. `neuron_bytes` is
++    /// `size_of::<SparseNeuron>()` per non-input neuron; offsets and indices are
++    /// `u32` / `u16` as stored.
++    pub fn memory(&self) -> MemoryBreakdown {
++        let (weight_bytes, index_bytes, padding_slots, edges) = match &self.store {
++            EdgeStore::F32(e) => e.memory_parts(),
++            EdgeStore::Bf16(e) => e.memory_parts(),
++            EdgeStore::F16(e) => e.memory_parts(),
++        };
++        MemoryBreakdown {
++            weight_bytes,
++            index_bytes,
++            neuron_bytes: std::mem::size_of::<SparseNeuron>() * self.neurons.len(),
++            padding_slots,
++            edges,
++        }
++    }
++
++    /// Forward `records.len() / stride` records in groups of `width` lanes using a
++    /// record-interleaved activation buffer `act[neuron * width + lane]`.
++    ///
++    /// `out` is record-major with `num_outputs` per record; `num_outputs` is
++    /// `out.len() / record_count` (outputs are the last `num_outputs` neurons). A
++    /// partial final group works: lanes beyond the record count are computed on
++    /// zero inputs and never written to `out`. Inputs beyond `stride` are zero,
++    /// matching `CompiledNetwork`'s short-record fill.
++    ///
++    /// Every activation slot is rewritten for every group (inputs fully, then each
++    /// non-input neuron in order; COO accumulators are re-seeded to the bias), so
++    /// no state survives between groups or calls.
++    ///
++    /// # Panics
++    ///
++    /// On a non-finite record value, `width == 0`, `stride == 0`, a `records` length that is not a multiple of
++    /// `stride`, or an `out` length that is not a whole, non-zero number of outputs
++    /// per record no larger than the non-input neuron count.
++    pub fn forward_batch(
++        &self,
++        records: &[f32],
++        stride: usize,
++        width: usize,
++        scratch: &mut Scratch,
++        out: &mut [f32],
++    ) {
++        assert!(width > 0, "forward_batch: width must be at least 1");
++        assert!(stride > 0, "forward_batch: stride must be at least 1");
++        assert!(
++            records.len() % stride == 0,
++            "forward_batch: records length {} is not a multiple of stride {}",
++            records.len(),
++            stride
++        );
++        assert!(
++            records.iter().all(|x| x.is_finite()),
++            "forward_batch: non-finite record"
++        );
++        let nrec = records.len() / stride;
++        if nrec == 0 {
++            assert!(
++                out.is_empty(),
++                "forward_batch: out must be empty for no records"
++            );
++            return;
++        }
++        assert!(
++            out.len() % nrec == 0,
++            "forward_batch: out length {} is not a multiple of the record count {}",
++            out.len(),
++            nrec
++        );
++        let no = out.len() / nrec;
++        assert!(
++            no >= 1 && no <= self.neurons.len(),
++            "forward_batch: {no} outputs per record is outside 1..={}",
++            self.neurons.len()
++        );
++
++        let ni = self.num_inputs;
++        let total = ni + self.neurons.len();
++        let acc_len = match self.layout {
++            Layout::CooSrc => self.neurons.len() * width,
++            _ => width,
++        };
++        scratch.act.resize(total * width, 0.0);
++        scratch.acc.resize(acc_len, 0.0);
++        let copy = stride.min(ni);
++
++        let mut start = 0;
++        while start < nrec {
++            let lanes = width.min(nrec - start);
++            scratch.act[..ni * width].fill(0.0);
++            for l in 0..lanes {
++                let rec = &records[(start + l) * stride..(start + l + 1) * stride];
++                for i in 0..copy {
++                    scratch.act[i * width + l] = rec[i];
++                }
++            }
++            let (act, acc) = (&mut scratch.act[..], &mut scratch.acc[..]);
++            match &self.store {
++                EdgeStore::F32(e) => run_dispatch(e, &self.neurons, ni, width, act, acc),
++                EdgeStore::Bf16(e) => run_dispatch(e, &self.neurons, ni, width, act, acc),
++                EdgeStore::F16(e) => run_dispatch(e, &self.neurons, ni, width, act, acc),
++            }
++            for o in 0..no {
++                let g = (total - no + o) * width;
++                for l in 0..lanes {
++                    out[(start + l) * no + o] = scratch.act[g + l];
++                }
++            }
++            start += width;
++        }
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Sparsity
++// ---------------------------------------------------------------------------
++
++/// Rebuild `net` with exactly `round(fraction * synapses)` seeded-selected
++/// synapses set to weight `0.0`. Topology and every other value are unchanged.
++pub fn apply_sparsity(net: &CompiledNetwork, fraction: f64, seed: u64) -> CompiledNetwork {
++    let mut synapses = net.synapses().to_vec();
++    let n = synapses.len();
++    let k = ((fraction * n as f64).round() as usize).min(n);
++    let mut idx: Vec<usize> = (0..n).collect();
++    let mut rng = Lcg::new(seed);
++    for i in 0..k {
++        let j = i + rng.next_below(n - i);
++        idx.swap(i, j);
++        synapses[idx[i]].weight = 0.0;
++    }
++    CompiledNetwork::from_parts(net.num_inputs(), net.neurons().to_vec(), synapses)
++        .expect("zeroing weights cannot break the index invariant")
++}
++
++// ---------------------------------------------------------------------------
++// Independent f64 oracle
++// ---------------------------------------------------------------------------
++
++/// Plain f64 forward pass over `net.neurons()` / `net.synapses()`. Supports
++/// Identity, Tanh, ReLU and Logistic only; anything else is an `Err` naming the
++/// squash. It calls no crate squash or kernel, so it shares no code path with
++/// what it checks (AGENTS.md oracle rule 1). Range clamps mirror
++/// `squash_profile`: Tanh `[-1, 1]`, Logistic `[0, 1]`, ReLU `[0, +inf)`, Identity
++/// unbounded. A constant neuron yields its bias.
++pub fn reference_forward_f64(
++    net: &CompiledNetwork,
++    record: &[f32],
++    num_outputs: usize,
++) -> Result<Vec<f64>, String> {
++    let ni = net.num_inputs();
++    let mut act = vec![0.0f64; net.num_neurons()];
++    for i in 0..ni.min(record.len()) {
++        act[i] = record[i] as f64;
++    }
++    for (n, neuron_data) in net.neurons().iter().enumerate() {
++        if neuron_data.is_constant {
++            act[ni + n] = neuron_data.bias as f64;
++            continue;
++        }
++        let mut sum = neuron_data.bias as f64;
++        let start = neuron_data.start_synapse as usize;
++        for s in &net.synapses()[start..start + neuron_data.num_synapses as usize] {
++            sum += s.weight as f64 * act[s.from_index as usize];
++        }
++        act[ni + n] = match neuron_data.squash_type {
++            0 => sum,
++            1 => sum.max(0.0),
++            6 => (1.0 / (1.0 + (-sum).exp())).clamp(0.0, 1.0),
++            7 => sum.tanh().clamp(-1.0, 1.0),
++            other => {
++                return Err(format!(
++                    "reference_forward_f64 does not support squash {:?} ({other})",
++                    SquashType::from(other)
++                ));
++            }
++        };
++    }
++    if num_outputs > act.len() {
++        return Err(format!(
++            "num_outputs {num_outputs} exceeds neuron count {}",
++            act.len()
++        ));
++    }
++    Ok(act[act.len() - num_outputs..].to_vec())
++}
++
++// ---------------------------------------------------------------------------
++// Statistics
++// ---------------------------------------------------------------------------
++
++/// Median (mean of the two middle values for an even count). Panics when empty.
++pub fn median(values: &[f64]) -> f64 {
++    quantile(values, 0.5)
++}
++
++/// Quantile with linear interpolation between order statistics (the "type 7"
++/// definition): position `q * (n - 1)` in the sorted values, interpolated between
++/// the two neighbours. `q` is clamped to `[0, 1]`. Panics when empty.
++pub fn quantile(values: &[f64], q: f64) -> f64 {
++    assert!(!values.is_empty(), "quantile: no values");
++    let mut v = values.to_vec();
++    v.sort_by(|a, b| a.total_cmp(b));
++    let pos = q.clamp(0.0, 1.0) * (v.len() - 1) as f64;
++    let lo = pos.floor() as usize;
++    let hi = pos.ceil() as usize;
++    v[lo] + (v[hi] - v[lo]) * (pos - lo as f64)
++}
++
++/// Paired ratio summary: median of per-rep `variant / baseline` ratios and its
++/// bootstrap percentile 95% interval.
++#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
++pub struct RatioSummary {
++    pub median_ratio: f64,
++    pub ci_low: f64,
++    pub ci_high: f64,
++}
++
++/// Ratios are formed per rep (rep `i` of the variant over rep `i` of the
++/// baseline), then the reps are resampled with replacement `resamples` times
++/// (indices drawn from `Lcg::new(seed)`); the interval is the 2.5th and 97.5th
++/// percentile of the resampled medians. Panics if the lengths differ or are empty.
++pub fn paired_ratio_ci(
++    variant_ns: &[f64],
++    baseline_ns: &[f64],
++    resamples: usize,
++    seed: u64,
++) -> RatioSummary {
++    assert_eq!(
++        variant_ns.len(),
++        baseline_ns.len(),
++        "paired_ratio_ci: variant and baseline must have the same number of reps"
++    );
++    assert!(!variant_ns.is_empty(), "paired_ratio_ci: no reps");
++    let ratios: Vec<f64> = variant_ns
++        .iter()
++        .zip(baseline_ns)
++        .map(|(v, b)| v / b)
++        .collect();
++    let mut rng = Lcg::new(seed);
++    let n = ratios.len();
++    let mut medians = Vec::with_capacity(resamples.max(1));
++    let mut buf = vec![0.0; n];
++    for _ in 0..resamples.max(1) {
++        for slot in buf.iter_mut() {
++            *slot = ratios[rng.next_below(n)];
++        }
++        medians.push(median(&buf));
++    }
++    RatioSummary {
++        median_ratio: median(&ratios),
++        ci_low: quantile(&medians, 0.025),
++        ci_high: quantile(&medians, 0.975),
++    }
++}
++
++/// Error of `got` against an f64 reference. A NaN difference counts as infinite
++/// so it can never pass a tolerance.
++#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
++pub struct ErrorStats {
++    pub max_abs: f64,
++    pub rmse: f64,
++}
++
++pub fn error_stats(got: &[f32], reference: &[f64]) -> ErrorStats {
++    assert_eq!(got.len(), reference.len(), "error_stats: length mismatch");
++    let mut max_abs = 0.0f64;
++    let mut sq = 0.0f64;
++    for (g, r) in got.iter().zip(reference) {
++        let d = (*g as f64 - r).abs();
++        let d = if d.is_nan() { f64::INFINITY } else { d };
++        max_abs = max_abs.max(d);
++        sq += d * d;
++    }
++    let rmse = if got.is_empty() {
++        0.0
++    } else {
++        (sq / got.len() as f64).sqrt()
++    };
++    ErrorStats { max_abs, rmse }
++}
++
++// ---------------------------------------------------------------------------
++// Manifest
++// ---------------------------------------------------------------------------
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct ShapeSpec {
++    pub label: String,
++    pub num_neurons: usize,
++    pub num_inputs: usize,
++    pub num_outputs: usize,
++    pub fan_in_kind: String,
++    pub fan_in: usize,
++}
++
++impl ShapeSpec {
++    /// Map `fan_in_kind` to a [`FanIn`]; an unknown kind is an error.
++    pub fn fan_in(&self) -> Result<FanIn, String> {
++        match self.fan_in_kind.as_str() {
++            "fixed" => Ok(FanIn::Fixed(self.fan_in)),
++            "varied_around" => Ok(FanIn::VariedAround(self.fan_in)),
++            "exact_total" => Ok(FanIn::ExactTotal(self.fan_in)),
++            other => Err(format!(
++                "shape {}: unknown fan_in_kind {other:?} (expected fixed, varied_around or exact_total)",
++                self.label
++            )),
++        }
++    }
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Criteria {
++    pub speed_win_ratio: f64,
++    pub tolerance_f32: f64,
++    pub tolerance_reduced: f64,
++    pub representative_shape: String,
++    pub adopt_rule: String,
++    pub platforms_required: Vec<String>,
++}
++
++#[derive(Clone, Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Manifest {
++    pub schema_version: u32,
++    pub issue: u32,
++    pub shapes: Vec<ShapeSpec>,
++    pub inactive_fractions: Vec<f64>,
++    pub batch_widths: Vec<usize>,
++    pub calibration_seed: u64,
++    pub validation_seed: u64,
++    pub validation_record_seed: u64,
++    pub shuffle_seed: u64,
++    pub bootstrap_seed: u64,
++    pub calibration_records: usize,
++    pub records_per_sample: usize,
++    pub reps: usize,
++    pub conversion_reps: usize,
++    pub bootstrap_resamples: usize,
++    pub max_cell_seconds: f64,
++    pub max_total_seconds: f64,
++    pub criteria: Criteria,
++}
++
++/// Parse and validate a manifest; every problem is an `Err` naming it.
++pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
++    let m: Manifest = serde_json::from_str(text).map_err(|e| format!("invalid manifest: {e}"))?;
++    if m.schema_version != 1 {
++        return Err(format!(
++            "unsupported manifest schema_version {}",
++            m.schema_version
++        ));
++    }
++    if m.shapes.is_empty() || m.inactive_fractions.is_empty() || m.batch_widths.is_empty() {
++        return Err("manifest needs at least one shape, inactive fraction and batch width".into());
++    }
++    for s in &m.shapes {
++        s.fan_in()?;
++        if s.num_neurons > MAX_NODE_COUNT {
++            return Err(format!(
++                "shape {}: neuron count exceeds {MAX_NODE_COUNT}",
++                s.label
++            ));
++        }
++        if s.num_inputs == 0
++            || s.num_inputs >= s.num_neurons
++            || s.num_outputs == 0
++            || s.num_outputs > s.num_neurons - s.num_inputs
++        {
++            return Err(format!(
++                "shape {}: inconsistent neuron/input/output counts",
++                s.label
++            ));
++        }
++    }
++    let unique = |values: Vec<String>, field: &str| -> Result<(), String> {
++        let mut seen = std::collections::BTreeSet::new();
++        for value in values {
++            if value.trim().is_empty() {
++                return Err(format!("{field} must not be empty"));
++            }
++            if !seen.insert(value) {
++                return Err(format!("duplicate {field}"));
++            }
++        }
++        Ok(())
++    };
++    unique(
++        m.shapes.iter().map(|s| s.label.clone()).collect(),
++        "shape label",
++    )?;
++    unique(
++        m.batch_widths.iter().map(ToString::to_string).collect(),
++        "batch_widths",
++    )?;
++    unique(
++        m.inactive_fractions
++            .iter()
++            .map(ToString::to_string)
++            .collect(),
++        "inactive_fractions",
++    )?;
++    unique(m.criteria.platforms_required.clone(), "platforms_required")?;
++    for s in &m.shapes {
++        let non_inputs = s.num_neurons - s.num_inputs;
++        let max_fan = match s.fan_in_kind.as_str() {
++            "exact_total" => s.fan_in.div_ceil(non_inputs),
++            "varied_around" => s
++                .fan_in
++                .checked_mul(2)
++                .and_then(|n| n.checked_sub(1))
++                .ok_or_else(|| format!("shape {}: fan_in overflow", s.label))?,
++            _ => s.fan_in,
++        };
++        if max_fan > u16::MAX as usize {
++            return Err(format!("shape {}: fan_in exceeds u16", s.label));
++        }
++        // Bound the simultaneous live variants and conversion temporaries before allocating.
++        let bytes = (max_fan as u128 * non_inputs as u128 * 32 * 20)
++            + (s.num_neurons as u128 * *m.batch_widths.iter().max().unwrap() as u128 * 8 * 20)
++            + (m.records_per_sample.max(m.calibration_records) as u128
++                * s.num_neurons as u128
++                * 16);
++        if bytes > 512 * 1024 * 1024 {
++            return Err(format!(
++                "shape {}: estimated experiment memory exceeds 512 MiB",
++                s.label
++            ));
++        }
++        if s.fan_in_kind == "exact_total" {
++            let schedule = s.fan_in()?.exact_schedule(non_inputs).unwrap();
++            if schedule
++                .iter()
++                .enumerate()
++                .any(|(i, &n)| n > s.num_inputs + i)
++            {
++                return Err(format!(
++                    "shape {}: exact fan_in would be truncated",
++                    s.label
++                ));
++            }
++        }
++    }
++    if m.inactive_fractions.iter().any(|f| !(0.0..1.0).contains(f)) {
++        return Err("inactive_fractions must lie in [0, 1)".into());
++    }
++    if m.batch_widths.contains(&0) {
++        return Err("batch_widths must be at least 1".into());
++    }
++    if m.reps < 2
++        || m.records_per_sample == 0
++        || m.calibration_records == 0
++        || m.conversion_reps == 0
++    {
++        return Err(
++            "reps must be at least 2; records_per_sample, calibration_records and conversion_reps must be positive"
++                .into(),
++        );
++    }
++    if m.reps > 10_000 || m.conversion_reps > 100 || m.bootstrap_resamples > 1_000_000 {
++        return Err(
++            "reps/conversion_reps/bootstrap_resamples exceed experiment work limits".into(),
++        );
++    }
++    if m.shapes.len() as u128 * m.batch_widths.len() as u128 * m.inactive_fractions.len() as u128
++        > 10_000
++    {
++        return Err("manifest exceeds 10000 cells".into());
++    }
++    if m.bootstrap_resamples == 0 {
++        return Err("bootstrap_resamples must be positive".into());
++    }
++    for (name, value) in [
++        ("max_cell_seconds", m.max_cell_seconds),
++        ("max_total_seconds", m.max_total_seconds),
++    ] {
++        if !value.is_finite() || value <= 0.0 {
++            return Err(format!("{name} must be finite and positive"));
++        }
++    }
++    if !(0.0..1.0).contains(&m.criteria.speed_win_ratio) || m.criteria.speed_win_ratio == 0.0 {
++        return Err("speed_win_ratio must lie in (0, 1)".into());
++    }
++    for tol in [m.criteria.tolerance_f32, m.criteria.tolerance_reduced] {
++        if !tol.is_finite() || tol < 0.0 {
++            return Err("tolerance must be finite and non-negative".into());
++        }
++    }
++    if m.criteria.platforms_required.is_empty() {
++        return Err("platforms_required must not be empty".into());
++    }
++    if m.calibration_seed == m.validation_seed || m.calibration_seed == m.validation_record_seed {
++        return Err("calibration and validation seeds must differ".into());
++    }
++    if !m
++        .shapes
++        .iter()
++        .any(|s| s.label == m.criteria.representative_shape)
++    {
++        return Err(format!(
++            "representative_shape {:?} is not a declared shape",
++            m.criteria.representative_shape
++        ));
++    }
++    Ok(m)
++}
+diff --git a/neat-core/examples/sparse_precision_experiment.rs b/neat-core/examples/sparse_precision_experiment.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..8fc4b486b156cc2302a05967544e0cf8e142a244
+--- /dev/null
++++ b/neat-core/examples/sparse_precision_experiment.rs
+@@ -0,0 +1,840 @@
++//! Issue #758 runner: opt-in, paired, interleaved benchmark of sparse layouts and
++//! reduced-precision weight storage against the real `CompiledNetwork`.
++//!
++//! ```text
++//! cargo run --release -p neat-core --example sparse_precision_experiment -- \
++//!     --manifest docs/research/sparse-precision/manifest.json --out results.json \
++//!     [--quick] [--code-rev <sha>] [--rustc <version string>]
++//! ```
++//!
++//! Calibration results are never reported as performance. Validation runs on a
++//! fresh network and fresh records, with variants shuffled within every rep.
++
++#[path = "../benches/common/mod.rs"]
++#[allow(dead_code)]
++mod common;
++#[path = "../benches/sparse_precision/mod.rs"]
++#[allow(dead_code)]
++mod sparse_precision;
++
++use common::{Lcg, NetSpec, build_network};
++use neat_core::network::CompiledNetwork;
++use serde_json::{Value, json};
++use sparse_precision::execution::*;
++use sparse_precision::*;
++use std::collections::BTreeMap;
++use std::hint::black_box;
++use std::time::{Instant, SystemTime, UNIX_EPOCH};
++
++/// Whole nanoseconds, rounded; timings are stored as integers to keep the file compact.
++fn ns_u64(ns: f64) -> u64 {
++    ns.round().max(0.0) as u64
++}
++
++fn fail(msg: impl std::fmt::Display) -> ! {
++    eprintln!("sparse_precision_experiment: {msg}");
++    std::process::exit(1);
++}
++
++struct Args {
++    manifest: String,
++    out: String,
++    quick: bool,
++    code_rev: String,
++    rustc: String,
++}
++
++fn parse_args() -> Args {
++    let mut manifest = None;
++    let mut out = None;
++    let mut quick = false;
++    let mut code_rev = "unknown".to_string();
++    let mut rustc = "unknown".to_string();
++    let mut it = std::env::args().skip(1);
++    while let Some(a) = it.next() {
++        match a.as_str() {
++            "--manifest" => manifest = it.next(),
++            "--out" => out = it.next(),
++            "--code-rev" => {
++                code_rev = it
++                    .next()
++                    .unwrap_or_else(|| fail("--code-rev needs a value"))
++            }
++            "--rustc" => rustc = it.next().unwrap_or_else(|| fail("--rustc needs a value")),
++            "--quick" => quick = true,
++            other => fail(format!("unknown argument {other:?}")),
++        }
++    }
++    Args {
++        manifest: manifest.unwrap_or_else(|| fail("--manifest <path> is required")),
++        out: out.unwrap_or_else(|| fail("--out <path> is required")),
++        quick,
++        code_rev,
++        rustc,
++    }
++}
++
++fn oracle(
++    net: &CompiledNetwork,
++    recs: &[f32],
++    stride: usize,
++    no: usize,
++) -> Result<Vec<f64>, String> {
++    let mut all = Vec::new();
++    for r in recs.chunks(stride) {
++        all.extend(reference_forward_f64(net, r, no)?);
++    }
++    Ok(all)
++}
++
++fn tolerance(m: &Manifest, p: Precision) -> f64 {
++    if p == Precision::F32 {
++        m.criteria.tolerance_f32
++    } else {
++        m.criteria.tolerance_reduced
++    }
++}
++
++struct CellOutcome {
++    json: Value,
++    failures: Vec<Value>,
++    planned: usize,
++    timed: usize,
++    /// (variant, verdict, accuracy_pass) per timed variant.
++    verdicts: Vec<(String, String, bool)>,
++}
++
++#[allow(clippy::too_many_arguments)]
++fn run_cell(
++    m: &Manifest,
++    cell: usize,
++    shape: &ShapeSpec,
++    spec: &NetSpec,
++    inactive: f64,
++    width: usize,
++    reps: usize,
++    rps: usize,
++) -> CellOutcome {
++    let prep_start = Instant::now();
++    let stride = shape.num_inputs;
++    let no = shape.num_outputs;
++    let cell_id =
++        json!({"shape": shape.label, "inactive_fraction": inactive, "batch_width": width});
++    let specs = variants(inactive);
++    let planned = specs.len();
++    let mut failures: Vec<Value> = Vec::new();
++    let mut note_failure = |variant: &str, stage: &str, reason: String| {
++        failures
++            .push(json!({"cell": cell_id, "variant": variant, "stage": stage, "reason": reason}));
++    };
++
++    // 1. Calibration (never reported as performance).
++    let cal_net = apply_sparsity(
++        &build_network(spec, m.calibration_seed.wrapping_add(cell as u64)),
++        inactive,
++        m.calibration_seed
++            .wrapping_add(77)
++            .wrapping_add(cell as u64),
++    );
++    let cal_recs = flat_records(m.calibration_records, stride, m.calibration_seed ^ 0xCA11);
++    let cal_ref = match oracle(&cal_net, &cal_recs, stride, no) {
++        Ok(r) => r,
++        Err(e) => {
++            note_failure("*", "calibration_oracle", e);
++            return CellOutcome {
++                json: json!({"cell": cell_id, "skipped": "oracle failed"}),
++                failures,
++                planned,
++                timed: 0,
++                verdicts: vec![],
++            };
++        }
++    };
++    let mut viable: Vec<VariantSpec> = Vec::new();
++    for vs in &specs {
++        let name = vs.name();
++        let mut exec = match vs.convert(&cal_net) {
++            Ok(e) => e,
++            Err(e) => {
++                note_failure(&name, "calibration_convert", e);
++                continue;
++            }
++        };
++        let mut out = vec![0.0f32; m.calibration_records * no];
++        exec.run(&cal_recs, stride, width, no, &mut out); // also the warm-up
++        let e = error_stats(&out, &cal_ref);
++        let tol = tolerance(m, vs.precision());
++        if e.max_abs > tol {
++            note_failure(
++                &name,
++                "calibration_accuracy",
++                format!("max_abs {} exceeds tolerance {tol}", e.max_abs),
++            );
++            continue;
++        }
++        viable.push(*vs);
++    }
++    if !viable.iter().any(|v| v.is_baseline()) {
++        note_failure(
++            "current",
++            "baseline",
++            "baseline unavailable; cell not timed".into(),
++        );
++        return CellOutcome {
++            json: json!({"cell": cell_id, "skipped": "no baseline"}),
++            failures,
++            planned,
++            timed: 0,
++            verdicts: vec![],
++        };
++    }
++
++    // 2. Validation on a fresh network and fresh records.
++    let val_net = apply_sparsity(
++        &build_network(spec, m.validation_seed.wrapping_add(cell as u64)),
++        inactive,
++        m.validation_seed.wrapping_add(77).wrapping_add(cell as u64),
++    );
++    let val_recs = flat_records(rps, stride, m.validation_record_seed);
++    let val_ref = match oracle(&val_net, &val_recs, stride, no) {
++        Ok(r) => r,
++        Err(e) => {
++            note_failure("*", "validation_oracle", e);
++            return CellOutcome {
++                json: json!({"cell": cell_id, "skipped": "oracle failed"}),
++                failures,
++                planned,
++                timed: 0,
++                verdicts: vec![],
++            };
++        }
++    };
++
++    let network_identity = val_net.to_topology_json(no);
++    let fingerprint = |bytes: &[u8]| {
++        bytes.iter().fold(0xcbf29ce484222325u64, |hash, &byte| {
++            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
++        })
++    };
++    let record_bytes: Vec<u8> = val_recs
++        .iter()
++        .flat_map(|x| x.to_bits().to_le_bytes())
++        .collect();
++    let data_identity = json!({
++        "network_topology_fnv1a64": format!("{:016x}", fingerprint(network_identity.as_bytes())),
++        "records_f32_le_fnv1a64": format!("{:016x}", fingerprint(&record_bytes)),
++        "network_seed": m.validation_seed.wrapping_add(cell as u64),
++        "record_seed": m.validation_record_seed,
++        "synapses": val_net.num_synapses(),
++        "zero_weights": val_net.synapses().iter().filter(|s| s.weight == 0.0).count(),
++    });
++
++    struct Live {
++        spec: VariantSpec,
++        exec: Exec,
++        conversion_samples: Vec<f64>,
++        first_run_ns: f64,
++        error: ErrorStats,
++        samples: Vec<f64>,
++        end_to_end_samples: Vec<f64>,
++    }
++    let mut live: Vec<Live> = Vec::new();
++    let mut out = vec![0.0f32; rps * no];
++    for vs in &viable {
++        let name = vs.name();
++        let mut times = Vec::new();
++        let mut exec = None;
++        for _ in 0..m.conversion_reps {
++            let t = Instant::now();
++            match vs.convert(&val_net) {
++                Ok(e) => {
++                    times.push(t.elapsed().as_nanos() as f64);
++                    exec = Some(e);
++                }
++                Err(e) => {
++                    note_failure(&name, "validation_convert", e);
++                    exec = None;
++                    break;
++                }
++            }
++        }
++        let Some(mut exec) = exec else { continue };
++        let first_run_start = Instant::now();
++        exec.run(&val_recs, stride, width, no, &mut out); // warm-up + accuracy capture
++        let first_run_ns = first_run_start.elapsed().as_nanos() as f64;
++        let error = error_stats(&out, &val_ref);
++        let tol = tolerance(m, vs.precision());
++        if error.max_abs > tol {
++            note_failure(
++                &name,
++                "validation_accuracy",
++                format!("max_abs {} exceeds tolerance {tol}", error.max_abs),
++            );
++            continue;
++        }
++        live.push(Live {
++            spec: *vs,
++            exec,
++            conversion_samples: times,
++            first_run_ns,
++            error,
++            samples: Vec::new(),
++            end_to_end_samples: Vec::new(),
++        });
++    }
++    let compilation_samples: Vec<u64> = (0..m.conversion_reps)
++        .map(|_| {
++            let t = Instant::now();
++            black_box(
++                CompiledNetwork::from_parts(
++                    val_net.num_inputs(),
++                    val_net.neurons().to_vec(),
++                    val_net.synapses().to_vec(),
++                )
++                .unwrap(),
++            );
++            t.elapsed().as_nanos() as u64
++        })
++        .collect();
++    let preparation_seconds = prep_start.elapsed().as_secs_f64();
++    if !live.iter().any(|l| l.spec.is_baseline()) {
++        note_failure(
++            "current",
++            "baseline",
++            "baseline failed validation; cell not timed".into(),
++        );
++        return CellOutcome {
++            json: json!({"cell": cell_id, "skipped": "no baseline"}),
++            failures,
++            planned,
++            timed: 0,
++            verdicts: vec![],
++        };
++    }
++
++    // 3. Paired, interleaved timing.
++    let timing_start = Instant::now();
++    let mut reps_done = 0;
++    for rep in 0..reps {
++        let mut order: Vec<usize> = (0..live.len()).collect();
++        let mut rng = Lcg::new(
++            m.shuffle_seed
++                .wrapping_add((cell as u64).wrapping_mul(1_000_003))
++                .wrapping_add(rep as u64),
++        );
++        for i in (1..order.len()).rev() {
++            order.swap(i, rng.next_below(i + 1));
++        }
++        for &i in &order {
++            let t = Instant::now();
++            live[i].exec.run(&val_recs, stride, width, no, &mut out);
++            let ns = t.elapsed().as_nanos() as f64;
++            black_box(&out);
++            live[i].samples.push(ns);
++            let t = Instant::now();
++            // Typed-parts compilation, conversion, scratch initialisation and one corpus scan.
++            let compiled = CompiledNetwork::from_parts(
++                val_net.num_inputs(),
++                val_net.neurons().to_vec(),
++                val_net.synapses().to_vec(),
++            )
++            .unwrap();
++            let mut fresh = if live[i].spec.config.is_none() {
++                live[i].spec.prepare_current(compiled)
++            } else {
++                live[i].spec.convert(&compiled).unwrap()
++            };
++            fresh.run(&val_recs, stride, width, no, &mut out);
++            black_box(&out);
++            live[i]
++                .end_to_end_samples
++                .push(t.elapsed().as_nanos() as f64);
++        }
++        reps_done += 1;
++        if prep_start.elapsed().as_secs_f64() > m.max_cell_seconds {
++            break;
++        }
++    }
++
++    if reps_done < reps {
++        note_failure(
++            "*",
++            "timing_budget",
++            format!("completed {reps_done} of {reps} paired repetitions"),
++        );
++    }
++
++    // 4. Summaries and verdicts.
++    let base_idx = live.iter().position(|l| l.spec.is_baseline()).unwrap();
++    let base_samples = live[base_idx].samples.clone();
++    let base_end_to_end = live[base_idx].end_to_end_samples.clone();
++    let whole_scan = live.iter().find(|l| l.spec.whole_scan);
++    let mut verdicts = Vec::new();
++    let mut rows = Vec::new();
++    for l in &live {
++        let name = l.spec.name();
++        let mem = l.exec.memory();
++        let tol = tolerance(m, l.spec.precision());
++        let accuracy_pass = l.error.max_abs <= tol;
++        let (ratio, verdict) = if l.spec.is_baseline() {
++            (None, "baseline".to_string())
++        } else {
++            let r = paired_ratio_ci(
++                &l.samples,
++                &base_samples,
++                m.bootstrap_resamples,
++                m.bootstrap_seed,
++            );
++            let v = if reps_done < reps {
++                "incomplete"
++            } else if r.ci_high <= m.criteria.speed_win_ratio {
++                "faster"
++            } else if r.ci_low > 1.0 {
++                "slower"
++            } else {
++                "inconclusive"
++            };
++            (Some(r), v.to_string())
++        };
++        verdicts.push((name.clone(), verdict.clone(), accuracy_pass));
++        let end_to_end_ratio = if l.spec.is_baseline() {
++            None
++        } else {
++            Some(paired_ratio_ci(
++                &l.end_to_end_samples,
++                &base_end_to_end,
++                m.bootstrap_resamples,
++                m.bootstrap_seed,
++            ))
++        };
++        let scratch = match &l.exec {
++            Exec::Sparse(_, s) => {
++                json!({"allocated_payload_bytes": s.allocated_bytes(), "basis": "actual vector capacities after warm-up"})
++            }
++            Exec::Current(_) | Exec::CurrentWholeScan(_) => {
++                let nn = val_net.num_neurons();
++                let non_inputs = val_net.neurons().len();
++                let trace = (non_inputs / 10).max(1) * 2 + 1;
++                let resident =
++                    (nn * (5 + neat_core::loss::MSE_TILE_LANES) + non_inputs * 5 + trace * 5) * 4;
++                json!({"resident_payload_bytes_model": resident,
++                    "batch_scratch_bytes_model": if width > 1 { nn * 16 * 4 } else { 0 },
++                    "basis": "length model of CompiledNetwork::assemble and BatchScratch::new; excludes allocator rounding and Vec headers"})
++            }
++        };
++        rows.push(json!({
++            "variant": name,
++            "conversion_ns_median": ns_u64(median(&l.conversion_samples)),
++            "conversion_sample_ns": l.conversion_samples.iter().map(|&s| ns_u64(s)).collect::<Vec<_>>(),
++            "first_run_ns": ns_u64(l.first_run_ns),
++            "scratch_memory": scratch,
++            "end_to_end_sample_ns": l.end_to_end_samples.iter().map(|&s| ns_u64(s)).collect::<Vec<_>>(),
++            "end_to_end_ratio_vs_current": end_to_end_ratio,
++            "end_to_end_verdict": if l.spec.is_baseline() { "baseline" } else if reps_done < reps { "incomplete" }
++                else if end_to_end_ratio.unwrap().ci_high <= m.criteria.speed_win_ratio { "faster" }
++                else if end_to_end_ratio.unwrap().ci_low > 1.0 { "slower" } else { "inconclusive" },
++            "ratio_vs_current_whole_scan": whole_scan.map(|control| paired_ratio_ci(
++                &l.samples, &control.samples, m.bootstrap_resamples, m.bootstrap_seed)),
++            "end_to_end_ratio_vs_current_whole_scan": whole_scan.map(|control| paired_ratio_ci(
++                &l.end_to_end_samples, &control.end_to_end_samples, m.bootstrap_resamples, m.bootstrap_seed)),
++            "memory": mem,
++            "error_vs_f64_oracle": l.error,
++            "tolerance": tol,
++            "accuracy_pass": accuracy_pass,
++            "sample_ns": l.samples.iter().map(|&s| ns_u64(s)).collect::<Vec<u64>>(),
++            "median_sample_ns": ns_u64(median(&l.samples)),
++            "ratio_vs_current": ratio,
++            "verdict": verdict,
++        }));
++    }
++    let timed = live.len();
++    CellOutcome {
++        json: json!({
++            "cell": cell_id,
++            "data_identity": data_identity,
++            "reps_planned": reps,
++            "reps_done": reps_done,
++            "records_per_sample": rps,
++            "preparation_seconds": preparation_seconds,
++            "compilation_sample_ns": compilation_samples,
++            "timing_seconds": timing_start.elapsed().as_secs_f64(),
++            "complete": reps_done == reps,
++            "variants_planned": planned,
++            "variants_timed": timed,
++            "variant_failures": failures,
++            "variants": rows,
++        }),
++        failures,
++        planned,
++        timed,
++        verdicts,
++    }
++}
++
++fn command_output(program: &str, args: &[&str]) -> String {
++    let output = std::process::Command::new(program)
++        .args(args)
++        .output()
++        .unwrap_or_else(|e| fail(format!("cannot run {program}: {e}")));
++    if !output.status.success() {
++        fail(format!(
++            "{program} failed: {}",
++            String::from_utf8_lossy(&output.stderr)
++        ));
++    }
++    String::from_utf8(output.stdout)
++        .unwrap_or_else(|e| fail(e))
++        .trim()
++        .to_string()
++}
++
++fn run_identity(args: &Args) -> Value {
++    let revision = command_output("git", &["rev-parse", "HEAD"]);
++    let compiler = command_output("rustc", &["--version"]);
++    let diff = command_output("git", &["diff", "HEAD", "--stat"]);
++    if !diff.is_empty() {
++        fail(
++            "tracked working tree differs from HEAD; commit the protocol and code before measurement",
++        );
++    }
++    if args.code_rev != "unknown" && args.code_rev != revision {
++        fail("--code-rev disagrees with git HEAD");
++    }
++    if args.rustc != "unknown" && args.rustc != compiler {
++        fail("--rustc disagrees with the installed compiler");
++    }
++    json!({
++        "git_head": revision,
++        "tracked_diff": diff,
++        "rustc_vv": command_output("rustc", &["-vV"]),
++        "cargo": command_output("cargo", &["--version"]),
++        "manifest_git_blob": command_output("git", &["hash-object", &args.manifest]),
++        "source_git_blobs": command_output("git", &["hash-object", "Cargo.toml", "neat-core/Cargo.toml",
++            "neat-core/benches/common/mod.rs", "neat-core/benches/sparse_precision/mod.rs",
++            "neat-core/examples/sparse_precision_experiment.rs",
++            "neat-core/benches/sparse_precision/execution.rs",
++            "neat-core/benches/sparse_precision/allocation.rs",
++            "neat-core/examples/sparse_precision_memory.rs",
++            "scripts/run_sparse_precision.ts", "scripts/sparse_precision_resources.py"]),
++        "lockfile_git_blob": command_output("git", &["hash-object", "Cargo.lock"]),
++        "kernel": command_output("uname", &["-a"]),
++        "cpu": if cfg!(target_os = "linux") {
++            std::fs::read_to_string("/proc/cpuinfo").unwrap_or_else(|e| fail(e))
++        } else { command_output("sysctl", &["-n", "machdep.cpu.brand_string"]) },
++        "rustflags": std::env::var("RUSTFLAGS").unwrap_or_default(),
++        "cargo_encoded_rustflags": std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default(),
++    })
++}
++
++fn run_experiment(args: &Args) -> Value {
++    let text = std::fs::read_to_string(&args.manifest)
++        .unwrap_or_else(|e| fail(format!("cannot read manifest {}: {e}", args.manifest)));
++    let mut m = parse_manifest(&text).unwrap_or_else(|e| fail(e));
++    let manifest_echo = serde_json::to_value(&m).unwrap_or_else(|e| fail(e));
++    if args.quick {
++        m.reps = 3;
++        m.records_per_sample = 16;
++        m.shapes.truncate(2);
++    }
++
++    let effective_manifest = serde_json::to_value(&m).unwrap();
++    let started = Instant::now();
++    let started_unix = SystemTime::now()
++        .duration_since(UNIX_EPOCH)
++        .map_or(0, |d| d.as_secs());
++
++    let mut cell_json = Vec::new();
++    let mut failures = Vec::new();
++    let mut not_run = Vec::new();
++    let mut tally: BTreeMap<String, BTreeMap<&'static str, u64>> = BTreeMap::new();
++    let (mut cells_planned, mut cells_run, mut variants_planned, mut variants_timed) =
++        (0usize, 0usize, 0usize, 0usize);
++
++    let mut cell = 0usize;
++    for (shape_index, shape) in m.shapes.iter().enumerate() {
++        let spec = NetSpec {
++            label: "manifest",
++            num_neurons: shape.num_neurons,
++            num_inputs: shape.num_inputs,
++            num_outputs: shape.num_outputs,
++            fan_in: shape.fan_in().unwrap_or_else(|e| fail(e)),
++        };
++        for (fraction_index, &inactive) in m.inactive_fractions.iter().enumerate() {
++            for &width in &m.batch_widths {
++                cells_planned += 1;
++                variants_planned += variants(inactive).len();
++                if shape.label == m.criteria.representative_shape {
++                    for variant in variants(inactive) {
++                        *tally
++                            .entry(variant.name())
++                            .or_default()
++                            .entry("representative_planned")
++                            .or_default() += 1;
++                    }
++                }
++                if started.elapsed().as_secs_f64() > m.max_total_seconds {
++                    not_run.push(json!({
++                        "shape": shape.label, "inactive_fraction": inactive, "batch_width": width,
++                        "reason": format!("max_total_seconds {} exceeded", m.max_total_seconds),
++                    }));
++                    cell += 1;
++                    continue;
++                }
++                let mut cell_manifest = m.clone();
++                cell_manifest.max_cell_seconds = m.max_cell_seconds.min(
++                    (m.max_total_seconds - started.elapsed().as_secs_f64()).max(f64::MIN_POSITIVE),
++                );
++                let o = run_cell(
++                    &cell_manifest,
++                    shape_index * m.inactive_fractions.len() + fraction_index,
++                    shape,
++                    &spec,
++                    inactive,
++                    width,
++                    m.reps,
++                    m.records_per_sample,
++                );
++                cell += 1;
++                eprintln!(
++                    "cell {cell}: {} frac={inactive} w={width}: {}/{} variants timed",
++                    shape.label, o.timed, o.planned
++                );
++                cells_run += 1;
++                variants_timed += o.timed;
++                failures.extend(o.failures);
++                let representative = shape.label == m.criteria.representative_shape;
++                for (name, verdict, acc) in &o.verdicts {
++                    if verdict == "baseline" {
++                        continue;
++                    }
++                    let t = tally.entry(name.clone()).or_default();
++                    *t.entry("cells_timed").or_default() += 1;
++                    *t.entry(match verdict.as_str() {
++                        "faster" => "faster",
++                        "slower" => "slower",
++                        "incomplete" => "incomplete",
++                        _ => "inconclusive",
++                    })
++                    .or_default() += 1;
++                    if *acc {
++                        *t.entry("accuracy_pass").or_default() += 1;
++                    }
++                    if representative {
++                        *t.entry("representative_cells").or_default() += 1;
++                        if verdict == "faster" && *acc {
++                            *t.entry("representative_faster_accurate").or_default() += 1;
++                        }
++                    }
++                }
++                cell_json.push(o.json);
++            }
++        }
++    }
++
++    let (arch, os) = (std::env::consts::ARCH, std::env::consts::OS);
++    let apple = arch == "aarch64" && os == "macos";
++    let cells_complete = cell_json.iter().filter(|c| c["complete"] == true).count();
++    let status = if args.quick {
++        "smoke"
++    } else if !not_run.is_empty() || cells_complete < cells_planned {
++        "incomplete"
++    } else if !failures.is_empty() {
++        "completed_with_failures"
++    } else {
++        "complete"
++    };
++    json!({
++        "schema_version": 2,
++        "protocol": "sparse-precision-v4",
++        "status": status,
++        "issue": 758,
++        "requested_manifest": manifest_echo,
++        "manifest": effective_manifest,
++        "quick": args.quick,
++        "code_rev": args.code_rev,
++        "crate_version": env!("CARGO_PKG_VERSION"),
++        "host": {
++            "os": os,
++            "arch": arch,
++            "available_parallelism": std::thread::available_parallelism().map_or(0, |n| n.get()),
++            "rustc": args.rustc,
++        },
++        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
++        "started_unix": started_unix,
++        "wall_seconds": started.elapsed().as_secs_f64(),
++        "cells": cell_json,
++        "failures": failures,
++        "not_run": not_run,
++        "coverage": {
++            "cells_planned": cells_planned,
++            "cells_run": cells_run,
++            "cells_complete": cells_complete,
++            "variants_planned": variants_planned,
++            "variants_timed": variants_timed,
++            "platforms_covered": if variants_timed > 0 { vec![format!("{arch}-{os}")] } else { vec![] },
++            "platforms_not_covered": m.criteria.platforms_required.iter().filter(|p| variants_timed == 0 || **p != format!("{arch}-{os}")).collect::<Vec<_>>(),
++            "metal": {"status": "not_run", "reason": if apple { "no factorial adapter for the scorer GPU backend" } else { "requires an Apple Metal host; this process runs on another OS" }},
++            "skipped_by_design": "active_only variants are skipped when inactive_fraction == 0 (identical to all_edges)",
++        },
++        "tally": tally,
++    })
++}
++
++fn main() {
++    let args = parse_args();
++    let identity = run_identity(&args);
++    let mut results = run_experiment(&args);
++    results["identity"] = identity;
++    let body = serde_json::to_string(&results).unwrap_or_else(|e| fail(e));
++    std::fs::write(&args.out, format!("{body}\n"))
++        .unwrap_or_else(|e| fail(format!("cannot write {}: {e}", args.out)));
++    eprintln!("wrote {}", args.out);
++    if results["status"] == "incomplete" || !results["failures"].as_array().unwrap().is_empty() {
++        fail(format!(
++            "[EXPERIMENT_FAILURE] status={} failures={}; raw results saved",
++            results["status"],
++            results["failures"].as_array().unwrap().len()
++        ));
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn manifest() -> Manifest {
++        parse_manifest(include_str!(
++            "../../docs/research/sparse-precision/manifest.json"
++        ))
++        .unwrap()
++    }
++
++    fn run_small(m: &Manifest, quick: bool) -> Value {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("manifest.json");
++        std::fs::write(&path, serde_json::to_string(m).unwrap()).unwrap();
++        run_experiment(&Args {
++            manifest: path.to_str().unwrap().into(),
++            out: String::new(),
++            quick,
++            code_rev: "test".into(),
++            rustc: "test".into(),
++        })
++    }
++
++    #[test]
++    fn coverage_and_effective_protocol_describe_the_actual_run() {
++        let mut m = manifest();
++        m.shapes.truncate(1);
++        m.criteria.representative_shape = m.shapes[0].label.clone();
++        m.inactive_fractions = vec![0.0];
++        m.batch_widths = vec![1, 3];
++        m.reps = 2;
++        m.records_per_sample = 3;
++        m.conversion_reps = 1;
++        m.bootstrap_resamples = 20;
++        let result = run_small(&m, false);
++        assert_eq!(result["status"], "complete");
++        assert_eq!(result["coverage"]["cells_complete"], 2);
++        assert_eq!(result["coverage"]["variants_planned"], 22);
++        assert_eq!(result["coverage"]["variants_timed"], 22);
++        let host = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
++        let expected: Vec<_> = m
++            .criteria
++            .platforms_required
++            .iter()
++            .filter(|p| **p != host)
++            .collect();
++        assert_eq!(result["coverage"]["platforms_not_covered"], json!(expected));
++        for cell in result["cells"].as_array().unwrap() {
++            for row in cell["variants"].as_array().unwrap() {
++                assert_eq!(row["sample_ns"].as_array().unwrap().len(), 2);
++                assert_eq!(row["end_to_end_sample_ns"].as_array().unwrap().len(), 2);
++                assert_eq!(row["accuracy_pass"], true);
++            }
++        }
++        // Batch width must not change the generated topology or input records.
++        assert_eq!(
++            result["cells"][0]["data_identity"],
++            result["cells"][1]["data_identity"]
++        );
++        let smoke = run_small(&m, true);
++        assert_eq!(smoke["status"], "smoke");
++        assert_eq!(smoke["manifest"]["records_per_sample"], 16);
++        assert_eq!(smoke["requested_manifest"]["records_per_sample"], 3);
++        assert_eq!(smoke["manifest"]["reps"], 3);
++    }
++
++    #[test]
++    fn numerical_failures_are_retained_and_never_counted_as_timed() {
++        let mut m = manifest();
++        m.shapes.truncate(1);
++        m.criteria.representative_shape = m.shapes[0].label.clone();
++        m.criteria.tolerance_reduced = 0.0;
++        m.inactive_fractions = vec![0.0];
++        m.batch_widths = vec![1];
++        m.reps = 2;
++        m.records_per_sample = 3;
++        m.conversion_reps = 1;
++        m.bootstrap_resamples = 20;
++        let result = run_small(&m, false);
++        assert_eq!(result["status"], "completed_with_failures");
++        assert_eq!(result["coverage"]["variants_planned"], 11);
++        assert_eq!(result["coverage"]["variants_timed"], 5);
++        assert_eq!(result["failures"].as_array().unwrap().len(), 6);
++        for f in result["failures"].as_array().unwrap() {
++            assert_eq!(f["stage"], "calibration_accuracy");
++            assert!(
++                f["reason"]
++                    .as_str()
++                    .unwrap()
++                    .contains("exceeds tolerance 0")
++            );
++        }
++        assert_eq!(
++            result["tally"]["csr_dst/bf16/all_edges"]["representative_planned"],
++            1
++        );
++        assert_eq!(
++            result["tally"]["csr_dst/bf16/all_edges"].get("cells_timed"),
++            None
++        );
++    }
++
++    #[test]
++    fn an_unmeasured_host_is_not_reported_as_platform_coverage() {
++        let mut m = manifest();
++        m.max_total_seconds = f64::MIN_POSITIVE;
++        let result = run_small(&m, false);
++        assert_eq!(result["status"], "incomplete");
++        assert_eq!(result["coverage"]["variants_timed"], 0);
++        assert_eq!(result["coverage"]["platforms_covered"], json!([]));
++        assert_eq!(
++            result["coverage"]["platforms_not_covered"],
++            json!(m.criteria.platforms_required)
++        );
++        assert_eq!(result["not_run"].as_array().unwrap().len(), 54);
++    }
++
++    #[test]
++    fn an_incomplete_cell_never_receives_a_speed_verdict() {
++        let mut m = manifest();
++        m.max_cell_seconds = f64::MIN_POSITIVE;
++        let shape = &m.shapes[0];
++        let spec = NetSpec {
++            label: "tiny",
++            num_neurons: shape.num_neurons,
++            num_inputs: shape.num_inputs,
++            num_outputs: shape.num_outputs,
++            fan_in: shape.fan_in().unwrap(),
++        };
++        let o = run_cell(&m, 0, shape, &spec, 0.0, 1, 3, 2);
++        assert_eq!(o.json["reps_done"], 1);
++        for row in o.json["variants"].as_array().unwrap() {
++            if row["variant"] != "current" {
++                assert_eq!(row["verdict"], "incomplete");
++            }
++        }
++        assert!(o.failures.iter().any(|f| f["stage"] == "timing_budget"));
++    }
++}
+diff --git a/neat-core/examples/sparse_precision_memory.rs b/neat-core/examples/sparse_precision_memory.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..23ab8b13ac87c1ab48364d9e039dead8f4ba361f
+--- /dev/null
++++ b/neat-core/examples/sparse_precision_memory.rs
+@@ -0,0 +1,233 @@
++//! Separate allocation probe: instrumentation never enters the timing executable.
++
++#[path = "../benches/sparse_precision/allocation.rs"]
++mod allocation;
++#[path = "../benches/common/mod.rs"]
++#[allow(dead_code)]
++mod common;
++#[path = "../benches/sparse_precision/mod.rs"]
++#[allow(dead_code)]
++mod sparse_precision;
++
++use allocation::CountingAllocator;
++use common::{NetSpec, build_network};
++use neat_core::network::CompiledNetwork;
++use serde_json::{Value, json};
++use sparse_precision::execution::*;
++use sparse_precision::*;
++
++#[global_allocator]
++static ALLOCATOR: CountingAllocator = CountingAllocator::new();
++
++fn memory_row(
++    net: &CompiledNetwork,
++    records: &[f32],
++    vs: VariantSpec,
++    width: usize,
++    outputs: usize,
++    tolerance: f64,
++) -> Result<Value, String> {
++    let (converted, conversion) = ALLOCATOR.measure(|| vs.convert(net));
++    let mut exec = converted?;
++    let oracle: Vec<_> = records
++        .chunks(net.num_inputs())
++        .map(|r| reference_forward_f64(net, r, outputs))
++        .collect::<Result<Vec<_>, _>>()?
++        .into_iter()
++        .flatten()
++        .collect();
++    let mut out = vec![0.0; records.len() / net.num_inputs() * outputs];
++    let (_, initialisation_and_scan) = ALLOCATOR.measure(|| {
++        exec.run(records, net.num_inputs(), width, outputs, &mut out);
++    });
++    let error = error_stats(&out, &oracle);
++    let memory = exec.memory();
++    drop(exec);
++    let (_, end_to_end) = ALLOCATOR.measure(|| {
++        let compiled = CompiledNetwork::from_parts(
++            net.num_inputs(),
++            net.neurons().to_vec(),
++            net.synapses().to_vec(),
++        )
++        .unwrap();
++        let mut fresh = if vs.config.is_none() {
++            vs.prepare_current(compiled)
++        } else {
++            vs.convert(&compiled).unwrap()
++        };
++        fresh.run(records, net.num_inputs(), width, outputs, &mut out);
++    });
++    Ok(json!({
++        "variant": vs.name(), "conversion": conversion,
++        "initialisation_and_scan": initialisation_and_scan,
++        "end_to_end": end_to_end, "memory": memory,
++        "error_vs_f64_oracle": error, "tolerance": tolerance,
++        "accuracy_pass": error.max_abs <= tolerance, "outputs": out,
++    }))
++}
++
++fn probe(m: &Manifest) -> Value {
++    let mut cells = Vec::new();
++    let mut failures = Vec::new();
++    for (shape_index, shape) in m.shapes.iter().enumerate() {
++        let spec = NetSpec {
++            label: "manifest",
++            num_neurons: shape.num_neurons,
++            num_inputs: shape.num_inputs,
++            num_outputs: shape.num_outputs,
++            fan_in: shape.fan_in().unwrap(),
++        };
++        for (fraction_index, &fraction) in m.inactive_fractions.iter().enumerate() {
++            let cell = shape_index * m.inactive_fractions.len() + fraction_index;
++            let parent = apply_sparsity(
++                &build_network(&spec, m.validation_seed.wrapping_add(cell as u64)),
++                fraction,
++                m.validation_seed.wrapping_add(77).wrapping_add(cell as u64),
++            );
++            let records = flat_records(
++                m.records_per_sample,
++                shape.num_inputs,
++                m.validation_record_seed,
++            );
++            let (compiled, compilation) = ALLOCATOR.measure(|| {
++                CompiledNetwork::from_parts(
++                    parent.num_inputs(),
++                    parent.neurons().to_vec(),
++                    parent.synapses().to_vec(),
++                )
++                .unwrap()
++            });
++            drop(compiled);
++            for &width in &m.batch_widths {
++                let mut rows = Vec::new();
++                for vs in variants(fraction) {
++                    let tolerance = if vs.precision() == Precision::F32 {
++                        m.criteria.tolerance_f32
++                    } else {
++                        m.criteria.tolerance_reduced
++                    };
++                    match memory_row(&parent, &records, vs, width, shape.num_outputs, tolerance) {
++                        Ok(mut row) => {
++                            // Output payload is checked above and omitted from the memory record.
++                            row.as_object_mut().unwrap().remove("outputs");
++                            if row["accuracy_pass"] == false {
++                                failures.push(json!({"shape": shape.label, "inactive_fraction": fraction,
++                                    "batch_width": width, "variant": vs.name(), "stage": "accuracy",
++                                    "error": row["error_vs_f64_oracle"], "tolerance": tolerance}));
++                            }
++                            rows.push(row);
++                        }
++                        Err(reason) => failures.push(json!({"shape": shape.label,
++                            "inactive_fraction": fraction, "batch_width": width,
++                            "variant": vs.name(), "stage": "conversion_or_oracle", "reason": reason})),
++                    }
++                }
++                cells.push(
++                    json!({"cell": {"shape": shape.label, "inactive_fraction": fraction,
++                    "batch_width": width}, "compilation": compilation, "variants": rows}),
++                );
++            }
++        }
++    }
++    json!({"schema_version": 1, "protocol": "sparse-precision-v4", "manifest": m,
++        "basis": "System allocator requested live bytes; includes conversion temporaries, excludes allocator metadata, internal realloc overlap, stacks and RSS; one variant live per scope",
++        "status": if failures.is_empty() { "complete" } else { "completed_with_failures" },
++        "cells": cells, "failures": failures})
++}
++
++fn main() {
++    let args: Vec<_> = std::env::args().skip(1).collect();
++    let result = (|| -> Result<(), String> {
++        if args.len() != 2 {
++            return Err("usage: sparse_precision_memory <manifest> <out>".into());
++        }
++        let text = std::fs::read_to_string(&args[0]).map_err(|e| e.to_string())?;
++        let manifest = parse_manifest(&text)?;
++        let results = probe(&manifest);
++        std::fs::write(&args[1], serde_json::to_string(&results).unwrap() + "\n")
++            .map_err(|e| e.to_string())?;
++        if results["status"] != "complete" {
++            return Err("[EXPERIMENT_FAILURE] memory rows saved with numerical failures".into());
++        }
++        Ok(())
++    })();
++    if let Err(e) = result {
++        eprintln!("sparse_precision_memory: {e}");
++        std::process::exit(1);
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use common::FanIn;
++    use neat_core::squash::SquashType;
++    use std::sync::Mutex;
++
++    static PROBE_LOCK: Mutex<()> = Mutex::new(());
++
++    fn network() -> CompiledNetwork {
++        build_network(
++            &NetSpec {
++                label: "memory",
++                num_neurons: 6,
++                num_inputs: 2,
++                num_outputs: 1,
++                fan_in: FanIn::Fixed(2),
++            },
++            18,
++        )
++    }
++
++    #[test]
++    fn a_memory_probe_retains_outputs_and_counts_conversion_temporaries() {
++        let _guard = PROBE_LOCK.lock().unwrap();
++        let net = network();
++        let records = [0.5, -0.25, -0.75, 0.125];
++        let oracle: Vec<_> = records
++            .chunks(2)
++            .flat_map(|r| reference_forward_f64(&net, r, 1).unwrap())
++            .collect();
++        let row = memory_row(&net, &records, variants(0.0)[2], 1, 1, 0.001).unwrap();
++        assert_eq!(row["accuracy_pass"], true);
++        for (got, expected) in row["outputs"].as_array().unwrap().iter().zip(oracle) {
++            assert!((got.as_f64().unwrap() - expected).abs() < 0.001);
++        }
++        let conversion = &row["conversion"];
++        assert!(
++            conversion["additional_peak_bytes"].as_u64().unwrap()
++                > row["memory"]["weight_bytes"].as_u64().unwrap()
++        );
++        assert!(
++            conversion["peak_live_bytes"].as_u64().unwrap()
++                > conversion["live_after_bytes"].as_u64().unwrap()
++        );
++    }
++
++    #[test]
++    fn numerical_failure_remains_a_measured_memory_row() {
++        let _guard = PROBE_LOCK.lock().unwrap();
++        let net = network();
++        let row = memory_row(&net, &[0.3, -0.7], variants(0.0)[3], 1, 1, 0.0).unwrap();
++        assert_eq!(row["variant"], "csr_dst/bf16/all_edges");
++        assert_eq!(row["accuracy_pass"], false);
++        assert!(row["error_vs_f64_oracle"]["max_abs"].as_f64().unwrap() > 0.0);
++    }
++
++    #[test]
++    fn unsupported_topology_is_refused_by_the_same_conversion_entry_point() {
++        let _guard = PROBE_LOCK.lock().unwrap();
++        let net = network();
++        let vs = variants(0.0)[2];
++        assert!(memory_row(&net, &[0.3, -0.7], vs, 1, 1, 0.001).is_ok());
++        let mut neurons = net.neurons().to_vec();
++        neurons[0].squash_type = SquashType::Mean as u8;
++        let unsupported =
++            CompiledNetwork::from_parts(net.num_inputs(), neurons, net.synapses().to_vec())
++                .unwrap();
++        assert_eq!(
++            memory_row(&unsupported, &[0.3, -0.7], vs, 1, 1, 0.001).unwrap_err(),
++            "neuron 2 uses aggregate squash 37; the experiment covers standard weighted-sum neurons only"
++        );
++    }
++}
+diff --git a/neat-core/tests/sparse_precision_experiment.rs b/neat-core/tests/sparse_precision_experiment.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..6809da82af2f99884be91828744541b457a21f97
+--- /dev/null
++++ b/neat-core/tests/sparse_precision_experiment.rs
+@@ -0,0 +1,770 @@
++//! Deterministic correctness tests for the Issue #758 sparse-layout and
++//! reduced-precision experiment harness (`benches/sparse_precision/mod.rs`).
++//!
++//! These are "what" tests: every layout, precision and batch width is checked
++//! against an independent f64 oracle (and, for f32, against the scalar
++//! `CompiledNetwork::activate`), never against another sparse kernel.
++
++#[path = "../benches/common/mod.rs"]
++#[allow(dead_code)]
++mod common;
++#[path = "../benches/sparse_precision/mod.rs"]
++#[allow(dead_code)]
++mod sparse_precision;
++
++use common::{FanIn, Lcg, NetSpec, build_inputs, build_network};
++use neat_core::network::{CompiledNetwork, NeuronData, SynapseData};
++use neat_core::squash::SquashType;
++use sparse_precision::*;
++
++const TOL_F32: f64 = 1e-3;
++const TOL_REDUCED: f64 = 2e-2;
++
++fn tol(p: Precision) -> f64 {
++    if p == Precision::F32 {
++        TOL_F32
++    } else {
++        TOL_REDUCED
++    }
++}
++
++fn small_spec() -> NetSpec {
++    NetSpec {
++        label: "test_small",
++        num_neurons: 40,
++        num_inputs: 6,
++        num_outputs: 3,
++        fan_in: FanIn::Fixed(7),
++    }
++}
++
++fn records(count: usize, stride: usize, seed: u64) -> Vec<f32> {
++    (0..count)
++        .flat_map(|i| build_inputs(stride, seed + i as u64))
++        .collect()
++}
++
++fn neuron(bias: f32, start: u32, num: u16, squash: SquashType) -> NeuronData {
++    NeuronData {
++        bias,
++        start_synapse: start,
++        num_synapses: num,
++        squash_type: squash as u8,
++        is_constant: false,
++    }
++}
++
++fn syn(weight: f32, from: u16) -> SynapseData {
++    SynapseData {
++        weight,
++        from_index: from,
++        synapse_type: 0,
++    }
++}
++
++fn run(net: &SparseNet, recs: &[f32], stride: usize, width: usize, no: usize) -> Vec<f32> {
++    let mut out = vec![0.0f32; recs.len() / stride * no];
++    net.forward_batch(recs, stride, width, &mut Scratch::default(), &mut out);
++    out
++}
++
++// ---------------------------------------------------------------------------
++// Agreement with independent oracles
++// ---------------------------------------------------------------------------
++
++#[test]
++fn every_variant_agrees_with_the_f64_oracle_at_every_width() {
++    let spec = small_spec();
++    let net = apply_sparsity(&build_network(&spec, 11), 0.5, 7);
++    let stride = spec.num_inputs;
++    // 5 records: width 3 gives a full group of 3 plus a partial group of 2;
++    // width 8 is a single partial group; width 1 is five groups.
++    let recs = records(5, stride, 100);
++    let oracle: Vec<f64> = recs
++        .chunks(stride)
++        .flat_map(|r| reference_forward_f64(&net, r, spec.num_outputs).unwrap())
++        .collect();
++    for layout in Layout::ALL {
++        for precision in Precision::ALL {
++            for active_only in [false, true] {
++                let s = SparseNet::from_network(&net, layout, precision, active_only).unwrap();
++                for width in [1, 3, 8] {
++                    let out = run(&s, &recs, stride, width, spec.num_outputs);
++                    let e = error_stats(&out, &oracle);
++                    assert!(
++                        e.max_abs <= tol(precision),
++                        "{layout:?}/{precision:?}/active={active_only}/w{width}: max_abs {} > {}",
++                        e.max_abs,
++                        tol(precision)
++                    );
++                }
++            }
++        }
++    }
++}
++
++#[test]
++fn f32_layouts_agree_with_the_scalar_activate() {
++    let spec = small_spec();
++    let mut net = build_network(&spec, 21);
++    let stride = spec.num_inputs;
++    let recs = records(4, stride, 200);
++    let expected: Vec<f32> = recs
++        .chunks(stride)
++        .flat_map(|r| net.activate(r, spec.num_outputs))
++        .collect();
++    for layout in Layout::ALL {
++        let s = SparseNet::from_network(&net, layout, Precision::F32, false).unwrap();
++        let out = run(&s, &recs, stride, 3, spec.num_outputs);
++        for (g, e) in out.iter().zip(&expected) {
++            assert!((g - e).abs() <= 1e-3, "{layout:?}: {g} vs {e}");
++        }
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Active-edge-only and initialisation semantics
++// ---------------------------------------------------------------------------
++
++/// 2 inputs, 3 neurons (globals 2, 3, 4). Neuron 2 has weights [0.5, 0.0],
++/// neuron 3 has [0.0, -0.0, 0.25], neuron 4 has [1.0]. Zeros: 0.0, 0.0, -0.0 so
++/// k = 3 of 6 total.
++fn zero_weight_net() -> CompiledNetwork {
++    CompiledNetwork::from_parts(
++        2,
++        vec![
++            neuron(0.1, 0, 2, SquashType::Tanh),
++            neuron(0.2, 2, 3, SquashType::Tanh),
++            neuron(0.0, 5, 1, SquashType::Tanh),
++        ],
++        vec![
++            syn(0.5, 0),
++            syn(0.0, 1),
++            syn(0.0, 0),
++            syn(-0.0, 1),
++            syn(0.25, 2),
++            syn(1.0, 3),
++        ],
++    )
++    .unwrap()
++}
++
++#[test]
++fn active_only_drops_exactly_the_zero_weight_edges() {
++    let net = zero_weight_net();
++    let recs = vec![0.3f32, -0.7, 0.9, 0.1];
++    for layout in Layout::ALL {
++        let all = SparseNet::from_network(&net, layout, Precision::F32, false).unwrap();
++        let act = SparseNet::from_network(&net, layout, Precision::F32, true).unwrap();
++        assert_eq!(all.memory().edges, 6, "{layout:?}");
++        assert_eq!(act.memory().edges, 6 - 3, "{layout:?}");
++        let a = run(&all, &recs, 2, 2, 1);
++        let b = run(&act, &recs, 2, 2, 1);
++        for (x, y) in a.iter().zip(&b) {
++            assert!((x - y).abs() <= 1e-6, "{layout:?}: {x} vs {y}");
++        }
++    }
++}
++
++#[test]
++fn a_neuron_with_no_active_edges_outputs_tanh_of_its_bias() {
++    // Neuron 2: both edges zero, bias 0.4 -> with active_only it has no edges and
++    // must output tanh(0.4). Neuron 3 is a constant with bias 0.25 and a (never
++    // read) edge from neuron 2; output = bias. Outputs are the last two neurons.
++    let net = CompiledNetwork::from_parts(
++        2,
++        vec![
++            neuron(0.4, 0, 2, SquashType::Tanh),
++            NeuronData {
++                bias: 0.25,
++                start_synapse: 2,
++                num_synapses: 1,
++                squash_type: SquashType::Tanh as u8,
++                is_constant: true,
++            },
++        ],
++        vec![syn(0.0, 0), syn(0.0, 1), syn(3.0, 2)],
++    )
++    .unwrap();
++    let expected = [(0.4f64).tanh() as f32, 0.25];
++    for layout in Layout::ALL {
++        let s = SparseNet::from_network(&net, layout, Precision::F32, true).unwrap();
++        assert_eq!(s.memory().edges, 0);
++        let out = run(&s, &[5.0, -5.0], 2, 1, 2);
++        assert!(
++            (out[0] - expected[0]).abs() <= 1e-6,
++            "{layout:?}: {}",
++            out[0]
++        );
++        assert_eq!(out[1], expected[1], "{layout:?}");
++    }
++}
++
++// ---------------------------------------------------------------------------
++// State leak
++// ---------------------------------------------------------------------------
++
++#[test]
++fn reused_scratch_leaks_no_state_between_records_or_widths() {
++    let spec = small_spec();
++    let net = build_network(&spec, 31);
++    let stride = spec.num_inputs;
++    let no = spec.num_outputs;
++    let a = build_inputs(stride, 1);
++    let b: Vec<f32> = build_inputs(stride, 2)
++        .iter()
++        .map(|v| v * 3.0 + 1.0)
++        .collect();
++    for layout in Layout::ALL {
++        let s = SparseNet::from_network(&net, layout, Precision::F32, false).unwrap();
++        let mut scratch = Scratch::default();
++        let (mut o1, mut o2, mut o3) = (vec![0.0; no], vec![0.0; no], vec![0.0; no]);
++        s.forward_batch(&a, stride, 1, &mut scratch, &mut o1);
++        s.forward_batch(&b, stride, 1, &mut scratch, &mut o2);
++        s.forward_batch(&a, stride, 1, &mut scratch, &mut o3);
++        assert_ne!(o1, o2, "fixture must make A and B differ");
++        assert_eq!(
++            o1.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
++            o3.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
++            "{layout:?}: A, B, A through one scratch"
++        );
++        // Batched (width 8, B then A then B lanes) equals each record alone.
++        let mut both = a.clone();
++        both.extend(&b);
++        both.extend(&a);
++        let mut out = vec![0.0; 3 * no];
++        s.forward_batch(&both, stride, 8, &mut scratch, &mut out);
++        assert_eq!(&out[..no], &o1[..], "{layout:?}: lane 0");
++        assert_eq!(&out[no..2 * no], &o2[..], "{layout:?}: lane 1");
++        assert_eq!(&out[2 * no..], &o1[..], "{layout:?}: lane 2");
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Codecs
++// ---------------------------------------------------------------------------
++
++#[test]
++fn codec_anchor_bit_patterns() {
++    assert_eq!(f32_to_bf16(1.0), 0x3F80);
++    assert_eq!(f32_to_f16(1.0), 0x3C00);
++    assert_eq!(f32_to_f16(65504.0), 0x7BFF); // largest finite binary16
++    assert_eq!(f32_to_f16(70000.0), 0x7C00); // beyond 65520 rounds to +inf
++    assert_eq!(f32_to_f16(-70000.0), 0xFC00);
++    // 2^-24 is the smallest binary16 subnormal.
++    let tiny = 2.0f32.powi(-24);
++    assert_eq!(f32_to_f16(tiny), 0x0001);
++    assert_eq!(f16_to_f32(0x0001), tiny);
++    assert_eq!(f16_to_f32(0x7BFF), 65504.0);
++    assert_eq!(f16_to_f32(0x7C00), f32::INFINITY);
++    assert_eq!(f32_to_bf16(f32::INFINITY), 0x7F80);
++    assert_eq!(f32_to_bf16(f32::NEG_INFINITY), 0xFF80);
++}
++
++#[test]
++fn codecs_round_ties_to_even() {
++    // bf16 keeps 7 stored bits; 1 + 2^-8 is exactly half an ulp above 1.0
++    // (0x3F808000: discarded half is 0x8000). 0x3F80 is even, so it stays.
++    assert_eq!(f32_to_bf16(1.0 + 2.0f32.powi(-8)), 0x3F80);
++    // 1 + 3*2^-8 = 0x3F818000 is a tie between 0x3F81 (odd) and 0x3F82 (even).
++    assert_eq!(f32_to_bf16(1.0 + 3.0 * 2.0f32.powi(-8)), 0x3F82);
++    // binary16 keeps 10 stored bits; 1 + 2^-11 ties between 0x3C00 (even) and 0x3C01.
++    assert_eq!(f32_to_f16(1.0 + 2.0f32.powi(-11)), 0x3C00);
++    // 1 + 3*2^-11 ties between 0x3C01 (odd) and 0x3C02 (even).
++    assert_eq!(f32_to_f16(1.0 + 3.0 * 2.0f32.powi(-11)), 0x3C02);
++    // Subnormal tie: 2^-25 is exactly half the smallest subnormal -> 0 (even);
++    // 1.5 * 2^-24 ties between 1 (odd) and 2 (even) -> 2.
++    assert_eq!(f32_to_f16(2.0f32.powi(-25)), 0x0000);
++    assert_eq!(f32_to_f16(1.5 * 2.0f32.powi(-24)), 0x0002);
++    // 65520 is the tie between 65504 (0x7BFF, odd) and 2^16 (even): rounds to inf.
++    assert_eq!(f32_to_f16(65520.0), 0x7C00);
++}
++
++#[test]
++fn codecs_keep_nan_as_nan() {
++    assert!(bf16_to_f32(f32_to_bf16(f32::NAN)).is_nan());
++    assert!(f16_to_f32(f32_to_f16(f32::NAN)).is_nan());
++    // A NaN whose payload sits only in the discarded low bits must not become inf.
++    let low_payload = f32::from_bits(0x7F80_0001);
++    assert!(low_payload.is_nan());
++    assert!(bf16_to_f32(f32_to_bf16(low_payload)).is_nan());
++    assert!(f16_to_f32(f32_to_f16(low_payload)).is_nan());
++}
++
++#[test]
++fn codec_round_trip_error_is_within_half_an_ulp() {
++    // Relative error of round-to-nearest is at most half an ulp over the
++    // significand: 2^-8 for bfloat16 (7 stored bits) and 2^-11 for binary16
++    // (10 stored bits). The brief's 2^-9 for bf16 is unattainable near 1.0.
++    let mut rng = Lcg::new(99);
++    for _ in 0..20_000 {
++        let mag = 2.0f32.powf(rng.next_signed() * 10.0); // 2^-10 ..= 2^10, normal in both
++        let v = mag * if rng.next_signed() < 0.0 { -1.0 } else { 1.0 };
++        let b = bf16_to_f32(f32_to_bf16(v));
++        let h = f16_to_f32(f32_to_f16(v));
++        assert!(((b - v) / v).abs() <= 2.0f32.powi(-8), "bf16 {v} -> {b}");
++        assert!(((h - v) / v).abs() <= 2.0f32.powi(-11), "f16 {v} -> {h}");
++    }
++}
++
++#[test]
++fn f16_decode_inverts_every_encoded_pattern() {
++    // Every finite binary16 value is exactly representable in f32, so encoding the
++    // decode of any non-NaN pattern must give the pattern back.
++    for bits in 0..=u16::MAX {
++        let v = f16_to_f32(bits);
++        if v.is_nan() {
++            assert_eq!(bits & 0x7C00, 0x7C00);
++            continue;
++        }
++        assert_eq!(f32_to_f16(v), bits, "pattern {bits:#06x}");
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Memory accounting
++// ---------------------------------------------------------------------------
++
++#[test]
++fn memory_accounting_follows_edge_counts_and_padding() {
++    // 2 inputs; neuron 2 has 5 edges, neuron 3 has 4, neuron 4 has 1 (10 edges).
++    // Blocked4 pads rows to multiples of 4: 5 -> 8 (3), 4 -> 4 (0), 1 -> 4 (3), so
++    // 6 padding slots and 16 slots in total.
++    let syns: Vec<SynapseData> = (0..10)
++        .map(|i| syn(0.1 + i as f32 * 0.01, (i % 2) as u16))
++        .collect();
++    let mut syns = syns;
++    syns[9].from_index = 3; // neuron 4 reads neuron 3 (feed-forward)
++    let net = CompiledNetwork::from_parts(
++        2,
++        vec![
++            neuron(0.0, 0, 5, SquashType::Tanh),
++            neuron(0.0, 5, 4, SquashType::Tanh),
++            neuron(0.0, 9, 1, SquashType::Tanh),
++        ],
++        syns,
++    )
++    .unwrap();
++    let csr = SparseNet::from_network(&net, Layout::CsrDst, Precision::F32, false)
++        .unwrap()
++        .memory();
++    assert_eq!(csr.weight_bytes, 4 * 10);
++    assert_eq!(csr.edges, 10);
++    // row_ptr has 3 + 1 u32 offsets, col has 10 u16.
++    assert_eq!(csr.index_bytes, 4 * 4 + 2 * 10);
++    let bf = SparseNet::from_network(&net, Layout::CsrDst, Precision::Bf16, false)
++        .unwrap()
++        .memory();
++    assert_eq!(bf.weight_bytes, 2 * 10);
++    let blk = SparseNet::from_network(&net, Layout::Blocked4, Precision::F32, false)
++        .unwrap()
++        .memory();
++    assert_eq!(blk.padding_slots, 6);
++    assert_eq!(blk.weight_bytes, 4 * 16);
++    assert_eq!(blk.edges, 10);
++    let coo = SparseNet::from_network(&net, Layout::CooSrc, Precision::F16, false)
++        .unwrap()
++        .memory();
++    assert_eq!(coo.weight_bytes, 2 * 10);
++    assert_eq!(coo.index_bytes, 4 * 10);
++    // Current: 8 B weight-side and 6 B index-side per synapse (see current_memory).
++    let cur = current_memory(&net);
++    assert_eq!((cur.weight_bytes, cur.index_bytes), (8 * 10, 6 * 10));
++}
++
++#[test]
++fn sparsity_zeroes_exactly_the_requested_count() {
++    let spec = small_spec();
++    let net = build_network(&spec, 5);
++    let n = net.num_synapses();
++    let sparse = apply_sparsity(&net, 0.5, 9);
++    let zeros = sparse.synapses().iter().filter(|s| s.weight == 0.0).count();
++    assert_eq!(zeros, (0.5 * n as f64).round() as usize);
++    assert_eq!(sparse.num_synapses(), n);
++}
++
++// ---------------------------------------------------------------------------
++// Statistics
++// ---------------------------------------------------------------------------
++
++#[test]
++fn median_and_quantile_use_linear_interpolation() {
++    let v = [4.0, 1.0, 3.0, 2.0]; // sorted 1 2 3 4
++    assert_eq!(median(&v), 2.5); // position 0.5*3 = 1.5 -> 2 + 0.5*(3-2)
++    assert_eq!(quantile(&v, 0.0), 1.0);
++    assert_eq!(quantile(&v, 1.0), 4.0);
++    // position 0.25*3 = 0.75 -> 1 + 0.75*(2-1)
++    assert!((quantile(&v, 0.25) - 1.75).abs() < 1e-12);
++    assert_eq!(median(&[7.0, 1.0, 5.0]), 5.0);
++}
++
++#[test]
++fn paired_ratio_ci_recovers_known_ratios() {
++    let base: Vec<f64> = (1..=15).map(|i| 100.0 + i as f64 * 3.0).collect();
++    let same = paired_ratio_ci(&base, &base, 500, 1);
++    assert_eq!(
++        (same.median_ratio, same.ci_low, same.ci_high),
++        (1.0, 1.0, 1.0)
++    );
++    let half: Vec<f64> = base.iter().map(|b| b * 0.5).collect();
++    let r = paired_ratio_ci(&half, &base, 500, 1);
++    assert_eq!((r.median_ratio, r.ci_low, r.ci_high), (0.5, 0.5, 0.5));
++}
++
++#[test]
++fn error_stats_counts_nan_as_infinite_error() {
++    let e = error_stats(&[1.0, 2.0], &[1.0, 2.5]);
++    assert_eq!(e.max_abs, 0.5);
++    assert!((e.rmse - (0.25f64 / 2.0).sqrt()).abs() < 1e-12);
++    assert!(error_stats(&[f32::NAN], &[0.0]).max_abs.is_infinite());
++}
++
++// ---------------------------------------------------------------------------
++// Negative cases: each refused by the rule it names, legal twin accepted
++// ---------------------------------------------------------------------------
++
++fn two_neuron_net(squash: SquashType, from: u16) -> CompiledNetwork {
++    // 1 input; neuron 1 (global) reads input 0; neuron 2 reads `from` with `squash`.
++    CompiledNetwork::from_parts(
++        1,
++        vec![
++            neuron(0.0, 0, 1, SquashType::Tanh),
++            neuron(0.0, 1, 1, squash),
++        ],
++        vec![syn(0.5, 0), syn(0.5, from)],
++    )
++    .unwrap()
++}
++
++#[test]
++fn aggregate_squash_neurons_are_refused() {
++    let bad = two_neuron_net(SquashType::Maximum, 1);
++    for layout in Layout::ALL {
++        match SparseNet::from_network(&bad, layout, Precision::F32, false) {
++            Err(ConvertError::AggregateSquash { neuron, squash }) => {
++                assert_eq!(neuron, 2); // 1 input + second non-input
++                assert_eq!(squash, SquashType::Maximum as u8);
++            }
++            other => panic!("expected AggregateSquash, got {:?}", other.err()),
++        }
++    }
++    let ok = two_neuron_net(SquashType::Tanh, 1);
++    assert!(SparseNet::from_network(&ok, Layout::CsrDst, Precision::F32, false).is_ok());
++}
++
++#[test]
++fn backward_and_self_edges_are_refused() {
++    for layout in Layout::ALL {
++        // Neuron 1 reading itself (from 1, destination 1) or a later neuron (2).
++        for from in [1u16, 2] {
++            let bad = CompiledNetwork::from_parts(
++                1,
++                vec![
++                    neuron(0.0, 0, 1, SquashType::Tanh),
++                    neuron(0.0, 1, 1, SquashType::Tanh),
++                ],
++                vec![syn(0.5, from), syn(0.5, 1)],
++            )
++            .unwrap();
++            assert_eq!(
++                SparseNet::from_network(&bad, layout, Precision::F32, false).err(),
++                Some(ConvertError::NotFeedForward {
++                    from: from as usize,
++                    to: 1
++                }),
++                "{layout:?} from {from}"
++            );
++        }
++    }
++    let ok = two_neuron_net(SquashType::Tanh, 1); // forward edge 1 -> 2
++    assert!(SparseNet::from_network(&ok, Layout::CooSrc, Precision::F32, false).is_ok());
++}
++
++fn tiny_sparse() -> SparseNet {
++    SparseNet::from_network(
++        &two_neuron_net(SquashType::Tanh, 1),
++        Layout::CsrDst,
++        Precision::F32,
++        false,
++    )
++    .unwrap()
++}
++
++#[test]
++#[should_panic(expected = "width must be at least 1")]
++fn zero_width_panics() {
++    let mut out = [0.0];
++    tiny_sparse().forward_batch(&[1.0], 1, 0, &mut Scratch::default(), &mut out);
++}
++
++#[test]
++#[should_panic(expected = "not a multiple of stride")]
++fn ragged_record_buffer_panics() {
++    let mut out = [0.0; 1];
++    tiny_sparse().forward_batch(&[1.0, 2.0, 3.0], 2, 1, &mut Scratch::default(), &mut out);
++}
++
++#[test]
++fn a_whole_record_buffer_is_accepted() {
++    let mut out = [0.0; 1];
++    tiny_sparse().forward_batch(&[1.0, 2.0], 2, 1, &mut Scratch::default(), &mut out);
++    // The extra record column is ignored: two tanh nodes each have weight 0.5.
++    let expected = (0.5f32 * (0.5f32).tanh()).tanh();
++    assert!((out[0] - expected).abs() < 1e-6);
++}
++
++#[test]
++#[should_panic(expected = "same number of reps")]
++fn paired_ratio_ci_rejects_mismatched_lengths() {
++    paired_ratio_ci(&[1.0, 2.0], &[1.0], 10, 1);
++}
++
++#[test]
++fn the_oracle_refuses_an_unsupported_squash_by_name() {
++    let net = two_neuron_net(SquashType::Gelu, 1);
++    let err = reference_forward_f64(&net, &[0.1], 1).unwrap_err();
++    assert!(err.contains("Gelu"), "{err}");
++    let ok = two_neuron_net(SquashType::Tanh, 1);
++    assert!(reference_forward_f64(&ok, &[0.1], 1).is_ok());
++}
++
++// ---------------------------------------------------------------------------
++// Manifest
++// ---------------------------------------------------------------------------
++
++fn committed_manifest() -> String {
++    std::fs::read_to_string(concat!(
++        env!("CARGO_MANIFEST_DIR"),
++        "/../docs/research/sparse-precision/manifest.json"
++    ))
++    .expect("committed manifest is readable")
++}
++
++#[test]
++fn the_committed_manifest_parses() {
++    let m = parse_manifest(&committed_manifest()).unwrap();
++    assert_eq!(m.issue, 758);
++    assert_eq!(m.shapes.len(), 6);
++    assert_eq!(m.criteria.representative_shape, "production_exact");
++}
++
++#[test]
++fn an_unknown_manifest_field_is_rejected() {
++    let text = committed_manifest();
++    assert!(parse_manifest(&text).is_ok());
++    let typo = text.replacen("\"reps\"", "\"repz\"", 1);
++    assert!(parse_manifest(&typo).is_err());
++    let extra = text.replacen("\"issue\": 758,", "\"issue\": 758, \"surprise\": 1,", 1);
++    assert!(parse_manifest(&extra).unwrap_err().contains("surprise"));
++}
++
++#[test]
++fn an_unknown_fan_in_kind_is_rejected() {
++    let text = committed_manifest();
++    let bad = text.replacen("\"fixed\"", "\"fixd\"", 1);
++    assert!(parse_manifest(&bad).unwrap_err().contains("fixd"));
++}
++
++#[test]
++fn manifest_rejects_invalid_experiment_boundaries() {
++    let valid: serde_json::Value = serde_json::from_str(&committed_manifest()).unwrap();
++    assert!(parse_manifest(&valid.to_string()).is_ok());
++    for (pointer, value, reason) in [
++        ("/shapes/0/num_inputs", serde_json::json!(0), "input"),
++        ("/shapes/0/num_neurons", serde_json::json!(65537), "neuron"),
++        ("/shapes/0/fan_in", serde_json::json!(65536), "fan_in"),
++        ("/shapes/0/label", serde_json::json!(""), "label"),
++        ("/reps", serde_json::json!(1), "reps"),
++        ("/bootstrap_resamples", serde_json::json!(0), "bootstrap"),
++        (
++            "/max_cell_seconds",
++            serde_json::json!(-1),
++            "max_cell_seconds",
++        ),
++        (
++            "/max_total_seconds",
++            serde_json::json!(0),
++            "max_total_seconds",
++        ),
++        (
++            "/criteria/speed_win_ratio",
++            serde_json::json!(1.1),
++            "speed_win_ratio",
++        ),
++        (
++            "/criteria/tolerance_f32",
++            serde_json::json!(-0.1),
++            "tolerance",
++        ),
++        (
++            "/criteria/platforms_required",
++            serde_json::json!([]),
++            "platforms_required",
++        ),
++        ("/validation_seed", serde_json::json!(1001), "seed"),
++        ("/batch_widths/0", serde_json::json!(usize::MAX), "memory"),
++        (
++            "/records_per_sample",
++            serde_json::json!(usize::MAX),
++            "memory",
++        ),
++    ] {
++        let mut bad = valid.clone();
++        *bad.pointer_mut(pointer).unwrap() = value;
++        let err = parse_manifest(&bad.to_string()).expect_err(pointer);
++        assert!(err.contains(reason), "{pointer}: {err}");
++    }
++    for pointer in [
++        "/shapes/1/label",
++        "/batch_widths/1",
++        "/inactive_fractions/1",
++    ] {
++        let mut bad = valid.clone();
++        let first = match pointer {
++            "/shapes/1/label" => bad["shapes"][0]["label"].clone(),
++            "/batch_widths/1" => bad["batch_widths"][0].clone(),
++            _ => bad["inactive_fractions"][0].clone(),
++        };
++        *bad.pointer_mut(pointer).unwrap() = first;
++        assert!(
++            parse_manifest(&bad.to_string())
++                .unwrap_err()
++                .contains("duplicate")
++        );
++    }
++}
++
++#[test]
++fn non_finite_and_overflowing_weights_are_refused_before_saturation_hides_them() {
++    for precision in Precision::ALL {
++        for layout in Layout::ALL {
++            for weight in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
++                let net = CompiledNetwork::from_parts(
++                    1,
++                    vec![neuron(0.0, 0, 1, SquashType::Tanh)],
++                    vec![syn(weight, 0)],
++                )
++                .unwrap();
++                let err = SparseNet::from_network(&net, layout, precision, true)
++                    .err()
++                    .unwrap();
++                assert!(err.to_string().contains("non-finite weight"), "{err}");
++            }
++            let legal = CompiledNetwork::from_parts(
++                1,
++                vec![neuron(0.0, 0, 1, SquashType::Tanh)],
++                vec![syn(1.0, 0)],
++            )
++            .unwrap();
++            let sparse = SparseNet::from_network(&legal, layout, precision, true).unwrap();
++            assert!((run(&sparse, &[0.5], 1, 1, 1)[0] - 0.5f32.tanh()).abs() < 1e-6);
++        }
++    }
++    let overflow = CompiledNetwork::from_parts(
++        1,
++        vec![neuron(0.0, 0, 1, SquashType::Tanh)],
++        vec![syn(65520.0, 0)],
++    )
++    .unwrap();
++    for layout in Layout::ALL {
++        let err = SparseNet::from_network(&overflow, layout, Precision::F16, false)
++            .err()
++            .unwrap();
++        assert!(err.to_string().contains("encoding overflow"), "{err}");
++        assert!(SparseNet::from_network(&overflow, layout, Precision::F32, false).is_ok());
++    }
++}
++
++#[test]
++fn non_finite_bias_and_records_are_refused() {
++    for layout in Layout::ALL {
++        let bad = CompiledNetwork::from_parts(
++            1,
++            vec![neuron(f32::NAN, 0, 1, SquashType::Tanh)],
++            vec![syn(1.0, 0)],
++        )
++        .unwrap();
++        let err = SparseNet::from_network(&bad, layout, Precision::F32, false)
++            .err()
++            .unwrap();
++        assert!(err.to_string().contains("non-finite bias"), "{err}");
++        let legal = CompiledNetwork::from_parts(
++            1,
++            vec![neuron(0.0, 0, 1, SquashType::Tanh)],
++            vec![syn(1.0, 0)],
++        )
++        .unwrap();
++        let accepted = SparseNet::from_network(&legal, layout, Precision::F32, false).unwrap();
++        assert!((run(&accepted, &[0.5], 1, 1, 1)[0] - 0.5f32.tanh()).abs() < 1e-6);
++    }
++    let s = tiny_sparse();
++    let mut out = [0.0];
++    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++        s.forward_batch(&[f32::NAN], 1, 1, &mut Scratch::default(), &mut out)
++    }));
++    let payload = err.expect_err("non-finite input must not be clamped into a valid result");
++    let message = payload
++        .downcast_ref::<String>()
++        .map(String::as_str)
++        .or_else(|| payload.downcast_ref::<&str>().copied())
++        .unwrap();
++    assert!(message.contains("non-finite record"), "{message}");
++    s.forward_batch(&[0.5], 1, 1, &mut Scratch::default(), &mut out);
++    assert!((out[0] - (0.5f32 * (0.25f32).tanh()).tanh()).abs() < 1e-6);
++}
++
++#[test]
++fn conversion_and_execution_preserve_the_parent() {
++    let net = build_network(&small_spec(), 21);
++    let before = net.to_topology_json(3);
++    let before_act = net.activations().to_vec();
++    for layout in Layout::ALL {
++        let s = SparseNet::from_network(&net, layout, Precision::F32, true).unwrap();
++        let mut scratch = Scratch::default();
++        let mut out = [0.0; 3];
++        s.forward_batch(&[0.5; 6], 6, 1, &mut scratch, &mut out);
++        assert_eq!(net.to_topology_json(3), before);
++        assert_eq!(net.activations(), before_act);
++        let expected = reference_forward_f64(&net, &[0.5; 6], 3).unwrap();
++        assert!(error_stats(&out, &expected).max_abs <= TOL_F32);
++    }
++}
++
++#[test]
++fn frozen_v2_manifest_uses_fresh_validation_without_changing_thresholds() {
++    let old = parse_manifest(&committed_manifest()).unwrap();
++    let new = parse_manifest(include_str!(
++        "../../docs/research/sparse-precision/manifest-v2.json"
++    ))
++    .unwrap();
++    assert_ne!(old.validation_seed, new.validation_seed);
++    assert_ne!(old.validation_record_seed, new.validation_record_seed);
++    assert_eq!(old.calibration_seed, new.calibration_seed);
++    assert_eq!(old.criteria.speed_win_ratio, new.criteria.speed_win_ratio);
++    assert_eq!(old.criteria.tolerance_f32, new.criteria.tolerance_f32);
++    assert_eq!(
++        old.criteria.tolerance_reduced,
++        new.criteria.tolerance_reduced
++    );
++}
++
++#[test]
++fn frozen_v3_changes_validation_seeds_and_preserves_the_experiment_controls() {
++    let previous = parse_manifest(include_str!(
++        "../../docs/research/sparse-precision/manifest-v2.json"
++    ))
++    .unwrap();
++    let current = parse_manifest(include_str!(
++        "../../docs/research/sparse-precision/manifest-v3.json"
++    ))
++    .unwrap();
++    assert_ne!(previous.validation_seed, current.validation_seed);
++    assert_ne!(
++        previous.validation_record_seed,
++        current.validation_record_seed
++    );
++    let mut current = serde_json::to_value(current).unwrap();
++    current["validation_seed"] = serde_json::json!(previous.validation_seed);
++    current["validation_record_seed"] = serde_json::json!(previous.validation_record_seed);
++    assert_eq!(current, serde_json::to_value(previous).unwrap());
++}
+diff --git a/scripts/run_sparse_precision.ts b/scripts/run_sparse_precision.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..95ac303df8242521d5ad21120c570126f0b97e57
+--- /dev/null
++++ b/scripts/run_sparse_precision.ts
+@@ -0,0 +1,165 @@
++// Opt-in v4 research driver. Peak RSS is collected outside the timed executable.
++export function peakRssBytes(os: "linux" | "darwin", raw: unknown): number {
++  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0) {
++    throw new Error(`RSS missing or malformed for ${os}`);
++  }
++  const bytes = raw * (os === "linux" ? 1024 : 1);
++  if (!Number.isSafeInteger(bytes)) {
++    throw new Error(`RSS outside supported range for ${os}`);
++  }
++  return bytes;
++}
++
++export function checkResearchExit(
++  code: number,
++  result: Record<string, unknown>,
++) {
++  if (
++    code === 0 && result.status === "complete" &&
++    Array.isArray(result.failures) &&
++    result.failures.length === 0
++  ) return;
++  if (
++    code === 1 && result.status === "completed_with_failures" &&
++    Array.isArray(result.failures) && result.failures.length > 0
++  ) return;
++  throw new Error(
++    `research command failed unexpectedly: exit=${code}, status=${result.status}`,
++  );
++}
++
++async function output(args: string[]) {
++  const result = await new Deno.Command(args[0], {
++    args: args.slice(1),
++    stdin: "null",
++    stdout: "piped",
++    stderr: "piped",
++    signal: AbortSignal.timeout(30_000),
++  }).output();
++  if (!result.success) {
++    throw new Error(`${args[0]}: ${new TextDecoder().decode(result.stderr)}`);
++  }
++  return new TextDecoder().decode(result.stdout).trim();
++}
++
++async function main() {
++  const [manifest, outDir] = Deno.args;
++  if (Deno.args.length !== 2) {
++    throw new Error(
++      "usage: run_sparse_precision.ts <committed-manifest> <new-output-directory>",
++    );
++  }
++  if (Deno.build.os !== "linux" && Deno.build.os !== "darwin") {
++    throw new Error(`unsupported RSS platform: ${Deno.build.os}`);
++  }
++  const os = Deno.build.os;
++  await output(["git", "ls-files", "--error-unmatch", manifest]);
++  if (await output(["git", "diff", "HEAD", "--stat"])) {
++    throw new Error("commit source and protocol before measurement");
++  }
++  await Deno.mkdir(outDir); // Refuse an existing directory; preserve earlier evidence.
++  const execution: Record<string, unknown> = {
++    schema_version: 1,
++    protocol: "sparse-precision-v4",
++    code_rev: await output(["git", "rev-parse", "HEAD"]),
++    compiler: await output(["rustc", "-vV"]),
++    host: await output(["uname", "-a"]),
++    gpu_inventory: os === "darwin"
++      ? await output(["system_profiler", "SPDisplaysDataType", "-json"])
++      : "Metal is unavailable on Linux",
++    manifest,
++    manifest_git_blob: await output(["git", "hash-object", manifest]),
++    cache_state: "no cache purge; fresh hosted runner or existing local cache",
++    commands: [],
++  };
++  const commands = execution.commands as Record<string, unknown>[];
++  const save = () =>
++    Deno.writeTextFile(
++      `${outDir}/execution.json`,
++      JSON.stringify(execution, null, 2) + "\n",
++    );
++  await save();
++  async function measured(name: string, command: string[]) {
++    const rssPath = `${outDir}/${name}-rss.json`;
++    const start = performance.now();
++    const result = await new Deno.Command("python3", {
++      args: ["scripts/sparse_precision_resources.py", rssPath, ...command],
++      stdin: "null",
++      stdout: "piped",
++      stderr: "piped",
++      signal: AbortSignal.timeout(900_000),
++    }).output();
++    const stderr = new TextDecoder().decode(result.stderr);
++    await Deno.writeFile(`${outDir}/${name}-stdout.txt`, result.stdout);
++    await Deno.writeTextFile(`${outDir}/${name}-stderr.txt`, stderr);
++    const rss = JSON.parse(await Deno.readTextFile(rssPath));
++    commands.push({
++      name,
++      command,
++      exit_code: result.code,
++      wall_seconds: (performance.now() - start) / 1000,
++      peak_process_rss_bytes: peakRssBytes(os, rss.max_rss),
++    });
++    await save();
++    return result.code;
++  }
++  const buildCode = await measured("build", [
++    "cargo",
++    "build",
++    "--locked",
++    "--release",
++    "-p",
++    "neat-core",
++    "--example",
++    "sparse_precision_experiment",
++    "--example",
++    "sparse_precision_memory",
++  ]);
++  if (buildCode !== 0) {
++    throw new Error(
++      `build failed: exit ${buildCode}; see ${outDir}/build-stderr.txt`,
++    );
++  }
++  const metadata = JSON.parse(
++    await output(["cargo", "metadata", "--no-deps", "--format-version", "1"]),
++  );
++  const binaryDir = `${metadata.target_directory}/release/examples`;
++  const timingCode = await measured("validation", [
++    `${binaryDir}/sparse_precision_experiment`,
++    "--manifest",
++    manifest,
++    "--out",
++    `${outDir}/results.json`,
++    "--code-rev",
++    execution.code_rev as string,
++    "--rustc",
++    await output(["rustc", "--version"]),
++  ]);
++  const timing = JSON.parse(await Deno.readTextFile(`${outDir}/results.json`));
++  checkResearchExit(timingCode, timing);
++  const memoryCode = await measured("memory", [
++    `${binaryDir}/sparse_precision_memory`,
++    manifest,
++    `${outDir}/memory.json`,
++  ]);
++  const memory = JSON.parse(await Deno.readTextFile(`${outDir}/memory.json`));
++  checkResearchExit(memoryCode, memory);
++  memory.identity = timing.identity;
++  await Deno.writeTextFile(
++    `${outDir}/memory.json`,
++    JSON.stringify(memory) + "\n",
++  );
++  execution.status = timingCode || memoryCode
++    ? "completed_with_failures"
++    : "complete";
++  await save();
++  if (timingCode || memoryCode) {
++    throw new Error(
++      `[EXPERIMENT_FAILURE] numerical failures retained in ${outDir}`,
++    );
++  }
++}
++
++if (import.meta.main) {
++  await main();
++}
+diff --git a/scripts/sparse_precision_resources.py b/scripts/sparse_precision_resources.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7ea894704c06d7e4aa117f402ca9f518be8f8db2
+--- /dev/null
++++ b/scripts/sparse_precision_resources.py
+@@ -0,0 +1,20 @@
++"""Collect the OS child high-water RSS; Deno's subprocess API has no rusage."""
++
++import json
++import resource
++import subprocess
++import sys
++
++
++def main():
++    if len(sys.argv) < 3:
++        raise SystemExit("usage: sparse_precision_resources.py <rss.json> <command> [args...]")
++    result = subprocess.run(sys.argv[2:], stdin=subprocess.DEVNULL, check=False)
++    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
++    with open(sys.argv[1], "x", encoding="utf-8") as output:
++        json.dump({"max_rss": usage.ru_maxrss, "platform": sys.platform}, output)
++    raise SystemExit(result.returncode if result.returncode >= 0 else 128 - result.returncode)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/scripts/lib/sparse_precision_workflow.py b/tests/scripts/lib/sparse_precision_workflow.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cccdd5b4aaddcea78f734c23b1622ebbf8d97264
+--- /dev/null
++++ b/tests/scripts/lib/sparse_precision_workflow.py
+@@ -0,0 +1,19 @@
++"""Validate the opt-in research job, not the ordinary CI jobs."""
++
++
++def validate(data):
++    job = data["jobs"]["sparse-precision-research"]
++    assert job["if"] == "github.event_name == 'workflow_dispatch' && inputs.sparse_precision"
++    triggers = data.get("on", data.get(True))
++    assert triggers["workflow_dispatch"]["inputs"]["sparse_precision"]["default"] is False
++    assert set(job["strategy"]["matrix"]["runner"]) == {"macos-15", "ubuntu-24.04"}
++    assert job["strategy"]["fail-fast"] is False
++    assert job["permissions"] == {"contents": "read"}
++    assert 30 <= job["timeout-minutes"] <= 60
++    steps = job["steps"]
++    run = next(s for s in steps if s.get("id") == "research")
++    assert run["run"] == 'deno run --allow-read --allow-write --allow-run --allow-env scripts/run_sparse_precision.ts docs/research/sparse-precision/manifest-v4.json sparse-precision-results < /dev/null'
++    upload = next(s for s in steps if s.get("uses", "").startswith("actions/upload-artifact@"))
++    assert upload["if"] == "always()"
++    assert upload["with"]["path"] == "sparse-precision-results/"
++    assert upload["with"]["if-no-files-found"] == "error"
+diff --git a/tests/scripts/sparse_precision_resources.bats b/tests/scripts/sparse_precision_resources.bats
+new file mode 100644
+index 0000000000000000000000000000000000000000..e2250a4f2ed8021782bf90c70312b518a3f1aa59
+--- /dev/null
++++ b/tests/scripts/sparse_precision_resources.bats
+@@ -0,0 +1,19 @@
++#!/usr/bin/env bats
++
++@test "RSS is the real child high-water mark and a child failure stays nonzero" {
++  run python3 - "${BATS_TEST_DIRNAME}/../../scripts/sparse_precision_resources.py" <<'PY'
++import json, os, subprocess, sys, tempfile
++with tempfile.TemporaryDirectory() as root:
++    for code in [0, 7]:
++        path = os.path.join(root, f"rss-{code}.json")
++        child = "import resource, sys; data = bytearray(32 * 1024 * 1024); del data; print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss); sys.exit(int(sys.argv[1]))"
++        observed = subprocess.run([sys.executable, sys.argv[1], path, sys.executable,
++                                   "-c", child, str(code)], capture_output=True, text=True)
++        assert observed.returncode == code, observed.stderr
++        with open(path) as source:
++            rss = json.load(source)
++        assert rss["platform"] == sys.platform
++        assert rss["max_rss"] == int(observed.stdout.strip()), (rss, observed.stdout)
++PY
++  [ "$status" -eq 0 ]
++}
+diff --git a/tests/scripts/sparse_precision_workflow.bats b/tests/scripts/sparse_precision_workflow.bats
+new file mode 100644
+index 0000000000000000000000000000000000000000..650265fa0d80d714fad40b14485fae2779e0a7e3
+--- /dev/null
++++ b/tests/scripts/sparse_precision_workflow.bats
+@@ -0,0 +1,50 @@
++#!/usr/bin/env bats
++
++setup() {
++  load helpers
++  export REPO_ROOT="${BATS_TEST_DIRNAME}/../.."
++  export PYTHONPATH="${REPO_ROOT}/tests/scripts/lib${PYTHONPATH:+:${PYTHONPATH}}"
++}
++
++@test "research driver checks platform units and failed research results" {
++  run deno test "${REPO_ROOT}/tests/sparse_precision_runner_test.ts"
++  [ "$status" -eq 0 ]
++}
++
++@test "research workflow is opt-in and preserves both platform artefacts on failure" {
++  run python3 - <<'PYTEST'
++import copy, os, yaml
++from sparse_precision_workflow import validate
++with open(os.path.join(os.environ["REPO_ROOT"], ".github/workflows/ci.yml")) as source:
++    data = yaml.safe_load(source)
++validate(data)
++# Each load-bearing setting is refused when it loses its contract.
++job = data["jobs"]["sparse-precision-research"]
++triggers = data.get("on", data.get(True))
++cases = [
++    (job, "if", "true"),
++    (triggers["workflow_dispatch"]["inputs"]["sparse_precision"], "default", True),
++    (job["strategy"]["matrix"], "runner", ["ubuntu-24.04"]),
++    (job["strategy"], "fail-fast", True),
++    (job, "permissions", {"contents": "write"}),
++    (job, "timeout-minutes", 5),
++    (next(s for s in job["steps"] if s.get("id") == "research"), "run", "true"),
++]
++upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
++cases += [(upload, "if", "success()"), (upload["with"], "path", "."),
++          (upload["with"], "if-no-files-found", "ignore")]
++for target, field, wrong in cases:
++    original = copy.deepcopy(target[field])
++    target[field] = wrong
++    try:
++        validate(data)
++    except AssertionError:
++        pass
++    else:
++        raise AssertionError(f"validator accepted wrong {field}: {wrong!r}")
++    finally:
++        target[field] = original
++validate(data)
++PYTEST
++  [ "$status" -eq 0 ]
++}
+diff --git a/tests/sparse_precision_runner_test.ts b/tests/sparse_precision_runner_test.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..6fe3c50566f4411699993a93d9c1e7ad41421e6d
+--- /dev/null
++++ b/tests/sparse_precision_runner_test.ts
+@@ -0,0 +1,41 @@
++import { assertEquals, assertThrows } from "@std/assert";
++import {
++  checkResearchExit,
++  peakRssBytes,
++} from "../scripts/run_sparse_precision.ts";
++
++Deno.test("RSS uses the platform's documented units and refuses missing data", () => {
++  assertEquals(peakRssBytes("linux", 1536), 1536 * 1024);
++  assertEquals(peakRssBytes("darwin", 1572864), 1572864);
++  for (const os of ["linux", "darwin"] as const) {
++    for (
++      const value of [undefined, 0, -1, "1536", Number.MAX_SAFE_INTEGER + 1]
++    ) {
++      assertThrows(() => peakRssBytes(os, value), Error, "RSS");
++    }
++  }
++});
++
++Deno.test("only recorded numerical failures explain a failed research command", () => {
++  checkResearchExit(0, { status: "complete", failures: [] });
++  checkResearchExit(1, {
++    status: "completed_with_failures",
++    failures: [{ stage: "validation_accuracy", reason: "exceeds tolerance" }],
++  });
++  for (
++    const result of [
++      {},
++      { status: "complete", failures: [] },
++      { status: "completed_with_failures", failures: [] },
++      { status: "incomplete", failures: [{ stage: "timing_budget" }] },
++    ]
++  ) {
++    assertThrows(() => checkResearchExit(1, result), Error, "research command");
++  }
++  assertThrows(
++    () => checkResearchExit(2, { status: "complete", failures: [] }),
++    Error,
++    "research command",
++  );
++  assertThrows(() => checkResearchExit(0, {}), Error, "research command");
++});
+diff --git a/docs/research/sparse-precision/manifest-v4.json b/docs/research/sparse-precision/manifest-v4.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..e2c5e25a496aba362e301550d3d5c3189431fa1d
+--- /dev/null
++++ b/docs/research/sparse-precision/manifest-v4.json
+@@ -0,0 +1,88 @@
++{
++  "schema_version": 1,
++  "issue": 758,
++  "shapes": [
++    {
++      "label": "small_50",
++      "num_neurons": 50,
++      "num_inputs": 8,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 12
++    },
++    {
++      "label": "fanin_4",
++      "num_neurons": 1000,
++      "num_inputs": 64,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 4
++    },
++    {
++      "label": "fanin_16",
++      "num_neurons": 1000,
++      "num_inputs": 64,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 16
++    },
++    {
++      "label": "fanin_64",
++      "num_neurons": 1000,
++      "num_inputs": 64,
++      "num_outputs": 4,
++      "fan_in_kind": "fixed",
++      "fan_in": 64
++    },
++    {
++      "label": "large_5000",
++      "num_neurons": 5000,
++      "num_inputs": 32,
++      "num_outputs": 16,
++      "fan_in_kind": "fixed",
++      "fan_in": 24
++    },
++    {
++      "label": "production_exact",
++      "num_neurons": 4127,
++      "num_inputs": 2461,
++      "num_outputs": 1,
++      "fan_in_kind": "exact_total",
++      "fan_in": 21513
++    }
++  ],
++  "inactive_fractions": [
++    0.0,
++    0.5,
++    0.9
++  ],
++  "batch_widths": [
++    1,
++    8,
++    32
++  ],
++  "calibration_seed": 1001,
++  "validation_seed": 32002,
++  "validation_record_seed": 33003,
++  "shuffle_seed": 4004,
++  "bootstrap_seed": 5005,
++  "calibration_records": 8,
++  "records_per_sample": 64,
++  "reps": 15,
++  "conversion_reps": 5,
++  "bootstrap_resamples": 2000,
++  "max_cell_seconds": 30,
++  "max_total_seconds": 1500,
++  "criteria": {
++    "speed_win_ratio": 0.9,
++    "tolerance_f32": 0.001,
++    "tolerance_reduced": 0.02,
++    "representative_shape": "production_exact",
++    "adopt_rule": "A variant is an adoption candidate only if warm and end-to-end CI upper bounds are at most speed_win_ratio with accuracy_pass in at least 75% of planned representative_shape cells on EVERY platform in platforms_required. Incomplete, failed and unavailable cells cannot qualify. No default changes either way.",
++    "platforms_required": [
++      "aarch64-macos",
++      "x86_64-linux",
++      "aarch64-linux"
++    ]
++  }
++}
