@@ -1617,6 +1617,21 @@ implementation on wasm — each correct to within an ulp, neither obliged to agr
 on the last bit. Every structural claim stays exact, so anything wider than
 rounding fails loudly.
 
+### Persisted creature JSON presentation (Issue #765)
+
+A checked-in, human-facing creature JSON file has one presentation contract:
+the bytes `JSON.stringify(doc, null, 1)` writes (with `-0` kept), a fixed key
+order per object kind and no trailing newline. The rules, the evidence and the
+intentional differences are in
+[`docs/CREATURE_JSON_PRESENTATION.md`](docs/CREATURE_JSON_PRESENTATION.md); the
+committed corpus is `neat-core/tests/fixtures/creature_presentation/`.
+
+| Gate | Where | What it proves |
+|---|---|---|
+| `tests/creature_presentation_test.ts` | `quality.sh`, every PR (`wasm64-memory64-smoke`) | canonical files are byte-identical to the reference writer, variants differ in bytes only, keys follow the documented order |
+| `neat-core/tests/creature_presentation.rs` | `cargo test` | every canonical file parses with `parse_creature_json` and compiles with `compile_creature` |
+| `tests/scripts/creature_presentation_gate.bats` | `bats` | both `quality.sh` and `ci.yml` run the Deno gate |
+
 ### Creature validation contract (Issue #559)
 
 `neat-core/src/creature_validate.rs` is the Rust home of NEAT-AI's

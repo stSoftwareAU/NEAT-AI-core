@@ -105,6 +105,12 @@ deno run --allow-read scripts/check_mermaid.ts . </dev/null
 echo "🌿 Checking the native/WASM pruning parity record..."
 deno test --allow-read tests/wasm_prune_parity_test.ts </dev/null
 
+# Persisted creature JSON presentation corpus (Issue #765) — pins the committed
+# corpus to the contract in docs/CREATURE_JSON_PRESENTATION.md. Mirrors the CI
+# wasm64-memory64-smoke step; `--allow-read` only.
+echo "📄 Checking the persisted creature JSON presentation corpus..."
+deno test --allow-read tests/creature_presentation_test.ts </dev/null
+
 # JSR supply-chain gate (Issue #603) — mirrors the CI typescript-gate step.
 # The committed `deno.json` quarantine (24h `minimumDependencyAge`) and the
 # frozen `deno.lock` are what keep every Deno gate off a freshly-published JSR

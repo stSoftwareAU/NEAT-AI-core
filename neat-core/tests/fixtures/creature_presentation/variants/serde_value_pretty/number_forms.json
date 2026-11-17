@@ -1,0 +1,107 @@
+{
+  "forwardOnly": true,
+  "input": 2,
+  "memetic": {
+    "ancestry": [
+      {
+        "biases": {
+          "output-0": 1e-6
+        },
+        "generation": 6,
+        "score": 0.5,
+        "weights": [
+          {
+            "fromUUID": "input-1",
+            "toUUID": "3a7e9b12-84c5-4d6f-a1b2-c3d4e5f60718",
+            "weight": -1.5e-9
+          }
+        ]
+      }
+    ],
+    "biases": {
+      "3a7e9b12-84c5-4d6f-a1b2-c3d4e5f60718": 5e-324,
+      "d29f4c6a-1b3e-4c58-8e07-5a6b9c0d1e2f": 1.7976931348623157e+308,
+      "output-0": 2.2985736498644322e-8
+    },
+    "generation": 7,
+    "score": 1e+21,
+    "weights": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "d29f4c6a-1b3e-4c58-8e07-5a6b9c0d1e2f",
+        "weight": 1e+20
+      },
+      {
+        "fromUUID": "3a7e9b12-84c5-4d6f-a1b2-c3d4e5f60718",
+        "toUUID": "output-0",
+        "weight": 1e+21
+      },
+      {
+        "fromUUID": "d29f4c6a-1b3e-4c58-8e07-5a6b9c0d1e2f",
+        "toUUID": "output-0",
+        "weight": 1.2345678901234568e+20
+      }
+    ]
+  },
+  "neurons": [
+    {
+      "bias": -0.0,
+      "frozen": false,
+      "squash": "TANH",
+      "type": "hidden",
+      "uuid": "d29f4c6a-1b3e-4c58-8e07-5a6b9c0d1e2f"
+    },
+    {
+      "bias": 1.0,
+      "squash": "LOGISTIC",
+      "type": "hidden",
+      "uuid": "3a7e9b12-84c5-4d6f-a1b2-c3d4e5f60718"
+    },
+    {
+      "bias": 1e-6,
+      "squash": "IDENTITY",
+      "type": "output",
+      "uuid": "output-0"
+    }
+  ],
+  "output": 1,
+  "semanticVersion": "4.0.0",
+  "synapses": [
+    {
+      "fromUUID": "3a7e9b12-84c5-4d6f-a1b2-c3d4e5f60718",
+      "toUUID": "output-0",
+      "weight": 1e-7
+    },
+    {
+      "fromUUID": "input-0",
+      "toUUID": "d29f4c6a-1b3e-4c58-8e07-5a6b9c0d1e2f",
+      "weight": 2.0
+    },
+    {
+      "fromUUID": "input-1",
+      "toUUID": "3a7e9b12-84c5-4d6f-a1b2-c3d4e5f60718",
+      "weight": -1.5e-9
+    },
+    {
+      "fromUUID": "d29f4c6a-1b3e-4c58-8e07-5a6b9c0d1e2f",
+      "toUUID": "output-0",
+      "weight": 0.75
+    },
+    {
+      "fromUUID": "input-1",
+      "toUUID": "d29f4c6a-1b3e-4c58-8e07-5a6b9c0d1e2f",
+      "weight": -0.5
+    }
+  ],
+  "tags": [
+    {
+      "name": "origin",
+      "value": "synthetic-number-forms"
+    },
+    {
+      "name": "purpose",
+      "value": "number presentation"
+    }
+  ],
+  "uuid": "7b1d0c52-9e4a-5f36-a8c1-2d3e4f506172"
+}
