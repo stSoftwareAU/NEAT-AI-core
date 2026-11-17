@@ -1628,7 +1628,7 @@ committed corpus is `neat-core/tests/fixtures/creature_presentation/`.
 
 | Gate | Where | What it proves |
 |---|---|---|
-| `tests/creature_presentation_test.ts` | `quality.sh`, every PR (`wasm64-memory64-smoke`) | canonical files are byte-identical to the reference writer, variants differ in bytes only, keys follow the documented order |
+| `tests/creature_presentation_test.ts` | `quality.sh`, every non-draft PR (`wasm64-memory64-smoke`) | canonical files are byte-identical to the reference writer, variants differ in bytes only, keys follow the documented order |
 | `neat-core/tests/creature_presentation.rs` | `cargo test` | every canonical file parses with `parse_creature_json` and compiles with `compile_creature` |
 | `tests/scripts/creature_presentation_gate.bats` | `bats` | both `quality.sh` and `ci.yml` run the Deno gate |
 

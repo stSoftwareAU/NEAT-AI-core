@@ -108,7 +108,10 @@ interface Features {
   negativeZeros: number;
   /** A literal with a negative mantissa and a negative exponent. */
   negativeNegativeExponent: boolean;
-  /** An integer-valued number in a bias or weight field. */
+  /**
+   * A bias or weight holding an integer value, written as a plain integer
+   * literal (not `-0`, not `1.0`) on its own line.
+   */
   integerValuedField: boolean;
   creatureTags: boolean;
   neuronTags: boolean;
@@ -200,15 +203,25 @@ const MANIFEST: Record<string, Features> = {
 // Number literals read from the canonical text.
 
 // Disjoint pieces throughout, so a hostile line cannot backtrack catastrophically.
+// Group 1 is the member key as written (absent for an array element);
+// group 2 is the number literal.
 const NUMBER_LINE =
-  /^(?:"(?:[^"\\]|\\.)*": )?(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/;
+  /^(?:"((?:[^"\\]|\\.)*)": )?(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/;
 
-/** The number literal a single canonical line holds, or null. */
-function numberLiteral(line: string): string | null {
+/**
+ * The `[key, literal]` pair a single canonical line holds, or null. The key is
+ * the member name as written, or null for an array element.
+ */
+function numberLine(line: string): [string | null, string] | null {
   let trimmed = line.trim();
   if (trimmed.endsWith(",")) trimmed = trimmed.slice(0, -1);
   const match = NUMBER_LINE.exec(trimmed);
-  return match === null ? null : match[1];
+  return match === null ? null : [match[1] ?? null, match[2]];
+}
+
+/** The number literal a single canonical line holds, or null. */
+function numberLiteral(line: string): string | null {
+  return numberLine(line)?.[1] ?? null;
 }
 
 function literalsOf(text: string): string[] {
@@ -216,6 +229,16 @@ function literalsOf(text: string): string[] {
   for (const line of text.split("\n")) {
     const literal = numberLiteral(line);
     if (literal !== null) found.push(literal);
+  }
+  return found;
+}
+
+/** Every `[key, literal]` pair in the canonical text, in file order. */
+function numberLinesOf(text: string): [string | null, string][] {
+  const found: [string | null, string][] = [];
+  for (const line of text.split("\n")) {
+    const pair = numberLine(line);
+    if (pair !== null) found.push(pair);
   }
   return found;
 }
@@ -427,6 +450,23 @@ function keyOrderViolation(
 }
 
 // ---------------------------------------------------------------------------
+// Integer-valued bias and weight lines.
+
+/** A plain integer literal. `-0` is excluded where it is used. */
+const PLAIN_INTEGER = /^-?(?:0|[1-9]\d*)$/;
+
+/**
+ * Whether a canonical line writes a bias or weight as a plain integer: its key
+ * is `bias`, `weight`, or an array-index key (an entry of a `memetic.biases`
+ * map), and its literal is an integer other than `-0`.
+ */
+function isIntegerBiasOrWeightLine([key, literal]: [string | null, string]) {
+  return key !== null &&
+    (key === "bias" || key === "weight" || INDEX_KEY.test(key)) &&
+    PLAIN_INTEGER.test(literal) && literal !== "-0";
+}
+
+// ---------------------------------------------------------------------------
 // Tests.
 
 const canonicalNames = listJson("canonical/");
@@ -497,8 +537,8 @@ for (const [name, want] of Object.entries(MANIFEST)) {
       const ints = integerValuedFields(doc);
       assert(ints.length > 0, `${name}: no integer-valued bias or weight`);
       assert(
-        ints.some((n) => literals.includes(String(n))),
-        `${name}: integer-valued field is not written as an integer literal`,
+        numberLinesOf(text).some(isIntegerBiasOrWeightLine),
+        `${name}: no bias or weight line is written as a plain integer literal`,
       );
     }
 
@@ -611,6 +651,12 @@ Deno.test("number literal extraction is linear on a hostile line", () => {
   const hostile = '"' + "\\\\".repeat(50_000) + "x";
   assertEquals(hostile.length, 100_002);
   assertEquals(numberLiteral(hostile), null);
+});
+
+Deno.test("numberLine pairs a member key with its literal and gives an array element no key", () => {
+  assertEquals(numberLine('  "bias": 1,'), ["bias", "1"]);
+  assertEquals(numberLine("    1e-7,"), [null, "1e-7"]);
+  assertEquals(numberLine('  "name": "1e-7",'), null);
 });
 
 Deno.test("every object in every canonical file follows the contract key order", () => {
