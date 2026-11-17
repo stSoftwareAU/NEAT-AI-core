@@ -11,7 +11,8 @@ Closes #765.
   exponent casing and sign, `-0`, key order (per-kind table plus array-index
   keys first, then UTF-16 code-unit order), array order, string escaping and the
   trailing newline, with the planning evidence and six intentional differences
-  (compact scorer files out of scope; GRQ#5582 metadata splice; `-0` kept;
+  (compact scorer files out of scope; the production trainer's tags-only
+  metadata splice; `-0` kept;
   today's Rust writers; NEAT-AI's own 2-space goldens; out-of-table keys).
 - `neat-core/tests/fixtures/creature_presentation/` — three `canonical/` files,
   three `variants/` (typed serde pretty, `serde_json::Value` pretty,
@@ -41,10 +42,14 @@ Closes #765.
   itself), so the per-file manifest counts `-0` literals exactly.
 - Every canonical file carries a manifest of the features it must keep, so a
   gate over an emptied or simplified corpus fails rather than passing vacuously.
-- Assumption: the corpus is authored here and vendored outward; it is synthetic,
-  no GRQ sample is copied.
-- Assumption: Deno 2.9.3 (the CI pin) supports `JSON.rawJSON`, as observed on
-  Deno 2.9.8 locally; CI is the first run on 2.9.3.
+- Assumptions: the corpus is authored here and vendored outward, and is
+  synthetic (no production-trainer sample is copied); Deno 2.9.3 (the CI pin)
+  supports `JSON.rawJSON`, as observed on Deno 2.9.8 locally.
+- The issue cites the splice rule by the private production trainer's issue
+  slug; this public repository's archive guard
+  (`tests/scripts/archive_pr_summaries_private_repo_reference.bats`) forbids
+  naming that repository, so the doc and this summary state the rule at concept
+  level instead.
 
 ### Undiscoverable Facts
 

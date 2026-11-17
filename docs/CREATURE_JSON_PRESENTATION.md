@@ -99,15 +99,16 @@ Escaped exactly as `JSON.stringify` escapes them: `\"`, `\\`, `\b`, `\f`, `\n`,
 
 None. The file ends with `}`.
 
-Evidence, from the issue's planning sample (GRQ-sampler commit `985c99f`, 40
-samples, all 1-space indented): 19 files end without a newline (written directly
-by NEAT-AI's `safeWriteJson`, which writes the `JSON.stringify` output verbatim)
-and 21 end with one (added by `jq`). 33 files are TypeScript-shaped (top-level
-`semanticVersion, forwardOnly, neurons, synapses, input, output, tags`; neuron
-`type, uuid, bias, squash`; synapse `weight, fromUUID, toUUID, type`; tag `name,
-value`; `"bias": 1`) and 7 are Rust-`Value`-shaped (alphabetical keys, `1.0`,
-uppercase `E`). Matching the TypeScript form rewrites the fewest existing samples
-and needs no change to the TypeScript writer's layout.
+Evidence, from the issue's planning sample (the production trainer's sampler at
+commit `985c99f`, 40 samples, all 1-space indented): 19 files end without a
+newline (written directly by NEAT-AI's `safeWriteJson`, which writes the
+`JSON.stringify` output verbatim) and 21 end with one (added by `jq`). 33 files
+are TypeScript-shaped (top-level `semanticVersion, forwardOnly, neurons,
+synapses, input, output, tags`; neuron `type, uuid, bias, squash`; synapse
+`weight, fromUUID, toUUID, type`; tag `name, value`; `"bias": 1`) and 7 are
+Rust-`Value`-shaped (alphabetical keys, `1.0`, uppercase `E`). Matching the
+TypeScript form rewrites the fewest existing samples and needs no change to the
+TypeScript writer's layout.
 
 ### Number spellings, verified
 
@@ -139,9 +140,9 @@ flowchart LR
 1. Compact, scorer-facing creature files (no whitespace, machine-read) are
    outside the contract.
 2. A metadata-only change (for example tags only) is spliced into the existing
-   bytes, not reserialised (stSoftwareAU/GRQ#5582). A file not yet in contract
-   form keeps its bytes outside the spliced span; the contract governs files a
-   writer serialises whole.
+   bytes, not reserialised (the production trainer's tags-only splice). A file
+   not yet in contract form keeps its bytes outside the spliced span; the
+   contract governs files a writer serialises whole.
 3. The contract keeps `-0` where plain `JSON.stringify` writes `0`.
 4. Today's Rust writers are not in contract form. `creature_to_json_pretty`
    (typed serde) writes 2-space indent, `1.0` and `-0.0`, uses struct field
