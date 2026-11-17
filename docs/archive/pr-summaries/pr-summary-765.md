@@ -104,7 +104,7 @@ flowchart LR
 - **met** — The Deno test goes red when a variant's value is changed (one weight, one tag value, one swapped array element). — evidence: `tests/creature_presentation_test.ts::variants are the same document as their canonical file but different bytes`; Evidence table above — reviewer: met
 - **met** — The Deno test runs in `quality.sh` and in CI with `--allow-read` only. — evidence: `quality.sh`, `.github/workflows/ci.yml` (`wasm64-memory64-smoke`), `tests/scripts/creature_presentation_gate.bats` — reviewer: met
 - **met** — Every canonical file parses with `parse_creature_json` and compiles with `compile_creature`. — evidence: `neat-core/tests/creature_presentation.rs::every_canonical_creature_parses_and_compiles_to_the_declared_shape` — reviewer: met
-- **met** — `./quality.sh` and `cargo test --workspace` pass. — evidence: `./quality.sh < /dev/null` exit 0 on commit `f52391f` (it runs `cargo test --workspace --lib --tests` and `--doc`) — reviewer: missing — reason: the reviewer could not run anything; the gate was run here and passed
+- **met** — `./quality.sh` and `cargo test --workspace` pass. — evidence: `./quality.sh < /dev/null` exit 0 on commit `e205251` (it runs `cargo test --workspace --lib --tests` and `--doc`) — reviewer: missing — reason: the reviewer could not run anything; the gate was run here and passed
 - **unrequested** — `tests/scripts/creature_presentation_gate.bats`, a validator for the two wiring sites — reviewer: unrequested — reason: the issue makes the `quality.sh`/`ci.yml` wiring load-bearing, and a workflow behaviour change owes a validator
 - **unrequested** — root `README.md` section "Persisted creature JSON presentation (Issue #765)" — reviewer: unrequested — reason: a code change owes a docs change; it points readers at the contract and its gates
 - **unrequested** — key-order enforcement in the Deno test (`KEY_TABLES`, `keyOrderViolation` and its tests) — reviewer: unrequested — reason: checks the committed corpus against the documented table; it pins no writer, so the serialiser sub-issue's golden test remains the writer-side owner
@@ -129,7 +129,12 @@ flowchart LR
 - Added `tests/creature_presentation_test.ts` — `deno test --allow-read tests/creature_presentation_test.ts < /dev/null`: 11 passed on the final head.
 - Added `neat-core/tests/creature_presentation.rs` — `cargo test -p neat-core --test creature_presentation`: 3 passed.
 - Added `tests/scripts/creature_presentation_gate.bats` — `bats tests/scripts/creature_presentation_gate.bats < /dev/null`: 15 passed (2 positive on the live files, 13 refusals each asserting its message).
-- `./quality.sh < /dev/null`: exit 0, "All quality checks passed!", on `f52391f`. Later commits change only Markdown table cells and this summary; `markdownlint-cli2` and `scripts/check_mermaid.ts` passed on them.
+- `./quality.sh < /dev/null`: exit 0, "All quality checks passed!", on
+  `e205251`. The run before it failed
+  `tests/scripts/archive_pr_summaries_private_repo_reference.bats` (tests 20
+  and 22): this summary named the private production trainer's repository. That
+  commit rewords it here and in `docs/CREATURE_JSON_PRESENTATION.md`; the
+  wording-only change was not re-sent to the Spec and Standards reviewers.
 - No existing test was edited; no assertion was removed.
 - Twinned gates: `quality.sh` and the `ci.yml` `wasm64-memory64-smoke` job both gained the Deno step, as the issue requires; no other copy found.
 - `deno.lock` and `Cargo.lock` are unchanged.
