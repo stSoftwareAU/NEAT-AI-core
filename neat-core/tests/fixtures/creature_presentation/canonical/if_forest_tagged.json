@@ -1,0 +1,136 @@
+{
+ "uuid": "0c9a6e41-3b27-5d88-b4f0-91a2c3d4e5f6",
+ "semanticVersion": "4.0.0",
+ "forwardOnly": true,
+ "neurons": [
+  {
+   "type": "constant",
+   "uuid": "const-positive",
+   "bias": 1,
+   "squash": "IDENTITY",
+   "frozen": true
+  },
+  {
+   "type": "constant",
+   "uuid": "const-negative",
+   "bias": 1,
+   "squash": "IDENTITY"
+  },
+  {
+   "type": "constant",
+   "uuid": "const-condition",
+   "bias": 1,
+   "squash": "IDENTITY"
+  },
+  {
+   "type": "hidden",
+   "uuid": "forest-7c1d-if0",
+   "bias": 0,
+   "squash": "IF",
+   "tags": [
+    {
+     "name": "role",
+     "value": "decision-node"
+    }
+   ]
+  },
+  {
+   "type": "output",
+   "uuid": "output-0",
+   "bias": 0,
+   "squash": "IDENTITY"
+  }
+ ],
+ "synapses": [
+  {
+   "weight": 1,
+   "fromUUID": "forest-7c1d-if0",
+   "toUUID": "output-0"
+  },
+  {
+   "weight": 3,
+   "fromUUID": "const-positive",
+   "toUUID": "forest-7c1d-if0",
+   "type": "positive"
+  },
+  {
+   "weight": -0.5,
+   "fromUUID": "const-condition",
+   "toUUID": "forest-7c1d-if0",
+   "type": "condition",
+   "frozen": true
+  },
+  {
+   "weight": 1,
+   "fromUUID": "input-0",
+   "toUUID": "forest-7c1d-if0",
+   "type": "condition",
+   "tags": [
+    {
+     "name": "feature",
+     "value": "x"
+    }
+   ]
+  },
+  {
+   "weight": -1,
+   "fromUUID": "const-negative",
+   "toUUID": "forest-7c1d-if0",
+   "type": "negative"
+  }
+ ],
+ "input": 1,
+ "output": 1,
+ "tags": [
+  {
+   "name": "origin",
+   "value": "synthetic-if-forest"
+  },
+  {
+   "name": "note",
+   "value": "say \"hi\" \\ path\nnext line"
+  }
+ ],
+ "memetic": {
+  "generation": 3,
+  "weights": [
+   {
+    "fromUUID": "input-0",
+    "toUUID": "forest-7c1d-if0",
+    "weight": 0.98
+   },
+   {
+    "fromUUID": "forest-7c1d-if0",
+    "toUUID": "output-0",
+    "weight": 1.02
+   }
+  ],
+  "biases": {
+   "forest-7c1d-if0": 0.01,
+   "output-0": -0.02
+  },
+  "score": 0.75,
+  "ancestry": [
+   {
+    "generation": 2,
+    "weights": [
+     {
+      "fromUUID": "input-0",
+      "toUUID": "forest-7c1d-if0",
+      "weight": 0.97
+     }
+    ],
+    "biases": {
+     "forest-7c1d-if0": 0.02
+    },
+    "score": 0.7
+   },
+   {
+    "generation": 1,
+    "weights": [],
+    "biases": {},
+    "score": 0.6
+   }
+  ]
+ }
+}

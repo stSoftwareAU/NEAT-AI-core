@@ -1,0 +1,119 @@
+{
+ "semanticVersion": "4.0.0",
+ "forwardOnly": true,
+ "neurons": [
+  {
+   "type": "hidden",
+   "uuid": "9c4d2b60-1f8e-4a73-8b05-dd44ee55ff66",
+   "bias": 0.25,
+   "squash": "RELU",
+   "id": 10
+  },
+  {
+   "type": "hidden",
+   "uuid": "5e8f1a24-7c3b-4d90-9e12-aa11bb22cc33",
+   "bias": -0.125,
+   "squash": "TANH",
+   "id": 2
+  },
+  {
+   "type": "output",
+   "uuid": "output-0",
+   "bias": 0.0625,
+   "squash": "IDENTITY",
+   "id": -1
+  }
+ ],
+ "synapses": [
+  {
+   "weight": 0.5,
+   "fromUUID": "5e8f1a24-7c3b-4d90-9e12-aa11bb22cc33",
+   "toUUID": "9c4d2b60-1f8e-4a73-8b05-dd44ee55ff66"
+  },
+  {
+   "weight": 0.875,
+   "fromUUID": "input-0",
+   "toUUID": "5e8f1a24-7c3b-4d90-9e12-aa11bb22cc33"
+  },
+  {
+   "weight": -0.25,
+   "fromUUID": "input-1",
+   "toUUID": "5e8f1a24-7c3b-4d90-9e12-aa11bb22cc33"
+  },
+  {
+   "weight": 0.375,
+   "fromUUID": "9c4d2b60-1f8e-4a73-8b05-dd44ee55ff66",
+   "toUUID": "output-0"
+  },
+  {
+   "weight": 0.125,
+   "fromUUID": "input-1",
+   "toUUID": "9c4d2b60-1f8e-4a73-8b05-dd44ee55ff66"
+  }
+ ],
+ "input": 2,
+ "output": 1,
+ "memetic": {
+  "generation": 9,
+  "weights": {
+   "0": [
+    {
+     "toId": 2,
+     "weight": -0
+    }
+   ],
+   "1": [
+    {
+     "toId": 2,
+     "weight": -0.26
+    },
+    {
+     "toId": 10,
+     "weight": 0.13
+    }
+   ],
+   "2": [
+    {
+     "toId": 10,
+     "weight": 0.51
+    }
+   ],
+   "10": [
+    {
+     "toId": -1,
+     "weight": 0.38
+    }
+   ]
+  },
+  "biases": {
+   "2": 1,
+   "10": 0.26,
+   "-1": 0.07
+  },
+  "score": 0.8125,
+  "ancestry": [
+   {
+    "generation": 8,
+    "weights": {
+     "0": [
+      {
+       "toId": 2,
+       "weight": 0.01
+      }
+     ],
+     "2": [
+      {
+       "toId": 10,
+       "weight": 0.5
+      }
+     ]
+    },
+    "biases": {
+     "2": -0.12,
+     "10": 0.25
+    },
+    "score": 0.8
+   }
+  ]
+ }
+}
