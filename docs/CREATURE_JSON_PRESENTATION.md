@@ -1,4 +1,4 @@
-# Persisted creature JSON presentation (Issue #765)
+# Persisted creature JSON presentation (Issues #765, #766)
 
 This is the single presentation contract for a **persisted** creature JSON file:
 one that is checked in and read by people. It fixes the bytes, not the meaning;
@@ -135,6 +135,41 @@ flowchart LR
     G[Rust Value pretty] --> F
 ```
 
+## Rust producer (Issue #766)
+
+`neat_core::creature_presentation` (`neat-core/src/creature_presentation.rs`,
+re-exported from the crate root) writes the contract bytes. It is plain Rust:
+no `cfg`, no file access and no new dependency. Two entry points, both returning
+`Result<String, PresentationError>`:
+
+- `creature_presentation_json(&serde_json::Value)` is the primary,
+  document-level entry point. It keeps keys the typed structs do not model (the
+  creature `uuid`, `tags`, `frozen` and anything else), placing unknown keys by
+  the general rule above. Use it for any writer that carries tags or metadata.
+- `creature_export_presentation_json(&CreatureExport)` is the typed
+  convenience. A typed round trip drops what the structs do not model (`uuid`,
+  `tags`, `frozen`), so a writer carrying them must use the document entry.
+
+Output is the contract bytes: 1-space layout, ECMAScript number form derived
+from Rust's shortest round-trip digits, `-0` kept, per-kind key order, array
+order untouched and no trailing newline. Every number is written from its f64
+value, as JavaScript holds it.
+
+Refusals, in order (the document entry): any `null` anywhere is
+`PresentationError::NullValue { path }`, because `serde_json` and
+`JSON.stringify` both turn NaN and infinities into `null`, so a `null` is a
+number already lost and the contract never writes one; a document that does not
+parse as a creature is `PresentationError::Creature(CreatureError::Json(..))`;
+and a bad width goes through `validate_creature_width` (`InvalidInputCount`,
+`InvalidOutputCount`, `TooManyNodes`). The typed entry validates the width
+first, then refuses a NaN or infinite f64 field with
+`PresentationError::NonFiniteNumber { path }`. `PresentationError` is its own
+`#[non_exhaustive]` type wrapping `CreatureError`, because adding a variant to
+`CreatureError` would be a public-API break.
+
+`creature_to_json` and `creature_to_json_pretty` are unchanged. Moving a
+consumer onto the new entry points is that consumer's own migration.
+
 ## Scope and intentional differences
 
 1. Compact, scorer-facing creature files (no whitespace, machine-read) are
@@ -144,16 +179,17 @@ flowchart LR
    not yet in contract form keeps its bytes outside the spliced span; the
    contract governs files a writer serialises whole.
 3. The contract keeps `-0` where plain `JSON.stringify` writes `0`.
-4. Today's Rust writers are not in contract form. `creature_to_json_pretty`
-   (typed serde) writes 2-space indent, `1.0` and `-0.0`, uses struct field
+4. The existing typed Rust writers are not in contract form; the
+   `creature_presentation` module (Issue #766, see "Rust producer" below) is.
+   `creature_to_json_pretty` (typed serde) writes 2-space indent, `1.0` and `-0.0`, uses struct field
    order, drops every key its structs do not model (the creature `uuid`, `tags`
    and `frozen`) while memetic `generation`, `score` and `ancestry` survive, and
    uses `BTreeMap` key order for memetic maps. `serde_json::Value` pretty writes
    alphabetical keys, 2-space indent and `1.0`; `to_string_pretty` writes no
    newline itself, so the production files and the corpus variant that end with
-   one do so because the writer appends it. This document changes no
-   writer; the corpus `variants/` records these shapes so a test can tell them
-   apart from contract bytes.
+   one do so because the writer appends it. Those writers are unchanged; the
+   corpus `variants/` records these shapes so a test can tell them apart from
+   contract bytes.
 5. NEAT-AI's own cross-engine golden fixtures (`test/fixtures/golden/*.json` at
    `221facd8`) are 2-space indented with a trailing newline. They are compared
    semantically by their own tests and are not contract bytes.
@@ -169,5 +205,5 @@ same documents in other writers' shapes.
 | Gate | Run by | What it pins |
 |---|---|---|
 | `tests/creature_presentation_test.ts` | `quality.sh` and the `wasm64-memory64-smoke` job in `.github/workflows/ci.yml` (`--allow-read` only) | Canonical files are byte-identical to the reference writer with no trailing newline. Each variant is semantically equal (numbers by `Object.is`, keys regardless of order, array order kept) and byte-different. Every required feature is present per file, so the gate cannot go vacuous. Every canonical object's keys follow the table above: the writer round trip alone cannot pin key order, because `JSON.parse` then `JSON.stringify` keeps the file's order, so the test checks the corpus against the table directly. |
-| `neat-core/tests/creature_presentation.rs` | `cargo test --workspace` | Every canonical file parses with `parse_creature_json` and compiles with `compile_creature`. The typed-serde variant is byte-identical to what `creature_to_json_pretty` writes for its canonical file, so that variant's 2-space indent, `1.0`, struct field order and `BTreeMap` map order are pinned to the real writer. |
+| `neat-core/tests/creature_presentation.rs` | `cargo test --workspace` | The Rust producer. Every canonical file is byte-identical through `creature_presentation_json` and rewriting is a no-op; the tagless `memetic_by_id.json` also passes through the typed entry. Every variant rewrites to its canonical bytes. An independent `serde_json::Value` walk compares f64 bits, so the rewrite is semantically lossless. A number-form table and a deterministic f64 bit-pattern sweep assert the round trip. One changed weight is a one-line diff and one added tag touches only its own lines plus the preceding `}` gaining a comma. Compiled before and after a rewrite, a creature activates bit-identically. Zero width, over-ceiling width, non-finite and `null` are refused. The typed-serde variant is still byte-identical to `creature_to_json_pretty`'s output, and every canonical file still parses with `parse_creature_json` and compiles with `compile_creature`. |
 | `tests/scripts/creature_presentation_gate.bats` | `bats` | Both `quality.sh` and `ci.yml` run the Deno gate. |

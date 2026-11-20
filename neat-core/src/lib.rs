@@ -20,6 +20,7 @@
 pub mod accumulate;
 pub mod batch_scoring;
 pub mod creature;
+pub mod creature_presentation;
 pub mod creature_validate;
 pub mod creature_validate_json;
 pub mod creature_validate_packed;
@@ -78,6 +79,10 @@ pub use creature::{
     creature_to_json_pretty, parse_creature_json, parse_squash_name, parse_synapse_type,
     squash_name_from, synapse_type_name_from, validate_creature_width,
     validate_no_duplicate_synapses,
+};
+// Issue #766 — the contract serialiser for persisted creature JSON.
+pub use creature_presentation::{
+    PresentationError, creature_export_presentation_json, creature_presentation_json,
 };
 // Issue #559 — the shared creature-validation contract.
 pub use creature_validate::{

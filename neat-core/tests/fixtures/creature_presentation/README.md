@@ -71,7 +71,11 @@ The variants are the same documents as the real tools write them:
 
 - `tests/creature_presentation_test.ts` (Deno) pins the bytes, the key order,
   the feature coverage and variant equivalence.
-- `neat-core/tests/creature_presentation.rs` checks every canonical file parses
-  with `parse_creature_json` and compiles with `compile_creature`. It also
-  checks `variants/serde_typed_pretty/memetic_by_id.json` is byte-identical to
+- `neat-core/tests/creature_presentation.rs` pins the Rust writer
+  (`neat_core::creature_presentation`) to the canonical bytes: every canonical
+  file is byte-identical through `creature_presentation_json` (the tagless
+  `memetic_by_id.json` also through the typed entry), and every variant
+  normalises to its canonical bytes. It also checks every canonical file parses
+  with `parse_creature_json` and compiles with `compile_creature`, and that
+  `variants/serde_typed_pretty/memetic_by_id.json` is byte-identical to
   `creature_to_json_pretty`'s output for the canonical file.
