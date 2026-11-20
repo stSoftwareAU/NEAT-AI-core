@@ -5,10 +5,10 @@ Adds the family writer audit to `docs/CREATURE_JSON_PRESENTATION.md`
 
 - one row per repository, pinned to a commit SHA, giving the production write
   path or the read-only evidence, the presentation written today, the route to
-  GRQ-sampler, and a verdict;
+  the private sample repository, and a verdict;
 - a table classifying each writer's differences;
 - a churn table for the committed corpus, with commands that reproduce it;
-- GRQ-sampler `git show --numstat` figures, one per classified cause;
+- The private sample repository `git show --numstat` figures, one per classified cause;
 - the files changed, with the owning repository for each change made elsewhere;
 - a re-check of every verdict in NEAT-AI `docs/RUST_EXTENSION_WRITE_PATH_AUDIT.md`.
 
@@ -34,20 +34,20 @@ churn table's "after" column can be reproduced from the tree. Closes #767.
 - Compact, scorer-facing files (`baseline.json`, candidate staging) are listed
   as writes, but they are outside the contract, as the doc's "Scope" section
   already says.
-- Production scale uses real GRQ-sampler commits. Two causes never occur alone
+- Production scale uses real commits from the private sample repository. Two causes never occur alone
   in the window searched: indentation or newline only, and exponent casing
   only. Both are recorded as "not measured", with the window and the reason.
 
 ### Undiscoverable Facts
 
-- All 14 repositories, GRQ and GRQ-sampler included, were readable through
+- All 14 repositories, the private trainer and sample repository included, were readable through
   `gh` on 2026-11-20. NEAT-AI-Explore, NEAT-AI-Refinery and NEAT-AI-Snapshot
   exist, and none of them writes a creature.
-- GRQ-sampler at `fdcd279` holds 42 samples: 31 TypeScript-shaped, 10
+- The private sample repository at `fdcd279` holds 42 samples: 31 TypeScript-shaped, 10
   Rust-`Value`-then-jq-shaped, and one, `Enceladus-Terminal.json`, in a shape
   no audited writer produces.
 - NEAT-AI's checkpoint (`CheckpointWriter.ts:224`) is compact, yet every `-1`
-  sample is 1-space. GRQ's `saveValidatedCreatureExport` re-indents only on a
+  sample is 1-space. The private trainer's `saveValidatedCreatureExport` re-indents only on a
   score mismatch, and the hop that re-indents when the scores agree was not
   traced.
 - The earlier NEAT-AI audit's "only two writers / two `tags.rs` sidecars" no
@@ -62,16 +62,16 @@ Documentation change plus one example binary; no UI.
   - after: empty for all three (identical files, so 0 / 0).
 - `cargo test -q -p neat-core --test creature_presentation`: 22 passed,
   including `every_variant_is_normalised_to_its_canonical_bytes`.
-- GRQ-sampler numstats were confirmed with `git show --numstat`:
-  - `a2a7d391`: 162179 / 161645 (`GRQ-10-forests.json`);
+- The private sample repository numstats were confirmed with `git show --numstat`:
+  - `a2a7d391`: 162179 / 161645 (the 10-forests sample);
   - `3b63ecaa`: 161712 / 161702;
-  - `36811a57`: 115 / 33 (`GRQ-12-1.json`);
+  - `36811a57`: 115 / 33 (the 12-1 sample);
   - `e776c06f`: 6 / 2.
 - Write-path citations were read in shallow clones at the SHAs in the doc. I
   re-read the load-bearing lines myself, including:
   - Backpropagation `tags.rs:208-211`, Lamarck `tags.rs:359-365`, Forests
     `run.rs:163-166`, Ockham `run.rs:2843-2847`, Rebase `cli.rs:653-657`;
-  - GRQ `format_creature_json.sh:55`, `creature_provenance_guard.sh:152` and
+  - The private trainer `format_creature_json.sh:55`, `creature_provenance_guard.sh:152` and
     the `format_creature_json` / commit lines in each `worker/<Extension>/run.sh`;
   - NEAT-AI `CheckpointWriter.ts:224`.
 - Issue numbers cited: #765 (Specify the persisted creature JSON presentation
@@ -83,7 +83,7 @@ Documentation change plus one example binary; no UI.
 <!-- vibe-spec-review inputs="diff+issue-body" -->
 
 - **met** — Every repository listed above has a row with a commit SHA and either a `file:line` write path or cited read-only evidence. A repository that does not exist or cannot be read is recorded as "not audited" with the reason, never given a verdict. — evidence: `docs/CREATURE_JSON_PRESENTATION.md` "Audited revisions" and "Write paths" tables — reviewer: met — reason: the reviewer's gaps are fixed in `8e26f15`: full NEAT-AI-core SHA, Ockham `incumbent.rs:272`, Lamarck `width.rs:83,94`, Backpropagation candidate shape, and the untraced `-1` hop stated
-- **met** — Each writer's differences are classified into the categories above. — evidence: `docs/CREATURE_JSON_PRESENTATION.md` "Difference classes per writer" — reviewer: partial — reason: the reviewer found Rebase, GRQ `creature_provenance_guard.sh` and `saveValidatedCreatureExport` unclassified, Forests' `memetic` removal unflagged and the jq cell ambiguous; all five are fixed in `8e26f15`
+- **met** — Each writer's differences are classified into the categories above. — evidence: `docs/CREATURE_JSON_PRESENTATION.md` "Difference classes per writer" — reviewer: partial — reason: the reviewer found Rebase, the private trainer `creature_provenance_guard.sh` and `saveValidatedCreatureExport` unclassified, Forests' `memetic` removal unflagged and the jq cell ambiguous; all five are fixed in `8e26f15`
 - **met** — The churn table gives added and deleted counts before and after for every committed variant shape, with commands that reproduce them from the tree. — evidence: "Churn on the committed corpus" table and command block; `neat-core/examples/creature_presentation_rewrite.rs` — reviewer: met
 - **met** — Every "after" count is zero, and the table names the test in `neat-core/tests/creature_presentation.rs` that enforces it. — evidence: `neat-core/tests/creature_presentation.rs::every_variant_is_normalised_to_its_canonical_bytes` — reviewer: met
 - **met** — The files changed in this repository are listed, and each change owned elsewhere names its owning repository. — evidence: "Files changed" subsection — reviewer: met
