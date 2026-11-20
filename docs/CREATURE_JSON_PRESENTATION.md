@@ -155,15 +155,19 @@ from Rust's shortest round-trip digits, `-0` kept, per-kind key order, array
 order untouched and no trailing newline. Every number is written from its f64
 value, as JavaScript holds it.
 
-Refusals, in order (the document entry): any `null` anywhere is
+Refusals, in order. The document entry: any `null` anywhere is
 `PresentationError::NullValue { path }`, because `serde_json` and
 `JSON.stringify` both turn NaN and infinities into `null`, so a `null` is a
-number already lost and the contract never writes one; a document that does not
-parse as a creature is `PresentationError::Creature(CreatureError::Json(..))`;
-and a bad width goes through `validate_creature_width` (`InvalidInputCount`,
-`InvalidOutputCount`, `TooManyNodes`). The typed entry validates the width
-first, then refuses a NaN or infinite f64 field with
-`PresentationError::NonFiniteNumber { path }`. `PresentationError` is its own
+number already lost and the contract never writes one; a number with no finite
+f64 is `PresentationError::NonFiniteNumber { path }` (reachable only when a
+build unifies `serde_json`'s `arbitrary_precision` feature and a literal such as
+`1e400` overflows); a document that does not parse as a creature is
+`PresentationError::Creature(CreatureError::Json(..))`; and a bad width goes
+through `validate_creature_width` (`InvalidInputCount`, `InvalidOutputCount`,
+`TooManyNodes`). The typed entry validates the width first, then refuses a NaN
+or infinite f64 field with `PresentationError::NonFiniteNumber { path }`, then
+runs the document entry's checks (so a `null` inside `memetic.extra` is
+`NullValue`). `PresentationError` is its own
 `#[non_exhaustive]` type wrapping `CreatureError`, because adding a variant to
 `CreatureError` would be a public-API break.
 
@@ -180,7 +184,7 @@ consumer onto the new entry points is that consumer's own migration.
    contract governs files a writer serialises whole.
 3. The contract keeps `-0` where plain `JSON.stringify` writes `0`.
 4. The existing typed Rust writers are not in contract form; the
-   `creature_presentation` module (Issue #766, see "Rust producer" below) is.
+   `creature_presentation` module (Issue #766, see "Rust producer" above) is.
    `creature_to_json_pretty` (typed serde) writes 2-space indent, `1.0` and `-0.0`, uses struct field
    order, drops every key its structs do not model (the creature `uuid`, `tags`
    and `frozen`) while memetic `generation`, `score` and `ancestry` survive, and

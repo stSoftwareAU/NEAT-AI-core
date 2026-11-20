@@ -17,11 +17,15 @@
 //! # Refusals
 //!
 //! A creature whose width is refused by [`validate_creature_width`] is never
-//! written. A non-finite number is refused too: the typed entry names it
-//! ([`PresentationError::NonFiniteNumber`]); the document entry refuses any
-//! `null` ([`PresentationError::NullValue`]), because `serde_json` and
-//! `JSON.stringify` both turn NaN and infinities into `null`, so a `null` is a
-//! number that is already lost. The contract never writes `null`.
+//! written. A non-finite number is refused too
+//! ([`PresentationError::NonFiniteNumber`]): the typed entry names a NaN or
+//! infinite `f64` field, and the document entry names a number with no finite
+//! `f64` (reachable only when a consumer's build unifies `serde_json`'s
+//! `arbitrary_precision` feature and a literal such as `1e400` overflows). The
+//! document entry also refuses any `null` ([`PresentationError::NullValue`]),
+//! because `serde_json` and `JSON.stringify` both turn NaN and infinities into
+//! `null`, so a `null` is a number that is already lost. The contract never
+//! writes `null`.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -40,8 +44,10 @@ pub enum PresentationError {
     /// Not a creature (a serde refusal, as [`CreatureError::Json`]) or a
     /// refused width (the error [`validate_creature_width`] returns).
     Creature(CreatureError),
-    /// Typed entry: an `f64` field is NaN or infinite. `path` is a
-    /// JSON-pointer-style path such as `/synapses/3/weight`.
+    /// A number that is not a finite `f64`: a NaN or infinite typed field, or
+    /// (with `serde_json`'s `arbitrary_precision` unified in) a literal that
+    /// overflows `f64`. `path` is a JSON-pointer-style path such as
+    /// `/synapses/3/weight`.
     NonFiniteNumber {
         /// Where the number sits.
         path: String,
@@ -174,12 +180,12 @@ impl Kind {
 /// # Errors
 ///
 /// [`PresentationError::NullValue`] for a `null`;
+/// [`PresentationError::NonFiniteNumber`] for a number with no finite `f64`
+/// (only under `serde_json`'s `arbitrary_precision`);
 /// [`PresentationError::Creature`] when the document is not a creature or its
 /// declared width is refused.
 pub fn creature_presentation_json(document: &Value) -> Result<String, PresentationError> {
-    if let Some(path) = find_null(document, &mut String::new()) {
-        return Err(PresentationError::NullValue { path });
-    }
+    scan_document(document, &mut String::new())?;
     // `&Value` is a `Deserializer`, so this reads the document without a clone.
     let creature = CreatureExport::deserialize(document)
         .map_err(|e| PresentationError::Creature(CreatureError::Json(e)))?;
@@ -198,7 +204,9 @@ pub fn creature_presentation_json(document: &Value) -> Result<String, Presentati
 /// # Errors
 ///
 /// [`PresentationError::Creature`] for a refused width;
-/// [`PresentationError::NonFiniteNumber`] for a NaN or infinite `f64`.
+/// [`PresentationError::NonFiniteNumber`] for a NaN or infinite `f64`;
+/// [`PresentationError::NullValue`] for a `null` inside `memetic.extra`, which
+/// the typed entry hands on to the document entry.
 pub fn creature_export_presentation_json(
     creature: &CreatureExport,
 ) -> Result<String, PresentationError> {
@@ -219,33 +227,34 @@ fn push_segment(path: &mut String, segment: &str) {
     path.push_str(&segment.replace('~', "~0").replace('/', "~1"));
 }
 
-/// The path of the first `null` in document order, if any.
-fn find_null(value: &Value, path: &mut String) -> Option<String> {
+/// One document-order walk refusing the first `null` (`NullValue`) or number
+/// with no finite `f64` (`NonFiniteNumber`).
+fn scan_document(value: &Value, path: &mut String) -> Result<(), PresentationError> {
     match value {
-        Value::Null => Some(path.clone()),
+        Value::Null => Err(PresentationError::NullValue { path: path.clone() }),
+        Value::Number(n) => match n.as_f64() {
+            Some(x) if x.is_finite() => Ok(()),
+            _ => Err(PresentationError::NonFiniteNumber { path: path.clone() }),
+        },
         Value::Array(items) => {
             for (i, item) in items.iter().enumerate() {
                 let len = path.len();
                 push_segment(path, &i.to_string());
-                if let Some(found) = find_null(item, path) {
-                    return Some(found);
-                }
+                scan_document(item, path)?;
                 path.truncate(len);
             }
-            None
+            Ok(())
         }
         Value::Object(map) => {
             for (key, item) in map {
                 let len = path.len();
                 push_segment(path, key);
-                if let Some(found) = find_null(item, path) {
-                    return Some(found);
-                }
+                scan_document(item, path)?;
                 path.truncate(len);
             }
-            None
+            Ok(())
         }
-        _ => None,
+        _ => Ok(()),
     }
 }
 
@@ -318,11 +327,12 @@ fn indent(out: &mut String, depth: usize) {
 
 fn write_value(value: &Value, kind: Kind, depth: usize, out: &mut String) {
     match value {
-        // Unreachable through the entry points (a null is refused first); kept
-        // exhaustive rather than panicking.
-        Value::Null => out.push_str("null"),
+        Value::Null => unreachable!("the pre-scan refused every null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => out.push_str(&js_number(n.as_f64().unwrap_or(f64::NAN))),
+        Value::Number(n) => out.push_str(&js_number(
+            n.as_f64()
+                .expect("the pre-scan refused every number without a finite f64"),
+        )),
         Value::String(s) => write_string(s, out),
         Value::Array(items) => {
             if items.is_empty() {
@@ -381,11 +391,7 @@ fn write_value(value: &Value, kind: Kind, depth: usize, out: &mut String) {
 /// exactly as it does: `\"`, `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, other
 /// U+0000 to U+001F as lowercase `\u00XX`, everything else literal.
 fn write_string(s: &str, out: &mut String) {
-    match serde_json::to_string(s) {
-        Ok(text) => out.push_str(&text),
-        // A `str` always serialises; this arm exists only to avoid a panic.
-        Err(_) => out.push_str("\"\""),
-    }
+    out.push_str(&serde_json::to_string(s).expect("a str always serialises"));
 }
 
 // ---------------------------------------------------------------------------

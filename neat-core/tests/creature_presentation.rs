@@ -670,3 +670,76 @@ fn a_document_that_is_not_a_creature_is_refused_as_json() {
     // Control: with `neurons` restored it is a creature.
     assert!(creature_presentation_json(&minimal_creature()).is_ok());
 }
+
+#[test]
+fn the_typed_entry_checks_the_width_before_the_numbers() {
+    let mut typed = minimal_typed();
+    typed.synapses[0].weight = f64::NAN;
+    typed.input = 0;
+    // Width first: a zero input is reported, not the NaN weight.
+    assert!(matches!(
+        creature_export_presentation_json(&typed),
+        Err(PresentationError::Creature(
+            CreatureError::InvalidInputCount { found: 0 }
+        ))
+    ));
+    // Control: with a legal width the same creature names the NaN.
+    typed.input = 1;
+    match creature_export_presentation_json(&typed) {
+        Err(PresentationError::NonFiniteNumber { path }) => {
+            assert_eq!(path, "/synapses/0/weight");
+        }
+        other => panic!("expected NonFiniteNumber, got {other:?}"),
+    }
+}
+
+#[test]
+fn unknown_keys_follow_index_then_utf16_order() {
+    let doc = with(
+        minimal_creature(),
+        "extra",
+        json!({
+            "10": 1, "2": 1, "0": 1, "4294967294": 1, "4294967295": 1, "01": 1,
+            "-1": 1, "b": 1, "a": 1, "\u{E000}": 1, "\u{1F600}": 1
+        }),
+    );
+    let text = write(&doc);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| *l == " \"extra\": {")
+        .expect("extra object is written");
+    let members: Vec<&str> = lines[start + 1..]
+        .iter()
+        .take_while(|l| l.starts_with("  "))
+        .copied()
+        .collect();
+    // Index keys (canonical integers 0..=4294967294) first, ascending
+    // numerically: 0, 2, 10, 4294967294. Then the rest by UTF-16 code unit:
+    // "-1" (0x2D), "01" (0x30), "4294967295" (0x34, past the index range),
+    // "a", "b", U+1F600 (lead surrogate 0xD83D), U+E000 (0xE000). Byte order
+    // would put U+E000 (EE ..) before U+1F600 (F0 ..), so this tells them apart.
+    let expected = [
+        "  \"0\": 1,",
+        "  \"2\": 1,",
+        "  \"10\": 1,",
+        "  \"4294967294\": 1,",
+        "  \"-1\": 1,",
+        "  \"01\": 1,",
+        "  \"4294967295\": 1,",
+        "  \"a\": 1,",
+        "  \"b\": 1,",
+        "  \"\u{1F600}\": 1,",
+        "  \"\u{E000}\": 1",
+    ];
+    assert_eq!(members, expected);
+
+    // "extra" is not in the creature table, so it follows every table key (the
+    // minimal creature holds neurons, synapses, input, output, in table order).
+    let top: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.starts_with(" \""))
+        .map(|l| l.split('"').nth(1).unwrap())
+        .collect();
+    assert_eq!(top, ["neurons", "synapses", "input", "output", "extra"]);
+}

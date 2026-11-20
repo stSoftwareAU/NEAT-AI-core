@@ -489,14 +489,17 @@ the rule that a `CreatureExport` must declare `1 <= input <= MAX_NODE_COUNT` and
 `neurons`** (input neurons are not listed there), so the rule is enforced at
 every boundary — `parse_creature_json` (after serde), `compile_creature`
 (before any other validation) and `creature_to_json` / `creature_to_json_pretty`
-(a widthless creature is never *written*) — with the typed
+(a widthless creature is never *written*), plus the two presentation writers
+`creature_presentation_json` / `creature_export_presentation_json` (Issue #766)
+— with the typed
 `CreatureError::InvalidInputCount { found }` / `InvalidOutputCount { found }`.
 There is no `#[serde(default)]` on either field and there never will be: a
 missing key is a serde error, not a silent zero. Adding a new entry point that
 accepts or emits creature JSON means calling the helper there; do not re-inline
 the comparison. `neat-core/tests/creature_width_contract.rs` pins the rule at
 all four sites (each was mutation-checked individually — dropping any one call
-fails its own tests).
+fails its own tests); the presentation writers are pinned in that file and in
+`neat-core/tests/creature_presentation.rs`.
 
 The **upper** bound is there for a different reason and must stay ahead of every
 caller (Issue #622). `input` is a declared count the payload never backs, and
@@ -533,8 +536,8 @@ creature JSON layout for Rust writers: 1-space indent, ECMAScript number text,
 `creature_presentation_json` (document level, keeps keys the structs do not
 model) and `creature_export_presentation_json` (typed convenience) both refuse a
 bad width through `validate_creature_width` — never re-inline it — and refuse a
-non-finite number or a `null` with `PresentationError` rather than writing
-`null`. `creature_to_json` and `creature_to_json_pretty` stay byte-for-byte
+`null` (`NullValue`) or a number with no finite `f64` (`NonFiniteNumber`) with
+`PresentationError` rather than writing `null`. `creature_to_json` and `creature_to_json_pretty` stay byte-for-byte
 unchanged (phase 1 of the three-phase flow). Do not reorder struct fields to
 chase the layout and do not enable `serde_json`'s `preserve_order`; the writer
 owns the order. `neat-core/tests/creature_presentation.rs` is the gate.
