@@ -442,10 +442,15 @@ fn js_number(x: f64) -> String {
     }
     // Rust's `{:e}` gives the shortest round-trip digits: "d.ddde<exp>".
     let sci = format!("{:e}", x.abs());
-    let (mantissa, exp) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
+    let (mantissa, exp) = sci
+        .split_once('e')
+        .expect("`{:e}` of a finite non-zero f64 always contains an `e`");
     let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
     let k = digits.len() as i32;
-    let n = exp.parse::<i32>().unwrap_or(0) + 1;
+    let n = exp
+        .parse::<i32>()
+        .expect("`{:e}` always writes an integer exponent")
+        + 1;
 
     if k <= n && n <= 21 {
         out.push_str(&digits);
