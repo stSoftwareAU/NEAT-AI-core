@@ -32,8 +32,8 @@ not run yet. Part of #766.
 
 - `CreatureExport` and its children model no `tags`, so a typed round trip drops
   them. The document-level entry is therefore the primary one: a writer that
-  carries tags (GRQ#5582's splice, NEAT-AI-Lamarck's `Value` re-attach) needs
-  it.
+  carries tags (the production trainer's tags-only splice, NEAT-AI-Lamarck's
+  `Value` re-attach) needs it.
 - Key order is decided by where an object sits in the document: root, neuron,
   synapse, tag, memetic record, weight row or id-keyed entry. Struct fields are
   not reordered and `preserve_order` is not enabled, so every registered
@@ -98,6 +98,30 @@ Each was applied to the writer alone and reverted before commit:
 | typed entry's own `validate_creature_width` call deleted | red (1)        | `the_typed_entry_checks_the_width_before_the_numbers` |
 | UTF-16 key comparison replaced by byte order             | red (1)        | `unknown_keys_follow_index_then_utf16_order`          |
 
+A second sweep swapped adjacent pairs in every key table, one at a time. The
+first three pairs are never both present in any corpus object. Before
+`every_key_table_is_written_in_its_documented_order` was added, those three
+swaps left all 21 tests green, as the pre-PR verifier reported. With the test
+added, every swap below is red:
+
+| Key-table swap                      | Result         |
+| ----------------------------------- | -------------- |
+| neuron `frozen`/`tags`              | red (1 failed) |
+| neuron `tags`/`id`                  | red (1)        |
+| synapse `frozen`/`tags`             | red (1)        |
+| neuron `bias`/`squash`              | red (6)        |
+| synapse `type`/`frozen`             | red (3)        |
+| tag `name`/`value`                  | red (4)        |
+| memetic record `score`/`ancestry`   | red (6)        |
+| id-keyed entry `toId`/`weight`      | red (6)        |
+| weight row `toUUID`/`weight`        | red (4)        |
+| creature `tags`/`memetic`           | red (4)        |
+| creature `uuid`/`semanticVersion`   | red (4)        |
+
+The new test builds one object of each kind carrying every key of its table.
+Its expected orders are copied by hand from the table in
+`docs/CREATURE_JSON_PRESENTATION.md`, not read from the writer's constants.
+
 The losslessness test, `rewriting_loses_no_value_including_the_sign_of_zero`,
 was among the failures for the rounding, `-0` and reorder mutations.
 
@@ -141,11 +165,12 @@ flowchart LR
   exponent case, exponent sign, the `1e21` threshold, the `1e-6` threshold, the
   integer `.0` suffix, two keys swapped in the per-kind key table, and
   array-index keys sorted as text. Each mutation and its result is listed in the
-  PR summary and reverted before commit — evidence: mutation table above —
-  reviewer: missing — reason: the reviewer said results were "not visible" in a
-  diff and that only some key pairs are covered (neuron `frozen`/`tags`/`id`
-  never share one corpus object); the pairs actually swapped,
-  `neurons`/`synapses` and `weight`/`fromUUID`, both went red
+  PR summary and reverted before commit — evidence: both mutation tables
+  above;
+  `neat-core/tests/creature_presentation.rs::every_key_table_is_written_in_its_documented_order`
+  — reviewer: met (re-review over the new diff; it re-ran eight adjacent swaps
+  and each went red, including the three neuron/synapse pairs the earlier
+  review flagged as uncovered)
 - **met** — A one-weight change makes exactly one output line differ; a one-tag
   change touches only that tag's lines — evidence:
   `neat-core/tests/creature_presentation.rs::changing_one_number_changes_exactly_one_line`,
@@ -172,12 +197,16 @@ flowchart LR
   unchanged and passing; `./quality.sh` passed — reviewer: met
 - **partial** — The `downstream-consumers` CI job passes — evidence: locally,
   `scripts/check-downstream-consumers.sh < /dev/null` (clone mode, `Develop`)
-  exited 0 with "all 6 registered consumers compile against this core" —
+  exited 0 on the final tree with "all 6 registered consumers compile against
+  this core" (Forests, Ockham, Lamarck and the other three each compiled);
+  the change is additive, with no public surface removed or narrowed —
   reviewer: missing — reason: CI not yet verified — remaining:
   merge-verification-only
 - **met** — `./quality.sh` and `cargo test --workspace` pass — evidence:
-  `./quality.sh < /dev/null` exited 0 on the final code commit ("All quality
-  checks passed!", 81 `test result: ok`); it runs
+  `./quality.sh < /dev/null` exited 0 on the final tree, after the full-table
+  key-order test and this summary's reword ("All quality checks passed!", 81
+  `test result: ok`, no `not ok` bats line; archived-summary bats 20 and 22
+  now pass); it runs
   `cargo test --workspace --lib --tests --all-features` and the doc tests —
   reviewer: missing — reason: the reviewer could not run the gate; it was run
   here and passed
@@ -223,7 +252,7 @@ This repository has no `CODING-STANDARDS.md`; the reviewer checked against
 ## Test Plan
 
 - `neat-core/tests/creature_presentation.rs` keeps its three existing tests
-  unchanged and adds 18:
+  unchanged and adds 19:
   - corpus and variants:
     `variant_directory_lists_exactly_the_registered_variants`,
     `canonical_files_are_rewritten_byte_for_byte`,
@@ -242,7 +271,8 @@ This repository has no `CODING-STANDARDS.md`; the reviewer checked against
     `a_null_in_a_document_is_refused_with_its_path`,
     `a_document_that_is_not_a_creature_is_refused_as_json`,
     `the_typed_entry_checks_the_width_before_the_numbers`;
-  - key order: `unknown_keys_follow_index_then_utf16_order`.
+  - key order: `unknown_keys_follow_index_then_utf16_order`,
+    `every_key_table_is_written_in_its_documented_order`.
 - `neat-core/tests/creature_width_contract.rs` adds
   `presentation_serialise_refuses_zero_input`,
   `presentation_serialise_refuses_zero_output` and
@@ -252,8 +282,10 @@ This repository has no `CODING-STANDARDS.md`; the reviewer checked against
   `creature_presentation.rs` module doc were edited.
 - Final runs:
   - `cargo test -p neat-core --test creature_presentation --test creature_width_contract`
-    passed (21 and 29).
-  - `./quality.sh < /dev/null` passed.
+    passed (22 and 29).
+  - `./quality.sh < /dev/null` passed on the final tree.
+  - `scripts/check-downstream-consumers.sh < /dev/null` passed on the final
+    tree (6 of 6).
   - `npx markdownlint-cli2` reported 0 issues.
   - `deno test --allow-read tests/creature_presentation_test.ts` passed (11).
 - Not run:
@@ -261,6 +293,10 @@ This repository has no `CODING-STANDARDS.md`; the reviewer checked against
     installed;
   - the `downstream-consumers` CI job itself, which runs on the PR. The same
     script passed locally in clone mode against all six consumers;
+  - the Deno coverage carry-over: the only TypeScript test,
+    `tests/creature_presentation_test.ts`, is new. It imports only
+    `@std/assert` and reads JSON fixtures, so it covers no repository source,
+    and no edited or removed test lost a covered line;
   - the `arbitrary_precision` overflow branch of `NonFiniteNumber`, which needs
     that feature unified into the build.
 

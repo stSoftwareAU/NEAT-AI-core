@@ -743,3 +743,138 @@ fn unknown_keys_follow_index_then_utf16_order() {
         .collect();
     assert_eq!(top, ["neurons", "synapses", "input", "output", "extra"]);
 }
+
+/// Keys of the object whose opening `{` is `lines[open]`, in written order.
+/// A member line sits exactly one space deeper than the brace; nested members
+/// are deeper still and are skipped.
+fn member_keys(lines: &[&str], open: usize) -> Vec<String> {
+    let depth = lines[open].len() - lines[open].trim_start().len();
+    assert!(
+        lines[open].trim_end().ends_with('{'),
+        "line {open} opens an object"
+    );
+    let member_indent = " ".repeat(depth + 1);
+    let mut keys = Vec::new();
+    for line in &lines[open + 1..] {
+        let indent = line.len() - line.trim_start().len();
+        if indent <= depth {
+            break;
+        }
+        if indent == depth + 1 && line.starts_with(&format!("{member_indent}\"")) {
+            keys.push(line[depth + 2..].split('"').next().unwrap().to_string());
+        }
+    }
+    keys
+}
+
+/// The line index of the first `{` directly after the line equal to `header`.
+fn first_object_after(lines: &[&str], header: &str) -> usize {
+    let at = lines
+        .iter()
+        .position(|l| *l == header)
+        .unwrap_or_else(|| panic!("`{header}` is written"));
+    at + 1
+}
+
+/// No corpus object carries every key of its table, so a swap of two keys that
+/// never share a corpus object (neuron `frozen`/`tags`/`id`, synapse
+/// `frozen`/`tags`) would pass the golden files. This document gives one object
+/// of every kind every key of its table, and the expected orders below are the
+/// tables of `docs/CREATURE_JSON_PRESENTATION.md` copied by hand — not read
+/// from the writer's constants.
+#[test]
+fn every_key_table_is_written_in_its_documented_order() {
+    // `serde_json::Value` objects are `BTreeMap`s, so these literals arrive at
+    // the writer in byte order (`bias, frozen, id, squash, tags, type, uuid`),
+    // which differs from every documented table: the written order can only
+    // come from the writer's tables.
+    let doc = json!({
+        "memetic": {
+            "ancestry": [{
+                "score": 0.5,
+                "biases": {"7": 0.1},
+                "weights": {"7": [{"weight": 0.5, "toId": 9}]},
+                "generation": 1
+            }],
+            "score": 0.75,
+            "biases": {"7": 0.2},
+            "weights": [{"weight": 0.25, "toUUID": "output-0", "fromUUID": "hidden-0"}],
+            "generation": 2
+        },
+        "tags": [{"value": "v", "name": "n"}],
+        "output": 1,
+        "input": 1,
+        "synapses": [
+            {"tags": [{"value": "s", "name": "role"}], "frozen": true, "type": "condition",
+             "toUUID": "output-0", "fromUUID": "hidden-0", "weight": 0.5},
+            {"weight": 1, "fromUUID": "input-0", "toUUID": "hidden-0"}
+        ],
+        "neurons": [
+            {"id": 7, "tags": [{"value": "x", "name": "role"}], "frozen": true,
+             "squash": "RELU", "bias": 0.5, "uuid": "hidden-0", "type": "hidden"},
+            {"id": 9, "squash": "IDENTITY", "bias": 0, "uuid": "output-0", "type": "output"}
+        ],
+        "forwardOnly": true,
+        "semanticVersion": "4.0.0",
+        "uuid": "6b1f0d2e-1111-4222-8333-944455566677"
+    });
+    let text = write(&doc);
+    let lines: Vec<&str> = text.lines().collect();
+
+    // creature
+    assert_eq!(
+        member_keys(&lines, 0),
+        [
+            "uuid",
+            "semanticVersion",
+            "forwardOnly",
+            "neurons",
+            "synapses",
+            "input",
+            "output",
+            "tags",
+            "memetic"
+        ]
+    );
+    // neuron
+    let neuron = first_object_after(&lines, " \"neurons\": [");
+    assert_eq!(
+        member_keys(&lines, neuron),
+        ["type", "uuid", "bias", "squash", "frozen", "tags", "id"]
+    );
+    // synapse
+    let synapse = first_object_after(&lines, " \"synapses\": [");
+    assert_eq!(
+        member_keys(&lines, synapse),
+        ["weight", "fromUUID", "toUUID", "type", "frozen", "tags"]
+    );
+    // tag: the creature's, the neuron's and the synapse's.
+    let tag_opens: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim_start() == "\"tags\": [")
+        .map(|(i, _)| i + 1)
+        .collect();
+    assert_eq!(tag_opens.len(), 3, "creature, neuron and synapse tags");
+    for open in tag_opens {
+        assert_eq!(member_keys(&lines, open), ["name", "value"]);
+    }
+    // memetic record: the root record and its ancestry snapshot.
+    let memetic = first_object_after(&lines, " \"memetic\": {") - 1;
+    let ancestry = first_object_after(&lines, "  \"ancestry\": [");
+    assert_eq!(
+        member_keys(&lines, memetic),
+        ["generation", "weights", "biases", "score", "ancestry"]
+    );
+    // The snapshot carries no `ancestry` of its own.
+    assert_eq!(
+        member_keys(&lines, ancestry),
+        ["generation", "weights", "biases", "score"]
+    );
+    // memetic weight row (array-form weights)
+    let row = first_object_after(&lines, "  \"weights\": [");
+    assert_eq!(member_keys(&lines, row), ["fromUUID", "toUUID", "weight"]);
+    // id-keyed memetic weight entry
+    let entry = first_object_after(&lines, "     \"7\": [");
+    assert_eq!(member_keys(&lines, entry), ["toId", "weight"]);
+}
