@@ -10,9 +10,10 @@ added them. This PR finishes #766:
   `neat-core/src/creature_presentation.rs` are now `expect` calls that name the
   `{:e}` invariant. Before, the writer could fall back to wrong bytes; now it
   panics instead.
-- **Correct the test module doc.** The doc of `neat-core/tests/creature_presentation.rs`
-  still said "This crate does not own the byte layout". That has been false since
-  #766. It now says the file pins both entry points to the corpus.
+- **Correct the test module doc.** The doc of
+  `neat-core/tests/creature_presentation.rs` still said "This crate does not own
+  the byte layout". That has been false since #766. It now says the file pins
+  both entry points to the corpus.
 - **Fix one row label.** The `0.1` row of the number-form table now names the
   branch it actually takes, `-6 < n <= 0`.
 - **Record the last criterion.** The `downstream-consumers` criterion, left
@@ -62,9 +63,9 @@ Backend-only change: no UI files.
   This PR does not change the code those mutations targeted, apart from the two
   `expect` lines, so it was not re-run here:
   - **Before-fix red run.** The typed golden assertion,
-    `typed_entry_writes_the_tagless_canonical_file_byte_for_byte`, was pointed at
-    `creature_to_json_pretty` and went red. The output had a 2-space indent, `1.0`
-    and the struct field order.
+    `typed_entry_writes_the_tagless_canonical_file_byte_for_byte`, was pointed
+    at `creature_to_json_pretty` and went red. The output had a 2-space indent,
+    `1.0` and the struct field order.
   - **Single mutations of the writer.** Each was run through
     `cargo test -p neat-core --test creature_presentation` and reverted:
 
@@ -229,8 +230,8 @@ three of its four `optional` notes in this diff, listed here.
     `cargo clippy -p neat-core --all-targets -- -D warnings` were clean.
   - `./quality.sh < /dev/null` exited 0 ("All quality checks passed!").
 - Not run:
-  - `cargo check --target wasm32-unknown-unknown`, because `rustup` is absent and
-    the target is not installed;
+  - `cargo check --target wasm32-unknown-unknown`, because `rustup` is absent
+    and the target is not installed;
   - the #770 mutation sweep, which was not repeated;
   - a mutation that deletes the document entry's own `validate_creature_width`
     call. By reading the code, the three `presentation_serialise_*` refusal
