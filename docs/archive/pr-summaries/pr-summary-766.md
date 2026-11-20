@@ -104,22 +104,22 @@ first three pairs are never both present in any corpus object. Before
 swaps left all 21 tests green, as the pre-PR verifier reported. With the test
 added, every swap below is red:
 
-| Key-table swap                      | Result         |
-| ----------------------------------- | -------------- |
-| neuron `frozen`/`tags`              | red (1 failed) |
-| neuron `tags`/`id`                  | red (1)        |
-| synapse `frozen`/`tags`             | red (1)        |
-| neuron `bias`/`squash`              | red (6)        |
-| synapse `type`/`frozen`             | red (3)        |
-| tag `name`/`value`                  | red (4)        |
-| memetic record `score`/`ancestry`   | red (6)        |
-| id-keyed entry `toId`/`weight`      | red (6)        |
-| weight row `toUUID`/`weight`        | red (4)        |
-| creature `tags`/`memetic`           | red (4)        |
-| creature `uuid`/`semanticVersion`   | red (4)        |
+| Key-table swap                    | Result         |
+| --------------------------------- | -------------- |
+| neuron `frozen`/`tags`            | red (1 failed) |
+| neuron `tags`/`id`                | red (1)        |
+| synapse `frozen`/`tags`           | red (1)        |
+| neuron `bias`/`squash`            | red (6)        |
+| synapse `type`/`frozen`           | red (3)        |
+| tag `name`/`value`                | red (4)        |
+| memetic record `score`/`ancestry` | red (6)        |
+| id-keyed entry `toId`/`weight`    | red (6)        |
+| weight row `toUUID`/`weight`      | red (4)        |
+| creature `tags`/`memetic`         | red (4)        |
+| creature `uuid`/`semanticVersion` | red (4)        |
 
-The new test builds one object of each kind carrying every key of its table.
-Its expected orders are copied by hand from the table in
+The new test builds one object of each kind carrying every key of its table. Its
+expected orders are copied by hand from the table in
 `docs/CREATURE_JSON_PRESENTATION.md`, not read from the writer's constants.
 
 The losslessness test, `rewriting_loses_no_value_including_the_sign_of_zero`,
@@ -165,12 +165,11 @@ flowchart LR
   exponent case, exponent sign, the `1e21` threshold, the `1e-6` threshold, the
   integer `.0` suffix, two keys swapped in the per-kind key table, and
   array-index keys sorted as text. Each mutation and its result is listed in the
-  PR summary and reverted before commit — evidence: both mutation tables
-  above;
+  PR summary and reverted before commit — evidence: both mutation tables above;
   `neat-core/tests/creature_presentation.rs::every_key_table_is_written_in_its_documented_order`
   — reviewer: met (re-review over the new diff; it re-ran eight adjacent swaps
-  and each went red, including the three neuron/synapse pairs the earlier
-  review flagged as uncovered)
+  and each went red, including the three neuron/synapse pairs the earlier review
+  flagged as uncovered)
 - **met** — A one-weight change makes exactly one output line differ; a one-tag
   change touches only that tag's lines — evidence:
   `neat-core/tests/creature_presentation.rs::changing_one_number_changes_exactly_one_line`,
@@ -198,18 +197,16 @@ flowchart LR
 - **partial** — The `downstream-consumers` CI job passes — evidence: locally,
   `scripts/check-downstream-consumers.sh < /dev/null` (clone mode, `Develop`)
   exited 0 on the final tree with "all 6 registered consumers compile against
-  this core" (Forests, Ockham, Lamarck and the other three each compiled);
-  the change is additive, with no public surface removed or narrowed —
-  reviewer: missing — reason: CI not yet verified — remaining:
-  merge-verification-only
+  this core" (Forests, Ockham, Lamarck and the other three each compiled); the
+  change is additive, with no public surface removed or narrowed — reviewer:
+  missing — reason: CI not yet verified — remaining: merge-verification-only
 - **met** — `./quality.sh` and `cargo test --workspace` pass — evidence:
   `./quality.sh < /dev/null` exited 0 on the final tree, after the full-table
   key-order test and this summary's reword ("All quality checks passed!", 81
-  `test result: ok`, no `not ok` bats line; archived-summary bats 20 and 22
-  now pass); it runs
-  `cargo test --workspace --lib --tests --all-features` and the doc tests —
-  reviewer: missing — reason: the reviewer could not run the gate; it was run
-  here and passed
+  `test result: ok`, no `not ok` bats line; archived-summary bats 20 and 22 now
+  pass); it runs `cargo test --workspace --lib --tests --all-features` and the
+  doc tests — reviewer: missing — reason: the reviewer could not run the gate;
+  it was run here and passed
 - **unrequested** — `PresentationError::NullValue` and the whole-document `null`
   scan — reviewer: unrequested — reason: this is how the document entry refuses
   a non-finite number, since a `Value` cannot hold one (see Essential Design
@@ -284,8 +281,8 @@ This repository has no `CODING-STANDARDS.md`; the reviewer checked against
   - `cargo test -p neat-core --test creature_presentation --test creature_width_contract`
     passed (22 and 29).
   - `./quality.sh < /dev/null` passed on the final tree.
-  - `scripts/check-downstream-consumers.sh < /dev/null` passed on the final
-    tree (6 of 6).
+  - `scripts/check-downstream-consumers.sh < /dev/null` passed on the final tree
+    (6 of 6).
   - `npx markdownlint-cli2` reported 0 issues.
   - `deno test --allow-read tests/creature_presentation_test.ts` passed (11).
 - Not run:
@@ -294,9 +291,9 @@ This repository has no `CODING-STANDARDS.md`; the reviewer checked against
   - the `downstream-consumers` CI job itself, which runs on the PR. The same
     script passed locally in clone mode against all six consumers;
   - the Deno coverage carry-over: the only TypeScript test,
-    `tests/creature_presentation_test.ts`, is new. It imports only
-    `@std/assert` and reads JSON fixtures, so it covers no repository source,
-    and no edited or removed test lost a covered line;
+    `tests/creature_presentation_test.ts`, is new. It imports only `@std/assert`
+    and reads JSON fixtures, so it covers no repository source, and no edited or
+    removed test lost a covered line;
   - the `arbitrary_precision` overflow branch of `NonFiniteNumber`, which needs
     that feature unified into the build.
 
