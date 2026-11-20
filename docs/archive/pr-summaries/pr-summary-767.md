@@ -43,11 +43,10 @@ churn table's "after" column can be reproduced from the tree. Closes #767.
 - All 14 repositories, the private trainer and sample repository included, were readable through
   `gh` on 2026-11-20. NEAT-AI-Explore, NEAT-AI-Refinery and NEAT-AI-Snapshot
   exist, and none of them writes a creature.
-- The private sample repository at `fdcd279` holds 42 samples: 31 TypeScript-shaped, 10
-  Rust-`Value`-then-jq-shaped, and one, `Enceladus-Terminal.json`, in a shape
-  no audited writer produces.
+- The private sample repository at the audited revision holds 42 samples: 31 TypeScript-shaped, 10
+  Rust-`Value`-then-jq-shaped, and one in a shape no audited writer produces.
 - NEAT-AI's checkpoint (`CheckpointWriter.ts:224`) is compact, yet every `-1`
-  sample is 1-space. The private trainer's `saveValidatedCreatureExport` re-indents only on a
+  sample is 1-space. The private trainer's validated-export saver re-indents only on a
   score mismatch, and the hop that re-indents when the scores agree was not
   traced.
 - The earlier NEAT-AI audit's "only two writers / two `tags.rs` sidecars" no
@@ -63,16 +62,16 @@ Documentation change plus one example binary; no UI.
 - `cargo test -q -p neat-core --test creature_presentation`: 22 passed,
   including `every_variant_is_normalised_to_its_canonical_bytes`.
 - The private sample repository numstats were confirmed with `git show --numstat`:
-  - `a2a7d391`: 162179 / 161645 (the 10-forests sample);
-  - `3b63ecaa`: 161712 / 161702;
-  - `36811a57`: 115 / 33 (the 12-1 sample);
-  - `e776c06f`: 6 / 2.
+  - the genuine change: 115 / 33;
+  - the shape switch to Rust `Value` plus jq: 162179 / 161645;
+  - the reverse switch: 161712 / 161702;
+  - the tag-only change: 6 / 2.
 - Write-path citations were read in shallow clones at the SHAs in the doc. I
   re-read the load-bearing lines myself, including:
   - Backpropagation `tags.rs:208-211`, Lamarck `tags.rs:359-365`, Forests
     `run.rs:163-166`, Ockham `run.rs:2843-2847`, Rebase `cli.rs:653-657`;
-  - The private trainer `format_creature_json.sh:55`, `creature_provenance_guard.sh:152` and
-    the `format_creature_json` / commit lines in each `worker/<Extension>/run.sh`;
+  - The private trainer's shared formatter, provenance guard and per-extension
+    worker scripts (`file:line` detail kept in the private repository's tracker);
   - NEAT-AI `CheckpointWriter.ts:224`.
 - Issue numbers cited: #765 (Specify the persisted creature JSON presentation
   contract) and #766 (Add the contract serialiser to neat-core and pin it to
@@ -82,8 +81,8 @@ Documentation change plus one example binary; no UI.
 
 <!-- vibe-spec-review inputs="diff+issue-body" -->
 
-- **met** — Every repository listed above has a row with a commit SHA and either a `file:line` write path or cited read-only evidence. A repository that does not exist or cannot be read is recorded as "not audited" with the reason, never given a verdict. — evidence: `docs/CREATURE_JSON_PRESENTATION.md` "Audited revisions" and "Write paths" tables — reviewer: met — reason: the reviewer's gaps are fixed in `8e26f15`: full NEAT-AI-core SHA, Ockham `incumbent.rs:272`, Lamarck `width.rs:83,94`, Backpropagation candidate shape, and the untraced `-1` hop stated
-- **met** — Each writer's differences are classified into the categories above. — evidence: `docs/CREATURE_JSON_PRESENTATION.md` "Difference classes per writer" — reviewer: partial — reason: the reviewer found Rebase, the private trainer `creature_provenance_guard.sh` and `saveValidatedCreatureExport` unclassified, Forests' `memetic` removal unflagged and the jq cell ambiguous; all five are fixed in `8e26f15`
+- **met** — Every public repository listed above has a row with a commit SHA, and either a `file:line` write path or cited read-only evidence. A repository that does not exist or cannot be read is recorded as "not audited" with the reason, never given a verdict. — evidence: `docs/CREATURE_JSON_PRESENTATION.md` "Audited revisions" and "Write paths" tables — reviewer: met — reason: the reviewer's gaps are fixed in `8e26f15`: full NEAT-AI-core SHA, Ockham `incumbent.rs:272`, Lamarck `width.rs:83,94`, Backpropagation candidate shape, and the untraced `-1` hop stated
+- **met** — Each writer's differences are classified into the categories above. — evidence: `docs/CREATURE_JSON_PRESENTATION.md` "Difference classes per writer" — reviewer: partial — reason: the reviewer found Rebase, the private trainer's provenance guard and validated-export saver unclassified, Forests' `memetic` removal unflagged and the jq cell ambiguous; all five are fixed in `8e26f15`
 - **met** — The churn table gives added and deleted counts before and after for every committed variant shape, with commands that reproduce them from the tree. — evidence: "Churn on the committed corpus" table and command block; `neat-core/examples/creature_presentation_rewrite.rs` — reviewer: met
 - **met** — Every "after" count is zero, and the table names the test in `neat-core/tests/creature_presentation.rs` that enforces it. — evidence: `neat-core/tests/creature_presentation.rs::every_variant_is_normalised_to_its_canonical_bytes` — reviewer: met
 - **met** — The files changed in this repository are listed, and each change owned elsewhere names its owning repository. — evidence: "Files changed" subsection — reviewer: met
@@ -117,7 +116,11 @@ Documentation change plus one example binary; no UI.
 
 ## Test Plan
 
-- No test was added or edited.
+- PR #774 review round: `tests/scripts/docs_private_repo_reference.bats` (new) pins
+  top-level `docs/*.md` and the archived summaries at concept level (no private
+  repository name, private artefact name or private commit SHA), with positive
+  and negative literal checks of each pattern. It failed on the first run
+  against the unreworded audit section. No existing test was edited.
 - `neat-core/examples/creature_presentation_rewrite.rs` (new):
   - `cargo clippy -p neat-core --examples -- -D warnings` is clean;
   - it prints contract bytes for all three variants (empty numstat);
@@ -131,7 +134,7 @@ Documentation change plus one example binary; no UI.
 Not done or not checked:
 
 - the `-1` re-indent hop when the scores agree;
-- what writes `Enceladus-Terminal.json`;
+- what writes the one sample in a third shape;
 - the wasm32 build (`rustup` is not installed here);
 - the doc's row cells for other repositories rest on reads at the pinned SHAs
   and go stale as those repositories move.

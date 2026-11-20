@@ -99,8 +99,8 @@ Escaped exactly as `JSON.stringify` escapes them: `\"`, `\\`, `\b`, `\f`, `\n`,
 
 None. The file ends with `}`.
 
-Evidence, from the issue's planning sample (the production trainer's sampler at
-commit `985c99f`, 40 samples, all 1-space indented): 19 files end without a
+Evidence, from the issue's planning sample (the production trainer's sampler,
+40 samples, all 1-space indented): 19 files end without a
 newline (written directly by NEAT-AI's `safeWriteJson`, which writes the
 `JSON.stringify` output verbatim) and 21 end with one (added by `jq`). 33 files
 are TypeScript-shaped (top-level `semanticVersion, forwardOnly, neurons,
@@ -224,6 +224,10 @@ persisted creatures. It starts from NEAT-AI `docs/RUST_EXTENSION_WRITE_PATH_AUDI
 ### Audited revisions
 
 Every `file:line` below is at this revision of its repository's default branch.
+The private production trainer and its private sample repository were audited
+at their own default-branch revisions. That `file:line` and revision detail
+lives in the private repositories' own tracker, so this table and the rows
+below carry only concept-level descriptions of them.
 
 | Repository | Commit SHA |
 |---|---|
@@ -239,28 +243,26 @@ Every `file:line` below is at this revision of its repository's default branch.
 | stSoftwareAU/NEAT-AI-Explore | `a77592098177614ca5155f1fe9f47017de3ab243` |
 | stSoftwareAU/NEAT-AI-Refinery | `84f3d126d58772c20166425c75e0ef487f238cdd` |
 | stSoftwareAU/NEAT-AI-Snapshot | `260cd82f45a90e915ee7dc519ff81961aa8a1720` |
-| GRQ trainer (private) | `9a6c8f89916a9995a39412b85832e8f53657cac7` |
-| GRQ-sampler (private, the destination) | `fdcd279a040345e71e0c6b56f5df1d2a846b2145` |
 
 ### Write paths
 
-| Repository | Production write path | Presentation today | Route to GRQ-sampler | Verdict |
+| Repository | Production write path | Presentation today | Route to the private sample repository | Verdict |
 |---|---|---|---|---|
-| NEAT-AI | `src/creature/CheckpointWriter.ts:224` writes `JSON.stringify(json)` to `.creatures/N.json`; `src/intelligentDesign/ImproveSquash.ts:512,597` write a string built by `JSON.stringify(…, null, 1)` (`src/intelligentDesign/workers/WorkerHandler.ts:159`). `safeWriteJson` (`src/intelligentDesign/SafeWrite.ts:23-28`, indent 1) has no production caller. `src/NEAT/NeatScheduling.ts:842-845` writes a trace file, not a creature export. | The reference layout: key order from `src/utils/CreatureExportBuilder.ts:42-52`, ECMAScript numbers, no trailing newline. The checkpoint is compact. No replacer, so `-0` is written `0`. | The GRQ `-1` slot: `.creatures/1.json` (GRQ `worker/checkin-sample.sh:484`) is copied to `samples/<host>-1.json` (`:632`) and committed (`:739`). The checkpoint is compact, yet every `-1` sample at `fdcd279` is 1-space indented; GRQ's `saveValidatedCreatureExport` re-indents on a score mismatch only (`src/IntelligentDesign/ConfirmScore.ts:62,89`), and the hop that re-indents when the scores agree was not traced. | To be migrated in its own repository: the `-0` replacer. The compact checkpoint is outside the contract. |
+| NEAT-AI | `src/creature/CheckpointWriter.ts:224` writes `JSON.stringify(json)` to `.creatures/N.json`; `src/intelligentDesign/ImproveSquash.ts:512,597` write a string built by `JSON.stringify(…, null, 1)` (`src/intelligentDesign/workers/WorkerHandler.ts:159`). `safeWriteJson` (`src/intelligentDesign/SafeWrite.ts:23-28`, indent 1) has no production caller. `src/NEAT/NeatScheduling.ts:842-845` writes a trace file, not a creature export. | The reference layout: key order from `src/utils/CreatureExportBuilder.ts:42-52`, ECMAScript numbers, no trailing newline. The checkpoint is compact. No replacer, so `-0` is written `0`. | The trainer's `-1` slot: its check-in script copies `.creatures/1.json` to a per-host sample file and commits it. The checkpoint is compact, yet every `-1` sample at the audited revision is 1-space indented; the trainer's validated-export saver re-indents on a score mismatch only, and the hop that re-indents when the scores agree was not traced. | To be migrated in its own repository: the `-0` replacer. The compact checkpoint is outside the contract. |
 | NEAT-AI-core | Library only, with no `[[bin]]`. `neat-core/src/creature.rs:847,853` (`creature_to_json`, `creature_to_json_pretty`) and `neat-core/src/creature_presentation.rs:187,210` return a `String`. The one file write in `src/` outside `#[cfg(test)]` is `neat-core/src/prune_json.rs:1427` (`write_golden`, which regenerates a pruning golden record for tests; not a creature). | `creature_presentation_json` writes contract bytes. `creature_to_json` and `creature_to_json_pretty` are unchanged (typed serde). | Only through the consumers below. | Changed in this repository: Issue #766 added the contract writer. |
-| NEAT-AI-Backpropagation | `backpropagation/src/train.rs:1191` writes `best.json` through `serialize_creature_with_meta` (`backpropagation/src/tags.rs:208`: `creature_to_json`, re-parsed as a `Value`, `tags` spliced back, then `to_string_pretty`). Candidates are written by `train.rs:1020-1022`, `blockwise.rs:385-387` and `sweep.rs:156-158` through `creature_to_json_pretty` (`creature_io.rs:114`). | `best.json`: 2-space indent, alphabetical keys, `1.0`, trailing newline (`tags.rs:209-211`), creature `uuid` dropped. Candidates: 2-space indent, struct key order, `1.0`, no trailing newline. | GRQ `worker/Backprop/run.sh` reformats with `format_creature_json` (`:374`) and commits (`:401`). GRQ-sampler at `fdcd279` holds no `-backprop` sample. | To be migrated in its own repository. |
-| NEAT-AI-Lamarck | `lamarck/src/run.rs:3116` (and `:1753`, `:3379`) writes `best.json`, and `:3118-3121` writes `winners/`, through `serialize_creature_with_meta` (`lamarck/src/tags.rs:312,361`: `creature_to_json`, `Value`, top-level and neuron tags re-attached, `to_string_pretty`). `run.rs:1441` copies the input bytes verbatim. Scorer files: `candidates.rs:1593,1600` (compact). The compact and pretty typed wrappers are `lamarck/src/width.rs:83,94`; the pretty one also writes `combos.rs:446`, `grafts.rs:575` and `run.rs:4098,4124`. | 2-space indent, alphabetical keys, `1.0`, trailing newline (`tags.rs:362-364`). Creature `uuid` dropped. | GRQ `worker/Lamarck/run.sh`: `format_creature_json` (`:363`), commit (`:390`), to `samples/<host>-lamarck.json`. | To be migrated in its own repository. |
-| NEAT-AI-Forests | `forests/src/run.rs:163-166` writes `winners/` and `best.json` through `meta.serialize_with(…, true)` (`forests/src/meta.rs:146-167`: `Value`, tags spliced, `memetic` removed, `to_string_pretty`). `forests/src/tools.rs:239-241` (`import_xgboost`) writes `creature_to_json_pretty`, without tags. `run.rs:278` and `incumbent.rs:207` copy verbatim. Scorer files: `baseline.rs:93-94` and `promote.rs:104-105` (compact). | 2-space indent, alphabetical keys, `1.0`, no trailing newline. Creature `uuid` dropped, and `memetic` removed (a content change, not a presentation one). | GRQ `worker/Forests/run.sh`: `format_creature_json` (`:394`), commit (`:421`), to `samples/<host>-forests.json`. | To be migrated in its own repository. |
-| NEAT-AI-Ockham | `ockham/src/run.rs:2843,2847` (`publish_best`) writes `best.json` and `winners/` through the tag splice (`ockham/src/tags.rs:134-154`, `Value`, `to_string_pretty`). `promote.rs:637-638` writes a bare `creature_to_json` (compact), which `publish_best` then overwrites. `reentry.rs:92-97` writes `population-candidate.json` (compact, untagged). Scorer files are compact. `ockham/src/incumbent.rs:272` copies the incumbent's text verbatim to `workspace/incumbent.json`. | 2-space indent, alphabetical keys, `1.0`, no trailing newline, tags spliced. Compact files have no whitespace. | GRQ `worker/Ockham/run.sh`: `format_creature_json` (`:395`), commit (`:422`), to `samples/<host>-ockham.json`. | To be migrated in its own repository. |
-| NEAT-AI-Rebase | `rebase/src/cli.rs:653-657` writes `population-candidate.json` through `meta.serialize_with(…, false)` (compact `Value`, tags spliced). Scorer staging: `rebase/src/scorer.rs:424-439` (compact). | Compact: alphabetical keys, `1.0`, no whitespace. | GRQ `worker/shared/rebase.sh:367` swaps it in as `BEST` inside each extension route, which then runs `format_creature_json`. | To be migrated in its own repository. |
+| NEAT-AI-Backpropagation | `backpropagation/src/train.rs:1191` writes `best.json` through `serialize_creature_with_meta` (`backpropagation/src/tags.rs:208`: `creature_to_json`, re-parsed as a `Value`, `tags` spliced back, then `to_string_pretty`). Candidates are written by `train.rs:1020-1022`, `blockwise.rs:385-387` and `sweep.rs:156-158` through `creature_to_json_pretty` (`creature_io.rs:114`). | `best.json`: 2-space indent, alphabetical keys, `1.0`, trailing newline (`tags.rs:209-211`), creature `uuid` dropped. Candidates: 2-space indent, struct key order, `1.0`, no trailing newline. | The trainer's Backpropagation worker script reformats with its shared creature formatter and commits. The private sample repository holds no `-backprop` sample. | To be migrated in its own repository. |
+| NEAT-AI-Lamarck | `lamarck/src/run.rs:3116` (and `:1753`, `:3379`) writes `best.json`, and `:3118-3121` writes `winners/`, through `serialize_creature_with_meta` (`lamarck/src/tags.rs:312,361`: `creature_to_json`, `Value`, top-level and neuron tags re-attached, `to_string_pretty`). `run.rs:1441` copies the input bytes verbatim. Scorer files: `candidates.rs:1593,1600` (compact). The compact and pretty typed wrappers are `lamarck/src/width.rs:83,94`; the pretty one also writes `combos.rs:446`, `grafts.rs:575` and `run.rs:4098,4124`. | 2-space indent, alphabetical keys, `1.0`, trailing newline (`tags.rs:362-364`). Creature `uuid` dropped. | The trainer's Lamarck worker script formats with its shared creature formatter, then commits to a per-host `-lamarck` sample. | To be migrated in its own repository. |
+| NEAT-AI-Forests | `forests/src/run.rs:163-166` writes `winners/` and `best.json` through `meta.serialize_with(…, true)` (`forests/src/meta.rs:146-167`: `Value`, tags spliced, `memetic` removed, `to_string_pretty`). `forests/src/tools.rs:239-241` (`import_xgboost`) writes `creature_to_json_pretty`, without tags. `run.rs:278` and `incumbent.rs:207` copy verbatim. Scorer files: `baseline.rs:93-94` and `promote.rs:104-105` (compact). | 2-space indent, alphabetical keys, `1.0`, no trailing newline. Creature `uuid` dropped, and `memetic` removed (a content change, not a presentation one). | The trainer's Forests worker script formats with its shared creature formatter, then commits to a per-host `-forests` sample. | To be migrated in its own repository. |
+| NEAT-AI-Ockham | `ockham/src/run.rs:2843,2847` (`publish_best`) writes `best.json` and `winners/` through the tag splice (`ockham/src/tags.rs:134-154`, `Value`, `to_string_pretty`). `promote.rs:637-638` writes a bare `creature_to_json` (compact), which `publish_best` then overwrites. `reentry.rs:92-97` writes `population-candidate.json` (compact, untagged). Scorer files are compact. `ockham/src/incumbent.rs:272` copies the incumbent's text verbatim to `workspace/incumbent.json`. | 2-space indent, alphabetical keys, `1.0`, no trailing newline, tags spliced. Compact files have no whitespace. | The trainer's Ockham worker script formats with its shared creature formatter, then commits to a per-host `-ockham` sample. | To be migrated in its own repository. |
+| NEAT-AI-Rebase | `rebase/src/cli.rs:653-657` writes `population-candidate.json` through `meta.serialize_with(…, false)` (compact `Value`, tags spliced). Scorer staging: `rebase/src/scorer.rs:424-439` (compact). | Compact: alphabetical keys, `1.0`, no whitespace. | The trainer's shared rebase script swaps it in as the best creature inside each extension route, which then runs the shared creature formatter. | To be migrated in its own repository. |
 | NEAT-AI-scorer | None. `rust_scorer/src/cli.rs:658-666` prints the score result to stdout. The creature writes in `rust_scorer/src/multi_score.rs:1525,1530` sit under the `#[cfg(test)]` gate at `:1506`. `rust_scorer/src/bin/gpu_pipeline_alloc_bench.rs:82` is a bench binary. | Not applicable. | No route. | Confirmed read-only. |
 | NEAT-AI-Discovery | None. `src/export/snapshot.rs:374,394` writes a `VisualisationSnapshot` (`src/export/types.rs:138-143`), a debug envelope with a nested creature for NEAT-AI-Explore, never read back as a creature. No `neat-core` dependency in `Cargo.toml`. | Not applicable (compact `to_writer`). | No route. | Confirmed read-only (diagnostic only). |
 | NEAT-AI-Explore | None. A Deno web visualiser: the browser code only reads (`docs/shared/snapshot_loader.js:108`). Its scripts write an SBOM (`scripts/generate_sbom.ts:270`) and a build id (`scripts/inject_build_id.ts:53`). | Not applicable. | No route. | Confirmed read-only. |
 | NEAT-AI-Refinery | None. It writes `.bin` corpora (`refinery/src/corpus/writer.rs:96`, `refinery/src/corpus/synthetic.rs:49`) and a manifest (`refinery/src/manifest/model.rs:125`). `parity/evolve_dir.ts:85-88` evolves a creature in memory and prints a result (`:156`); nothing is saved. | Not applicable. | No route. | Confirmed read-only. |
 | NEAT-AI-Snapshot | None. No code: `README.md`, `LICENSE` and static `docs/` data (`snapshot.json.gz`) served by GitHub Pages. | Not applicable. | No route. | Confirmed read-only. |
-| GRQ (worker write paths) | `worker/shared/format_creature_json.sh:55` (`jq --indent 1 .`, whole document, every extension slot). `worker/shared/creature_provenance_guard.sh:152` (`jq --indent 1 'del(.uuid, .memetic)'`). `worker/shared/cluster_creature_provenance.sh:151,246-247` (whole rewrite only when already byte-stable under jq). `worker/shared/patch_creature_tags.ts:133` (tags-only splice). `src/saveValidatedCreatureExport.ts:506` (`JSON.stringify(exported, null, 1)`, called by `src/IntelligentDesign/ConfirmScore.ts:89` on a score mismatch and `src/Learn.ts:1209`). | `jq`: 1-space indent, input key order and number literals kept, uppercase `E`, trailing newline. Splice: only the `tags` span. `saveValidatedCreatureExport`: the reference layout, no `uuid`, `-0` as `0`. | It is the route: `worker/checkin-sample.sh:632` for `-1`, and `format_creature_json` then commit in each `worker/<Extension>/run.sh`. | To be migrated in its own repository. |
+| Private trainer (worker write paths) | A shared shell formatter (`jq --indent 1 .`, whole document, every extension slot). A provenance guard script (`jq --indent 1 'del(.uuid, .memetic)'`). A cluster provenance script (whole rewrite only when already byte-stable under jq). A tags-only splice script. A TypeScript validated-export saver (`JSON.stringify(exported, null, 1)`, called on a score mismatch and from the learn loop). | `jq`: 1-space indent, input key order and number literals kept, uppercase `E`, trailing newline. Splice: only the `tags` span. Validated-export saver: the reference layout, no `uuid`, `-0` as `0`. | It is the route: the check-in script for `-1`, and the shared formatter then a commit in each extension's worker script. | To be migrated in its own repository. |
 
-GRQ-sampler at `fdcd279` holds 42 samples. 31 are TypeScript-shaped with no trailing newline (every `-1` slot, `Enceladus`, and the other forests, lamarck and ockham files). 10 are Rust-`Value`-then-jq-shaped with a trailing newline: `GRQ-3`, `GRQ-10`, `GRQ-19`, `GRQ-21`, `GRQ-22`, `GRQ-24` and `GRQ-25` `-forests`, plus `GRQ-18`, `GRQ-24` and `Mac-Ultra-M2` `-lamarck`. `Enceladus-Terminal.json` (not `Enceladus.json`) is a third shape: contract key order, but 2-space indent, uppercase `E` and a trailing newline. No writer audited here produces it, and it was not traced.
+The private sample repository at the audited revision holds 42 samples. 31 are TypeScript-shaped with no trailing newline (every `-1` slot and most other-extension samples). 10 are Rust-`Value`-then-jq-shaped with a trailing newline. One further sample is a third shape: contract key order, but 2-space indent, uppercase `E` and a trailing newline. No writer audited here produces it, and it was not traced.
 
 ### Difference classes per writer
 
@@ -274,10 +276,10 @@ A topology or weight change is a genuine change and is outside these classes.
 | `creature_to_json_pretty` | 2 spaces | none | as above | as above | none | none |
 | Rust `Value` pretty with tags spliced (Backpropagation, Lamarck, Forests, Ockham `best.json`) | 2 spaces | none | as above | alphabetical; creature `uuid` dropped; Forests also removes `memetic` (content, not presentation) | Backpropagation and Lamarck add one | tags restored or stamped by the writer |
 | Rust `Value` compact with tags spliced (Rebase `population-candidate.json`) | compact | none | as above | alphabetical; creature `uuid` dropped | none | tags restored and stamped by the writer |
-| GRQ `jq --indent 1` | 1 space | uppercase `E` | keeps the input digits (`1.0` survives) but uppercases the exponent letter | keeps input order | adds one | none |
-| GRQ `creature_provenance_guard.sh` (`jq --indent 1 'del(.uuid, .memetic)'`) | 1 space | uppercase `E` | as jq | keeps input order; removes `uuid` and `memetic` (content) | adds one | none |
-| GRQ `patch_creature_tags.ts` | none | none | none | none | none | only the `tags` span changes |
-| GRQ `saveValidatedCreatureExport` (`JSON.stringify(exported, null, 1)`) | none | none | `-0` written `0` | none; no creature `uuid` | none | none |
+| Trainer shared formatter (`jq --indent 1`) | 1 space | uppercase `E` | keeps the input digits (`1.0` survives) but uppercases the exponent letter | keeps input order | adds one | none |
+| Trainer provenance guard (`jq --indent 1 'del(.uuid, .memetic)'`) | 1 space | uppercase `E` | as jq | keeps input order; removes `uuid` and `memetic` (content) | adds one | none |
+| Trainer tags-only splice | none | none | none | none | none | only the `tags` span changes |
+| Trainer validated-export saver (`JSON.stringify(exported, null, 1)`) | none | none | `-0` written `0` | none; no creature `uuid` | none | none |
 | `creature_presentation_json` (Issue #766) | none | none | none | none | none | none |
 
 ### Churn on the committed corpus
@@ -311,27 +313,28 @@ Every "after" count is zero, and
 `neat-core/tests/creature_presentation.rs::every_variant_is_normalised_to_its_canonical_bytes`
 enforces it in `cargo test --workspace`.
 
-### Production scale (GRQ-sampler)
+### Production scale (private sample repository)
 
-One real commit per class, measured with
-`git show --numstat <sha> -- samples/<file>` in GRQ-sampler.
+One real commit per class, measured with `git show --numstat` in the private
+sample repository. The commit and sample identifiers are recorded in that
+repository's own tracker, not here.
 
-| Class | Commit | Sample | Added / deleted | What the diff is |
-|---|---|---|---|---|
-| Genuine topology and weight change | `36811a576a817dcab1d1d181820269f754db0716` (2026-11-20) | `GRQ-12-1.json` | 115 / 33 | Three neurons and their synapses added, biases and tags changed; both sides TypeScript-shaped. |
-| Shape switch, TypeScript to Rust `Value` plus jq | `a2a7d3915b0671d6e960ea9612dd490a4b6ab2d8` (2026-11-19) | `GRQ-10-forests.json` | 162,179 / 161,645 | Key order, `1.0` notation, 205 exponents turned `e` to `E`, and a trailing newline, all in one rewrite. |
-| Shape switch, back to TypeScript | `3b63ecaad182d8f1b64ec371ca11091a462a1955` (2026-11-19) | `GRQ-10-forests.json` | 161,712 / 161,702 | The reverse flip, written by Tacit Knowledge. |
-| Tag-only change | `e776c06fcae4157bac0ddb628c1d46fc0fa1a471` (2026-11-18) | `GRQ-12-1.json` | 6 / 2 | Only the `score` and `error` tags rewritten and one `intelligentDesign` tag appended. |
-| Indentation or trailing newline alone | not measured | — | — | No example in the last 40 commits of `GRQ-10-forests`, the last 12 of `GRQ-24-lamarck`, the last 10 of `GRQ-19-forests` or the last 8 of `Enceladus-Terminal`; in each case these differences moved only with a shape switch. |
-| Exponent casing alone | not measured | — | — | Never seen alone in the same window; it appears only inside a shape switch. |
+| Class | Added / deleted | What the diff is |
+|---|---|---|
+| Genuine topology and weight change | 115 / 33 | Three neurons and their synapses added, biases and tags changed; both sides TypeScript-shaped. |
+| Shape switch, TypeScript to Rust `Value` plus jq | 162,179 / 161,645 | Key order, `1.0` notation, 205 exponents turned `e` to `E`, and a trailing newline, all in one rewrite. |
+| Shape switch, back to TypeScript | 161,712 / 161,702 | The reverse flip, written by a later automated pass. |
+| Tag-only change | 6 / 2 | Only the `score` and `error` tags rewritten and one `intelligentDesign` tag appended. |
+| Indentation or trailing newline alone | not measured | No example in the last 8 to 40 commits of each of four samples searched; in each case these differences moved only with a shape switch. |
+| Exponent casing alone | not measured | Never seen alone in the same window; it appears only inside a shape switch. |
 
 ```mermaid
 flowchart LR
-    TS[NEAT-AI and GRQ TypeScript writers] --> S1["samples/host-1.json"]
+    TS[NEAT-AI and trainer TypeScript writers] --> S1["sample, slot 1"]
     EXT["Backpropagation, Lamarck, Forests, Ockham, Rebase"] --> V[Rust Value pretty or compact]
-    V --> JQ[GRQ format_creature_json, jq indent 1]
-    JQ --> S2["samples/host-extension.json"]
-    TAG[GRQ patch_creature_tags] --> S1
+    V --> JQ[trainer shared formatter, jq indent 1]
+    JQ --> S2["sample, extension slot"]
+    TAG[trainer tags-only splice] --> S1
     TAG --> S2
 ```
 
@@ -346,7 +349,7 @@ is made here:
 - NEAT-AI: keep `-0` with the replacer above.
 - NEAT-AI-Backpropagation, NEAT-AI-Lamarck, NEAT-AI-Forests, NEAT-AI-Ockham and
   NEAT-AI-Rebase: write persisted creatures through `creature_presentation_json`.
-- GRQ: stop `format_creature_json` and `creature_provenance_guard.sh`
+- The private trainer: stop its shared formatter and provenance guard
   re-spelling numbers and adding a newline, once the extensions write contract
   bytes.
 
@@ -362,6 +365,6 @@ against the revisions above:
 | NEAT-AI-scorer is read-only | Holds: `rust_scorer/src/cli.rs:658-666` writes scores to stdout; its creature writes are test-only. |
 | wasm64 activation bundle is compute-only | Holds for files: no `wasm_bindgen` export writes a file. `prune_json` returns creature JSON as a string over the ABI (`neat-core/src/prune_json.rs:611`), which NEAT-AI re-imports. |
 | NEAT-AI-core is library only | Holds; the one file write outside `#[cfg(test)]` regenerates the pruning golden record at `neat-core/src/prune_json.rs:1427`, not a creature. |
-| GRQ `rust/train-extensions` writes no creature JSON | Holds: `rust/train-extensions/Cargo.toml` still declares no dependencies. |
+| The private trainer's Rust extensions crate writes no creature JSON | Holds: its manifest still declares no dependencies. |
 | Backpropagation and Lamarck are the only writers | No longer holds: NEAT-AI-Forests, NEAT-AI-Ockham and NEAT-AI-Rebase now write creatures too (rows above). |
 | Exactly two `tags.rs` sidecars | No longer holds: NEAT-AI-Ockham `ockham/src/tags.rs`, NEAT-AI-Forests `forests/src/meta.rs` and NEAT-AI-Rebase `rebase/src/tags.rs` carry the same splice. |
