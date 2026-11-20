@@ -60,9 +60,8 @@ Closes #765.
   `semanticVersion, forwardOnly, neurons, synapses, input, output, tags`, then
   `memetic`. The creature `uuid` and memetic record positions come from that
   commit's golden fixtures, as recorded in the doc.
-- An interrupted earlier attempt left a worker handover note on this branch;
-  it was removed before the PR was readied, so the diff carries no handover
-  file.
+- An interrupted earlier attempt left a worker handover note on this branch; it
+  was removed before the PR was readied, so the diff carries no handover file.
 
 ## Evidence
 
