@@ -1626,10 +1626,17 @@ intentional differences are in
 [`docs/CREATURE_JSON_PRESENTATION.md`](docs/CREATURE_JSON_PRESENTATION.md); the
 committed corpus is `neat-core/tests/fixtures/creature_presentation/`.
 
+The Rust producer is `neat_core::creature_presentation` (Issue #766):
+`creature_presentation_json` takes a `serde_json::Value` document and keeps keys
+the typed structs do not model, and `creature_export_presentation_json` is the
+typed convenience. Both refuse a bad width, a non-finite number and a `null`
+with `PresentationError`. `creature_to_json` and `creature_to_json_pretty` are
+unchanged.
+
 | Gate | Where | What it proves |
 |---|---|---|
 | `tests/creature_presentation_test.ts` | `quality.sh`, every non-draft PR (`wasm64-memory64-smoke`) | canonical files are byte-identical to the reference writer, variants differ in bytes only, keys follow the documented order |
-| `neat-core/tests/creature_presentation.rs` | `cargo test` | every canonical file parses with `parse_creature_json` and compiles with `compile_creature`, and the typed-serde variant is byte-identical to `creature_to_json_pretty`'s output |
+| `neat-core/tests/creature_presentation.rs` | `cargo test` | the Rust producer writes every canonical file byte-identically, every variant normalises to its canonical bytes, the rewrite is semantically lossless and scores unchanged, and zero width, over-ceiling width, non-finite and `null` are refused; the typed-serde variant still matches `creature_to_json_pretty`'s output |
 | `tests/scripts/creature_presentation_gate.bats` | `bats` | both `quality.sh` and `ci.yml` run the Deno gate |
 
 ### Creature validation contract (Issue #559)

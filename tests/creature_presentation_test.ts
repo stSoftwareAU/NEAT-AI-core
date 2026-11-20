@@ -6,8 +6,8 @@
 // trailing newline. This gate fails when a canonical file drifts from the
 // writer's output, when a variant stops meaning the same document, or when a
 // file loses a feature the corpus exists to cover (so the checks cannot go
-// vacuous). The Rust side (`neat-core/tests/creature_presentation.rs`) checks
-// the same files parse and compile.
+// vacuous). The Rust side (`neat-core/tests/creature_presentation.rs`) also
+// writes the same files through the contract serialiser and checks the bytes.
 //
 // Run: deno test --allow-read tests/creature_presentation_test.ts
 

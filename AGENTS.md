@@ -192,6 +192,7 @@ expressible, and the synthetic tests catch header-overrun and undercover cases.
 - **`training_bin_stream`** (`neat-core/src/training_bin_stream.rs`) — **one** chunked `.bin` scan API: pipelined double-buffer reads on native hosts, sequential `File::read` chunks on the wasm family (same `for_each_read_chunk` callback). Used by **NEAT-AI-scorer** for production-sized forward-only scoring.
 - **`reachability`** (`neat-core/src/reachability.rs`, Issue #759) — O(V+E) input→output reachability diagnostics (Live / BiasDriven / DeadEnd / Isolated). The bridge-biased proposal filter is not part of core; it lives solely in the example harness `neat-core/examples/reachability_mutation_experiment.rs`. Diagnostic only: `prune_cleanup` stays the sole rewrite owner, and a BiasDriven neuron is not removable on reachability alone. Experiment harness and results: [`docs/research/reachability-guided-mutation.md`](docs/research/reachability-guided-mutation.md).
 - Root **`Cargo.toml`** is a **virtual workspace**; **`[workspace.package].version`** is what the PR **auto-bump** job edits; **`neat-core`** uses `version.workspace = true`.
+- **`creature_presentation`** (`neat-core/src/creature_presentation.rs`, Issue #766) — the single Rust home of the persisted creature JSON layout (contract: [`docs/CREATURE_JSON_PRESENTATION.md`](docs/CREATURE_JSON_PRESENTATION.md)). Plain Rust: no `cfg`, no file access.
 - **`scripts/runlib.sh`** (Issue #680) — the canonical build → install → clean helper the NEAT-AI Rust siblings run. It lives **here** and is copied byte-for-byte downstream: change behaviour on `Develop` in this repository and re-copy outward, never edit a sibling's copy. Contract and gate: [README "Canonical `runlib.sh`"](README.md#canonical-runlibsh-issue-680), `tests/scripts/runlib.bats`.
 - **`scripts/lockfile-freshness.sh`** (Issue #695) — the lockfile-freshness gate and re-lock. The version bump edits `[workspace.package].version`, which every lockfile **outside** the root workspace records for the `neat-core` path dependency it resolves, so a root-only re-lock stales the siblings by one bump per merge. `--check` (the `quality` CI job and `quality.sh`) fails while any committed `Cargo.lock` no longer resolves against the manifest beside it; `--update` (the `version-increment` job, after the bump and before the commit) re-locks them with `cargo update --workspace`, which moves local path packages only and leaves the quarantine's remote choices intact. Both modes sweep `find . -name Cargo.lock`, so a third lockfile needs no wiring. Gate: `tests/scripts/lockfile_freshness.bats`.
 - **`scripts/family-pins.sh`** (Issue #681) — the canonical helper that moves a consumer's NEAT-AI family git-tag pins to the latest release, under the same copy contract: it lives **here** and is copied byte-for-byte downstream, never edited in a sibling. Contract and gate: [README "Canonical `family-pins.sh`"](README.md#canonical-family-pinssh-issue-681), `tests/scripts/family_pins.bats`.
@@ -488,14 +489,17 @@ the rule that a `CreatureExport` must declare `1 <= input <= MAX_NODE_COUNT` and
 `neurons`** (input neurons are not listed there), so the rule is enforced at
 every boundary — `parse_creature_json` (after serde), `compile_creature`
 (before any other validation) and `creature_to_json` / `creature_to_json_pretty`
-(a widthless creature is never *written*) — with the typed
+(a widthless creature is never *written*), plus the two presentation writers
+`creature_presentation_json` / `creature_export_presentation_json` (Issue #766)
+— with the typed
 `CreatureError::InvalidInputCount { found }` / `InvalidOutputCount { found }`.
 There is no `#[serde(default)]` on either field and there never will be: a
 missing key is a serde error, not a silent zero. Adding a new entry point that
 accepts or emits creature JSON means calling the helper there; do not re-inline
 the comparison. `neat-core/tests/creature_width_contract.rs` pins the rule at
 all four sites (each was mutation-checked individually — dropping any one call
-fails its own tests).
+fails its own tests); the presentation writers are pinned in that file and in
+`neat-core/tests/creature_presentation.rs`.
 
 The **upper** bound is there for a different reason and must stay ahead of every
 caller (Issue #622). `input` is a declared count the payload never backs, and
@@ -522,6 +526,21 @@ routes that refuse it, so re-ordering the check back behind the walk fails even
 though the returned error would be unchanged; and for the prune, which succeeds,
 so re-materialising the input range fails even though the pruned record would be
 unchanged.
+
+## One persisted presentation for creature JSON (Issue #766)
+
+`neat-core/src/creature_presentation.rs` is the single home of the persisted
+creature JSON layout for Rust writers: 1-space indent, ECMAScript number text,
+`-0` kept, per-kind key order, no trailing newline
+([`docs/CREATURE_JSON_PRESENTATION.md`](docs/CREATURE_JSON_PRESENTATION.md)).
+`creature_presentation_json` (document level, keeps keys the structs do not
+model) and `creature_export_presentation_json` (typed convenience) both refuse a
+bad width through `validate_creature_width` — never re-inline it — and refuse a
+`null` (`NullValue`) or a number with no finite `f64` (`NonFiniteNumber`) with
+`PresentationError` rather than writing `null`. `creature_to_json` and `creature_to_json_pretty` stay byte-for-byte
+unchanged (phase 1 of the three-phase flow). Do not reorder struct fields to
+chase the layout and do not enable `serde_json`'s `preserve_order`; the writer
+owns the order. `neat-core/tests/creature_presentation.rs` is the gate.
 
 ## `serde_json` keeps `float_roundtrip` (PR #571)
 

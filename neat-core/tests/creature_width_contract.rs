@@ -23,9 +23,11 @@ use neat_core::creature_validate_json::MAX_REQUEST_NEURONS;
 use neat_core::if_graft::{GraftError, validate_creature_topology};
 use neat_core::network::MAX_NODE_COUNT;
 use neat_core::{
-    CleanupError, CreatureError, CreatureExport, NeuronExport, SynapseExport, ValidateOptions,
-    ValidationStats, cleanup_creature, compile_creature, creature_to_json, creature_to_json_pretty,
-    creature_validate, parse_creature_json, validate_synapse_and_memetic_rules,
+    CleanupError, CreatureError, CreatureExport, NeuronExport, PresentationError, SynapseExport,
+    ValidateOptions, ValidationStats, cleanup_creature, compile_creature,
+    creature_export_presentation_json, creature_presentation_json, creature_to_json,
+    creature_to_json_pretty, creature_validate, parse_creature_json,
+    validate_synapse_and_memetic_rules,
 };
 
 /// Zero-input creature JSON exactly as written in the issue's acceptance
@@ -230,6 +232,66 @@ fn pretty_serialise_refuses_zero_input_and_zero_output() {
     match creature_to_json_pretty(&creature_with_widths(1, 0)) {
         Err(CreatureError::InvalidOutputCount { found }) => assert_eq!(found, 0),
         other => panic!("expected InvalidOutputCount, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// creature_presentation_json / creature_export_presentation_json — the contract
+// serialiser (Issue #766) never writes a widthless creature either.
+// ---------------------------------------------------------------------------
+
+fn presentation_refusals(creature: &CreatureExport) -> [Result<String, PresentationError>; 2] {
+    let document = serde_json::to_value(creature).expect("creature converts to a document");
+    [
+        creature_export_presentation_json(creature),
+        creature_presentation_json(&document),
+    ]
+}
+
+#[test]
+fn presentation_serialise_refuses_zero_input() {
+    for result in presentation_refusals(&creature_with_widths(0, 1)) {
+        match result {
+            Err(PresentationError::Creature(CreatureError::InvalidInputCount { found })) => {
+                assert_eq!(found, 0)
+            }
+            other => panic!("expected InvalidInputCount, got {other:?}"),
+        }
+    }
+    // Control: the same fixture with a legal width is written.
+    for result in presentation_refusals(&creature_with_widths(1, 1)) {
+        assert!(result.is_ok());
+    }
+}
+
+#[test]
+fn presentation_serialise_refuses_zero_output() {
+    for result in presentation_refusals(&creature_with_widths(1, 0)) {
+        match result {
+            Err(PresentationError::Creature(CreatureError::InvalidOutputCount { found })) => {
+                assert_eq!(found, 0)
+            }
+            other => panic!("expected InvalidOutputCount, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn presentation_serialise_refuses_input_past_the_ceiling() {
+    for result in presentation_refusals(&creature_with_widths(MAX_NODE_COUNT + 1, 1)) {
+        assert!(
+            matches!(
+                result,
+                Err(PresentationError::Creature(
+                    CreatureError::TooManyNodes { .. }
+                ))
+            ),
+            "{result:?}"
+        );
+    }
+    // Control: the ceiling itself is addressable.
+    for result in presentation_refusals(&creature_with_widths(MAX_NODE_COUNT, 1)) {
+        assert!(result.is_ok());
     }
 }
 
