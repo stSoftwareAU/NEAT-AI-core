@@ -125,7 +125,7 @@ flowchart LR
 - **met** — A one-weight change makes exactly one output line differ; a one-tag change touches only that tag's lines — evidence: `neat-core/tests/creature_presentation.rs::changing_one_number_changes_exactly_one_line`, `::adding_a_creature_tag_changes_only_the_tags_array` — reviewer: partial — reason: the reviewer noted the tag test also allows the previous tag's `}` to gain a comma. JSON without trailing commas forces that line, and the test asserts it is exactly `  },` and that every changed line is inside the creature `tags` array
 - **met** — A zero-width creature, an over-ceiling width and a non-finite number are each refused with a typed error by both entry points, and nothing is written — evidence: `neat-core/tests/creature_presentation.rs::zero_input_is_refused_by_both_entries_and_one_input_is_accepted`, `::zero_output_is_refused_by_both_entries_and_one_output_is_accepted`, `::an_input_width_past_the_node_ceiling_is_refused_and_the_ceiling_itself_is_accepted`, `::a_non_finite_typed_number_is_refused_with_its_path`, `::a_null_in_a_document_is_refused_with_its_path`; `neat-core/tests/creature_width_contract.rs::presentation_serialise_refuses_zero_input`, `::presentation_serialise_refuses_zero_output`, `::presentation_serialise_refuses_input_past_the_ceiling` — reviewer: met
 - **met** — `creature_to_json` and `creature_to_json_pretty` output is unchanged, and the existing tests pass unmodified — evidence: `neat-core/src/creature.rs` not in the diff; `neat-core/tests/creature_presentation.rs::typed_serde_variant_is_what_creature_to_json_pretty_writes_today` unchanged and passing; `./quality.sh` passed — reviewer: met
-- **partial** — The `downstream-consumers` CI job passes — evidence: the change adds API only, and no existing item changes — reviewer: missing — reason: CI not yet verified — remaining: merge-verification-only
+- **partial** — The `downstream-consumers` CI job passes — evidence: locally, `scripts/check-downstream-consumers.sh < /dev/null` (clone mode, `Develop`) exited 0 with "all 6 registered consumers compile against this core" — reviewer: missing — reason: CI not yet verified — remaining: merge-verification-only
 - **met** — `./quality.sh` and `cargo test --workspace` pass — evidence: `./quality.sh < /dev/null` exited 0 on the final code commit ("All quality checks passed!", 81 `test result: ok`); it runs `cargo test --workspace --lib --tests --all-features` and the doc tests — reviewer: missing — reason: the reviewer could not run the gate; it was run here and passed
 - **unrequested** — `PresentationError::NullValue` and the whole-document `null` scan — reviewer: unrequested — reason: this is how the document entry refuses a non-finite number, since a `Value` cannot hold one (see Essential Design Decisions)
 - **unrequested** — README "Rust producer" paragraph and gate row, the AGENTS.md repository-layout bullet, the fixture README "Gates" bullet, and the reworded `tests/creature_presentation_test.ts` header comment — reviewer: unrequested — reason: each described the old Rust gate and was made false by this change
@@ -181,7 +181,8 @@ This repository has no `CODING-STANDARDS.md`; the reviewer checked against
 - Not run:
   - `cargo check --target wasm32-unknown-unknown`, because the target is not
     installed;
-  - the `downstream-consumers` job, which runs on the PR;
+  - the `downstream-consumers` CI job itself, which runs on the PR. The same
+    script passed locally in clone mode against all six consumers;
   - the `arbitrary_precision` overflow branch of `NonFiniteNumber`, which needs
     that feature unified into the build.
 
