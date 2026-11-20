@@ -412,7 +412,12 @@ fn number_text_round_trips_and_has_the_ecmascript_shape_across_a_sweep() {
         }
     }
     for base in [1e21, 1e-6, 1e-7, 1e20, f64::MIN_POSITIVE, f64::MAX, 5e-324] {
-        values.extend([base, next_up(base), next_down(base)]);
+        // `next_up(f64::MAX)` is infinite, which JSON cannot hold.
+        values.extend(
+            [base, next_up(base), next_down(base)]
+                .into_iter()
+                .filter(|v| v.is_finite()),
+        );
     }
     for i in 1..2000u64 {
         values.push(f64::from_bits(i)); // subnormals
