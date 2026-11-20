@@ -1,9 +1,9 @@
-//! Issue #765 — the persisted-creature presentation corpus parses and compiles.
+//! Issues #765 and #766 — the persisted-creature presentation corpus parses,
+//! compiles, and is what the Rust contract writer emits.
 //!
 //! `tests/fixtures/creature_presentation/canonical/` holds creature JSON in the
-//! presentation contract form (see that directory's README). This crate does
-//! not own the byte layout — the Deno gate `tests/creature_presentation_test.ts`
-//! does — but every canonical file must still be a creature this crate reads:
+//! presentation contract form (see that directory's README). Every canonical
+//! file must be a creature this crate reads:
 //! [`parse_creature_json`] accepts it and [`compile_creature`] builds a network
 //! whose shape matches what the file declares. Listing the directory against a
 //! fixed set of names means an emptied or renamed corpus fails rather than
@@ -14,6 +14,13 @@
 //! canonical `memetic_by_id.json`, and `docs/CREATURE_JSON_PRESENTATION.md` relies on
 //! that to describe today's Rust output. The test below fails if the writer's bytes
 //! move, so the fixture and the doc cannot silently go stale.
+//!
+//! The rest of the file pins `creature_presentation_json` and
+//! `creature_export_presentation_json` (Issue #766) to the corpus: byte-identical
+//! canonical rewrite, variant normalisation, a lossless f64-bit walk, number form,
+//! small diffs, unchanged scoring and the refusals. The Deno gate
+//! `tests/creature_presentation_test.ts` checks the same corpus bytes from
+//! TypeScript.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -337,7 +344,7 @@ fn numbers_are_written_as_ecmascript_number_to_string() {
         ),
         (0.0, "0", "zero"),
         (-0.0, "-0", "contract keeps the sign of zero"),
-        (0.1, "0.1", "0 < n <= 21 handled as 0.ddd; n = 0"),
+        (0.1, "0.1", "-6 < n <= 0: 0.ddd with n = 0 leading zeros"),
         (-1.5e-9, "-1.5e-9", "sign prefix, exponent form"),
         (1.5, "1.5", "0 < n <= 21: split at n"),
         (0.0000015, "0.0000015", "n = -5: decimal"),
