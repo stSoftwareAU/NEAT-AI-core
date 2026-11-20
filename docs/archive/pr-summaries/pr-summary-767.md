@@ -54,7 +54,7 @@ churn table's "after" column can be reproduced from the tree. Closes #767.
 
 ## Evidence
 
-Documentation change plus one example binary; no UI.
+Documentation change, one example binary and one bats guard over `docs/*.md`; no UI.
 
 - The doc's reproduction block, run on the final head:
   - before: `67 67`, `106 106` and `100 100`;

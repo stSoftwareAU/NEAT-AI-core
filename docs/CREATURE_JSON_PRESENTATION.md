@@ -343,7 +343,8 @@ flowchart LR
 In this repository, the write path changed in `neat-core/src/creature_presentation.rs`
 (re-exported from `neat-core/src/lib.rs`), added by Issue #766. Issue #767 adds
 `neat-core/examples/creature_presentation_rewrite.rs`, which reproduces the
-churn table, and this section. Every other change is owned elsewhere, and none
+churn table, `tests/scripts/docs_private_repo_reference.bats`, a guard over
+`docs/*.md` that pins this section at concept level, and this section. Every other change is owned elsewhere, and none
 is made here:
 
 - NEAT-AI: keep `-0` with the replacer above.
