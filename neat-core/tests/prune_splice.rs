@@ -1033,8 +1033,9 @@ fn five_by_five(direct: &[(usize, usize, f64)]) -> CreatureExport {
 
 #[test]
 fn a_wide_relay_is_refused_while_a_narrow_one_beside_it_is_spliced() {
-    // `h-ok` has one edge each way; `h-id` would add 25 edges for the 10 it
-    // removes, 15 net new, so it stays.
+    // `h-ok` is spliced first, so `h-id` is planned against 24 pushes (the
+    // `input-0 -> output-0` edge now exists) for the 10 it removes: 14 net new,
+    // so it stays.
     let mut before = five_by_five(&[]);
     before.neurons.insert(
         0,

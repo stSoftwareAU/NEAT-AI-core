@@ -1457,22 +1457,9 @@ impl Engine {
                 .iter()
                 .filter(|s| s.from_uuid == uuid || s.to_uuid == uuid)
                 .count();
-            let target_uuids: HashSet<&str> = outward.iter().map(|o| o.to_uuid.as_str()).collect();
-            let mut taken: HashSet<(&str, &str, SynapseType)> = HashSet::new();
-            for s in &self.creature.synapses {
-                if s.from_uuid == uuid || s.to_uuid == uuid {
-                    continue;
-                }
-                if target_uuids.contains(s.to_uuid.as_str()) {
-                    let target_squash = squashes[&s.to_uuid];
-                    taken.insert((
-                        s.from_uuid.as_str(),
-                        s.to_uuid.as_str(),
-                        canonical_role(target_squash, role_of(s)),
-                    ));
-                }
-            }
-            let mut pushes = 0usize;
+            // The distinct keys the plan would write, in plan order; at most
+            // in x out, so small beside the synapse list.
+            let mut planned: HashSet<(&str, &str, SynapseType)> = HashSet::new();
             for (out, target_squash) in outward.iter().zip(targets.iter().copied()) {
                 let role = if target_squash == SquashType::If {
                     out.synapse_type.as_deref()
@@ -1481,21 +1468,35 @@ impl Engine {
                 };
                 let key_role = canonical_role(target_squash, parse_synapse_type(role));
                 for feed in &inward {
-                    if taken.insert((feed.from_uuid.as_str(), out.to_uuid.as_str(), key_role)) {
-                        pushes += 1;
-                    }
+                    planned.insert((feed.from_uuid.as_str(), out.to_uuid.as_str(), key_role));
                 }
                 if target_squash == SquashType::If && bias != 0.0 {
                     let from = support
                         .as_deref()
                         .expect("the qualification loop refused an IF target without one");
-                    if taken.insert((from, out.to_uuid.as_str(), key_role)) {
-                        pushes += 1;
-                    }
+                    planned.insert((from, out.to_uuid.as_str(), key_role));
                 }
-                if pushes.saturating_sub(touching) > MAX_NET_NEW_SYNAPSES_PER_SPLICE {
-                    return Ok(None);
+            }
+            // A planned key a surviving synapse already holds is merged, not
+            // pushed. Looked up rather than collected, so the scan allocates
+            // nothing however many edges the targets carry.
+            let target_uuids: HashSet<&str> = outward.iter().map(|o| o.to_uuid.as_str()).collect();
+            for s in &self.creature.synapses {
+                if s.from_uuid == uuid
+                    || s.to_uuid == uuid
+                    || !target_uuids.contains(s.to_uuid.as_str())
+                {
+                    continue;
                 }
+                let target_squash = squashes[&s.to_uuid];
+                planned.remove(&(
+                    s.from_uuid.as_str(),
+                    s.to_uuid.as_str(),
+                    canonical_role(target_squash, role_of(s)),
+                ));
+            }
+            if planned.len().saturating_sub(touching) > MAX_NET_NEW_SYNAPSES_PER_SPLICE {
+                return Ok(None);
             }
         }
 
