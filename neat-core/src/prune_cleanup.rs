@@ -1341,9 +1341,13 @@ impl Engine {
             }
         }
 
+        // Built once for the whole pass: a splice only rewrites synapses and
+        // biases and removes the spliced neuron — whose edges are all gone — so
+        // no surviving neuron's squash moves between candidates (NEAT-AI#4096).
+        let squashes = self.squash_map()?;
         let mut changed = false;
         for uuid in candidates {
-            let Some(plan) = self.plan_splice(&uuid)? else {
+            let Some(plan) = self.plan_splice(&uuid, &squashes)? else {
                 continue;
             };
             self.apply_splice(plan);
@@ -1372,7 +1376,11 @@ impl Engine {
     /// Returns [`CleanupError::UnknownEndpoint`] when an edge names a target
     /// the creature does not carry, and [`CleanupError::Creature`] when a
     /// neuron declares a squash name this crate does not know.
-    fn plan_splice(&self, uuid: &str) -> Result<Option<SplicePlan>, CleanupError> {
+    fn plan_splice(
+        &self,
+        uuid: &str,
+        squashes: &HashMap<String, SquashType>,
+    ) -> Result<Option<SplicePlan>, CleanupError> {
         let Some(neuron) = self.creature.neurons.iter().find(|n| n.uuid == uuid) else {
             return Ok(None);
         };
@@ -1417,7 +1425,6 @@ impl Engine {
             .find(|n| n.neuron_type == "constant" && n.bias == SUPPORT_CONSTANT_BIAS)
             .map(|n| n.uuid.clone());
 
-        let squashes = self.squash_map()?;
         let mut targets: Vec<SquashType> = Vec::with_capacity(outward.len());
         for out in &outward {
             let Some(target_squash) = squashes.get(&out.to_uuid).copied() else {
@@ -1433,6 +1440,63 @@ impl Engine {
                 return Ok(None);
             }
             targets.push(target_squash);
+        }
+
+        // The net-new-synapse cap below, refused **before** the synapse list is
+        // cloned. It is the same refusal on the same condition: the edges the
+        // plan would push are exactly the distinct rewired and carried keys
+        // that no surviving synapse already holds, which is what `plan_edge`
+        // pushes when it finds no collision. Without it every candidate paid
+        // for a whole-list clone and a linear `plan_edge` lookup per rewired
+        // edge only to be refused here, so one pass cost O(identity neurons ×
+        // synapses) (NEAT-AI#4096).
+        {
+            let touching = self
+                .creature
+                .synapses
+                .iter()
+                .filter(|s| s.from_uuid == uuid || s.to_uuid == uuid)
+                .count();
+            let target_uuids: HashSet<&str> = outward.iter().map(|o| o.to_uuid.as_str()).collect();
+            let mut taken: HashSet<(&str, &str, SynapseType)> = HashSet::new();
+            for s in &self.creature.synapses {
+                if s.from_uuid == uuid || s.to_uuid == uuid {
+                    continue;
+                }
+                if target_uuids.contains(s.to_uuid.as_str()) {
+                    let target_squash = squashes[&s.to_uuid];
+                    taken.insert((
+                        s.from_uuid.as_str(),
+                        s.to_uuid.as_str(),
+                        canonical_role(target_squash, role_of(s)),
+                    ));
+                }
+            }
+            let mut pushes = 0usize;
+            for (out, target_squash) in outward.iter().zip(targets.iter().copied()) {
+                let role = if target_squash == SquashType::If {
+                    out.synapse_type.as_deref()
+                } else {
+                    None
+                };
+                let key_role = canonical_role(target_squash, parse_synapse_type(role));
+                for feed in &inward {
+                    if taken.insert((feed.from_uuid.as_str(), out.to_uuid.as_str(), key_role)) {
+                        pushes += 1;
+                    }
+                }
+                if target_squash == SquashType::If && bias != 0.0 {
+                    let from = support
+                        .as_deref()
+                        .expect("the qualification loop refused an IF target without one");
+                    if taken.insert((from, out.to_uuid.as_str(), key_role)) {
+                        pushes += 1;
+                    }
+                }
+                if pushes.saturating_sub(touching) > MAX_NET_NEW_SYNAPSES_PER_SPLICE {
+                    return Ok(None);
+                }
+            }
         }
 
         let mut synapses: Vec<SynapseExport> = self

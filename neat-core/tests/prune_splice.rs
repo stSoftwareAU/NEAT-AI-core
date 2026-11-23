@@ -989,3 +989,148 @@ fn a_splice_leaves_an_otherwise_exact_prune_exact() {
     );
     assert_valid("exact_with_splice", &result.creature);
 }
+
+// --- the net-new cap is judged on collisions, not on in x out (NEAT-AI#4096) --
+
+/// Five observations into `h-id`, which fans out to five outputs at weights
+/// `0.5, 1.0, 1.5, 2.0, 2.5`; inward weights are `1 .. 5`. `direct` lists
+/// extra `(from, to, weight)` edges that already exist between them.
+fn five_by_five(direct: &[(usize, usize, f64)]) -> CreatureExport {
+    let out_weights = [0.5, 1.0, 1.5, 2.0, 2.5];
+    let mut synapses: Vec<String> = Vec::new();
+    for i in 0..5 {
+        synapses.push(format!(
+            r#"{{"weight":{:?},"fromUUID":"input-{i}","toUUID":"h-id"}}"#,
+            (i + 1) as f64
+        ));
+    }
+    for (j, w) in out_weights.iter().enumerate() {
+        synapses.push(format!(
+            r#"{{"weight":{w:?},"fromUUID":"h-id","toUUID":"output-{j}"}}"#
+        ));
+    }
+    for (i, j, w) in direct {
+        synapses.push(format!(
+            r#"{{"weight":{w:?},"fromUUID":"input-{i}","toUUID":"output-{j}"}}"#
+        ));
+    }
+    creature(&format!(
+        r#"{{
+      "semanticVersion":"4.0.0","forwardOnly":true,"input":5,"output":5,
+      "neurons":[
+        {{"type":"hidden","uuid":"h-id","bias":0.0,"squash":"IDENTITY"}},
+        {{"type":"output","uuid":"output-0","bias":0.0,"squash":"IDENTITY"}},
+        {{"type":"output","uuid":"output-1","bias":0.0,"squash":"IDENTITY"}},
+        {{"type":"output","uuid":"output-2","bias":0.0,"squash":"IDENTITY"}},
+        {{"type":"output","uuid":"output-3","bias":0.0,"squash":"IDENTITY"}},
+        {{"type":"output","uuid":"output-4","bias":0.0,"squash":"IDENTITY"}}
+      ],
+      "synapses":[{}]
+    }}"#,
+        synapses.join(",")
+    ))
+}
+
+#[test]
+fn a_wide_relay_is_refused_while_a_narrow_one_beside_it_is_spliced() {
+    // `h-ok` has one edge each way; `h-id` would add 25 edges for the 10 it
+    // removes, 15 net new, so it stays.
+    let mut before = five_by_five(&[]);
+    before.neurons.insert(
+        0,
+        neat_core::NeuronExport {
+            uuid: "h-ok".to_string(),
+            ..before.neurons[0].clone()
+        },
+    );
+    before.synapses.push(neat_core::SynapseExport {
+        weight: 2.0,
+        from_uuid: "input-0".to_string(),
+        to_uuid: "h-ok".to_string(),
+        synapse_type: None,
+    });
+    before.synapses.push(neat_core::SynapseExport {
+        weight: 3.0,
+        from_uuid: "h-ok".to_string(),
+        to_uuid: "output-0".to_string(),
+        synapse_type: None,
+    });
+    let outcome = spliced(&before);
+
+    assert_eq!(outcome.spliced_neurons, vec!["h-ok".to_string()]);
+    assert!(!has_neuron(&outcome.creature, "h-ok"));
+    assert!(has_neuron(&outcome.creature, "h-id"));
+    // 10 edges around `h-id`, plus `input-0 -> output-0` at 2 * 3.
+    assert_eq!(outcome.creature.synapses.len(), 11);
+    assert_close(
+        "the narrow relay's product",
+        weight(&outcome.creature, "input-0", "output-0"),
+        6.0,
+    );
+    assert_same_function("wide_and_narrow", &before, &outcome.creature);
+    assert_valid("wide_and_narrow", &outcome.creature);
+}
+
+#[test]
+fn collisions_with_existing_edges_do_not_count_towards_the_net_new_cap() {
+    // 25 rewired edges against 10 removed would be 15 net new, but six of the
+    // 25 land on an existing edge, so 19 are pushed: 9 net new, which is made.
+    let before = five_by_five(&[
+        (0, 0, 10.0),
+        (1, 1, 10.0),
+        (2, 2, 10.0),
+        (3, 3, 10.0),
+        (4, 4, 10.0),
+        (0, 1, 20.0),
+    ]);
+    let outcome = spliced(&before);
+
+    assert_eq!(outcome.spliced_neurons, vec!["h-id".to_string()]);
+    assert!(!has_neuron(&outcome.creature, "h-id"));
+    // The 6 existing edges plus the 19 new ones.
+    assert_eq!(outcome.creature.synapses.len(), 25);
+    // Merged into existing edges: existing + w_in * w_out.
+    assert_close(
+        "0->0",
+        weight(&outcome.creature, "input-0", "output-0"),
+        10.5,
+    );
+    assert_close(
+        "1->1",
+        weight(&outcome.creature, "input-1", "output-1"),
+        12.0,
+    );
+    assert_close(
+        "2->2",
+        weight(&outcome.creature, "input-2", "output-2"),
+        14.5,
+    );
+    assert_close(
+        "3->3",
+        weight(&outcome.creature, "input-3", "output-3"),
+        18.0,
+    );
+    assert_close(
+        "4->4",
+        weight(&outcome.creature, "input-4", "output-4"),
+        22.5,
+    );
+    assert_close(
+        "0->1",
+        weight(&outcome.creature, "input-0", "output-1"),
+        21.0,
+    );
+    // New edges carry the plain product.
+    assert_close(
+        "2->4",
+        weight(&outcome.creature, "input-2", "output-4"),
+        7.5,
+    );
+    assert_close(
+        "4->0",
+        weight(&outcome.creature, "input-4", "output-0"),
+        2.5,
+    );
+    assert_same_function("colliding_wide", &before, &outcome.creature);
+    assert_valid("colliding_wide", &outcome.creature);
+}
