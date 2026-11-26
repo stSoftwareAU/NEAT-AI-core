@@ -1,16 +1,20 @@
 //! Frozen variant/selection contracts, not a native selection implementation (#776).
 use serde_json::{Value, json};
 
-#[test]
-fn variant_captures_preserve_original_selection_contracts() {
-    let cases: Vec<Value> = serde_json::from_str(
+fn captures() -> Vec<Value> {
+    serde_json::from_str(
         &std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/golden/compact_legacy_variants.json"
         ))
         .unwrap(),
     )
-    .unwrap();
+    .unwrap()
+}
+
+#[test]
+fn variant_captures_preserve_original_selection_contracts() {
+    let cases = captures();
     let expected = [
         ("fold_variants", "safe"),
         ("noop_variants", "none"),
@@ -22,7 +26,8 @@ fn variant_captures_preserve_original_selection_contracts() {
         ("select_lower", "safe"),
         ("select_tie", "safe"),
     ];
-    assert_eq!(cases.len(), expected.len());
+    // Five aggressive records below cover seven additional original tests.
+    assert_eq!(cases.len(), expected.len() + 5);
     for (name, selected) in expected {
         let found: Vec<_> = cases.iter().filter(|c| c["name"] == name).collect();
         assert_eq!(found.len(), 1, "missing or duplicate {name}");
@@ -89,6 +94,81 @@ fn variant_captures_preserve_original_selection_contracts() {
         for candidate in [safe, aggressive] {
             if !candidate.is_null() {
                 assert!(!candidate["uuid"].as_str().unwrap().is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn aggressive_captures_preserve_speculation_and_structural_guards() {
+    let cases = captures();
+    for name in [
+        "aggressive_maximum",
+        "aggressive_frozen",
+        "aggressive_last_input",
+        "aggressive_variants",
+        "aggressive_equal",
+    ] {
+        let found: Vec<_> = cases.iter().filter(|c| c["name"] == name).collect();
+        assert_eq!(found.len(), 1, "missing or duplicate {name}");
+        let case = found[0];
+        // Freeze the original input scale, not a new native threshold policy.
+        assert_eq!(case["threshold"], 1e-3);
+        assert_eq!(case["tiny"], 1e-6);
+        if matches!(name, "aggressive_variants" | "aggressive_equal") {
+            assert_eq!(case["feedbackLoop"], false);
+            let safe = &case["safe"];
+            let aggressive = &case["aggressive"];
+            assert!(!safe.is_null() && !aggressive.is_null());
+            assert_eq!(safe["graph"]["neurons"][0]["squash"], "MAXIMUM");
+            assert_eq!(aggressive["graph"]["neurons"][0]["squash"], "MAXIMUM");
+            let safe_edges = safe["graph"]["synapses"].as_array().unwrap();
+            let aggressive_edges = aggressive["graph"]["synapses"].as_array().unwrap();
+            assert_eq!(aggressive_edges.len(), 1);
+            assert_eq!(aggressive_edges[0]["fromUUID"], "input-0");
+            assert_eq!(aggressive_edges[0]["weight"], 2);
+            if name == "aggressive_variants" {
+                assert_eq!(safe_edges.len(), 2);
+                assert_eq!(safe_edges[1]["fromUUID"], "input-2");
+                assert_eq!(safe_edges[1]["weight"], 1e-6);
+                assert_ne!(safe["uuid"], aggressive["uuid"]);
+                assert_eq!(case["wrapperSafe"]["uuid"], safe["uuid"]);
+                assert_eq!(case["wrapperSafe"]["graph"], safe["graph"]);
+                assert_eq!(safe["score"], 10);
+                assert_eq!(aggressive["score"], 5);
+                assert_eq!(case["selected"], "safe");
+            } else {
+                assert_eq!(safe_edges.len(), 1);
+                assert_eq!(safe["uuid"], aggressive["uuid"]);
+                assert_eq!(safe["graph"], aggressive["graph"]);
+            }
+        } else {
+            assert_eq!(case["operation"], "aggressivePrune");
+            assert_eq!(case["preparation"], "none");
+            assert_eq!(case["before"], case["input"]);
+            assert!(case["input"]["neurons"][0].get("id").is_none());
+            assert_eq!(case["after"]["neurons"][0]["id"], -1);
+            let mut expected_neurons = case["input"]["neurons"].clone();
+            expected_neurons[0]["id"] = json!(-1);
+            assert_eq!(case["after"]["neurons"], expected_neurons);
+            let edges = case["after"]["synapses"].as_array().unwrap();
+            if name == "aggressive_frozen" {
+                assert_eq!(case["result"], json!({"changed":false,"removedSynapses":0}));
+                assert_eq!(edges.len(), 2);
+                assert_eq!(edges[0]["weight"], 1.5);
+                assert_eq!(edges[1]["frozen"], true);
+                assert_eq!(edges[1]["weight"], 1e-6);
+            } else {
+                assert_eq!(case["result"], json!({"changed":true,"removedSynapses":1}));
+                assert_eq!(edges.len(), 1);
+                let weight = if name == "aggressive_maximum" {
+                    1.5
+                } else {
+                    1e-6
+                };
+                assert_eq!(edges[0]["weight"], weight);
+                assert_eq!(edges[0]["fromId"], 0);
+                assert_eq!(edges[0]["toId"], -1);
             }
         }
     }

@@ -10,6 +10,8 @@ export async function captureLegacyVariants(root: URL, revision: string) {
   const { selectCompactVariant } = await import(
     new URL("src/compact/CompactVariants.ts", root).href
   );
+  const { aggressivePrune, AGGRESSIVE_PRUNE_WEIGHT_THRESHOLD: threshold } =
+    await import(new URL("src/compact/AggressivePrune.ts", root).href);
   const { initWasmForTests } = await import(
     new URL("test/_initWasm.ts", root).href
   );
@@ -134,6 +136,148 @@ export async function captureLegacyVariants(root: URL, revision: string) {
         safe.creature === aggressive.creature,
       safe: snapshot(safe?.creature, safe?.input),
       aggressive: snapshot(aggressive?.creature, aggressive?.input),
+      selected,
+    });
+  }
+  const aggressiveTest = "test/compact/CompactCreatureAggressivePrune.ts";
+  const tiny = threshold / 1000; // The original tests' TINY expression.
+  // Original raw helper literals; normalization belongs to aggressivePrune.
+  for (
+    const [name, input] of [
+      ["aggressive_maximum", {
+        input: 2,
+        output: 1,
+        neurons: [{
+          type: "output",
+          uuid: "output-0",
+          bias: 0,
+          squash: "MAXIMUM",
+        }],
+        synapses: [
+          { fromUUID: "input-0", toUUID: "output-0", weight: 1.5 },
+          { fromUUID: "input-1", toUUID: "output-0", weight: tiny },
+        ],
+      }],
+      ["aggressive_frozen", {
+        input: 2,
+        output: 1,
+        neurons: [{
+          type: "output",
+          uuid: "output-0",
+          bias: 0,
+          squash: "IDENTITY",
+        }],
+        synapses: [
+          { fromUUID: "input-0", toUUID: "output-0", weight: 1.5 },
+          {
+            fromUUID: "input-1",
+            toUUID: "output-0",
+            weight: tiny,
+            frozen: true,
+          },
+        ],
+      }],
+      ["aggressive_last_input", {
+        input: 2,
+        output: 1,
+        neurons: [{
+          type: "output",
+          uuid: "output-0",
+          bias: 0,
+          squash: "IDENTITY",
+        }],
+        synapses: [
+          { fromUUID: "input-0", toUUID: "output-0", weight: tiny },
+          { fromUUID: "input-1", toUUID: "output-0", weight: tiny },
+        ],
+      }],
+    ] as const
+  ) {
+    const after = structuredClone(input);
+    const result = aggressivePrune(after);
+    captures.push({
+      name,
+      revision,
+      test: aggressiveTest,
+      source: "src/compact/AggressivePrune.ts",
+      operation: "aggressivePrune",
+      preparation: "none",
+      threshold,
+      tiny,
+      input,
+      before: structuredClone(input),
+      result,
+      after,
+    });
+  }
+
+  // Original aggressivelyPrunableCreature constructor input, then the final
+  // test's no-low-impact input. The first input covers three source tests.
+  for (
+    const [name, input] of [
+      ["aggressive_variants", {
+        input: 3,
+        output: 1,
+        neurons: [{
+          type: "output",
+          uuid: "output-0",
+          bias: 0,
+          squash: "MAXIMUM",
+        }],
+        synapses: [
+          { fromUUID: "input-0", toUUID: "output-0", weight: 2.0 },
+          { fromUUID: "input-1", toUUID: "output-0", weight: 0 },
+          { fromUUID: "input-2", toUUID: "output-0", weight: tiny },
+        ],
+      }],
+      ["aggressive_equal", {
+        input: 2,
+        output: 1,
+        neurons: [{
+          type: "output",
+          uuid: "output-0",
+          bias: 0,
+          squash: "MAXIMUM",
+        }],
+        synapses: [
+          { fromUUID: "input-0", toUUID: "output-0", weight: 2.0 },
+          { fromUUID: "input-1", toUUID: "output-0", weight: 0 },
+        ],
+      }],
+    ] as const
+  ) {
+    const creature = Creature.fromJSON(structuredClone(input), false);
+    const before = creature.exportJSON();
+    const variants = compactCreatureVariants(creature, false);
+    let selected: string | undefined;
+    let wrapperSafe;
+    if (name === "aggressive_variants") {
+      // Original harmful-candidate test assigns scores; these are not fitness
+      // measurements and do not establish activation equivalence.
+      variants.safe.score = 10;
+      variants.aggressive.score = 5;
+      selected = selectedRole(variants);
+      wrapperSafe = snapshot(
+        compactCreature(
+          Creature.fromJSON(structuredClone(input), false),
+          false,
+        ),
+      );
+    }
+    captures.push({
+      name,
+      revision,
+      test: aggressiveTest,
+      source: "src/compact/CompactCreature.ts",
+      operation: "compactCreatureVariants",
+      feedbackLoop: false,
+      threshold,
+      tiny,
+      input,
+      before,
+      safe: snapshot(variants.safe),
+      aggressive: snapshot(variants.aggressive),
+      wrapperSafe,
       selected,
     });
   }

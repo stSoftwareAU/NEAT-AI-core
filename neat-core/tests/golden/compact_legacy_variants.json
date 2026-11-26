@@ -779,5 +779,576 @@
       }
     },
     "selected": "safe"
+  },
+  {
+    "name": "aggressive_maximum",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactCreatureAggressivePrune.ts",
+    "source": "src/compact/AggressivePrune.ts",
+    "operation": "aggressivePrune",
+    "preparation": "none",
+    "threshold": 0.001,
+    "tiny": 0.000001,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        }
+      ]
+    },
+    "result": {
+      "changed": true,
+      "removedSynapses": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "MAXIMUM",
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1.5,
+          "fromId": 0,
+          "toId": -1
+        }
+      ]
+    }
+  },
+  {
+    "name": "aggressive_frozen",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactCreatureAggressivePrune.ts",
+    "source": "src/compact/AggressivePrune.ts",
+    "operation": "aggressivePrune",
+    "preparation": "none",
+    "threshold": 0.001,
+    "tiny": 0.000001,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "frozen": true
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "frozen": true
+        }
+      ]
+    },
+    "result": {
+      "changed": false,
+      "removedSynapses": 0
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1.5,
+          "fromId": 0,
+          "toId": -1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "frozen": true,
+          "fromId": 1,
+          "toId": -1
+        }
+      ]
+    }
+  },
+  {
+    "name": "aggressive_last_input",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactCreatureAggressivePrune.ts",
+    "source": "src/compact/AggressivePrune.ts",
+    "operation": "aggressivePrune",
+    "preparation": "none",
+    "threshold": 0.001,
+    "tiny": 0.000001,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        }
+      ]
+    },
+    "result": {
+      "changed": true,
+      "removedSynapses": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "fromId": 0,
+          "toId": -1
+        }
+      ]
+    }
+  },
+  {
+    "name": "aggressive_variants",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactCreatureAggressivePrune.ts",
+    "source": "src/compact/CompactCreature.ts",
+    "operation": "compactCreatureVariants",
+    "feedbackLoop": false,
+    "threshold": 0.001,
+    "tiny": 0.000001,
+    "input": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 2,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.000001,
+          "fromUUID": "input-2",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 3,
+      "output": 1
+    },
+    "safe": {
+      "uuid": "256adab6-41f0-5692-bcd3-f9a72324050e",
+      "score": 10,
+      "graph": {
+        "semanticVersion": "4.0.0",
+        "neurons": [
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "bias": 0,
+            "squash": "MAXIMUM"
+          }
+        ],
+        "synapses": [
+          {
+            "weight": 2,
+            "fromUUID": "input-0",
+            "toUUID": "output-0"
+          },
+          {
+            "weight": 0.000001,
+            "fromUUID": "input-2",
+            "toUUID": "output-0"
+          }
+        ],
+        "input": 3,
+        "output": 1,
+        "tags": [
+          {
+            "name": "approach",
+            "value": "compact"
+          },
+          {
+            "name": "old-neurons",
+            "value": "0"
+          }
+        ]
+      }
+    },
+    "aggressive": {
+      "uuid": "e4dc4ef0-9941-529d-880b-00a478ddfc9e",
+      "score": 5,
+      "graph": {
+        "semanticVersion": "4.0.0",
+        "neurons": [
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "bias": 0,
+            "squash": "MAXIMUM"
+          }
+        ],
+        "synapses": [
+          {
+            "weight": 2,
+            "fromUUID": "input-0",
+            "toUUID": "output-0"
+          }
+        ],
+        "input": 3,
+        "output": 1,
+        "tags": [
+          {
+            "name": "approach",
+            "value": "compact"
+          },
+          {
+            "name": "old-neurons",
+            "value": "0"
+          }
+        ]
+      }
+    },
+    "wrapperSafe": {
+      "uuid": "256adab6-41f0-5692-bcd3-f9a72324050e",
+      "score": null,
+      "graph": {
+        "semanticVersion": "4.0.0",
+        "neurons": [
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "bias": 0,
+            "squash": "MAXIMUM"
+          }
+        ],
+        "synapses": [
+          {
+            "weight": 2,
+            "fromUUID": "input-0",
+            "toUUID": "output-0"
+          },
+          {
+            "weight": 0.000001,
+            "fromUUID": "input-2",
+            "toUUID": "output-0"
+          }
+        ],
+        "input": 3,
+        "output": 1,
+        "tags": [
+          {
+            "name": "approach",
+            "value": "compact"
+          },
+          {
+            "name": "old-neurons",
+            "value": "0"
+          }
+        ]
+      }
+    },
+    "selected": "safe"
+  },
+  {
+    "name": "aggressive_equal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactCreatureAggressivePrune.ts",
+    "source": "src/compact/CompactCreature.ts",
+    "operation": "compactCreatureVariants",
+    "feedbackLoop": false,
+    "threshold": 0.001,
+    "tiny": 0.000001,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 0
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 2,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "safe": {
+      "uuid": "e4dc4ef0-9941-529d-880b-00a478ddfc9e",
+      "score": null,
+      "graph": {
+        "semanticVersion": "4.0.0",
+        "neurons": [
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "bias": 0,
+            "squash": "MAXIMUM"
+          }
+        ],
+        "synapses": [
+          {
+            "weight": 2,
+            "fromUUID": "input-0",
+            "toUUID": "output-0"
+          }
+        ],
+        "input": 2,
+        "output": 1,
+        "tags": [
+          {
+            "name": "approach",
+            "value": "compact"
+          },
+          {
+            "name": "old-neurons",
+            "value": "0"
+          }
+        ]
+      }
+    },
+    "aggressive": {
+      "uuid": "e4dc4ef0-9941-529d-880b-00a478ddfc9e",
+      "score": null,
+      "graph": {
+        "semanticVersion": "4.0.0",
+        "neurons": [
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "bias": 0,
+            "squash": "MAXIMUM"
+          }
+        ],
+        "synapses": [
+          {
+            "weight": 2,
+            "fromUUID": "input-0",
+            "toUUID": "output-0"
+          }
+        ],
+        "input": 2,
+        "output": 1,
+        "tags": [
+          {
+            "name": "approach",
+            "value": "compact"
+          },
+          {
+            "name": "old-neurons",
+            "value": "0"
+          }
+        ]
+      }
+    }
   }
 ]
