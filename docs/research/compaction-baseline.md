@@ -136,6 +136,12 @@ those distinctions in explicit contracts before moving algorithms.
 
 ## Outstanding before accepting #776
 
+The [public synthetic measurements](compaction-synthetic-performance.md) record
+the frozen TS two-variant pipeline, separate serialization/load costs and
+synthetic-target scores for a 5,300-neuron graph. This is a partial performance
+baseline: native compaction, authoritative scorer parity, allocation profiles
+and representative consumer acceptance remain outstanding.
+
 The [raw helper baseline](compaction-helper-baseline.md) separately captures
 typed zero-weight pruning, duplicate-role policies and backward-edge repair.
 Those intermediate inputs must not be normalized through a whole-creature

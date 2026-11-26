@@ -1,0 +1,342 @@
+{
+  "schema": 1,
+  "measuredAt": "2026-11-26T17:24:57.843126+00:00",
+  "scorerRevision": "a164969ac4d96ff39eace7086ad22c0538d95705",
+  "nativeCore": {
+    "name": "neat-core",
+    "version": "0.23.7",
+    "source": "git+https://github.com/stSoftwareAU/NEAT-AI-core?tag=v0.23.7#3759355634b1cabc8034cd76df5dbd44a867d18c",
+    "dependencies": [
+      "serde",
+      "serde_json",
+      "wasm-bindgen"
+    ]
+  },
+  "cargoLockSha256": "bbd3e2f104808d33c2b29ee747190bed82e87588f437be3fd25d9ace8b39529f",
+  "binarySha256": "b307e0642f24f03f47d392c5aeaa51393ddd0b5c19053070cb916aa620e39ab3",
+  "compiler": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1",
+  "buildCommand": [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "--bin",
+    "rust_scorer"
+  ],
+  "cargoConfig": "# Same-host release binaries (fleet pattern: build on the machine that runs\n# the artefact). Never apply to wasm32 \u2014 Issue #568.\n#\n# Note: an exported `RUSTFLAGS` *replaces* these rustflags entirely (Cargo\n# does not merge). `./quality.sh` and CI set `RUSTFLAGS=-D warnings`, so those\n# builds intentionally stay portable; a plain `cargo build --release` on a\n# fleet host picks up `target-cpu=native` from here.\n[target.'cfg(not(target_arch = \"wasm32\"))']\nrustflags = [\"-C\", \"target-cpu=native\"]\n",
+  "buildRustflagsEnvironment": {
+    "RUSTFLAGS": null,
+    "CARGO_ENCODED_RUSTFLAGS": null
+  },
+  "host": {
+    "os": "Linux",
+    "arch": "x86_64"
+  },
+  "corpusSha256": "e67b6b276a720cadab5e7eb6611603b44588d1ab04ea67f0f15695070d1fc0fa",
+  "corpusBytes": 1536,
+  "reference": {
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "seed": 1910,
+    "recordCount": 32,
+    "input": 8,
+    "output": 4,
+    "format": "little-endian f32 inputs followed by targets",
+    "graphs": [
+      {
+        "name": "original",
+        "sha256": "97bf48c0f288468d8099f158414dc418206a69ec48cedcfbf031cfdb2b286eb8",
+        "mse": 15.374102312786226,
+        "score": -14.375502072786226,
+        "growthCost": 1e-07,
+        "forwardOnly": false
+      },
+      {
+        "name": "safe",
+        "sha256": "b21e2d6f0001d205abfcbb5545aa7c9c72a8380d129d8bd8403354f9dfa1f275",
+        "mse": 15.374102995177847,
+        "score": -14.375234235193908,
+        "growthCost": 1e-07,
+        "forwardOnly": false
+      },
+      {
+        "name": "aggressive",
+        "sha256": "e9d7ab18596180a6545b180321967bc1c2e0e0934186e2045b30a6c6844e4940",
+        "mse": 15.374206307167029,
+        "score": -14.375335417183138,
+        "growthCost": 1e-07,
+        "forwardOnly": false
+      }
+    ]
+  },
+  "repetitions": 3,
+  "warmups": 1,
+  "mode": "single creature CLI, --gpu off --cost MSE, no scorer environment overrides",
+  "timingCaveat": "Fresh process wall time includes startup/load/I/O/scoring; not comparable to TS activation-only timing.",
+  "comparisonCaveat": "Observed differences only; no tolerance or consumer acceptance gate is introduced.",
+  "rows": [
+    {
+      "iteration": 0,
+      "warmup": true,
+      "name": "original",
+      "processMs": 72.29675499911536,
+      "result": {
+        "score": -14.375502682875526,
+        "error": 15.374102922875526,
+        "complexityPenalty": 0.00139976,
+        "recordCount": 32,
+        "hiddenNeurons": 5288,
+        "synapseCount": 87096,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.061621045,
+        "compileTimeSecs": 0.033620803,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": 6.100892999683083e-07,
+      "scoreDeltaFromTs": -6.100892999683083e-07
+    },
+    {
+      "iteration": 0,
+      "warmup": true,
+      "name": "safe",
+      "processMs": 50.987047998205526,
+      "result": {
+        "score": -14.375233274281271,
+        "error": 15.37410203426521,
+        "complexityPenalty": 0.0011312400160618423,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69834,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.044464962,
+        "compileTimeSecs": 0.023159552,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -9.609126365717202e-07,
+      "scoreDeltaFromTs": 9.609126365717202e-07
+    },
+    {
+      "iteration": 0,
+      "warmup": true,
+      "name": "aggressive",
+      "processMs": 55.752387997927144,
+      "result": {
+        "score": -14.37533486939205,
+        "error": 15.374205759375942,
+        "complexityPenalty": 0.0011291100161081031,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69621,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.048142179,
+        "compileTimeSecs": 0.025590782,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -5.477910871576341e-07,
+      "scoreDeltaFromTs": 5.477910871576341e-07
+    },
+    {
+      "iteration": 1,
+      "warmup": false,
+      "name": "original",
+      "processMs": 391.80148399827885,
+      "result": {
+        "score": -14.375502682875526,
+        "error": 15.374102922875526,
+        "complexityPenalty": 0.00139976,
+        "recordCount": 32,
+        "hiddenNeurons": 5288,
+        "synapseCount": 87096,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.3796017,
+        "compileTimeSecs": 0.313601931,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": 6.100892999683083e-07,
+      "scoreDeltaFromTs": -6.100892999683083e-07
+    },
+    {
+      "iteration": 1,
+      "warmup": false,
+      "name": "safe",
+      "processMs": 70.07310100016184,
+      "result": {
+        "score": -14.375233274281271,
+        "error": 15.37410203426521,
+        "complexityPenalty": 0.0011312400160618423,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69834,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.053636643,
+        "compileTimeSecs": 0.027652457,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -9.609126365717202e-07,
+      "scoreDeltaFromTs": 9.609126365717202e-07
+    },
+    {
+      "iteration": 1,
+      "warmup": false,
+      "name": "aggressive",
+      "processMs": 58.877949999441626,
+      "result": {
+        "score": -14.37533486939205,
+        "error": 15.374205759375942,
+        "complexityPenalty": 0.0011291100161081031,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69621,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.04731889,
+        "compileTimeSecs": 0.024092838,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -5.477910871576341e-07,
+      "scoreDeltaFromTs": 5.477910871576341e-07
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "name": "original",
+      "processMs": 68.52753400016809,
+      "result": {
+        "score": -14.375502682875526,
+        "error": 15.374102922875526,
+        "complexityPenalty": 0.00139976,
+        "recordCount": 32,
+        "hiddenNeurons": 5288,
+        "synapseCount": 87096,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.060860129,
+        "compileTimeSecs": 0.032830734,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": 6.100892999683083e-07,
+      "scoreDeltaFromTs": -6.100892999683083e-07
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "name": "safe",
+      "processMs": 57.44609899920761,
+      "result": {
+        "score": -14.375233274281271,
+        "error": 15.37410203426521,
+        "complexityPenalty": 0.0011312400160618423,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69834,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.050211696,
+        "compileTimeSecs": 0.026181512,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -9.609126365717202e-07,
+      "scoreDeltaFromTs": 9.609126365717202e-07
+    },
+    {
+      "iteration": 2,
+      "warmup": false,
+      "name": "aggressive",
+      "processMs": 56.99763699885807,
+      "result": {
+        "score": -14.37533486939205,
+        "error": 15.374205759375942,
+        "complexityPenalty": 0.0011291100161081031,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69621,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.048884767,
+        "compileTimeSecs": 0.026116635,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -5.477910871576341e-07,
+      "scoreDeltaFromTs": 5.477910871576341e-07
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "name": "original",
+      "processMs": 70.7284640011494,
+      "result": {
+        "score": -14.375502682875526,
+        "error": 15.374102922875526,
+        "complexityPenalty": 0.00139976,
+        "recordCount": 32,
+        "hiddenNeurons": 5288,
+        "synapseCount": 87096,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.062612708,
+        "compileTimeSecs": 0.034597225,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": 6.100892999683083e-07,
+      "scoreDeltaFromTs": -6.100892999683083e-07
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "name": "safe",
+      "processMs": 54.202434002945665,
+      "result": {
+        "score": -14.375233274281271,
+        "error": 15.37410203426521,
+        "complexityPenalty": 0.0011312400160618423,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69834,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.047339191,
+        "compileTimeSecs": 0.02631885,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -9.609126365717202e-07,
+      "scoreDeltaFromTs": 9.609126365717202e-07
+    },
+    {
+      "iteration": 3,
+      "warmup": false,
+      "name": "aggressive",
+      "processMs": 57.97298200195655,
+      "result": {
+        "score": -14.37533486939205,
+        "error": 15.374205759375942,
+        "complexityPenalty": 0.0011291100161081031,
+        "recordCount": 32,
+        "hiddenNeurons": 4329,
+        "synapseCount": 69621,
+        "forwardOnly": false,
+        "trainingReadBackend": "record_iterator",
+        "gpuBackend": "cpu-fallback",
+        "timeTaken": 0.046614039,
+        "compileTimeSecs": 0.024797289,
+        "costName": "MSE"
+      },
+      "errorDeltaFromTs": -5.477910871576341e-07,
+      "scoreDeltaFromTs": 5.477910871576341e-07
+    }
+  ]
+}
