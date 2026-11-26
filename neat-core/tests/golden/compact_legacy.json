@@ -4,6 +4,12 @@
     "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
     "source": "src/compact/CompactCreature.ts",
     "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "feedbackLoop": true,
+    "activationTolerance": 0.00001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9997937994259076,
+    "afterScore": 0.999813494602714,
     "before": {
       "semanticVersion": "4.0.0",
       "neurons": [
@@ -125,6 +131,12 @@
     "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
     "source": "src/compact/CompactCreature.ts",
     "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "feedbackLoop": true,
+    "activationTolerance": 0.00001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9997937994259076,
+    "afterScore": 0.9997937994259076,
     "before": {
       "semanticVersion": "4.0.0",
       "neurons": [
@@ -212,6 +224,12 @@
     "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
     "source": "src/compact/CompactCreature.ts",
     "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "feedbackLoop": true,
+    "activationTolerance": 0.00001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9997937994259076,
+    "afterScore": 0.9997937994259076,
     "before": {
       "semanticVersion": "4.0.0",
       "neurons": [
@@ -299,6 +317,12 @@
     "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
     "source": "src/compact/CompactCreature.ts",
     "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "feedbackLoop": true,
+    "activationTolerance": 0.00001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9997937994259076,
+    "afterScore": 0.9997937994259076,
     "before": {
       "semanticVersion": "4.0.0",
       "neurons": [
@@ -378,6 +402,255 @@
       ],
       [
         -0.813668429851532
+      ]
+    ]
+  },
+  {
+    "name": "constant_transitive_fold",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureConstantTransitiveFold.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.99977,
+    "afterScore": 0.99999,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "const-c",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-h",
+          "bias": 0.2,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.6,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-c",
+          "toUUID": "hidden-h"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "hidden-h",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.40531961697461105,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.6,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ],
+    "outputs": [
+      [
+        0.4053196310997009
+      ],
+      [
+        1.0053197145462036
+      ],
+      [
+        -0.1946803629398346
+      ],
+      [
+        0.5553196668624878
+      ],
+      [
+        -0.7946803569793701
+      ]
+    ]
+  },
+  {
+    "name": "constant_with_varying_input",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureConstantTransitiveFold.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.99977,
+    "afterScore": 0.99988,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "const-c",
+          "bias": 0.4
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-h",
+          "bias": 0.2,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.7,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-h"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-c",
+          "toUUID": "hidden-h"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "hidden-h",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-h",
+          "bias": 0.4,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.7,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-h"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "hidden-h",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ],
+    "outputs": [
+      [
+        0.3993438184261322
+      ],
+      [
+        0.4751300513744354
+      ],
+      [
+        0.3127787411212921
+      ],
+      [
+        0.41995805501937866
+      ],
+      [
+        0.23447072505950928
       ]
     ]
   }

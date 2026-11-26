@@ -2,7 +2,7 @@
 
 This is the first capture slice of #776, not its acceptance gate. Production
 implementations remain unchanged. Do not start #777/#778 on the strength of
-these four captures: the remaining coverage and family checks below are open.
+these six captures: the remaining coverage and family checks below are open.
 
 ## Revisions and original suites
 
@@ -23,8 +23,10 @@ has passed.
 `neat-core/tests/golden/compact_legacy.json` stores the original input after its
 legacy wire round trip, the actual candidate or `null`, and original activation
 outputs at five deterministic probes. `complement_bypass` uses the input from
-`test/compact/CompactCreatureComplementBypass.ts`. The other three are explicitly
-synthetic variations of its squashes, not captures of three additional tests.
+`test/compact/CompactCreatureComplementBypass.ts`. The other three squash variants are explicitly
+synthetic variations of its squashes, not captures of three additional tests. Two further inputs are copied from
+`test/compact/CompactCreatureConstantTransitiveFold.ts`, including its
+forward-only flag and feedback-loop argument.
 
 | Capture | Observable legacy contract |
 |---|---|
@@ -32,14 +34,22 @@ synthetic variations of its squashes, not captures of three additional tests.
 | `identity_fanin_noop` | This two-input IDENTITY fan-in does not meet the legacy chain-fold guard; no candidate |
 | `aggregate_guard` | COMPLEMENT feeding MAXIMUM is not bypassed; no candidate |
 | `nonlinear_noop` | TANH feeding TANH is not algebraically folded; no candidate |
+| `constant_transitive_fold` | Fold the constant-fed LOGISTIC hidden neuron and its constant away, retaining the varying output input |
+| `constant_with_varying_input` | Fold the constant input but retain the LOGISTIC hidden neuron because another input varies |
 
 `neat-core/tests/compact_legacy_capture.rs` checks the changed/no-op contracts
 and native activation of both halves against recorded legacy outputs at the
-original regression's `1e-5` activation tolerance. It does not compare a future
+original regressions' activation tolerances: `1e-5` for the initial squash
+variants and `1e-6` for the constant-fold cases. It does not compare a future
 Rust compactor yet, and five probes do not prove equivalence for every input.
+The recorded scores use the legacy `Score.calculate` with error `0` and growth
+cost `0.0001`, matching the constant-chain regression. Both constant cases must
+retain or improve that score. These are complexity-score baselines at zero
+error, not full-corpus scorer acceptance or native scorer parity.
 The unmodified legacy implementation remains the oracle. Mutation evidence:
 adding `0.1` to the compacted COMPLEMENT output bias fails at `[0, 0]` with
-`1.325 != 1.225`; the mutation was reverted.
+`1.325 != 1.225`; the mutation was reverted. Adding `0.1` to either constant-case output bias
+also fails replay; both mutations were reverted.
 
 Regenerate only from a clean checkout at the recorded revision:
 
@@ -77,7 +87,7 @@ those distinctions in explicit contracts before moving algorithms.
 ## Outstanding before accepting #776
 
 - Freeze remaining original fixtures: identity chains/parallel bridges, typed
-  IF, transitive constants, zero weights, recurrent refusal, ordering, metadata,
+  IF, remaining transitive-constant cases, zero weights, recurrent refusal, ordering, metadata,
   UUID/memetic invalidation, clipping, non-finite traces and deadlines.
 - Classify large-weight rescaling, aggressive pruning, trace-based pruning and
   repair-only transforms from their actual guards; candidate acceptance and
