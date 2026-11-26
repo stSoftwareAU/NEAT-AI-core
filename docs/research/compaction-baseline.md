@@ -9,7 +9,7 @@ these nineteen captures: the remaining coverage and family checks below are open
 | Repository | Inspected revision | Verification |
 |---|---|---|
 | NEAT-AI-core | `3759355634b1cabc8034cd76df5dbd44a867d18c` | `cargo test --workspace --locked` passed |
-| NEAT-AI | `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab` | 238 compaction/simplification tests passed |
+| NEAT-AI | `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab` | 238 executions passed; 232 distinct compaction/simplification tests |
 | NEAT-AI-Ockham | `febc59d836bcb165e99aaa149a13f52bdcad431e` | `cargo test --workspace --locked` passed |
 
 The TypeScript baseline was run with every `.ts` file explicitly selected from
@@ -17,6 +17,14 @@ The TypeScript baseline was run with every `.ts` file explicitly selected from
 does **not** select most of these filenames. The original assertions and
 tolerances were not changed. This is not a claim that the entire family suite
 has passed.
+
+The [selected-suite test matrix](compaction-test-matrix.md) records all 58
+selected files, their rule boundaries and individual runtime test identities.
+It explains the imported and generated tests behind those counts. A separate
+selection adds nine related caller/invariant files: 78 top-level tests and two
+nested steps passed unchanged. Their identities and source hashes are recorded
+separately, with conditional candidate and documentation-only evidence labelled.
+The matrix lists the remaining work before the family inventory is exhaustive.
 
 ## Captures
 
