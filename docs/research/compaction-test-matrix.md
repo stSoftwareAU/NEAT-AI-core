@@ -8,6 +8,11 @@ reported name, source line/column, execution count and result, plus each source
 file's SHA-256. Runtime reporting captures generated tests that a source grep
 would miss. The original tests, inputs and tolerances were not edited.
 
+A separate run covers nine explicitly selected related files outside those
+directories: **78 top-level tests and two nested steps**, all passed unchanged
+on 2026-11-26. See [related caller and invariant tests](#related-caller-and-invariant-tests)
+and their [separate runtime index](compaction-related-tests.json).
+
 This is complete for the explicitly selected `test/compact/*.ts` and
 `test/optimize/simplify/*.ts` files at that revision. It is **not** the complete
 family test-to-rule/caller-to-API matrix required to accept #776. Tests elsewhere,
@@ -152,11 +157,67 @@ Check the exit status, all reported failures/errors/skips, the selected file set
 and counts before accepting a regenerated index; do not silently overwrite it
 when a newer checkout changes tests or their meaning.
 
+## Related caller and invariant tests
+
+These nine files are an explicit additional selection, not an exhaustive scan of
+all tests outside the two directories. The separate index preserves every JUnit
+name, source location, result and source hash, with `kind` distinguishing a test
+from a nested step and `parent` identifying the enclosing test. All 78 tests and
+two steps executed once. The two steps belong to one `ShallowClone.ts` test;
+Deno includes them in its JUnit total of 80. They are not two additional
+independent top-level tests. Across the two runs there are **310 distinct
+top-level identities, 316 top-level executions and two nested-step executions**.
+These counts do not measure assertions or migration coverage.
+
+| Original file | Top-level tests / nested steps | Boundary and evidence limits |
+|---|---|---|
+| [test/architecture/NewbornGrace.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/architecture/NewbornGrace.ts) | 6 / 0 | N: tag budget validation, ageing, serialization and genome-identity invariance. These are metadata policy tests; trace-based grace behaviour is covered separately in `test/compact/NewbornGrace.ts`. |
+| [test/architecture/StaleUuidAfterStructuralChange.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/architecture/StaleUuidAfterStructuralChange.ts) | 16 / 0 | C, T, O, S, M plus repair, backpropagation, restore-source and fitness callers. Covers genome-cache invalidation, preservation of neuron IDs, tag/memetic-only invariance and stale fitness/deduplication; not all cases rewrite topology. A three-helper registration loop contributes three distinct runtime tests. |
+| [test/architecture/training/CompactResultValidation.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/architecture/training/CompactResultValidation.ts) | 4 / 0 | Training producer validation: reproduce orphan-constant rejection, repair the same object and validate its round trip, preserve a valid creature and pass through `undefined`. Repair policy is not an exact algebraic rewrite. |
+| [test/creature/ShallowClone.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/creature/ShallowClone.ts) | 16 / 2 | Creature serialization clone ownership, mutable-state isolation, activation/trace equivalence, flags and identity; includes mutation/breeding isolation and compaction preserving the original. Sixteen top-level tests plus two nested mutation/structural-change steps. This is not U (export-object cloning). |
+| [test/docs/CompactionInvariantAbsorbed.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/docs/CompactionInvariantAbsorbed.ts) | 2 / 0 | Two documentation-retention assertions: training documentation contains the absorbed invariants and obsolete summary files are absent. Passing these tests is not runtime compaction or scoring evidence. |
+| [test/mutate/AddSkipConnection.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/mutate/AddSkipConnection.ts) | 14 / 0 | Mutation operator configuration, topology guards and bypass creation. One compaction comparison requires candidates in both arms, verifies that the control loses a relay, and compares surviving hidden IDs. The other cases are mutation coverage, not compaction parity. |
+| [test/propagate/SyntheticSynapsesAggregateNeurons.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/propagate/SyntheticSynapsesAggregateNeurons.ts) | 10 / 0 | Synthetic-edge generation excludes IF/MAX/MIN targets; removal preserves IF roles; training covers aggregate and IDENTITY creatures. Checks guarded by `if (result.compact)` validate a returned candidate only when one exists. |
+| [test/propagate/SyntheticSynapsesIntegration.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/propagate/SyntheticSynapsesIntegration.ts) | 8 / 0 | Training integration and call-scoped synthetic options. The compact-output validity check is conditional on `result.compact`; a passing run alone does not prove that a compact candidate was produced. |
+| [test/propagate/Traced.ts](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/propagate/Traced.ts) | 2 / 0 | T: trace-based removal of unused neurons; separately, applying learned trace data changes weights. The learning case is a caller boundary, not an algebraic compaction rule. |
+
+The additional callers reach these source boundaries at the same frozen revision:
+
+- [`validateAndRepairCompact`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/src/architecture/training/TrainingTeardown.ts) invokes `validateOrDiagnose` before the compact result is serialized; the helper returns the original object or `undefined`.
+- [`validateOrDiagnose`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/src/utils/Diagnostics.ts) validates, attempts `fix()` after failure and validates again; this is repair with a failure path.
+- [`shallowClone`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/src/creature/CreatureSerialization.ts) owns the creature clone used by `Creature.shallowClone()`; distinct from cloning exported JSON in U.
+- [`AddSkipConnection`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/src/mutate/AddSkipConnection.ts) owns bypass mutation; the selected test compares its effect on subsequent C compaction.
+- [`generateSyntheticSynapses`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/src/propagate/SyntheticSynapses.ts) owns candidate synthetic edges and aggregate-target exclusions.
+- [`removeSyntheticSynapses`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/src/propagate/RemoveSyntheticSynapses.ts) zeros near-zero untyped synthetic weights (default threshold `1e-7`), selects from `creature.compactVariants(false)` and loads the selected candidate if present. Its `removed` result counts zeroed edges, not proven final graph removals.
+
+To reproduce this additional run, use the same clean, verified legacy checkout
+as above. Pass the core checkout's absolute path to this command; the selected
+files come from the committed index, not Deno's default filename discovery:
+
+```sh
+python3 - /absolute/path/to/NEAT-AI-core <<'PYRUN'
+import json
+from pathlib import Path
+import subprocess
+import sys
+index = json.loads((Path(sys.argv[1]) /
+                    "docs/research/compaction-related-tests.json").read_text())
+assert subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() == index["revision"]
+files = [entry["path"] for entry in index["files"]]
+subprocess.run(["deno", "test", "-A", "--reporter=junit",
+                "--junit-path=/tmp/compaction-related-tests.xml", *files], check=True)
+PYRUN
+```
+
+The same report/status/source-hash verification rules apply. Treat nested steps
+separately when comparing identities and totals. Neither this selection nor the
+directory selection changes original test inputs or acceptance tolerances.
+
 ## Remaining inventory work
 
-- Trace tests outside these two directories, including training result
-  validation, stale UUIDs, newborn grace, synthetic-synapse integration and
-  discovery removal. A preliminary lexical candidate list is not exhaustive.
+- Continue tracing tests outside these two directories beyond the nine related
+  files above, including discovery removal and indirect callers. The selected
+  files and a preliminary lexical candidate list are not exhaustive.
 - Map each individual assertion and numerical tolerance to its primitive or
   caller policy, including tests with multiple boundaries and generated cases.
 - Reconcile raw helper inputs with whole-creature captures: typed zero-weight

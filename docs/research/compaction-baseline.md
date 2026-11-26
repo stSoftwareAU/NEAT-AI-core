@@ -20,8 +20,11 @@ has passed.
 
 The [selected-suite test matrix](compaction-test-matrix.md) records all 58
 selected files, their rule boundaries and individual runtime test identities.
-It explains the imported and generated tests behind those counts, and lists
-the remaining work before the family matrix is exhaustive.
+It explains the imported and generated tests behind those counts. A separate
+selection adds nine related caller/invariant files: 78 top-level tests and two
+nested steps passed unchanged. Their identities and source hashes are recorded
+separately, with conditional candidate and documentation-only evidence labelled.
+The matrix lists the remaining work before the family inventory is exhaustive.
 
 ## Captures
 

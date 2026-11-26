@@ -1,0 +1,708 @@
+{
+  "repository": "stSoftwareAU/NEAT-AI",
+  "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+  "selection": "Explicit related files outside the two directory suites; not exhaustive.",
+  "distinctTests": 78,
+  "testExecutions": 78,
+  "distinctSteps": 2,
+  "stepExecutions": 2,
+  "reportedEntries": 80,
+  "files": [
+    {
+      "path": "test/architecture/NewbornGrace.ts",
+      "sha256": "b46e1ab8705237fb1c4cdd1d5fa5533bf7a33f8865599fad230efebafae071d1",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "tagNewbornGrace - zero rounds writes no tag at all",
+          "line": 27,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "tagNewbornGrace - a positive budget is readable back",
+          "line": 34,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "tagNewbornGrace - rejects a negative or fractional budget",
+          "line": 40,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "newbornGraceRemaining - a malformed tag reads as no protection",
+          "line": 53,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "ageNewbornGrace - spends one round and clears a spent budget",
+          "line": 60,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "newborn grace - the budget survives export and re-import",
+          "line": 80,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/architecture/StaleUuidAfterStructuralChange.ts",
+      "sha256": "74a5362444a3914eccbf6e050df9f08b95e450fd89dd819defe8259311a59aa8",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "Issue #3843: a creature loaded from JSON does not inherit the file's uuid",
+          "line": 82,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: loading preserves per-neuron uuids",
+          "line": 102,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: an in-process uuid is cached, never recomputed",
+          "line": 120,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: a tag-only change invalidates nothing",
+          "line": 144,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843 + #3844: pruning memetic does not shed the creature's identity",
+          "line": 164,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: CompactUnused.removeNeuron (rewrites biases, then removes) sheds the creature's identity",
+          "line": 243,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: createConstantOne (splices a neuron in) sheds the creature's identity",
+          "line": 243,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: removeHiddenNeuron (removes a neuron) sheds the creature's identity",
+          "line": 243,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: repairInvalidIfNeuronsInCreature sheds identity when it repairs",
+          "line": 277,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: a backprop step sheds identity even when no neuron downgrades",
+          "line": 297,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843 + #3845: the repair diagnostic still names the genome it is repairing",
+          "line": 337,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: compactCreature does not pass on the parent's uuid",
+          "line": 407,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: simplify does not pass on the parent's uuid",
+          "line": 424,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: restoreSource does not pass on the parent's uuid",
+          "line": 438,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: Fitness does not hand a stale-uuid derivative its parent's score",
+          "line": 486,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3843: Fitness still deduplicates genuinely identical creatures",
+          "line": 539,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/architecture/training/CompactResultValidation.ts",
+      "sha256": "a14ee166ba936da4b714c8cafa125709b6ef4609dc39be343144fe4bf8f8939e",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "Issue #3383 - orphaned constant reproduces the CI validation failure",
+          "line": 81,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3383 - validateAndRepairCompact prunes the orphaned constant",
+          "line": 95,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3383 - validateAndRepairCompact leaves a valid creature unchanged",
+          "line": 119,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Issue #3383 - validateAndRepairCompact passes through undefined",
+          "line": 132,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/creature/ShallowClone.ts",
+      "sha256": "873919eaadaea24549fcf6637135059358ef8a8d984584abcfeb65c9c56d62b3",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "shallowClone - basic structure preservation",
+          "line": 29,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - activation output equivalence",
+          "line": 53,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - mutable state copying",
+          "line": 87,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - memetic weights object is not shared with original",
+          "line": 115,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - independence from original (neuron modification)",
+          "line": 135,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - independence from original (synapse modification)",
+          "line": 162,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - independence from original (tags modification)",
+          "line": 189,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - large creature activation equivalence",
+          "line": 218,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - uuid generation after modification",
+          "line": 255,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - semantic version preservation",
+          "line": 281,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - forwardOnly flag preservation",
+          "line": 294,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - activateAndTrace equivalence",
+          "line": 307,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - structural equivalence with fromJSON",
+          "line": 353,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - fittest creature protection: mutation cannot affect original",
+          "line": 461,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "step",
+          "name": "shallowClone - fittest creature protection: mutation cannot affect original > heavy mutation of clone preserves original",
+          "line": 477,
+          "column": 11,
+          "executions": 1,
+          "result": "passed",
+          "parent": "shallowClone - fittest creature protection: mutation cannot affect original"
+        },
+        {
+          "kind": "step",
+          "name": "shallowClone - fittest creature protection: mutation cannot affect original > structural changes to clone preserve original",
+          "line": 522,
+          "column": 11,
+          "executions": 1,
+          "result": "passed",
+          "parent": "shallowClone - fittest creature protection: mutation cannot affect original"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - fittest creature protection: breeding produces new creature",
+          "line": 537,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "shallowClone - fittest creature protection: compact operation preserves original",
+          "line": 607,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/docs/CompactionInvariantAbsorbed.ts",
+      "sha256": "a1f71f43e81e1b9f633a85c331352268c9f71a21437a6daf8a7a66d255355c46",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "TRAINING.md captures the safe/aggressive compaction invariant (#3286)",
+          "line": 22,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "absorbed compaction PR summaries are deleted (#3286)",
+          "line": 70,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/mutate/AddSkipConnection.ts",
+      "sha256": "1ee2fe17976767b0e1a10daae0963c584d8fa7232c97ce3639e6b703a7628765",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - bypasses the run from its entry to the neuron it feeds",
+          "line": 22,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - a run shorter than skipMinRunLength is left alone",
+          "line": 38,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - skipMinRunLength lowers the bar",
+          "line": 52,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - prefers the longest run when several qualify",
+          "line": 65,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - targets the deep run, not a uniformly drawn pair",
+          "line": 125,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - a forward-only creature stays forward-only",
+          "line": 148,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - the forward-only guard refuses a backward bypass",
+          "line": 163,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - the bypass weight honours structuralWeightScale",
+          "line": 176,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - adds one bypass per call and never a duplicate",
+          "line": 215,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - a wide creature with no serial run is left alone",
+          "line": 234,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - focus list is preferred, then relaxed",
+          "line": 256,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - refuses an out-of-range skipMinRunLength",
+          "line": 268,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - the bypass does not make the run compactable",
+          "line": 287,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "AddSkipConnection - a back-edge off the run is never mistaken for a consumer",
+          "line": 339,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/propagate/SyntheticSynapsesAggregateNeurons.ts",
+      "sha256": "79f4c6a8f1fe9ae27f8854918bbbbaa3463f9961e26cd04f91adc3af3941e357",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "generateSyntheticSynapses skips IF neurons as targets",
+          "line": 131,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "generateSyntheticSynapses skips MAXIMUM neurons as targets",
+          "line": 150,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "generateSyntheticSynapses skips MINIMUM neurons as targets",
+          "line": 170,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "removeSyntheticSynapses preserves IF neuron typed connections",
+          "line": 192,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "training with syntheticSynapses=true and IF neuron produces valid creature",
+          "line": 220,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "training with syntheticSynapses=true and IF neuron, single iteration",
+          "line": 260,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "training with syntheticSynapses=true and MAXIMUM neuron produces valid creature",
+          "line": 298,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "training with syntheticSynapses=true and MINIMUM neuron produces valid creature",
+          "line": 330,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "syntheticSynapses with large creature containing IF neurons",
+          "line": 364,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "syntheticSynapses with well-connected IDENTITY network trains without error",
+          "line": 408,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/propagate/SyntheticSynapsesIntegration.ts",
+      "sha256": "73b4b645546ebed2ce1a8862c3fa021daa50d68c1bfb4bd257bcf72dcc444ca9",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "trainDir with syntheticSynapses=true completes without error",
+          "line": 73,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "syntheticSynapses=false does not alter synapse count",
+          "line": 102,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "synthetic synapses are pruned after training — creature validates",
+          "line": 137,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "syntheticSynapses default is off — no behaviour change without opt-in",
+          "line": 172,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "synthetic synapses with gappy creature can discover new connections",
+          "line": 199,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "compact output is valid when syntheticSynapses is enabled",
+          "line": 235,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "syntheticSynapses works with single iteration",
+          "line": 267,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "syntheticSynapses result error differs from non-synthetic training",
+          "line": 296,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/propagate/Traced.ts",
+      "sha256": "9b7706d4e32b8ccad6418f6d2c5bb36d3d8361e3a274568f0f375ce0a4a4c22a",
+      "entries": [
+        {
+          "kind": "test",
+          "name": "Traced: compactUnused removes unused neurons from traced creature",
+          "line": 8,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "kind": "test",
+          "name": "Traced: applyLearnings modifies creature weights from trace data",
+          "line": 26,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    }
+  ]
+}
