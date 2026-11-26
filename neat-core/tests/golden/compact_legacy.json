@@ -1262,5 +1262,1193 @@
         0.64000004529953
       ]
     ]
+  },
+  {
+    "name": "zero_weight_orphan",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ZeroWeightSynapsePruning.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 1e-7,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9998538644828342,
+    "afterScore": 0.9999496612070854,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-unused",
+          "bias": 0.2,
+          "squash": "TANH"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.5,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-unused"
+        },
+        {
+          "weight": 1.25,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0,
+          "fromUUID": "hidden-unused",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1.25,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "1"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ],
+    "outputs": [
+      [
+        0.10000000149011612
+      ],
+      [
+        1.350000023841858
+      ],
+      [
+        -1.149999976158142
+      ],
+      [
+        0.4124999940395355
+      ],
+      [
+        -2.4000000953674316
+      ]
+    ]
+  },
+  {
+    "name": "parallel_two",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.999703256650778,
+    "afterScore": 0.99987,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        0
+      ],
+      [
+        1.4500000476837158
+      ],
+      [
+        -1.4500000476837158
+      ],
+      [
+        -0.08750000596046448
+      ],
+      [
+        -1.5499999523162842
+      ]
+    ]
+  },
+  {
+    "name": "parallel_weights",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.999703256650778,
+    "afterScore": 0.99987,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0.2,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        0.5
+      ],
+      [
+        1.9500000476837158
+      ],
+      [
+        -0.9500000476837158
+      ],
+      [
+        0.41249996423721313
+      ],
+      [
+        -1.0499999523162842
+      ]
+    ]
+  },
+  {
+    "name": "parallel_bias",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9995752189084056,
+    "afterScore": 0.9997520315140093,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": -0.3,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h2",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.2,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-2",
+          "toUUID": "h2"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 3,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "h2",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 3,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h2",
+          "bias": 0.15000000000000013,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.2,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 2,
+          "fromUUID": "input-0",
+          "toUUID": "h2"
+        },
+        {
+          "weight": 3,
+          "fromUUID": "input-1",
+          "toUUID": "h2"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-2",
+          "toUUID": "h2"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h2",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 3,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "3"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        -1,
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75,
+        0.5
+      ],
+      [
+        -2,
+        1,
+        -0.5
+      ]
+    ],
+    "outputs": [
+      [
+        0.3500000238418579
+      ],
+      [
+        5.850000381469727
+      ],
+      [
+        -5.149999618530273
+      ],
+      [
+        -1.1499998569488525
+      ],
+      [
+        -0.9000000357627869
+      ]
+    ]
+  },
+  {
+    "name": "parallel_duplicate_sources",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.999703256650778,
+    "afterScore": 0.999703256650778,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-0",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "after": null,
+    "probes": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ],
+    "outputs": [
+      [
+        0
+      ],
+      [
+        1.4500000476837158
+      ],
+      [
+        -1.4500000476837158
+      ],
+      [
+        0.36250001192092896
+      ],
+      [
+        -2.9000000953674316
+      ]
+    ]
+  },
+  {
+    "name": "parallel_nonlinear",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.999703256650778,
+    "afterScore": 0.999703256650778,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": null,
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        1.75
+      ],
+      [
+        2.1065824031829834
+      ],
+      [
+        1.3934175968170166
+      ],
+      [
+        1.7283979654312134
+      ],
+      [
+        1.3995466232299805
+      ]
+    ]
+  },
+  {
+    "name": "parallel_fanin",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9997003495694308,
+    "afterScore": 0.9997003495694308,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.4,
+          "fromUUID": "input-2",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 3,
+      "output": 1
+    },
+    "after": null,
+    "probes": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        -1,
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75,
+        0.5
+      ],
+      [
+        -2,
+        1,
+        -0.5
+      ]
+    ],
+    "outputs": [
+      [
+        0
+      ],
+      [
+        2.200000047683716
+      ],
+      [
+        -2.200000047683716
+      ],
+      [
+        0.09999999403953552
+      ],
+      [
+        -1.7000000476837158
+      ]
+    ]
+  },
+  {
+    "name": "parallel_forward_only",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.999703256650778,
+    "afterScore": 0.99987,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        0
+      ],
+      [
+        1.4500000476837158
+      ],
+      [
+        -1.4500000476837158
+      ],
+      [
+        -0.08750000596046448
+      ],
+      [
+        -1.5499999523162842
+      ]
+    ]
+  },
+  {
+    "name": "parallel_three",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/ParallelIdentityBridgeMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9996083474141275,
+    "afterScore": 0.9998206919545174,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": -0.2,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h2",
+          "bias": 0.3,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": -1,
+          "fromUUID": "input-2",
+          "toUUID": "h2"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.2,
+          "fromUUID": "h2",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 3,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h2",
+          "bias": 0.24999999999999994,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h2"
+        },
+        {
+          "weight": 1.6,
+          "fromUUID": "input-1",
+          "toUUID": "h2"
+        },
+        {
+          "weight": -1.2,
+          "fromUUID": "input-2",
+          "toUUID": "h2"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h2",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 3,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "3"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        1,
+        1
+      ],
+      [
+        -1,
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75,
+        0.5
+      ],
+      [
+        -2,
+        1,
+        -0.5
+      ]
+    ],
+    "outputs": [
+      [
+        0.25
+      ],
+      [
+        1.149999976158142
+      ],
+      [
+        -0.6499999761581421
+      ],
+      [
+        -1.4250000715255737
+      ],
+      [
+        1.4500000476837158
+      ]
+    ]
   }
 ]
