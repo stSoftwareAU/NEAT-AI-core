@@ -2,7 +2,7 @@
 
 This is the first capture slice of #776, not its acceptance gate. Production
 implementations remain unchanged. Do not start #777/#778 on the strength of
-these nineteen captures: the remaining coverage and family checks below are open.
+these twenty-five captures: the remaining coverage and family checks below are open.
 
 ## Revisions and original suites
 
@@ -45,6 +45,15 @@ and all eight tests in `ParallelIdentityBridgeMerge.ts`, both in `test/compact`.
 These original tests pass without changes. Three-input cases use five
 three-dimensional probes; the earlier ten captures remain unchanged.
 
+Six additional inputs cover both published JSON fixtures in
+`CompactCreatureConstantFold.ts`, the disconnected-constant regression, and the
+first three `CompactCreatureConstantMerge.ts` tests. The forest constructor is
+copied unchanged from the frozen test and invoked with its original count of
+twelve. The fourth merge test's large fixture has a separate helper boundary
+and is not captured here. All seven original tests in these three files passed
+unchanged; the previous nineteen captures and eleven raw-helper captures are
+unchanged.
+
 | Capture | Observable legacy contract |
 |---|---|
 | `complement_bypass` | Remove the hidden COMPLEMENT; bias becomes `0.1 + 1.5 * (1 - 0.25) = 1.225`; weights become `-0.75` and `3.25` |
@@ -66,6 +75,12 @@ three-dimensional probes; the earlier ten captures remain unchanged.
 | `parallel_fanin` | A two-input bridge plus a single-input bridge returns no candidate |
 | `parallel_forward_only` | Merge the two bridges while retaining `forwardOnly: true` |
 | `parallel_three` | Retain `h2` with weights `0.5`, `1.6`, `-1.2` and merged bias `0.25` |
+| `constant_fold_full` | Remove the constant and fold `0.5 * 0.5` into the varying HARD_TANH consumer's bias: `0.2 + 0.25 = 0.45` |
+| `constant_fold_partial_if` | Fold the additive contribution to bias `0.3`, but retain canonical bias-one `constant-0` feeding the IF positive role at weight `0.3 * 0.5 = 0.15` |
+| `constant_disconnected` | Remove the disconnected constant and preserve the unit input-to-output edge and zero output bias |
+| `constant_merge_forest` | Replace 24 constants feeding twelve IF neurons with two canonical bias-one constants; preserve distinct positive/negative roles and all 49 edges; improve the original zero-error score |
+| `constant_merge_if_roles` | Keep three distinct canonical sources for the IF condition, positive and negative roles, at weights `0.2`, `-0.15` and `0.6`; never duplicate endpoint pairs |
+| `constant_merge_surplus` | Retain three canonical constants plus untouched `const-d` (bias `0.25`, weight `0.9`) for MAXIMUM: four independent inbound values cannot share three source slots |
 
 `neat-core/tests/compact_legacy_capture.rs` checks the changed/no-op contracts
 and native activation of both halves against recorded legacy outputs at the
@@ -85,6 +100,13 @@ cost `0.0001`, matching the constant-chain and IF regressions. Both constant cas
 three fixed-selector IF cases must
 retain or improve that score. These are complexity-score baselines at zero
 error, not full-corpus scorer acceptance or native scorer parity.
+The new constant-fold/merge cases retain the originals' `1e-6` activation bound.
+The disconnected-constant source test has no activation tolerance; its added
+native activation check also uses `1e-6`. Folded bias and partial-IF weight
+assertions retain `1e-9`; the three IF-role weights retain `1e-6`. The forest's
+derived role weights receive additional `1e-6` integrity checks. Both fold
+fixtures require the original score non-regression bound of `1e-9`; the forest
+requires strict improvement. No new score gate is imposed on the other cases.
 The unmodified legacy implementation remains the oracle. Mutation evidence:
 adding `0.1` to the compacted COMPLEMENT output bias fails at `[0, 0]` with
 `1.325 != 1.225`; the mutation was reverted. Adding `0.1` to either constant-case output bias
@@ -95,6 +117,11 @@ activation assertion, and all mutations were reverted.
 All nine zero/parallel cases also reject independent mutations: perturbed
 zero-edge survivor/parallel weights, incorrect merged biases, a candidate in
 each no-op case, or a lost forward-only flag. All mutations were reverted.
+Each of the six additional constant cases rejects its own corruption: a changed
+folded bias, a missing IF positive role, a restored disconnected constant, a
+changed forest role weight, aliased IF role sources, or a deleted surplus
+MAXIMUM input. The last corruption can preserve the sampled outputs, so its
+structural assertion is essential. All six mutations were reverted.
 
 Regenerate only from a clean checkout at the recorded revision:
 

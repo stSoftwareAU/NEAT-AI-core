@@ -2450,5 +2450,1772 @@
         1.4500000476837158
       ]
     ]
+  },
+  {
+    "name": "constant_fold_full",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureConstantFold.ts",
+    "fixture": "test/data/constant-fold-full-removal.json",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.99977,
+    "afterScore": 0.99988,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "legacy-neuron-1762683495",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "533d8616-037c-4278-b95c-3a2a1ce15ee6",
+          "bias": 0.2,
+          "squash": "HARD_TANH"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.7,
+          "fromUUID": "input-0",
+          "toUUID": "533d8616-037c-4278-b95c-3a2a1ce15ee6"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "legacy-neuron-1762683495",
+          "toUUID": "533d8616-037c-4278-b95c-3a2a1ce15ee6"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "533d8616-037c-4278-b95c-3a2a1ce15ee6",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "533d8616-037c-4278-b95c-3a2a1ce15ee6",
+          "bias": 0.45,
+          "squash": "HARD_TANH"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.7,
+          "fromUUID": "input-0",
+          "toUUID": "533d8616-037c-4278-b95c-3a2a1ce15ee6"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "533d8616-037c-4278-b95c-3a2a1ce15ee6",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ],
+    "outputs": [
+      [
+        0.32499998807907104
+      ],
+      [
+        0.6000000238418579
+      ],
+      [
+        -0.02499999850988388
+      ],
+      [
+        0.4124999940395355
+      ],
+      [
+        -0.3749999701976776
+      ]
+    ]
+  },
+  {
+    "name": "constant_fold_partial_if",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureConstantFold.ts",
+    "fixture": "test/data/constant-fold-partial-if.json",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.999627,
+    "afterScore": 0.999637,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "neuron-132866057",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "nonif-consumer",
+          "bias": 0.1,
+          "squash": "HARD_TANH"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-consumer",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.6,
+          "fromUUID": "input-0",
+          "toUUID": "nonif-consumer"
+        },
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "if-consumer",
+          "type": "condition"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "if-consumer",
+          "type": "negative"
+        },
+        {
+          "weight": 0.4,
+          "fromUUID": "neuron-132866057",
+          "toUUID": "nonif-consumer"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "neuron-132866057",
+          "toUUID": "if-consumer",
+          "type": "positive"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "nonif-consumer",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "if-consumer",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "constant-0",
+          "bias": 1
+        },
+        {
+          "type": "hidden",
+          "uuid": "nonif-consumer",
+          "bias": 0.30000000000000004,
+          "squash": "HARD_TANH"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-consumer",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.6,
+          "fromUUID": "input-0",
+          "toUUID": "nonif-consumer"
+        },
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "if-consumer",
+          "type": "condition"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "if-consumer",
+          "type": "negative"
+        },
+        {
+          "weight": 0.15,
+          "fromUUID": "constant-0",
+          "toUUID": "if-consumer",
+          "type": "positive"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "nonif-consumer",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "if-consumer",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "3"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        0.24000000953674316
+      ],
+      [
+        0.9300000667572021
+      ],
+      [
+        -0.13500000536441803
+      ],
+      [
+        0.20249998569488525
+      ],
+      [
+        -0.6150000095367432
+      ]
+    ]
+  },
+  {
+    "name": "constant_disconnected",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureDisconnectedConstant.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.99989,
+    "afterScore": 0.99999,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "unused-const",
+          "bias": 1
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "1"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ],
+    "outputs": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ]
+  },
+  {
+    "name": "constant_merge_forest",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureConstantMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9958526107039424,
+    "afterScore": 0.9980598319956603,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "const-pos-0",
+          "bias": 0.1
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-0",
+          "bias": -0.2
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-1",
+          "bias": 0.2
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-1",
+          "bias": -0.4
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-2",
+          "bias": 0.30000000000000004
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-2",
+          "bias": -0.6000000000000001
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-3",
+          "bias": 0.4
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-3",
+          "bias": -0.8
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-4",
+          "bias": 0.5
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-4",
+          "bias": -1
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-5",
+          "bias": 0.6000000000000001
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-5",
+          "bias": -1.2000000000000002
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-6",
+          "bias": 0.7000000000000001
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-6",
+          "bias": -1.4000000000000001
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-7",
+          "bias": 0.8
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-7",
+          "bias": -1.6
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-8",
+          "bias": 0.9
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-8",
+          "bias": -1.8
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-9",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-9",
+          "bias": -2
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-10",
+          "bias": 1.1
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-10",
+          "bias": -2.2
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos-11",
+          "bias": 1.2000000000000002
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg-11",
+          "bias": -2.4000000000000004
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-0",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-1",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-2",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-3",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-4",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-5",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-6",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-7",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-8",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-9",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-10",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-11",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.3,
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "type": "condition"
+        },
+        {
+          "weight": 0.4,
+          "fromUUID": "input-0",
+          "toUUID": "if-1",
+          "type": "condition"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "if-2",
+          "type": "condition"
+        },
+        {
+          "weight": 0.6000000000000001,
+          "fromUUID": "input-0",
+          "toUUID": "if-3",
+          "type": "condition"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "input-0",
+          "toUUID": "if-4",
+          "type": "condition"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-0",
+          "toUUID": "if-5",
+          "type": "condition"
+        },
+        {
+          "weight": 0.9000000000000001,
+          "fromUUID": "input-0",
+          "toUUID": "if-6",
+          "type": "condition"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "if-7",
+          "type": "condition"
+        },
+        {
+          "weight": 1.1,
+          "fromUUID": "input-0",
+          "toUUID": "if-8",
+          "type": "condition"
+        },
+        {
+          "weight": 1.2,
+          "fromUUID": "input-0",
+          "toUUID": "if-9",
+          "type": "condition"
+        },
+        {
+          "weight": 1.3,
+          "fromUUID": "input-0",
+          "toUUID": "if-10",
+          "type": "condition"
+        },
+        {
+          "weight": 1.4000000000000001,
+          "fromUUID": "input-0",
+          "toUUID": "if-11",
+          "type": "condition"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-0",
+          "toUUID": "if-0",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-0",
+          "toUUID": "if-0",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-1",
+          "toUUID": "if-1",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-1",
+          "toUUID": "if-1",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-2",
+          "toUUID": "if-2",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-2",
+          "toUUID": "if-2",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-3",
+          "toUUID": "if-3",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-3",
+          "toUUID": "if-3",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-4",
+          "toUUID": "if-4",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-4",
+          "toUUID": "if-4",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-5",
+          "toUUID": "if-5",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-5",
+          "toUUID": "if-5",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-6",
+          "toUUID": "if-6",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-6",
+          "toUUID": "if-6",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-7",
+          "toUUID": "if-7",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-7",
+          "toUUID": "if-7",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-8",
+          "toUUID": "if-8",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-8",
+          "toUUID": "if-8",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-9",
+          "toUUID": "if-9",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-9",
+          "toUUID": "if-9",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-10",
+          "toUUID": "if-10",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-10",
+          "toUUID": "if-10",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "const-pos-11",
+          "toUUID": "if-11",
+          "type": "positive"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-neg-11",
+          "toUUID": "if-11",
+          "type": "negative"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-2",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-3",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-4",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-5",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-6",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-7",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-8",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-9",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-10",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-11",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "constant-1",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "constant-0",
+          "bias": 1
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-0",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-1",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-2",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-3",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-4",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-5",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-6",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-7",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-8",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-9",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-10",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-11",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.3,
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "type": "condition"
+        },
+        {
+          "weight": 0.4,
+          "fromUUID": "input-0",
+          "toUUID": "if-1",
+          "type": "condition"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "if-2",
+          "type": "condition"
+        },
+        {
+          "weight": 0.6000000000000001,
+          "fromUUID": "input-0",
+          "toUUID": "if-3",
+          "type": "condition"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "input-0",
+          "toUUID": "if-4",
+          "type": "condition"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-0",
+          "toUUID": "if-5",
+          "type": "condition"
+        },
+        {
+          "weight": 0.9000000000000001,
+          "fromUUID": "input-0",
+          "toUUID": "if-6",
+          "type": "condition"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "if-7",
+          "type": "condition"
+        },
+        {
+          "weight": 1.1,
+          "fromUUID": "input-0",
+          "toUUID": "if-8",
+          "type": "condition"
+        },
+        {
+          "weight": 1.2,
+          "fromUUID": "input-0",
+          "toUUID": "if-9",
+          "type": "condition"
+        },
+        {
+          "weight": 1.3,
+          "fromUUID": "input-0",
+          "toUUID": "if-10",
+          "type": "condition"
+        },
+        {
+          "weight": 1.4000000000000001,
+          "fromUUID": "input-0",
+          "toUUID": "if-11",
+          "type": "condition"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": -0.13999999999999999,
+          "fromUUID": "constant-1",
+          "toUUID": "if-0",
+          "type": "negative"
+        },
+        {
+          "weight": -0.27999999999999997,
+          "fromUUID": "constant-1",
+          "toUUID": "if-1",
+          "type": "negative"
+        },
+        {
+          "weight": -0.42000000000000004,
+          "fromUUID": "constant-1",
+          "toUUID": "if-2",
+          "type": "negative"
+        },
+        {
+          "weight": -0.5599999999999999,
+          "fromUUID": "constant-1",
+          "toUUID": "if-3",
+          "type": "negative"
+        },
+        {
+          "weight": -0.7,
+          "fromUUID": "constant-1",
+          "toUUID": "if-4",
+          "type": "negative"
+        },
+        {
+          "weight": -0.8400000000000001,
+          "fromUUID": "constant-1",
+          "toUUID": "if-5",
+          "type": "negative"
+        },
+        {
+          "weight": -0.98,
+          "fromUUID": "constant-1",
+          "toUUID": "if-6",
+          "type": "negative"
+        },
+        {
+          "weight": -1.1199999999999999,
+          "fromUUID": "constant-1",
+          "toUUID": "if-7",
+          "type": "negative"
+        },
+        {
+          "weight": -1.26,
+          "fromUUID": "constant-1",
+          "toUUID": "if-8",
+          "type": "negative"
+        },
+        {
+          "weight": -1.4,
+          "fromUUID": "constant-1",
+          "toUUID": "if-9",
+          "type": "negative"
+        },
+        {
+          "weight": -1.54,
+          "fromUUID": "constant-1",
+          "toUUID": "if-10",
+          "type": "negative"
+        },
+        {
+          "weight": -1.6800000000000002,
+          "fromUUID": "constant-1",
+          "toUUID": "if-11",
+          "type": "negative"
+        },
+        {
+          "weight": 0.05,
+          "fromUUID": "constant-0",
+          "toUUID": "if-0",
+          "type": "positive"
+        },
+        {
+          "weight": 0.1,
+          "fromUUID": "constant-0",
+          "toUUID": "if-1",
+          "type": "positive"
+        },
+        {
+          "weight": 0.15000000000000002,
+          "fromUUID": "constant-0",
+          "toUUID": "if-2",
+          "type": "positive"
+        },
+        {
+          "weight": 0.2,
+          "fromUUID": "constant-0",
+          "toUUID": "if-3",
+          "type": "positive"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "constant-0",
+          "toUUID": "if-4",
+          "type": "positive"
+        },
+        {
+          "weight": 0.30000000000000004,
+          "fromUUID": "constant-0",
+          "toUUID": "if-5",
+          "type": "positive"
+        },
+        {
+          "weight": 0.35000000000000003,
+          "fromUUID": "constant-0",
+          "toUUID": "if-6",
+          "type": "positive"
+        },
+        {
+          "weight": 0.4,
+          "fromUUID": "constant-0",
+          "toUUID": "if-7",
+          "type": "positive"
+        },
+        {
+          "weight": 0.45,
+          "fromUUID": "constant-0",
+          "toUUID": "if-8",
+          "type": "positive"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "constant-0",
+          "toUUID": "if-9",
+          "type": "positive"
+        },
+        {
+          "weight": 0.55,
+          "fromUUID": "constant-0",
+          "toUUID": "if-10",
+          "type": "positive"
+        },
+        {
+          "weight": 0.6000000000000001,
+          "fromUUID": "constant-0",
+          "toUUID": "if-11",
+          "type": "positive"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-2",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-3",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-4",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-5",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-6",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-7",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-8",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-9",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-10",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.08333333333333333,
+          "fromUUID": "if-11",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "36"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        -0.9099999666213989
+      ],
+      [
+        0.574999988079071
+      ],
+      [
+        -1.159999966621399
+      ],
+      [
+        0.13750001788139343
+      ],
+      [
+        -0.6599999666213989
+      ]
+    ]
+  },
+  {
+    "name": "constant_merge_if_roles",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureConstantMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9995142175026008,
+    "afterScore": 0.999537,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "const-cond",
+          "bias": 0.5
+        },
+        {
+          "type": "constant",
+          "uuid": "const-pos",
+          "bias": -0.25
+        },
+        {
+          "type": "constant",
+          "uuid": "const-neg",
+          "bias": 2
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-neuron",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "if-neuron",
+          "type": "condition"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "input-1",
+          "toUUID": "if-neuron",
+          "type": "positive"
+        },
+        {
+          "weight": 0.4,
+          "fromUUID": "const-cond",
+          "toUUID": "if-neuron",
+          "type": "condition"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "const-pos",
+          "toUUID": "if-neuron",
+          "type": "positive"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "const-neg",
+          "toUUID": "if-neuron",
+          "type": "negative"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "if-neuron",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "constant-2",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "constant-1",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "constant-0",
+          "bias": 1
+        },
+        {
+          "type": "hidden",
+          "uuid": "if-neuron",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "if-neuron",
+          "type": "condition"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "input-1",
+          "toUUID": "if-neuron",
+          "type": "positive"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "constant-2",
+          "toUUID": "if-neuron",
+          "type": "negative"
+        },
+        {
+          "weight": -0.15,
+          "fromUUID": "constant-1",
+          "toUUID": "if-neuron",
+          "type": "positive"
+        },
+        {
+          "weight": 0.2,
+          "fromUUID": "constant-0",
+          "toUUID": "if-neuron",
+          "type": "condition"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "if-neuron",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "4"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        -0.15000000596046448
+      ],
+      [
+        0.5499999523162842
+      ],
+      [
+        0.6000000238418579
+      ],
+      [
+        -0.6749999523162842
+      ],
+      [
+        0.6000000238418579
+      ]
+    ]
+  },
+  {
+    "name": "constant_merge_surplus",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureConstantMerge.ts",
+    "feedbackLoop": false,
+    "activationTolerance": 0.000001,
+    "growthCost": 0.0001,
+    "error": 0,
+    "beforeScore": 0.9993860157570046,
+    "afterScore": 0.9994034852126311,
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "const-a",
+          "bias": 0.5
+        },
+        {
+          "type": "constant",
+          "uuid": "const-b",
+          "bias": -2
+        },
+        {
+          "type": "constant",
+          "uuid": "const-c",
+          "bias": 3
+        },
+        {
+          "type": "constant",
+          "uuid": "const-d",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "max-neuron",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "const-a",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "const-b",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "const-c",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 0.9,
+          "fromUUID": "const-d",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "max-neuron",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "constant-2",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "constant-1",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "constant-0",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "const-d",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "max-neuron",
+          "bias": 0,
+          "squash": "MAXIMUM"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 2.4000000000000004,
+          "fromUUID": "constant-2",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": -1.4,
+          "fromUUID": "constant-1",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "constant-0",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 0.9,
+          "fromUUID": "const-d",
+          "toUUID": "max-neuron"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "max-neuron",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "5"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0
+      ],
+      [
+        1
+      ],
+      [
+        -1
+      ],
+      [
+        0.25
+      ],
+      [
+        -2
+      ]
+    ],
+    "outputs": [
+      [
+        2.4000000953674316
+      ],
+      [
+        2.4000000953674316
+      ],
+      [
+        2.4000000953674316
+      ],
+      [
+        2.4000000953674316
+      ],
+      [
+        2.4000000953674316
+      ]
+    ]
   }
 ]

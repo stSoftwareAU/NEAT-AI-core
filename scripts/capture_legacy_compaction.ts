@@ -367,4 +367,194 @@ record(
   1e-6,
 );
 
+// Original published fixture inputs, loaded without edits.
+for (
+  const [name, fixture] of [
+    ["constant_fold_full", "test/data/constant-fold-full-removal.json"],
+    ["constant_fold_partial_if", "test/data/constant-fold-partial-if.json"],
+  ]
+) {
+  record(
+    name,
+    JSON.parse(await Deno.readTextFile(new URL(fixture, root))),
+    "test/compact/CompactCreatureConstantFold.ts",
+    false,
+    1e-6,
+    fixture,
+  );
+}
+
+// Original makeConstantForest constructor from the frozen test, unchanged.
+function makeConstantForest(count: number): unknown {
+  const neurons: Record<string, unknown>[] = [];
+  const synapses: Record<string, unknown>[] = [];
+
+  for (let i = 0; i < count; i++) {
+    neurons.push({
+      type: "constant",
+      uuid: `const-pos-${i}`,
+      bias: 0.1 * (i + 1),
+    });
+    neurons.push({
+      type: "constant",
+      uuid: `const-neg-${i}`,
+      bias: -0.2 * (i + 1),
+    });
+  }
+
+  for (let i = 0; i < count; i++) {
+    neurons.push({ type: "hidden", uuid: `if-${i}`, squash: "IF", bias: 0 });
+    synapses.push({
+      fromUUID: "input-0",
+      toUUID: `if-${i}`,
+      weight: 0.3 + i * 0.1,
+      type: "condition",
+    });
+    synapses.push({
+      fromUUID: `const-pos-${i}`,
+      toUUID: `if-${i}`,
+      weight: 0.5,
+      type: "positive",
+    });
+    synapses.push({
+      fromUUID: `const-neg-${i}`,
+      toUUID: `if-${i}`,
+      weight: 0.7,
+      type: "negative",
+    });
+    synapses.push({
+      fromUUID: `if-${i}`,
+      toUUID: "output-0",
+      weight: 1 / count,
+    });
+  }
+
+  neurons.push({
+    type: "output",
+    uuid: "output-0",
+    squash: "IDENTITY",
+    bias: 0,
+  });
+  synapses.push({ fromUUID: "input-1", toUUID: "output-0", weight: 0.25 });
+
+  return {
+    semanticVersion: "4.0.0",
+    forwardOnly: true,
+    input: 2,
+    output: 1,
+    neurons,
+    synapses,
+  };
+}
+
+record(
+  "constant_disconnected",
+  {
+    semanticVersion: "4.0.0",
+    forwardOnly: true,
+    input: 1,
+    output: 1,
+    neurons: [
+      { type: "constant", uuid: "unused-const", bias: 1 },
+      { type: "output", uuid: "output-0", squash: "IDENTITY", bias: 0 },
+    ],
+    synapses: [
+      { fromUUID: "input-0", toUUID: "output-0", weight: 1 },
+    ],
+  },
+  "test/compact/CompactCreatureDisconnectedConstant.ts",
+  false,
+  1e-6,
+);
+
+record(
+  "constant_merge_forest",
+  makeConstantForest(12),
+  "test/compact/CompactCreatureConstantMerge.ts",
+  false,
+  1e-6,
+);
+
+record(
+  "constant_merge_if_roles",
+  {
+    semanticVersion: "4.0.0",
+    forwardOnly: true,
+    input: 2,
+    output: 1,
+    neurons: [
+      { type: "constant", uuid: "const-cond", bias: 0.5 },
+      { type: "constant", uuid: "const-pos", bias: -0.25 },
+      { type: "constant", uuid: "const-neg", bias: 2 },
+      { type: "hidden", uuid: "if-neuron", squash: "IF", bias: 0 },
+      { type: "output", uuid: "output-0", squash: "IDENTITY", bias: 0 },
+    ],
+    synapses: [
+      {
+        fromUUID: "input-0",
+        toUUID: "if-neuron",
+        weight: 1,
+        type: "condition",
+      },
+      {
+        fromUUID: "const-cond",
+        toUUID: "if-neuron",
+        weight: 0.4,
+        type: "condition",
+      },
+      {
+        fromUUID: "input-1",
+        toUUID: "if-neuron",
+        weight: 0.7,
+        type: "positive",
+      },
+      {
+        fromUUID: "const-pos",
+        toUUID: "if-neuron",
+        weight: 0.6,
+        type: "positive",
+      },
+      {
+        fromUUID: "const-neg",
+        toUUID: "if-neuron",
+        weight: 0.3,
+        type: "negative",
+      },
+      { fromUUID: "if-neuron", toUUID: "output-0", weight: 1 },
+    ],
+  },
+  "test/compact/CompactCreatureConstantMerge.ts",
+  false,
+  1e-6,
+);
+
+record(
+  "constant_merge_surplus",
+  {
+    semanticVersion: "4.0.0",
+    forwardOnly: true,
+    input: 1,
+    output: 1,
+    neurons: [
+      { type: "constant", uuid: "const-a", bias: 0.5 },
+      { type: "constant", uuid: "const-b", bias: -2 },
+      { type: "constant", uuid: "const-c", bias: 3 },
+      { type: "constant", uuid: "const-d", bias: 0.25 },
+      { type: "hidden", uuid: "max-neuron", squash: "MAXIMUM", bias: 0 },
+      { type: "output", uuid: "output-0", squash: "IDENTITY", bias: 0 },
+    ],
+    synapses: [
+      { fromUUID: "input-0", toUUID: "max-neuron", weight: 1 },
+      { fromUUID: "const-a", toUUID: "max-neuron", weight: 0.6 },
+      { fromUUID: "const-b", toUUID: "max-neuron", weight: 0.7 },
+      { fromUUID: "const-c", toUUID: "max-neuron", weight: 0.8 },
+      { fromUUID: "const-d", toUUID: "max-neuron", weight: 0.9 },
+      { fromUUID: "max-neuron", toUUID: "output-0", weight: 1 },
+    ],
+  },
+  "test/compact/CompactCreatureConstantMerge.ts",
+  false,
+  1e-6,
+);
+
 await Deno.writeTextFile(destination, JSON.stringify(captures, null, 2) + "\n");
