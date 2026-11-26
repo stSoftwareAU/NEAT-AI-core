@@ -1,9 +1,12 @@
 # Raw legacy compaction helper captures (Issue #776)
 
-These five records supplement the
+These eleven records supplement the
 [whole-creature baseline](compaction-baseline.md). They freeze the unmodified
 NEAT-AI helpers at `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`, using inputs copied
-unchanged from the original tests. All five original tests passed unchanged.
+unchanged from the original tests. All twelve original tests in the five
+selected source files passed unchanged. The records cover ten of those tests:
+one memetic test supplies both a dirty and a clean input; the two creature-based
+memetic/`fix()` tests are not captured by this raw-helper mode.
 This remains a partial #776 baseline, not its acceptance gate.
 
 ## Preserve the helper boundary
@@ -27,11 +30,25 @@ any normalization visible in their `after` is performed by the helper itself.
 | `distinct_if_roles` | `MergeDuplicateSynapses.ts`, second test | Merge count is zero: condition and positive edges to IF remain separate even though source and target match. Do not invent the missing negative role. |
 | `backward_repair` | `RemoveBackwardSynapses.ts`, first test | Remove only `hidden-1 -> hidden-0`; retain the three forward edges and neuron order. This is repair, not recurrent equivalence. |
 | `forward_noop` | `RemoveBackwardSynapses.ts`, second test | Return zero removals and leave the prepared input unchanged. |
+| `duplicate_tags` | `MergeDuplicateSynapsesTagDedup.ts` | Sum `0.25 + 0.75 = 1` and retain one tag for two distinct objects with equal `{name,value}`. Preserve the IDs added by the merge helper itself. |
+| `memetic_count` | `PruneOrphanMemeticReferences.ts`, exact-count test, dirty input | Return four: one stale bias, one absent-edge row, one entire absent-source entry (despite its two rows), and one stale ancestry row. Preserve valid metadata and topology. |
+| `memetic_clean` | Same test, clean input | Return zero and preserve the complete input, including valid bias and weight metadata. |
+| `memetic_array_weights` | Same file, array-shaped weights test | Return one for the stale bias. Preserve all three wire-array slots unchanged; their indices are not runtime neuron IDs. |
+| `memetic_absent` | Same file, no-memetic test | Return zero and preserve the absence of memetic data. |
+| `memetic_no_weights` | Same file, no-weights snapshot test | Return two for stale root/ancestry biases. Preserve valid biases and do not introduce weights into either snapshot. |
 
 The two duplicate tests intentionally distinguish pointwise targets from IF
 targets. A universal endpoint-only key or a universal role-aware key would
 lose one of these legacy policies. Capture the distinction before designing
 shared primitives or choosing explicit options.
+
+The five memetic records invoke `pruneOrphanMemeticReferences` on its original
+`MemeticPruneTarget` objects: neuron IDs plus synapse indices, not creature
+exports. Their numeric result counts metadata removals, not graph removals.
+They do not exercise `pruneDanglingMemeticFromExport`, whose UUID wire boundary
+is a separate contract. Neither `Creature.fromJSON` nor `fix()` is called for
+these records. The tag record likewise retains two distinct equal-valued tag
+objects until the original merge helper runs.
 
 ## Integrity checks and limits
 
@@ -39,10 +56,18 @@ shared primitives or choosing explicit options.
 surviving endpoints, roles, weights, tag union, memetic invalidation,
 preparation boundary and no-op equality. Its `1e-12` weight bound checks the
 simple recorded arithmetic; the original TS assertions also run unchanged.
+The tag-deduplication case checks the exact sum of one. Memetic cases compare
+the entire result against the original input with only the explicitly stale
+entries removed; clean/no-memetic cases require whole-object equality.
 The fixture test first failed because the helper capture file was absent.
 Each case independently rejects a deliberately corrupted record: lost typed
 zero edge, wrong duplicate sum, swapped IF role, restored backward edge, or
 changed no-op weight. All five mutations were reverted.
+The expanded required-case check first failed before the six records were added.
+Seven further corruptions were caught and reverted: duplicated equal tag,
+wrong removal count, restored stale ancestry row, changed valid weight, lost
+wire-array slot, invented memetic object, and invented weights field. These
+are fixture mutations, not evidence of native compaction implementation parity.
 
 These are **capture integrity checks**, not native helper parity: no new Rust
 rewriter is being tested here. Activation/score claims would be inappropriate

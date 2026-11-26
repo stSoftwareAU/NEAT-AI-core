@@ -17,10 +17,16 @@ fn raw_helper_captures_preserve_legacy_contracts() {
         "distinct_if_roles",
         "backward_repair",
         "forward_noop",
+        "duplicate_tags",
+        "memetic_count",
+        "memetic_clean",
+        "memetic_array_weights",
+        "memetic_absent",
+        "memetic_no_weights",
     ] {
         assert!(cases.iter().any(|c| c["name"] == name), "missing {name}");
     }
-    assert_eq!(cases.len(), 5);
+    assert_eq!(cases.len(), 11);
     for case in cases {
         let before = &case["before"];
         let after = &case["after"];
@@ -112,9 +118,101 @@ fn raw_helper_captures_preserve_legacy_contracts() {
                     ],
                 );
             }
+            "duplicate_tags" => {
+                assert_eq!(case["preparation"], "none");
+                assert_eq!(case["input"], *before);
+                assert_eq!(case["result"], json!({"merged": 1}));
+                assert_eq!(before["synapses"].as_array().unwrap().len(), 2);
+                assert_eq!(before["synapses"][0]["tags"], before["synapses"][1]["tags"]);
+                // Two distinct tag objects have equal values; 0.25 + 0.75 = 1.
+                assert_eq!(
+                    after["synapses"],
+                    json!([{
+                        "fromUUID": "input-0", "toUUID": "output-0", "weight": 1,
+                        "fromId": 0, "toId": -1,
+                        "tags": [{"name": "meta", "value": "same"}]
+                    }])
+                );
+                // The legacy merge helper itself adds the canonical output ID.
+                assert_eq!(
+                    after["neurons"],
+                    json!([{
+                        "type": "output", "uuid": "output-0", "squash": "IDENTITY",
+                        "bias": 0, "id": -1
+                    }])
+                );
+            }
+            "memetic_count"
+            | "memetic_clean"
+            | "memetic_array_weights"
+            | "memetic_absent"
+            | "memetic_no_weights" => assert_memetic_capture(&case),
             other => panic!("unclassified helper capture: {other}"),
         }
     }
+}
+
+fn assert_memetic_capture(case: &Value) {
+    assert_eq!(case["helper"], "pruneOrphanMemeticReferences");
+    assert_eq!(case["preparation"], "none");
+    assert_eq!(case["input"], case["before"]);
+    let mut expected = case["before"].clone();
+    let count = match case["name"].as_str().unwrap() {
+        "memetic_count" => {
+            // One stale bias, one missing-edge row, one absent-source entry
+            // (despite its two rows), and one stale ancestry row: 1+1+1+1.
+            expected["memetic"]["biases"]
+                .as_object_mut()
+                .unwrap()
+                .remove("99");
+            expected["memetic"]["weights"]["0"]
+                .as_array_mut()
+                .unwrap()
+                .remove(1);
+            expected["memetic"]["weights"]
+                .as_object_mut()
+                .unwrap()
+                .remove("42");
+            expected["memetic"]["ancestry"][0]["weights"]["0"]
+                .as_array_mut()
+                .unwrap()
+                .remove(1);
+            4
+        }
+        "memetic_array_weights" => {
+            // Wire array rows are not integer-keyed runtime weights. Only the
+            // stale bias is removed; all three array slots survive unchanged.
+            assert!(expected["memetic"]["weights"].is_array());
+            expected["memetic"]["biases"]
+                .as_object_mut()
+                .unwrap()
+                .remove("99");
+            1
+        }
+        "memetic_no_weights" => {
+            // Root and ancestry each lose one stale bias; absent weights stay
+            // absent, and both valid bias values survive.
+            assert!(expected["memetic"].get("weights").is_none());
+            assert!(expected["memetic"]["ancestry"][0].get("weights").is_none());
+            expected["memetic"]["biases"]
+                .as_object_mut()
+                .unwrap()
+                .remove("99");
+            expected["memetic"]["ancestry"][0]["biases"]
+                .as_object_mut()
+                .unwrap()
+                .remove("98");
+            2
+        }
+        "memetic_absent" => {
+            assert!(expected.get("memetic").is_none());
+            0
+        }
+        "memetic_clean" => 0,
+        other => panic!("unclassified memetic capture: {other}"),
+    };
+    assert_eq!(case["result"], count);
+    assert_eq!(case["after"], expected);
 }
 
 fn assert_edges(actual: &[Value], expected: &[(&str, &str, &str, f64)]) {

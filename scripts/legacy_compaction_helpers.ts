@@ -9,10 +9,14 @@ export async function captureLegacyHelpers(root: URL, revision: string) {
   const { normaliseCreatureExport } = await import(
     new URL("src/architecture/NormaliseCreatureExport.ts", root).href
   );
+  const { pruneOrphanMemeticReferences } = await import(
+    new URL("src/compact/MemeticCleanup.ts", root).href
+  );
   const helpers = {
     pruneZeroWeightSynapses,
     mergeDuplicateSynapses,
     removeBackwardSynapses,
+    pruneOrphanMemeticReferences,
   };
   const tagA = { name: "tag", value: "a" };
   const tagB = { name: "tag", value: "b" };
@@ -177,6 +181,126 @@ export async function captureLegacyHelpers(root: URL, revision: string) {
         ],
         input: 1,
         output: 1,
+      },
+    },
+    {
+      name: "duplicate_tags",
+      test: "test/compact/MergeDuplicateSynapsesTagDedup.ts",
+      helper: "mergeDuplicateSynapses",
+      prepare: false,
+      json: {
+        input: 1,
+        output: 1,
+        neurons: [{
+          type: "output",
+          uuid: "output-0",
+          squash: "IDENTITY",
+          bias: 0,
+        }],
+        synapses: [
+          {
+            fromUUID: "input-0",
+            toUUID: "output-0",
+            weight: 0.25,
+            tags: [{ name: "meta", value: "same" }],
+          },
+          {
+            fromUUID: "input-0",
+            toUUID: "output-0",
+            weight: 0.75,
+            tags: [{ name: "meta", value: "same" }],
+          },
+        ],
+      },
+    },
+    {
+      name: "memetic_count",
+      test: "test/compact/PruneOrphanMemeticReferences.ts",
+      helper: "pruneOrphanMemeticReferences",
+      prepare: false,
+      json: {
+        neurons: [{ id: 0 }, { id: 1 }, { id: 2 }],
+        synapses: [{ from: 0, to: 1 }, { from: 1, to: 2 }],
+        memetic: {
+          generation: 1,
+          score: 0,
+          biases: { 0: 0.1, 1: 0.2, 99: 0.5 },
+          weights: {
+            0: [{ toId: 1, weight: 0.3 }, { toId: 2, weight: 0.4 }],
+            1: [{ toId: 2, weight: 0.5 }],
+            42: [{ toId: 1, weight: 0.6 }, { toId: 2, weight: 0.7 }],
+          },
+          ancestry: [{
+            generation: 0,
+            score: 0,
+            biases: {},
+            weights: {
+              0: [{ toId: 1, weight: 0.1 }, { toId: 9, weight: 0.2 }],
+            },
+          }],
+        },
+      },
+    },
+    {
+      name: "memetic_clean",
+      test: "test/compact/PruneOrphanMemeticReferences.ts",
+      helper: "pruneOrphanMemeticReferences",
+      prepare: false,
+      json: {
+        neurons: [{ id: 0 }, { id: 1 }],
+        synapses: [{ from: 0, to: 1 }],
+        memetic: {
+          generation: 1,
+          score: 0,
+          biases: { 0: 0.1, 1: 0.2 },
+          weights: { 0: [{ toId: 1, weight: 0.3 }] },
+        },
+      },
+    },
+    {
+      name: "memetic_array_weights",
+      test: "test/compact/PruneOrphanMemeticReferences.ts",
+      helper: "pruneOrphanMemeticReferences",
+      prepare: false,
+      json: {
+        neurons: [{ id: 10 }, { id: 11 }, { id: 12 }],
+        synapses: [{ from: 0, to: 1 }, { from: 1, to: 2 }],
+        memetic: {
+          generation: 1,
+          score: 0,
+          biases: { 10: 0.1, 99: 0.5 },
+          weights: [
+            { fromUUID: "input-0", toUUID: "input-1", weight: 0.3 },
+            { fromUUID: "input-1", toUUID: "output-0", weight: 0.4 },
+            { fromUUID: "output-0", toUUID: "input-0", weight: 0.5 },
+          ],
+        },
+      },
+    },
+    {
+      name: "memetic_absent",
+      test: "test/compact/PruneOrphanMemeticReferences.ts",
+      helper: "pruneOrphanMemeticReferences",
+      prepare: false,
+      json: {
+        neurons: [{ id: 0 }, { id: 1 }],
+        synapses: [{ from: 0, to: 1 }],
+      },
+    },
+    {
+      name: "memetic_no_weights",
+      test: "test/compact/PruneOrphanMemeticReferences.ts",
+      helper: "pruneOrphanMemeticReferences",
+      prepare: false,
+      json: {
+        neurons: [{ id: 0 }, { id: 1 }],
+        synapses: [{ from: 0, to: 1 }],
+        memetic: {
+          generation: 1,
+          score: 0,
+          biases: { 0: 0.1, 99: 0.5 },
+          ancestry: [{ generation: 0, score: 0, biases: { 0: 0.1, 98: 0.2 } }],
+        },
       },
     },
   ] as const;
