@@ -1,0 +1,1984 @@
+{
+  "repository": "stSoftwareAU/NEAT-AI",
+  "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+  "selectedDirectories": [
+    "test/compact",
+    "test/optimize/simplify"
+  ],
+  "distinctTests": 232,
+  "executions": 238,
+  "files": [
+    {
+      "path": "test/compact/Cascade.ts",
+      "sha256": "3011cbc392a15fd18312e8d9d8c1ef3cd718a294bd9e5f6c45a6ad7dbc2ed529",
+      "tests": [
+        {
+          "name": "compactUnused - behaviour preserved with cascading Cosine/CLIPPED removals",
+          "line": 56,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CleanupOrphanedNeurons.ts",
+      "sha256": "539eb2b5aea04086732bd69572a4c6f0c11f326a760a5682c5e3f9d83ea7cebc",
+      "tests": [
+        {
+          "name": "cleanupOrphanedNeurons - should remove hidden neuron with no outward connections",
+          "line": 10,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - should handle cascade removal of orphaned neurons",
+          "line": 94,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - should remove constant neurons with no outward connections",
+          "line": 162,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - should not remove output neurons even if no outward connections",
+          "line": 199,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - simulates remove-low-impact scenario from issue",
+          "line": 232,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - returns correct count of removed neurons",
+          "line": 324,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - should apply squash function when converting hidden to constant",
+          "line": 379,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - should apply TANH squash function when converting hidden to constant",
+          "line": 452,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeuronsInCreature - removes orphaned neurons from live creature",
+          "line": 513,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CloneCreatureExport.ts",
+      "sha256": "72a45505073ec25be8d4e0d2aecb04d9d7c8881054c046ea9bfde6d2af3b840f",
+      "tests": [
+        {
+          "name": "cloneCreatureExport: produces a deep-enough copy that mutation is isolated",
+          "line": 37,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cloneCreatureExport: minimal input (no optional fields) round-trips cleanly",
+          "line": 74,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/Compact.ts",
+      "sha256": "e46c128b6133a8bb08f10f54bc9e426fc8a8fab1bcf0cf61893ca837924d13bf",
+      "tests": [
+        {
+          "name": "compact - removes hidden neurons with no reachable output path",
+          "line": 10,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact - removes feedback loops when feedbackLoop is false",
+          "line": 52,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact - iteratively compacts linear IDENTITY chain preserving behaviour",
+          "line": 97,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact - repeated compaction of random multi-layer network converges",
+          "line": 163,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact - removes self-loops and unused paths preserving behaviour",
+          "line": 238,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactBehaviourGuard.ts",
+      "sha256": "145a32fd8f09edcadc2a60d5f67552e20d57948ad49700428ddf6de693876e4f",
+      "tests": [
+        {
+          "name": "safe compaction never returns a creature that changed behaviour",
+          "line": 42,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "safe compaction still folds an exactly foldable creature",
+          "line": 57,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "safe compaction carries the creature's provenance tags",
+          "line": 92,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactConstant.ts",
+      "sha256": "f2fa469be7dd12e60683f7620a1b105596fdaf7c3f32cdaf4f80bb4ec6db91fc",
+      "tests": [
+        {
+          "name": "compactUnused - behaviour preserved with constant and IF neurons",
+          "line": 79,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreature.ts",
+      "sha256": "4ce43adf7b567a3976b32a628c25fe7f313351035e48a100dc455a5ecccb83c6",
+      "tests": [
+        {
+          "name": "compactCreature - returns undefined when no compaction occurs",
+          "line": 6,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature - removes dead hidden neuron",
+          "line": 24,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature - preserves forward-only semantics",
+          "line": 50,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature - COMPLEMENT bypass preserves behaviour",
+          "line": 76,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature - removes zero-weight synapses",
+          "line": 111,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature - IDENTITY chain between two same-squash neurons merges into direct synapse",
+          "line": 141,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureAggressivePrune.ts",
+      "sha256": "7ac25ffd360d5d1d64383fa5c2f636a7a279e40a3661e47bcc4e3c31843a8593",
+      "tests": [
+        {
+          "name": "aggressivePrune drops a low-impact synapse feeding a MAXIMUM aggregate",
+          "line": 24,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "aggressivePrune never touches a frozen low-impact synapse",
+          "line": 51,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "aggressivePrune keeps an output's last inbound edge",
+          "line": 70,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreatureVariants: aggressive prunes a synapse the safe variant keeps",
+          "line": 111,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreatureVariants: the safe variant is unchanged by the aggressive pass",
+          "line": 142,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreatureVariants: a harmful aggressive prune is rejected by selection",
+          "line": 162,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreatureVariants: aggressive equals safe when nothing is low-impact",
+          "line": 184,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureCloneOptimisation.ts",
+      "sha256": "a3c5c10b35f8d5ffdf26e1407cc8bc6bb5d2cc19d0508f5a61cd5a23fe1ef659",
+      "tests": [
+        {
+          "name": "compactCreature: compaction does not modify original creature neurons",
+          "line": 14,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: compaction does not modify original creature synapses",
+          "line": 60,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: preserves neuron tags through compaction",
+          "line": 100,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: preserves synapse tags through compaction",
+          "line": 144,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: preserves synapse types through compaction",
+          "line": 196,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: preserves forwardOnly flag through compaction",
+          "line": 249,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: preserves creature-level tags after compaction",
+          "line": 294,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: compacting does not mutate original neuron biases",
+          "line": 346,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: compacting does not mutate original synapse weights",
+          "line": 393,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: preserves memetic data when no compaction occurs",
+          "line": 437,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: preserves semanticVersion through compaction",
+          "line": 478,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: compacted creature is a separate object from original",
+          "line": 522,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: large IDENTITY chain compacts without corrupting original",
+          "line": 575,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureComplementBypass.ts",
+      "sha256": "f7d6ecd5e519097107aa987d4caf0648a98f02df1676f6e532368c7cadc638d3",
+      "tests": [
+        {
+          "name": "compactCreature: bypass COMPLEMENT feeding IDENTITY output (safe algebraic fold)",
+          "line": 27,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: does not bypass COMPLEMENT into aggregate squashes (unsafe)",
+          "line": 108,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: bypass COMPLEMENT feeding multiple IDENTITY outputs (safe algebraic fold)",
+          "line": 145,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: does not bypass multi-outbound COMPLEMENT when any downstream is aggregate (unsafe)",
+          "line": 243,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureConstantFold.ts",
+      "sha256": "f4e95e059dc7596340ca9704d0c8538adefcd716e33fea91fd2628fdbc54bda0",
+      "tests": [
+        {
+          "name": "compactCreature folds a constant into its sole HARD_TANH consumer and removes it (full removal)",
+          "line": 55,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature partially folds a constant: drops non-IF synapses, keeps the IF synapse (partial fold)",
+          "line": 121,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureConstantMerge.ts",
+      "sha256": "84613ef091c322b3f7917f365efd3fe212e923931f8c8564b187d9d5433a6d68",
+      "tests": [
+        {
+          "name": "compactCreature merges a forest of differently-biased constants into canonical bias-1 constants",
+          "line": 134,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature merges the three constants of a single IF, one per role",
+          "line": 182,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature keeps a surplus constant rather than duplicating a synapse",
+          "line": 273,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "GRQ-23-forests fixture — 277 constants merge to canonical bias-1 constants",
+          "line": 327,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureConstantTransitiveFold.ts",
+      "sha256": "789e769573d398c924d8e0a2ea553ed6cfae79fd7677af723fec7d2b3d38358e",
+      "tests": [
+        {
+          "name": "compactCreature collapses a constant -> hidden -> output subgraph to a fixpoint",
+          "line": 43,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature does NOT collapse a hidden neuron with a varying input",
+          "line": 104,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureDisconnectedConstant.ts",
+      "sha256": "1074dceb36585b87ac55ca8df4e3c9a267609ce40a777a110cfef491959f7d39",
+      "tests": [
+        {
+          "name": "compactCreature removes disconnected constant (no outward synapses)",
+          "line": 8,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureIfCollapse.ts",
+      "sha256": "cf704c82315a05709e5f5b8af3286df143004bb7e93c398708d9b68f7b8e8854",
+      "tests": [
+        {
+          "name": "compactCreature collapses a constant-conditioned IF to its positive branch (condition > 0)",
+          "line": 53,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature collapses a constant-conditioned IF to its negative branch (condition <= 0)",
+          "line": 127,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature leaves an IF with a varying condition input unchanged",
+          "line": 186,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureIntegrity.ts",
+      "sha256": "2729e8ad7edd6168d14c07c439691ef8948d02c0ff1c4fe71ceb6c32c6d44e1d",
+      "tests": [
+        {
+          "name": "compactCreature integrity: COMPLEMENT bypass with cascading removal",
+          "line": 28,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature integrity: chain compaction where fromNeuron is also a COMPLEMENT candidate",
+          "line": 74,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature integrity: backward synapse removal creating orphans",
+          "line": 125,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature integrity: multiple compact operations in sequence",
+          "line": 168,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature integrity: neuron with zero-weight synapses becomes bridge after pruning",
+          "line": 229,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature integrity: COMPLEMENT bypass does not create dangling references",
+          "line": 272,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureNoOrphans.ts",
+      "sha256": "74a69ab188ce0dc94606f7ff307cdcd8dd26020e49047a2714e59ed2af9f1e0e",
+      "tests": [
+        {
+          "name": "compactCreature: removes orphaned neurons when backward synapses are stripped (issue #956)",
+          "line": 21,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: cascade removal of multiple orphaned neurons",
+          "line": 113,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureSimplifyLargeWeights.ts",
+      "sha256": "30c73f9de209e0bd422c59c825e5151d73a24ea95112e65e4a994be03e83661b",
+      "tests": [
+        {
+          "name": "compactCreature: simplifies large weights around ABSOLUTE without changing behaviour (issue #642)",
+          "line": 17,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureSimplifyLargeWeightsSupportedSquashes.ts",
+      "sha256": "961d235836d348043faec34dc5f8b87db04fd1d8b127773066d87049d7c1b649",
+      "tests": [
+        {
+          "name": "compactCreature: simplifies large weights for HYPOT without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: simplifies large weights for HYPOTv2 without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: simplifies large weights for IF without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: simplifies large weights for LeakyReLU without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: simplifies large weights for MAXIMUM without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: simplifies large weights for MEAN without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: simplifies large weights for MINIMUM without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: simplifies large weights for ReLU without changing behaviour (issue #642)",
+          "line": 29,
+          "column": 8,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactCreatureVariants.ts",
+      "sha256": "fa1d7be0a4668a551e5b03dc152e8117fdd44a9a845bf80e677ab1d0b65b2a77",
+      "tests": [
+        {
+          "name": "compactCreatureVariants returns both a safe and an aggressive candidate",
+          "line": 41,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature returns the safe variant for back-compat",
+          "line": 57,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "no-op aggressive pass dedupes to a single scored candidate via UUID",
+          "line": 80,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreatureVariants returns empty when nothing compacts",
+          "line": 114,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "selectCompactVariant falls back to the present variant",
+          "line": 131,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "selectCompactVariant keeps safe when variants are identical (distinct instances)",
+          "line": 152,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "selectCompactVariant prefers a distinct, strictly higher-scoring aggressive",
+          "line": 172,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "selectCompactVariant keeps safe when aggressive does not improve the score",
+          "line": 190,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactKeepOrder.ts",
+      "sha256": "96932a3243f5fd078b3c234dc270ffb02cbb46931f3223aeaa27f28af2ee1254",
+      "tests": [
+        {
+          "name": "compactUnused - preserves constant neuron ordering and behaviour",
+          "line": 82,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactTagPreservation.ts",
+      "sha256": "73e93a500f00b2d769afa4edfac0b96e627fc2a7b212a0cb5f813a8cfae77baa",
+      "tests": [
+        {
+          "name": "compact: COMPLEMENT bypass preserves synapse tags on new synapses",
+          "line": 23,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact: COMPLEMENT bypass merges tags when adding to existing synapse",
+          "line": 78,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact: IDENTITY chain merge preserves synapse tags",
+          "line": 140,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact: orphaned neuron conversion to constant preserves neuron tags",
+          "line": 208,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact: parallel IDENTITY bridge merge preserves neuron tags on kept neuron",
+          "line": 247,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact: parallel bridge merge preserves neuron tags on kept neuron",
+          "line": 304,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact: parallel IDENTITY bridge merge preserves synapse tags",
+          "line": 355,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compact: COMPLEMENT bypass preserves neuron tags on remaining neurons",
+          "line": 421,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactUnusedFiniteGuard.ts",
+      "sha256": "aafc58c6c20b301ff71cda090fb7f626e769bdcd4e7c4e9688754f976b198121",
+      "tests": [
+        {
+          "name": "removeNeuron - normal bias adjustment succeeds",
+          "line": 15,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "removeNeuron - returns false when bias addition overflows to Infinity",
+          "line": 47,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "removeNeuron - returns false when activation is NaN",
+          "line": 83,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "removeNeuron - multiple synapses: no partial bias corruption on failure",
+          "line": 109,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactUnusedOrphanCleanup.ts",
+      "sha256": "a91ffb7079b5a8ddd889d5ab7c8d34ebc8c66ffd8b7502d5a7ded2e15894939b",
+      "tests": [
+        {
+          "name": "compactUnused - no orphaned neurons after removal (issue #2117)",
+          "line": 79,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactUnused - cascade cleanup of chain of orphaned neurons (issue #2117)",
+          "line": 117,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/CompactUtils.ts",
+      "sha256": "046aefc35ecd0ed5babfb7a04a6f29c9ae5343d9244e265d148a24469aba3c99",
+      "tests": [
+        {
+          "name": "mergeDuplicateSynapses - sums weights of duplicate synapses",
+          "line": 11,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeDuplicateSynapses - no duplicates returns zero merges",
+          "line": 35,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeDuplicateSynapses - same from/to merges even when type differs (Issue #2086)",
+          "line": 53,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeDuplicateSynapses - an IF target keeps one synapse per role (Issue #3873)",
+          "line": 98,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeDuplicateSynapses - deletes memetic when merging occurs",
+          "line": 124,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneZeroWeightSynapses - removes zero-weight untyped synapses",
+          "line": 142,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneZeroWeightSynapses - preserves typed zero-weight synapses",
+          "line": 168,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneZeroWeightSynapses - preserves last inbound to output",
+          "line": 196,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneZeroWeightSynapses - removes non-finite weight synapses",
+          "line": 214,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneDeadSubgraphs - removes neurons with no path to output",
+          "line": 232,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneDeadSubgraphs - no dead neurons returns zero counts",
+          "line": 268,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedSynapse - deletes memetic when synapse is referenced",
+          "line": 287,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedSynapse - preserves memetic when synapse not referenced",
+          "line": 309,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedSynapse - handles missing memetic gracefully",
+          "line": 331,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedNeuron - deletes memetic when neuron is in weights",
+          "line": 346,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedNeuron - deletes memetic when neuron is a weight target",
+          "line": 368,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedNeuron - deletes memetic when neuron is in biases",
+          "line": 390,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedNeuron - preserves memetic when neuron not referenced",
+          "line": 412,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupMemeticForRemovedNeuron - handles missing memetic gracefully",
+          "line": 434,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ConstantMerge.ts",
+      "sha256": "2503875e6e6f684d8adf707e12af1dfc4e0fd0da2914649189a681f3c80290b5",
+      "tests": [
+        {
+          "name": "mergeRedundantConstants - one canonical constant per IF role",
+          "line": 94,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeRedundantConstants - is a fixpoint (re-running changes nothing)",
+          "line": 143,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeRedundantConstants - sums constants sharing one IF role",
+          "line": 154,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeRedundantConstants - never sums into a MAXIMUM, and stops at three slots",
+          "line": 203,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeRedundantConstants - leaves frozen constants and frozen synapses alone",
+          "line": 262,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeRedundantConstants - reuses a canonical constant already present",
+          "line": 313,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ConvertedConstantKeepsUuid_test.ts",
+      "sha256": "4914b7ffa3a527bd2b009bb857e66af704f80da2c51864c27411a04feaf88440",
+      "tests": [
+        {
+          "name": "Issue #4071 - a converted constant survives an export round trip beside a legacy-labelled constant",
+          "line": 50,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "Issue #4071 - cleanupOrphanedNeurons keeps the source uuid on a hidden converted to a constant",
+          "line": 110,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/DeadSubgraphPruning.ts",
+      "sha256": "f11ca20891db79f024826cef066a52089fc7f45c3fd6e8fece63a15673a4d960",
+      "tests": [
+        {
+          "name": "Dead subgraph pruning: removes unreachable subgraph without changing outputs",
+          "line": 44,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/FixIF.ts",
+      "sha256": "907d554e66371c60768d9b7c8a19f451d08c395f6a7400c8cd07fe20df12cf44",
+      "tests": [
+        {
+          "name": "compactUnused - behaviour preserved when IF-type neuron is compacted",
+          "line": 77,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/IfRoutingScoreInvariant.ts",
+      "sha256": "7273e091c4dbf706c0c6954d41eefcda8eea34564fdfce994e4624f80dbccca9",
+      "tests": [
+        {
+          "name": "Issue #3840 fixture is the shape under test",
+          "line": 88,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactCreature: safe compaction never lowers the score",
+          "line": 119,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify: simplification never lowers the score",
+          "line": 147,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "DiscoveryNeuronRemoval: an impact 0.00% removal costs no score",
+          "line": 172,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "the routing probe rejects a candidate whose IF routing moved",
+          "line": 207,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "the routing probe never touches a creature without IF structure",
+          "line": 251,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "the topology hash separates two IF role assignments",
+          "line": 274,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "probe inputs are deterministic across calls",
+          "line": 309,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "creature-level tags survive compaction, simplification and removal",
+          "line": 318,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/IsAggregationSquash.ts",
+      "sha256": "b3ba854d39fa9f02f9ee9b1c36c01fa11987d95db6721190ef38ed30243a2b94",
+      "tests": [
+        {
+          "name": "isAggregationSquash - returns true for aggregation squashes",
+          "line": 9,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "isAggregationSquash - returns false for non-aggregation squashes",
+          "line": 20,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "isAggregationSquash - returns false for undefined and empty string",
+          "line": 31,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/MemeticDanglingReferences.ts",
+      "sha256": "11aaabccc8a223121cc3c2250d0f27809e7c3c872d2477c5d5091013cc0f241b",
+      "tests": [
+        {
+          "name": "Issue #3844: no compaction pass leaves a dangling memetic reference",
+          "line": 148,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "Issue #3844: no creature-level pass leaves a dangling memetic reference",
+          "line": 197,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "Issue #3844: a tags-only change leaves memetic and uuid untouched",
+          "line": 251,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/MergeDuplicateSynapses.ts",
+      "sha256": "941e8db857eceb47c238c8eb86eedf88bb44dcf67baddfe38397be589c71b132",
+      "tests": [
+        {
+          "name": "mergeDuplicateSynapses: merges same from/to (sums weights), clears memetic",
+          "line": 8,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "mergeDuplicateSynapses: keeps both IF roles from one source on UUID export (Issue #3873)",
+          "line": 63,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/MergeDuplicateSynapsesTagDedup.ts",
+      "sha256": "fa0a4c78b8c2a6ee1c7eabd636f5dc7391754aebb7698b83692e21e1487a78db",
+      "tests": [
+        {
+          "name": "mergeDuplicateSynapses: de-duplicates tags by {name,value} (not reference equality)",
+          "line": 5,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/NewbornGrace.ts",
+      "sha256": "cfcfe1c63ca1eea078052f0081a9856d1fd99075dc90046773329b94ad197259",
+      "tests": [
+        {
+          "name": "compactUnused - removes the quiet neuron when it has no grace",
+          "line": 88,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactUnused - a newborn survives one compaction pass, then becomes removable",
+          "line": 97,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactUnused - a two-round grace outlasts the first pass",
+          "line": 132,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "AddNeuron - tags the neuron it inserts with the configured grace",
+          "line": 147,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "compactUnused - a pass that compacts nothing spends no grace",
+          "line": 186,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/OrphanedNeuronCornerCases.ts",
+      "sha256": "2133012100cb9969341f0f8fc95f5708dab8bb69731882534dd7cf6d057c2c05",
+      "tests": [
+        {
+          "name": "cleanupOrphanedNeurons - deep cascade: A→B→C→D all removed when A is sole source",
+          "line": 10,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - hidden-to-constant conversion then orphaning",
+          "line": 76,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - multiple neurons orphaned simultaneously",
+          "line": 119,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - constant neuron with only inward connections",
+          "line": 158,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - self-referencing synapse edge case",
+          "line": 196,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "cleanupOrphanedNeurons - defensive fromId cleanup prevents dangling references",
+          "line": 245,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ParallelBridgeMerge.ts",
+      "sha256": "abf6c064fc14ccc4b5c25bb052cb8e4017634abe3a3b568f05b602b0e1c3104f",
+      "tests": [
+        {
+          "name": "parallel bridge merge: two COMPLEMENT bridge neurons are merged",
+          "line": 28,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: COMPLEMENT weight calculation is correct",
+          "line": 76,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: mixed IDENTITY and COMPLEMENT are NOT merged together",
+          "line": 148,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: LOGISTIC neurons are not merged",
+          "line": 177,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: TANH neurons are not merged",
+          "line": 204,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: ReLU neurons are not merged",
+          "line": 230,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: ABSOLUTE neurons are not merged",
+          "line": 257,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: MAXIMUM aggregate neurons are not merged",
+          "line": 284,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: COMPLEMENT merge preserves structure via compactCreature",
+          "line": 310,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: three COMPLEMENT neurons merged correctly",
+          "line": 350,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: IDENTITY neurons still work as before",
+          "line": 399,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ParallelBridgeMergeExactness.ts",
+      "sha256": "869d133c4c07a8b97f5fb5a9782abf29093b2be7548318d3d00b959b92cddcac",
+      "tests": [
+        {
+          "name": "parallel bridge merge: IF target is declined",
+          "line": 79,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: MAXIMUM target is declined",
+          "line": 120,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: merges into the bridge that loads last",
+          "line": 145,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: a source that loads after the kept bridge is left alone",
+          "line": 198,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "GRQ-23-forests fixture — parallel bridge merge is exact and forward-only",
+          "line": 242,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ParallelBridgeMergeOrdering.ts",
+      "sha256": "1b33ed68132b0e18a2bde2285a285e6e9213fd63a0360ab30949422c297d5270",
+      "tests": [
+        {
+          "name": "parallel bridge merge: a source after the first bridge stays forward",
+          "line": 99,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: a backward bridge edge is declined",
+          "line": 128,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: MAXIMUM target is declined",
+          "line": 222,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: IF target is declined for every synapse role",
+          "line": 240,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "GRQ-23-forests fixture — parallel bridge merge no longer drifts",
+          "line": 278,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ParallelIdentityBridgeMerge.ts",
+      "sha256": "242e9e1373d969fc67518a8959fc1896bdbf723e2a65cb0f2bab65cb7c2f367d",
+      "tests": [
+        {
+          "name": "parallel IDENTITY merge: two bridge neurons to same target are merged",
+          "line": 6,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel IDENTITY merge: weight calculation is correct",
+          "line": 40,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel IDENTITY merge: bias contributions are correctly absorbed",
+          "line": 107,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel IDENTITY merge: skips when would create duplicate synapses",
+          "line": 143,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel IDENTITY merge: does not merge non-IDENTITY squash neurons",
+          "line": 172,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel IDENTITY merge: does not merge neurons with multiple inbound connections",
+          "line": 207,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel IDENTITY merge: preserves forward-only topology",
+          "line": 236,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel IDENTITY merge: three bridge neurons merged correctly",
+          "line": 268,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ParallelIdentityBridgeUnification.ts",
+      "sha256": "f359430934304e0e1f2a2cab51a63f78ed769043bcad202819073282e383d494",
+      "tests": [
+        {
+          "name": "parallel merge: IDENTITY bridges merge from a UUID-only export",
+          "line": 32,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel merge: compaction still collapses IDENTITY bridges without behaviour change",
+          "line": 62,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ParallelMergeCornerCases.ts",
+      "sha256": "dba67db2549542f0265103695ee2c233d33ad432a6e4afa8d47b4fb0bb3c5ffa",
+      "tests": [
+        {
+          "name": "parallel merge: bridge neuron with typed synapse is not merged",
+          "line": 13,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel merge: kept neuron's source is also merged elsewhere",
+          "line": 75,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel merge: duplicate synapse from redirect is prevented",
+          "line": 117,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel merge: neuron becomes bridge after zero-weight pruning context",
+          "line": 154,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: COMPLEMENT bridge with extra typed synapse is excluded",
+          "line": 186,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel identity merge: integrity assertion catches dangling references",
+          "line": 216,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "parallel bridge merge: integrity assertion after COMPLEMENT merge",
+          "line": 251,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/PruneOrphanMemeticReferences.ts",
+      "sha256": "6acd79e86cd1cd750badc68f20914090ee9f2a07c22b7bb2949e9703ab2ea8bb",
+      "tests": [
+        {
+          "name": "pruneOrphanMemeticReferences removes stale bias keys",
+          "line": 10,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "fix() leaves memetic consistent for validate after stale memetic",
+          "line": 66,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneOrphanMemeticReferences returns the exact count of removed items",
+          "line": 101,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneOrphanMemeticReferences leaves array-shaped root weights untouched",
+          "line": 164,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneOrphanMemeticReferences counts nothing for a creature with no memetic",
+          "line": 198,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "pruneOrphanMemeticReferences prunes biases of a snapshot that has no weights",
+          "line": 207,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/RemoveBackwardSynapses.ts",
+      "sha256": "fe0b92cda081bf11e3c117c2d854a9502629ea2a1b33c9cd00d189bce605595e",
+      "tests": [
+        {
+          "name": "removeBackwardSynapses: strips synapses that point backwards in neuron order",
+          "line": 6,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "removeBackwardSynapses: no-op when the network is already feed-forward",
+          "line": 50,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/RemoveHiddenNeuronCascade.ts",
+      "sha256": "42d9a0d4878ec5a08fe9c5a2b1bc7d79da9048e44da601c2a94e96bb40c885d9",
+      "tests": [
+        {
+          "name": "removeHiddenNeuron - cascades to a constant orphaned by the removal",
+          "line": 17,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "removeHiddenNeuron - keeps a constant that still has other outward connections",
+          "line": 59,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/SimplifyLargeWeights.ts",
+      "sha256": "6c45556f37108f73c78988aaae93e5c421f6e571446387e5b1c5f86ef5bf94c1",
+      "tests": [
+        {
+          "name": "simplifyLargeWeights: rescales imbalanced ABSOLUTE bridge and reduces penalty",
+          "line": 16,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplifyLargeWeights: no-op for balanced weights",
+          "line": 57,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplifyLargeWeights: non-homogeneous squash (TANH) is left alone",
+          "line": 78,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "calculateWeightBiasPenalty: returns 0 for an empty creature export",
+          "line": 99,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/UnusedClipped.ts",
+      "sha256": "b29f5bca57ca3a4438afe8c78a5710452fd9b4459e2540a69ae4530e24bc36a7",
+      "tests": [
+        {
+          "name": "compactUnused - behaviour preserved when CLIPPED hidden neuron is removed",
+          "line": 54,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ZeroWeightSynapsePruning.ts",
+      "sha256": "3aa839f538770d8949ae5c6e9c74e35fc64d3111e2896635507c4f0f88d58960",
+      "tests": [
+        {
+          "name": "Compact: prunes zero-weight synapses then removes newly-orphaned neurons (behaviour-preserving)",
+          "line": 39,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/compact/ZeroWeightSynapsePruningTyped.ts",
+      "sha256": "cae281482adcb06ab67bafc132f855dd00097cd9783ba467602d23fb7f17f70b",
+      "tests": [
+        {
+          "name": "pruneZeroWeightSynapses: keeps typed synapses, protects IF targets, and never disconnects outputs",
+          "line": 5,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/ABSOLUTE.ts",
+      "sha256": "abd038537c605dec2083176c7f0e7772154d271800c96c7f647d2a76b7124c92",
+      "tests": [
+        {
+          "name": "simplify - ABSOLUTE squash with mixed activation chain preserves behaviour",
+          "line": 11,
+          "column": 6,
+          "executions": 7,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/BehaviourGuard.ts",
+      "sha256": "5ba17c1887e0147f7dd5db80bf5db56df110a361eb3eb64386d253fbff277ae6",
+      "tests": [
+        {
+          "name": "simplify never returns a creature that changed behaviour",
+          "line": 58,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify still folds a creature it can simplify exactly",
+          "line": 73,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify carries the creature's provenance tags",
+          "line": 101,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/COMPLEMENT.ts",
+      "sha256": "63aaf23685586d52973ec90128123695312d1f1c000dc87bc2161cd76c270de0",
+      "tests": [
+        {
+          "name": "simplify - COMPLEMENT neuron produces behaviour-equivalent IDENTITY with negated weights",
+          "line": 9,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/Constant.ts",
+      "sha256": "a0daa89160964c448b991ea7ace650e0231160b033a67ecaccc1b564fd791f0b",
+      "tests": [
+        {
+          "name": "simplify - constant neurons folded into multi-squash network preserving behaviour",
+          "line": 14,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify - constant neuron folded into LOGISTIC hidden layers preserving behaviour",
+          "line": 195,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify - multiple minimal-weight constants folded preserving behaviour",
+          "line": 289,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify - simple constant propagation to IDENTITY outputs preserving behaviour",
+          "line": 393,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/Cosine.ts",
+      "sha256": "affade961f909174f100bb86945a5fad71c36e266fa5effdf19b99354e69186c",
+      "tests": [
+        {
+          "name": "simplify - Cosine squash with varied biases preserves behaviour",
+          "line": 8,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/IDENTITY.ts",
+      "sha256": "3480428c6e19b0516008427436d080b6a95551463bbf251e865d08b5cf234f53",
+      "tests": [
+        {
+          "name": "simplify - IDENTITY hidden neuron folded into downstream TANH output",
+          "line": 11,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify - simple IDENTITY chain folded into single output neuron",
+          "line": 100,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        },
+        {
+          "name": "simplify - IDENTITY into MAXIMUM output is not simplified (aggregate squash is unsafe to fold)",
+          "line": 166,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/MemeticCleanup.ts",
+      "sha256": "299dd2d37a2f747de2912834564523b8ea578eb16a279117da508a7d21c0a13d",
+      "tests": [
+        {
+          "name": "simplify - memetic cleared when simplifyConstants removes a synapse (#2233)",
+          "line": 15,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/SINE.ts",
+      "sha256": "d002a52eb4fa3f256c6ed38627a38e9f541f239cb4f48709aeed99608bc4fb30",
+      "tests": [
+        {
+          "name": "simplify - SINE squash with varied biases preserves behaviour",
+          "line": 8,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    },
+    {
+      "path": "test/optimize/simplify/TAN.ts",
+      "sha256": "4abde4bfe5cb715fd868cbe492f21d8b2ad5c2b9f0f99d87eab3b5b1426049c0",
+      "tests": [
+        {
+          "name": "simplify - TAN squash with varied biases preserves behaviour",
+          "line": 8,
+          "column": 6,
+          "executions": 1,
+          "result": "passed"
+        }
+      ]
+    }
+  ]
+}
