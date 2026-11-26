@@ -41,6 +41,14 @@ fn native_activation_reproduces_legacy_compaction_outputs() {
                 assert!(after.neurons.iter().any(|n| n.uuid == "hidden-h"));
                 assert!(!after.neurons.iter().any(|n| n.uuid == "const-c"));
             }
+            "constant_fold_full"
+            | "constant_fold_partial_if"
+            | "constant_disconnected"
+            | "constant_merge_forest"
+            | "constant_merge_if_roles"
+            | "constant_merge_surplus" => {
+                assert_constant_contract(&case);
+            }
             "identity_fanin_noop" | "aggregate_guard" | "nonlinear_noop" => {
                 assert!(case.after.is_none(), "{} must not compact", case.name);
             }
@@ -77,12 +85,16 @@ fn native_activation_reproduces_legacy_compaction_outputs() {
             case.activation_tolerance, tolerance,
             "original tolerance must not widen"
         );
-        if case.name.starts_with("constant_")
-            || matches!(
-                case.name.as_str(),
-                "if_positive" | "if_negative" | "if_zero"
-            )
-        {
+        if matches!(
+            case.name.as_str(),
+            "constant_transitive_fold"
+                | "constant_with_varying_input"
+                | "constant_fold_full"
+                | "constant_fold_partial_if"
+                | "if_positive"
+                | "if_negative"
+                | "if_zero"
+        ) {
             assert!(
                 case.after_score >= case.before_score - 1e-9,
                 "{}: legacy score regressed",
@@ -199,11 +211,138 @@ fn every_recorded_legacy_contract_is_present() {
         "parallel_fanin",
         "parallel_forward_only",
         "parallel_three",
+        "constant_fold_full",
+        "constant_fold_partial_if",
+        "constant_disconnected",
+        "constant_merge_forest",
+        "constant_merge_if_roles",
+        "constant_merge_surplus",
     ] {
         assert!(
             captures.iter().any(|c| c.name == name),
             "missing legacy regression {name}"
         );
+    }
+}
+
+fn assert_constant_contract(case: &Capture) {
+    let after = case
+        .after
+        .as_ref()
+        .expect("the original constant case compacts");
+    assert!(after.forward_only);
+    let constants: Vec<_> = after
+        .neurons
+        .iter()
+        .filter(|n| n.neuron_type == "constant")
+        .collect();
+    let neuron = |uuid: &str| after.neurons.iter().find(|n| n.uuid == uuid).unwrap();
+    let weight = |from: &str, to: &str, role: Option<&str>| {
+        let edges: Vec<_> = after
+            .synapses
+            .iter()
+            .filter(|s| s.from_uuid == from && s.to_uuid == to && s.synapse_type.as_deref() == role)
+            .collect();
+        assert_eq!(edges.len(), 1, "{}: {from} -> {to}", case.name);
+        edges[0].weight
+    };
+    // Original merge tests prohibit duplicate endpoint pairs, including when
+    // distinct IF roles would otherwise collide on one canonical source.
+    let pairs: std::collections::HashSet<_> = after
+        .synapses
+        .iter()
+        .map(|s| (&s.from_uuid, &s.to_uuid))
+        .collect();
+    assert_eq!(pairs.len(), after.synapses.len());
+    match case.name.as_str() {
+        "constant_fold_full" => {
+            assert!(constants.is_empty());
+            let consumer = neuron("533d8616-037c-4278-b95c-3a2a1ce15ee6");
+            assert_eq!(consumer.squash.as_deref(), Some("HARD_TANH"));
+            assert!((consumer.bias - (0.2 + 0.5 * 0.5)).abs() <= 1e-9);
+        }
+        "constant_fold_partial_if" => {
+            assert_eq!(constants.len(), 1);
+            assert_eq!(constants[0].uuid, "constant-0");
+            assert_eq!(constants[0].bias, 1.0);
+            assert_eq!(neuron("if-consumer").squash.as_deref(), Some("IF"));
+            assert!((neuron("nonif-consumer").bias - (0.1 + 0.4 * 0.5)).abs() <= 1e-9);
+            assert!(
+                (weight("constant-0", "if-consumer", Some("positive")) - 0.3 * 0.5).abs() <= 1e-9
+            );
+            assert!(
+                !after
+                    .synapses
+                    .iter()
+                    .any(|s| s.from_uuid == "constant-0" && s.to_uuid == "nonif-consumer")
+            );
+        }
+        "constant_disconnected" => {
+            assert!(constants.is_empty());
+            assert_eq!(after.neurons.len(), 1);
+            assert_eq!(neuron("output-0").bias, 0.0);
+            assert_eq!(after.synapses.len(), 1);
+            assert_eq!(weight("input-0", "output-0", None), 1.0);
+        }
+        "constant_merge_forest" => {
+            assert_eq!(
+                case.before
+                    .neurons
+                    .iter()
+                    .filter(|n| n.neuron_type == "constant")
+                    .count(),
+                24
+            );
+            assert_eq!(constants.len(), 2);
+            assert_eq!(after.neurons.len(), 2 + 12 + 1);
+            assert_eq!(after.synapses.len(), 12 * 4 + 1);
+            for c in constants {
+                assert!(matches!(c.uuid.as_str(), "constant-0" | "constant-1"));
+                assert_eq!(c.bias, 1.0);
+            }
+            for i in 0..12 {
+                let target = format!("if-{i}");
+                assert_eq!(neuron(&target).squash.as_deref(), Some("IF"));
+                assert!(
+                    (weight("constant-0", &target, Some("positive"))
+                        - 0.5 * 0.1 * f64::from(i + 1))
+                    .abs()
+                        <= 1e-6
+                );
+                assert!(
+                    (weight("constant-1", &target, Some("negative"))
+                        - 0.7 * -0.2 * f64::from(i + 1))
+                    .abs()
+                        <= 1e-6
+                );
+            }
+            assert!(
+                case.after_score > case.before_score,
+                "original forest score must improve"
+            );
+        }
+        "constant_merge_if_roles" => {
+            assert_eq!(constants.len(), 3);
+            for (index, role, expected) in [
+                (0, "condition", 0.4 * 0.5),
+                (1, "positive", 0.6 * -0.25),
+                (2, "negative", 0.3 * 2.0),
+            ] {
+                let source = format!("constant-{index}");
+                assert_eq!(neuron(&source).bias, 1.0);
+                assert!((weight(&source, "if-neuron", Some(role)) - expected).abs() <= 1e-6);
+            }
+            assert_eq!(neuron("if-neuron").squash.as_deref(), Some("IF"));
+        }
+        "constant_merge_surplus" => {
+            let mut ids: Vec<_> = constants.iter().map(|n| n.uuid.as_str()).collect();
+            ids.sort_unstable();
+            assert_eq!(ids, ["const-d", "constant-0", "constant-1", "constant-2"]);
+            assert_eq!(neuron("const-d").bias, 0.25);
+            assert_eq!(weight("const-d", "max-neuron", None), 0.9);
+            assert_eq!(neuron("max-neuron").squash.as_deref(), Some("MAXIMUM"));
+        }
+        other => panic!("unclassified constant capture: {other}"),
     }
 }
 
