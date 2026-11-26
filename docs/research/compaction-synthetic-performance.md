@@ -6,6 +6,11 @@ entry point with feedback disabled and MCMC temperature omitted. The legacy
 `compactCreature` wrapper invokes this same two-variant pipeline and returns
 only `safe`; its wall time must not be described as safe-pass-only cost.
 
+The [frozen native scorer comparison](compaction-native-scorer.md) uses the same
+graph bytes and synthetic rows. It matches the CLI's different growth cost and
+records both dependency revisions and observed differences; it is not a new
+acceptance threshold.
+
 ## Source and measurement boundary
 
 - Legacy revision: `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`.

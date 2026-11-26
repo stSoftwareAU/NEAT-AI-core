@@ -5,13 +5,13 @@ import {
   legacyCompactionSource,
 } from "./legacy_compaction_source.ts";
 
-const [checkout, destination, count = "3"] = Deno.args;
+const [checkout, destination, count = "3", artifactDirectory] = Deno.args;
 const repetitions = Number(count);
 if (
   !checkout || !destination || !Number.isInteger(repetitions) || repetitions < 3
 ) {
   throw new Error(
-    "Usage: benchmark_legacy_compaction.ts <frozen NEAT-AI checkout> <report.json> [repetitions >= 3]",
+    "Usage: benchmark_legacy_compaction.ts <frozen NEAT-AI checkout> <report.json> [repetitions >= 3] [new artifact directory]",
   );
 }
 const root = await legacyCompactionSource(checkout);
@@ -57,6 +57,28 @@ const probes = Array.from(
 const targets = probes.map((_, r) =>
   Array.from({ length: 4 }, (_, c) => ((r * 3 + c * 5) % 17 - 8) / 8)
 );
+// Optional interchange files for the native scorer. Never replace existing data.
+// Targets are multiples of 1/8 (exact f32); inputs already reach TS activation
+// through Float32Array. Each record is eight inputs then four targets, LE f32.
+const scorerGrowthCost = 0.0000001;
+const scorerReferences = [];
+if (artifactDirectory) {
+  await Deno.mkdir(artifactDirectory);
+  await Deno.mkdir(`${artifactDirectory}/creatures`);
+  await Deno.mkdir(`${artifactDirectory}/data`);
+  const data = new Uint8Array(probes.length * (8 + 4) * 4);
+  const view = new DataView(data.buffer);
+  let offset = 0;
+  for (let r = 0; r < probes.length; r++) {
+    for (const value of [...probes[r], ...targets[r]]) {
+      view.setFloat32(offset, value, true);
+      offset += 4;
+    }
+  }
+  await Deno.writeFile(`${artifactDirectory}/data/records.bin`, data, {
+    createNew: true,
+  });
+}
 function timed<T>(run: () => T): { value: T; ms: number } {
   const start = performance.now();
   const value = run();
@@ -136,6 +158,21 @@ for (let iteration = 0; iteration <= repetitions; iteration++) {
     const zeroErrorScore = calculate(graph, 0, growthCost);
     if (![mse, score.value, zeroErrorScore].every(Number.isFinite)) {
       throw new Error(`Non-finite ${name} score`);
+    }
+    if (artifactDirectory && iteration === 0) {
+      await Deno.writeTextFile(
+        `${artifactDirectory}/creatures/${name}.json`,
+        wire,
+        { createNew: true },
+      );
+      scorerReferences.push({
+        name,
+        sha256: await hash(wire),
+        mse,
+        score: calculate(graph, mse, scorerGrowthCost),
+        growthCost: scorerGrowthCost,
+        forwardOnly: graph.forwardOnly === true,
+      });
     }
     graphs.push({
       name,
@@ -219,3 +256,22 @@ const report = {
   rows,
 };
 await Deno.writeTextFile(destination, JSON.stringify(report, null, 2) + "\n");
+if (artifactDirectory) {
+  await Deno.writeTextFile(
+    `${artifactDirectory}/reference.json`,
+    JSON.stringify(
+      {
+        revision: LEGACY_COMPACTION_REVISION,
+        seed,
+        recordCount: probes.length,
+        input: 8,
+        output: 4,
+        format: "little-endian f32 inputs followed by targets",
+        graphs: scorerReferences,
+      },
+      null,
+      2,
+    ) + "\n",
+    { createNew: true },
+  );
+}
