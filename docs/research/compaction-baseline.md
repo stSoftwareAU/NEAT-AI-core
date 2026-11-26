@@ -136,6 +136,11 @@ those distinctions in explicit contracts before moving algorithms.
 
 ## Outstanding before accepting #776
 
+The [creature metadata captures](compaction-metadata-baseline.md) preserve
+the original stale-memetic validation failure and successful cleanup/repair.
+They retain runtime IDs before export; broader metadata and native repair
+parity remain open.
+
 The [public synthetic measurements](compaction-synthetic-performance.md) record
 the frozen TS two-variant pipeline, separate serialization/load costs and
 synthetic-target scores for a 5,300-neuron graph. This is a partial performance
