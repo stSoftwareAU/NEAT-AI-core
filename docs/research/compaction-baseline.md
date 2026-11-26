@@ -136,6 +136,11 @@ those distinctions in explicit contracts before moving algorithms.
 
 ## Outstanding before accepting #776
 
+The [raw helper baseline](compaction-helper-baseline.md) separately captures
+typed zero-weight pruning, duplicate-role policies and backward-edge repair.
+Those intermediate inputs must not be normalized through a whole-creature
+loader before invoking their original helper.
+
 - Freeze remaining original fixtures: identity chains/parallel bridges, typed
   remaining typed-IF guards, remaining transitive-constant cases, zero weights, recurrent refusal, ordering, metadata,
   UUID/memetic invalidation, clipping, non-finite traces and deadlines.
