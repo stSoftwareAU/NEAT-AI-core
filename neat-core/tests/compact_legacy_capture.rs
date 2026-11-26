@@ -47,9 +47,28 @@ fn native_activation_reproduces_legacy_compaction_outputs() {
             "if_positive" | "if_negative" | "if_zero" | "if_varying" => {
                 assert_if_contract(&case);
             }
+            "zero_weight_orphan" => {
+                let after = case
+                    .after
+                    .as_ref()
+                    .expect("zero edge strands a hidden neuron");
+                assert_eq!(after.neurons.len(), 1);
+                assert_eq!(after.neurons[0].uuid, "output-0");
+                assert_eq!(after.neurons[0].bias, 0.1);
+                assert_eq!(after.synapses.len(), 1);
+                assert_eq!(after.synapses[0].from_uuid, "input-0");
+                assert_eq!(after.synapses[0].to_uuid, "output-0");
+                assert_eq!(after.synapses[0].weight, 1.25);
+            }
+            name if name.starts_with("parallel_") => assert_parallel_contract(&case),
             other => panic!("unclassified capture: {other}"),
         }
-        let tolerance = if case.name.starts_with("constant_") || case.name.starts_with("if_") {
+        let tolerance = if case.name == "zero_weight_orphan" {
+            1e-7
+        } else if case.name.starts_with("constant_")
+            || case.name.starts_with("if_")
+            || case.name.starts_with("parallel_")
+        {
             1e-6
         } else {
             1e-5
@@ -75,6 +94,7 @@ fn native_activation_reproduces_legacy_compaction_outputs() {
         for creature in [&case.before, case.after.as_ref().unwrap_or(&case.before)] {
             let mut net = compile_creature(creature).unwrap();
             for (probe, expected) in case.probes.iter().zip(&case.outputs) {
+                assert_eq!(probe.len(), creature.input, "{}: probe width", case.name);
                 let actual = net.activate(probe, creature.output);
                 assert_eq!(actual.len(), expected.len(), "{}", case.name);
                 for (actual, expected) in actual.iter().zip(expected) {
@@ -86,6 +106,66 @@ fn native_activation_reproduces_legacy_compaction_outputs() {
                 }
             }
         }
+    }
+}
+
+fn assert_parallel_contract(case: &Capture) {
+    if matches!(
+        case.name.as_str(),
+        "parallel_duplicate_sources" | "parallel_nonlinear" | "parallel_fanin"
+    ) {
+        assert!(case.after.is_none(), "{} must not compact", case.name);
+        return;
+    }
+    let after = case.after.as_ref().expect("parallel bridges must merge");
+    // These are one-pass captures: the merged bridge remains, rather than
+    // flattening the whole linear network into the output in a second pass.
+    assert_eq!(after.neurons.len(), 2);
+    let (kept_uuid, bias, weights, output_bias): (&str, f64, &[f64], f64) = match case.name.as_str()
+    {
+        "parallel_two" | "parallel_forward_only" => ("h1", 0.0, &[1.0, 0.45], 0.0),
+        // 2 * 0.1 + 1.5 * 0.2 = 0.5; inbound weights are products.
+        "parallel_weights" => ("h1", 0.5, &[1.0, 0.45], 0.0),
+        // 2 * 0.5 + 3 * -0.3 + 0.5 * 0.1 = 0.15.
+        "parallel_bias" => ("h2", 0.15, &[2.0, 3.0, 0.5], 0.2),
+        // 0.5 * 0.1 + 0.8 * -0.2 + 1.2 * 0.3 = 0.25.
+        "parallel_three" => ("h2", 0.25, &[0.5, 1.6, -1.2], 0.0),
+        other => panic!("unclassified parallel capture: {other}"),
+    };
+    let kept = &after.neurons[0];
+    assert_eq!(kept.uuid, kept_uuid);
+    assert_eq!(kept.neuron_type, "hidden");
+    assert_eq!(kept.squash.as_deref(), Some("IDENTITY"));
+    assert!(
+        (kept.bias - bias).abs() <= 1e-12,
+        "{}: merged bias",
+        case.name
+    );
+    assert_eq!(after.neurons[1].uuid, "output-0");
+    assert_eq!(after.neurons[1].bias, output_bias);
+    assert_eq!(after.synapses.len(), weights.len() + 1);
+    for (index, expected) in weights.iter().enumerate() {
+        let edge = after
+            .synapses
+            .iter()
+            .find(|s| s.from_uuid == format!("input-{index}") && s.to_uuid == kept_uuid)
+            .expect("each original input must reach the retained bridge");
+        assert!(
+            (edge.weight - expected).abs() <= 1e-12,
+            "{}: input {index}",
+            case.name
+        );
+        assert!(edge.synapse_type.is_none());
+    }
+    let outbound = after
+        .synapses
+        .iter()
+        .find(|s| s.from_uuid == kept_uuid && s.to_uuid == "output-0")
+        .expect("retained bridge must reach the output");
+    assert_eq!(outbound.weight, 1.0);
+    assert!(outbound.synapse_type.is_none());
+    if case.name == "parallel_forward_only" {
+        assert!(after.forward_only);
     }
 }
 
@@ -110,6 +190,15 @@ fn every_recorded_legacy_contract_is_present() {
         "if_negative",
         "if_zero",
         "if_varying",
+        "zero_weight_orphan",
+        "parallel_two",
+        "parallel_weights",
+        "parallel_bias",
+        "parallel_duplicate_sources",
+        "parallel_nonlinear",
+        "parallel_fanin",
+        "parallel_forward_only",
+        "parallel_three",
     ] {
         assert!(
             captures.iter().any(|c| c.name == name),
