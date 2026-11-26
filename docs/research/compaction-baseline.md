@@ -80,6 +80,11 @@ are records for review, never automatically updated by the native test.
 Paths below are relative to the named repository. This is the inspected subset,
 not an exhaustive family caller-to-API matrix.
 
+The [family source and dependency inventory](compaction-family-inventory.md)
+records pinned source revisions, declared dependencies, lockfile resolutions
+and additional implementation boundaries across the 14 public repositories.
+Its remaining verification gaps are explicit; it does not complete this gate.
+
 | Repository / callers | Current API / ownership |
 |---|---|
 | NEAT-AI `src/Creature.ts` | `compact` and `compactVariants` delegate to `src/compact/CompactCreature.ts` |
