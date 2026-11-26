@@ -44,9 +44,12 @@ fn native_activation_reproduces_legacy_compaction_outputs() {
             "identity_fanin_noop" | "aggregate_guard" | "nonlinear_noop" => {
                 assert!(case.after.is_none(), "{} must not compact", case.name);
             }
+            "if_positive" | "if_negative" | "if_zero" | "if_varying" => {
+                assert_if_contract(&case);
+            }
             other => panic!("unclassified capture: {other}"),
         }
-        let tolerance = if case.name.starts_with("constant_") {
+        let tolerance = if case.name.starts_with("constant_") || case.name.starts_with("if_") {
             1e-6
         } else {
             1e-5
@@ -55,7 +58,12 @@ fn native_activation_reproduces_legacy_compaction_outputs() {
             case.activation_tolerance, tolerance,
             "original tolerance must not widen"
         );
-        if case.name.starts_with("constant_") {
+        if case.name.starts_with("constant_")
+            || matches!(
+                case.name.as_str(),
+                "if_positive" | "if_negative" | "if_zero"
+            )
+        {
             assert!(
                 case.after_score >= case.before_score - 1e-9,
                 "{}: legacy score regressed",
@@ -98,10 +106,51 @@ fn every_recorded_legacy_contract_is_present() {
         "nonlinear_noop",
         "constant_transitive_fold",
         "constant_with_varying_input",
+        "if_positive",
+        "if_negative",
+        "if_zero",
+        "if_varying",
     ] {
         assert!(
             captures.iter().any(|c| c.name == name),
             "missing legacy regression {name}"
         );
+    }
+}
+
+fn assert_if_contract(case: &Capture) {
+    let after = case.after.as_ref().unwrap_or(&case.before);
+    let neuron = after
+        .neurons
+        .iter()
+        .find(|n| n.uuid == "if-neuron")
+        .unwrap();
+    let inbound: Vec<_> = after
+        .synapses
+        .iter()
+        .filter(|s| s.to_uuid == "if-neuron")
+        .collect();
+    if case.name == "if_varying" {
+        assert_eq!(neuron.squash.as_deref(), Some("IF"));
+        let condition = inbound
+            .iter()
+            .find(|s| s.synapse_type.as_deref() == Some("condition"))
+            .unwrap();
+        assert_eq!(condition.from_uuid, "input-0");
+        assert_eq!(condition.weight, 0.5);
+    } else {
+        assert!(case.after.is_some(), "constant IF must produce a candidate");
+        assert_eq!(neuron.squash.as_deref(), Some("IDENTITY"));
+        // Exactly the selected arm survives, with its original weight and no role.
+        let (source, weight) = if case.name == "if_positive" {
+            ("input-0", 0.6)
+        } else {
+            ("input-1", 0.7)
+        };
+        assert_eq!(inbound.len(), 1);
+        assert_eq!(inbound[0].from_uuid, source);
+        assert_eq!(inbound[0].weight, weight);
+        assert!(inbound[0].synapse_type.is_none());
+        assert!(after.neurons.iter().all(|n| n.neuron_type != "constant"));
     }
 }
