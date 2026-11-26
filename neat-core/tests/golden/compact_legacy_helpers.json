@@ -1,0 +1,799 @@
+[
+  {
+    "name": "typed_zero",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ZeroWeightSynapsePruningTyped.ts",
+    "helper": "pruneZeroWeightSynapses",
+    "preparation": "none",
+    "input": {
+      "input": 1,
+      "output": 2,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "if-0",
+          "squash": "IF",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": -0.2
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toId": -1,
+          "weight": 0
+        },
+        {
+          "fromUUID": "input-0",
+          "toId": -1,
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "input-0",
+          "toId": -2,
+          "weight": 0
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0.2,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": -0.2,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0
+        }
+      ],
+      "memetic": {
+        "generation": 0,
+        "score": 0,
+        "biases": {},
+        "weights": {}
+      }
+    },
+    "before": {
+      "input": 1,
+      "output": 2,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "if-0",
+          "squash": "IF",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": -0.2
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toId": -1,
+          "weight": 0
+        },
+        {
+          "fromUUID": "input-0",
+          "toId": -1,
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "input-0",
+          "toId": -2,
+          "weight": 0
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0.2,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": -0.2,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0
+        }
+      ],
+      "memetic": {
+        "generation": 0,
+        "score": 0,
+        "biases": {},
+        "weights": {}
+      }
+    },
+    "result": {
+      "removedSynapses": 1
+    },
+    "after": {
+      "input": 1,
+      "output": 2,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "if-0",
+          "squash": "IF",
+          "bias": 0,
+          "id": 4227520
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.1,
+          "id": -1
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": -0.2,
+          "id": -2
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toId": -1,
+          "weight": 0.3,
+          "fromId": 0
+        },
+        {
+          "fromUUID": "input-0",
+          "toId": -2,
+          "weight": 0,
+          "fromId": 0
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0,
+          "type": "condition",
+          "fromId": 0,
+          "toId": 4227520
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0.2,
+          "type": "positive",
+          "fromId": 0,
+          "toId": 4227520
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": -0.2,
+          "type": "negative",
+          "fromId": 0,
+          "toId": 4227520
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "if-0",
+          "weight": 0,
+          "fromId": 0,
+          "toId": 4227520
+        }
+      ]
+    }
+  },
+  {
+    "name": "duplicate_sum",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/MergeDuplicateSynapses.ts",
+    "helper": "mergeDuplicateSynapses",
+    "preparation": "none",
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": -0.2,
+          "tags": [
+            {
+              "name": "tag",
+              "value": "b"
+            }
+          ]
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 0.1,
+          "type": "condition",
+          "tags": [
+            {
+              "name": "tag",
+              "value": "a"
+            }
+          ]
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 0.2,
+          "type": "condition",
+          "tags": [
+            {
+              "name": "tag",
+              "value": "b"
+            }
+          ]
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 0.3,
+          "type": "positive"
+        }
+      ],
+      "memetic": {
+        "generation": 0,
+        "score": 0,
+        "biases": {},
+        "weights": {}
+      }
+    },
+    "before": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": -0.2,
+          "tags": [
+            {
+              "name": "tag",
+              "value": "b"
+            }
+          ]
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 0.1,
+          "type": "condition",
+          "tags": [
+            {
+              "name": "tag",
+              "value": "a"
+            }
+          ]
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 0.2,
+          "type": "condition",
+          "tags": [
+            {
+              "name": "tag",
+              "value": "b"
+            }
+          ]
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 0.3,
+          "type": "positive"
+        }
+      ],
+      "memetic": {
+        "generation": 0,
+        "score": 0,
+        "biases": {},
+        "weights": {}
+      }
+    },
+    "result": {
+      "merged": 3
+    },
+    "after": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 1775329651
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.1,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.3,
+          "fromId": 0,
+          "toId": -1,
+          "tags": [
+            {
+              "name": "tag",
+              "value": "b"
+            }
+          ]
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 0.6000000000000001,
+          "type": "condition",
+          "tags": [
+            {
+              "name": "tag",
+              "value": "a"
+            },
+            {
+              "name": "tag",
+              "value": "b"
+            }
+          ],
+          "fromId": 0,
+          "toId": 1775329651
+        }
+      ]
+    }
+  },
+  {
+    "name": "distinct_if_roles",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/MergeDuplicateSynapses.ts",
+    "helper": "mergeDuplicateSynapses",
+    "preparation": "none",
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": "positive"
+        }
+      ]
+    },
+    "before": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": "positive"
+        }
+      ]
+    },
+    "result": {
+      "merged": 0
+    },
+    "after": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.3,
+          "type": "condition",
+          "fromId": 0,
+          "toId": -1
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": "positive",
+          "fromId": 0,
+          "toId": -1
+        }
+      ]
+    }
+  },
+  {
+    "name": "backward_repair",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/RemoveBackwardSynapses.ts",
+    "helper": "removeBackwardSynapses",
+    "preparation": "normaliseCreatureExport",
+    "input": {
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "uuid": "hidden-1",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "hidden-1",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "hidden-1",
+          "toUUID": "hidden-0",
+          "weight": 0.25
+        },
+        {
+          "fromUUID": "hidden-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "before": {
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 1775329651
+        },
+        {
+          "uuid": "hidden-1",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 1775329650
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1,
+          "fromId": 0,
+          "toId": 1775329651
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "hidden-1",
+          "weight": 0.5,
+          "fromId": 1775329651,
+          "toId": 1775329650
+        },
+        {
+          "fromUUID": "hidden-1",
+          "toUUID": "hidden-0",
+          "weight": 0.25,
+          "fromId": 1775329650,
+          "toId": 1775329651
+        },
+        {
+          "fromUUID": "hidden-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 1775329650,
+          "toId": -1
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "result": {
+      "removedSynapses": 1
+    },
+    "after": {
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 1775329651
+        },
+        {
+          "uuid": "hidden-1",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 1775329650
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1,
+          "fromId": 0,
+          "toId": 1775329651
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "hidden-1",
+          "weight": 0.5,
+          "fromId": 1775329651,
+          "toId": 1775329650
+        },
+        {
+          "fromUUID": "hidden-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 1775329650,
+          "toId": -1
+        }
+      ],
+      "input": 1,
+      "output": 1
+    }
+  },
+  {
+    "name": "forward_noop",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/RemoveBackwardSynapses.ts",
+    "helper": "removeBackwardSynapses",
+    "preparation": "normaliseCreatureExport",
+    "input": {
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "before": {
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 1775329651
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1,
+          "fromId": 0,
+          "toId": 1775329651
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 1775329651,
+          "toId": -1
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "result": {
+      "removedSynapses": 0
+    },
+    "after": {
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 1775329651
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1,
+          "fromId": 0,
+          "toId": 1775329651
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 1775329651,
+          "toId": -1
+        }
+      ],
+      "input": 1,
+      "output": 1
+    }
+  }
+]

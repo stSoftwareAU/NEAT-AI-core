@@ -1,8 +1,8 @@
 /** Capture the unmodified legacy implementation; never regenerate from core. */
-const [checkout, destination] = Deno.args;
+const [checkout, destination, mode = "creature"] = Deno.args;
 if (!checkout || !destination) {
   throw new Error(
-    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json>",
+    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json> [creature|helpers]",
   );
 }
 const revision = "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab";
@@ -21,6 +21,18 @@ if (!diff.success || diff.stdout.length) {
   throw new Error("Legacy checkout must have no tracked modifications");
 }
 const root = new URL(`file://${await Deno.realPath(checkout)}/`);
+if (mode === "helpers") {
+  const { captureLegacyHelpers } = await import(
+    "./legacy_compaction_helpers.ts"
+  );
+  const captures = await captureLegacyHelpers(root, revision);
+  await Deno.writeTextFile(
+    destination,
+    JSON.stringify(captures, null, 2) + "\n",
+  );
+  Deno.exit(0);
+}
+if (mode !== "creature") throw new Error(`Unknown capture mode: ${mode}`);
 const { Creature } = await import(new URL("src/Creature.ts", root).href);
 const { compactCreature } = await import(
   new URL("src/compact/CompactCreature.ts", root).href
