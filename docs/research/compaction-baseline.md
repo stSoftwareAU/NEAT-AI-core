@@ -136,6 +136,11 @@ those distinctions in explicit contracts before moving algorithms.
 
 ## Outstanding before accepting #776
 
+The [variant and selection captures](compaction-variant-baseline.md) record
+both pipeline results and the original eight tests' caller-side selection
+contracts. They supplement single-result captures without implementing a
+native selector or establishing the remaining aggressive-policy coverage.
+
 The [public synthetic measurements](compaction-synthetic-performance.md) record
 the frozen TS two-variant pipeline, separate serialization/load costs and
 synthetic-target scores for a 5,300-neuron graph. This is a partial performance

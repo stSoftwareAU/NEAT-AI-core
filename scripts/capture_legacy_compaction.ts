@@ -7,10 +7,21 @@ import {
 const [checkout, destination, mode = "creature"] = Deno.args;
 if (!checkout || !destination) {
   throw new Error(
-    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json> [creature|helpers]",
+    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json> [creature|helpers|variants]",
   );
 }
 const root = await legacyCompactionSource(checkout);
+if (mode === "variants") {
+  const { captureLegacyVariants } = await import(
+    "./legacy_compaction_variants.ts"
+  );
+  const captures = await captureLegacyVariants(root, revision);
+  await Deno.writeTextFile(
+    destination,
+    JSON.stringify(captures, null, 2) + "\n",
+  );
+  Deno.exit(0);
+}
 if (mode === "helpers") {
   const { captureLegacyHelpers } = await import(
     "./legacy_compaction_helpers.ts"
