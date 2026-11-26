@@ -1,4 +1,4 @@
-/** Capture the original creature-based memetic tests without load-time cleanup. */
+/** Capture original runtime repair tests without normalizing away their inputs. */
 export async function captureLegacyMetadata(root: URL, revision: string) {
   const { Creature } = await import(new URL("src/Creature.ts", root).href);
   const { creatureValidate } = await import(
@@ -10,6 +10,14 @@ export async function captureLegacyMetadata(root: URL, revision: string) {
   const { fix } = await import(
     new URL("src/creature/CreatureMutation.ts", root).href
   );
+  const { removeNeuron } = await import(
+    new URL("src/compact/CompactUnused.ts", root).href
+  );
+  const {
+    createSeededRng,
+    getRandomNumberGenerator,
+    setRandomNumberGenerator,
+  } = await import(new URL("src/utils/RandomNumberGenerator.ts", root).href);
   type LegacyCreature = ReturnType<typeof Creature.fromJSON>;
   function runtimeSnapshot(creature: LegacyCreature) {
     // exportJSON validates DEBUG creatures and converts memetic IDs to wire
@@ -109,6 +117,92 @@ export async function captureLegacyMetadata(root: URL, revision: string) {
       after: runtimeSnapshot(creature),
       afterValidation,
       afterExport: creature.exportJSON(),
+    });
+  }
+  // The four original literals share topology; only these scalar fields differ.
+  for (
+    const [name, hiddenBias, outputBias, outwardWeight, activation] of [
+      ["finite_normal", 0.1, 0.5, 0.3, 0.5],
+      ["finite_overflow", 0, 0, 1, 1],
+      ["finite_nan", 0, 0, 0.5, NaN],
+      ["finite_atomic", 0, 0, 0.5, Number.MAX_VALUE],
+    ] as const
+  ) {
+    const atomic = name === "finite_atomic";
+    const input = {
+      neurons: [
+        {
+          type: "hidden",
+          uuid: "hidden-0",
+          squash: "IDENTITY",
+          bias: hiddenBias,
+        },
+        {
+          type: "output",
+          uuid: "output-0",
+          squash: "IDENTITY",
+          bias: outputBias,
+        },
+        ...(atomic
+          ? [{ type: "output", uuid: "output-1", squash: "IDENTITY", bias: 0 }]
+          : []),
+      ],
+      synapses: [
+        { fromUUID: "input-0", toUUID: "hidden-0", weight: 1.0 },
+        { fromUUID: "hidden-0", toUUID: "output-0", weight: outwardWeight },
+        ...(atomic
+          ? [{ fromUUID: "hidden-0", toUUID: "output-1", weight: 1.0 }]
+          : []),
+      ],
+      input: 2,
+      output: atomic ? 2 : 1,
+    };
+    const creature = Creature.fromJSON(structuredClone(input));
+    const hidden = creature.neurons.find((n: { type: string }) =>
+      n.type === "hidden"
+    );
+    const loaded = runtimeSnapshot(creature);
+    if (name === "finite_overflow" || atomic) {
+      const output = creature.neurons.find((n: { id: number }) =>
+        n.id === (atomic ? -2 : -1)
+      );
+      if (!atomic) output.bias = Number.MAX_VALUE / 2;
+      const outward = creature.synapses.find((
+        s: { from: number; to: number },
+      ) => s.from === hidden.index && s.to === output.index);
+      outward.weight = Number.MAX_VALUE;
+    }
+    const before = runtimeSnapshot(creature);
+    // Successful removal chooses a random input for a temporary zero edge.
+    // Seed only that capture; the original test does not require a given input.
+    const captureSeed = name === "finite_normal" ? 1910 : null;
+    const previousRng = getRandomNumberGenerator();
+    if (captureSeed !== null) {
+      setRandomNumberGenerator(createSeededRng(captureSeed));
+    }
+    let result;
+    try {
+      result = removeNeuron(hidden.id, creature, activation);
+    } finally {
+      if (captureSeed !== null) setRandomNumberGenerator(previousRng);
+    }
+    captures.push({
+      name,
+      revision,
+      test: "test/compact/CompactUnusedFiniteGuard.ts",
+      source: "src/compact/CompactUnused.ts",
+      operation: "removeNeuron",
+      preparation: name === "finite_overflow" || atomic
+        ? "Creature.fromJSON(input), then original runtime injections"
+        : "Creature.fromJSON(input)",
+      input,
+      hiddenId: hidden.id,
+      loaded,
+      before,
+      activation: Number.isFinite(activation) ? activation : String(activation),
+      captureSeed,
+      result,
+      after: runtimeSnapshot(creature),
     });
   }
   return captures;
