@@ -1,3 +1,8 @@
+import {
+  LEGACY_COMPACTION_REVISION as revision,
+  legacyCompactionSource,
+} from "./legacy_compaction_source.ts";
+
 /** Capture the unmodified legacy implementation; never regenerate from core. */
 const [checkout, destination] = Deno.args;
 if (!checkout || !destination) {
@@ -5,22 +10,7 @@ if (!checkout || !destination) {
     "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json>",
   );
 }
-const revision = "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab";
-const head = await new Deno.Command("git", {
-  args: ["-C", checkout, "rev-parse", "HEAD"],
-}).output();
-if (
-  !head.success || new TextDecoder().decode(head.stdout).trim() !== revision
-) {
-  throw new Error(`Legacy checkout must be at ${revision}`);
-}
-const diff = await new Deno.Command("git", {
-  args: ["-C", checkout, "status", "--porcelain", "--untracked-files=no"],
-}).output();
-if (!diff.success || diff.stdout.length) {
-  throw new Error("Legacy checkout must have no tracked modifications");
-}
-const root = new URL(`file://${await Deno.realPath(checkout)}/`);
+const root = await legacyCompactionSource(checkout);
 const { Creature } = await import(new URL("src/Creature.ts", root).href);
 const { compactCreature } = await import(
   new URL("src/compact/CompactCreature.ts", root).href

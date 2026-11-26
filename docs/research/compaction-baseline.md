@@ -103,6 +103,12 @@ those distinctions in explicit contracts before moving algorithms.
 
 ## Outstanding before accepting #776
 
+The [public synthetic measurements](compaction-synthetic-performance.md) record
+the frozen TS two-variant pipeline, separate serialization/load costs and
+synthetic-target scores for a 5,300-neuron graph. This is a partial performance
+baseline: native compaction, authoritative scorer parity, allocation profiles
+and representative consumer acceptance remain outstanding.
+
 - Freeze remaining original fixtures: identity chains/parallel bridges, typed
   remaining typed-IF guards, remaining transitive-constant cases, zero weights, recurrent refusal, ordering, metadata,
   UUID/memetic invalidation, clipping, non-finite traces and deadlines.
