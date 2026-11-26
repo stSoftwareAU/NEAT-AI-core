@@ -2,7 +2,7 @@
 
 This is the first capture slice of #776, not its acceptance gate. Production
 implementations remain unchanged. Do not start #777/#778 on the strength of
-these ten captures: the remaining coverage and family checks below are open.
+these nineteen captures: the remaining coverage and family checks below are open.
 
 ## Revisions and original suites
 
@@ -32,6 +32,11 @@ used by `test/compact/CompactCreatureIfCollapse.ts`. The fourth IF input changes
 only the negative fixture's condition weight to zero and is explicitly synthetic;
 its `fixture` field records the source of that variation.
 
+Nine further inputs are copied unchanged from `ZeroWeightSynapsePruning.ts`
+and all eight tests in `ParallelIdentityBridgeMerge.ts`, both in `test/compact`.
+These original tests pass without changes. Three-input cases use five
+three-dimensional probes; the earlier ten captures remain unchanged.
+
 | Capture | Observable legacy contract |
 |---|---|
 | `complement_bypass` | Remove the hidden COMPLEMENT; bias becomes `0.1 + 1.5 * (1 - 0.25) = 1.225`; weights become `-0.75` and `3.25` |
@@ -44,11 +49,28 @@ its `fixture` field records the source of that variation.
 | `if_negative` | A negative constant selector retains only the negative arm, stripped of its role |
 | `if_zero` | Synthetic zero-selector boundary variation of the negative fixture still selects the negative arm |
 | `if_varying` | A varying selector retains the IF neuron and its typed condition input |
+| `zero_weight_orphan` | Remove the zero edge and stranded hidden neuron; retain the direct input weight `1.25` and output bias `0.1` |
+| `parallel_two` | Merge two IDENTITY bridges into retained `h1` with input weights `1` and `0.45`, and a unit output edge |
+| `parallel_weights` | Preserve those products and merge bias to `2 * 0.1 + 1.5 * 0.2 = 0.5` |
+| `parallel_bias` | Merge three biases to `2 * 0.5 + 3 * -0.3 + 0.5 * 0.1 = 0.15`; keep output bias `0.2` |
+| `parallel_duplicate_sources` | The original duplicate-source group returns no candidate |
+| `parallel_nonlinear` | The original LOGISTIC bridges return no candidate |
+| `parallel_fanin` | A two-input bridge plus a single-input bridge returns no candidate |
+| `parallel_forward_only` | Merge the two bridges while retaining `forwardOnly: true` |
+| `parallel_three` | Retain `h2` with weights `0.5`, `1.6`, `-1.2` and merged bias `0.25` |
 
 `neat-core/tests/compact_legacy_capture.rs` checks the changed/no-op contracts
 and native activation of both halves against recorded legacy outputs at the
 original regressions' activation tolerances: `1e-5` for the initial squash
-variants and `1e-6` for the constant-fold and IF cases. It does not compare a future
+variants, `1e-6` for the constant-fold and IF cases, and `1e-7` for zero-weight
+cleanup. The parallel source tests assert graph arithmetic at `1e-12`, which
+the native replay preserves; they specify no activation tolerance. An additional
+`1e-6` bound checks their native activation against the frozen TS outputs.
+The retained bridge, its UUID, edge roles, output bias and forward-only flag
+are checked separately: one legacy pass does not fully flatten these networks.
+The duplicate-source and fan-in source tests allow other passes to fire; their
+`null` captures describe the actual frozen result, not a new universal refusal rule.
+This harness does not compare a future
 Rust compactor yet, and five probes do not prove equivalence for every input.
 The recorded scores use the legacy `Score.calculate` with error `0` and growth
 cost `0.0001`, matching the constant-chain and IF regressions. Both constant cases and all
@@ -62,6 +84,9 @@ also fails replay; both mutations were reverted. IF mutations independently chan
 arm source, retain a negative role after collapse, perturb the zero-selector
 output bias, and strip the varying condition role; each fails its structural or
 activation assertion, and all mutations were reverted.
+All nine zero/parallel cases also reject independent mutations: perturbed
+zero-edge survivor/parallel weights, incorrect merged biases, a candidate in
+each no-op case, or a lost forward-only flag. All mutations were reverted.
 
 Regenerate only from a clean checkout at the recorded revision:
 
