@@ -40,6 +40,7 @@ function record(
   test: string,
   feedbackLoop: boolean,
   activationTolerance: number,
+  fixture?: string,
 ) {
   const creature = Creature.fromJSON(json);
   const before = creature.exportJSON();
@@ -51,6 +52,7 @@ function record(
     revision,
     source: "src/compact/CompactCreature.ts",
     test,
+    fixture,
     feedbackLoop,
     activationTolerance,
     growthCost: 0.0001,
@@ -124,6 +126,32 @@ for (const varying of [false, true]) {
     "test/compact/CompactCreatureConstantTransitiveFold.ts",
     false,
     1e-6,
+  );
+}
+
+// Load the original typed-IF fixtures directly from the pinned legacy checkout.
+for (
+  const [name, fixture] of [
+    ["if_positive", "test/data/if-collapse-positive.json"],
+    ["if_negative", "test/data/if-collapse-negative.json"],
+    ["if_varying", "test/data/if-collapse-varying-condition.json"],
+    ["if_zero", "test/data/if-collapse-negative.json"],
+  ]
+) {
+  const json = JSON.parse(await Deno.readTextFile(new URL(fixture, root)));
+  if (name === "if_zero") {
+    // Synthetic boundary variation: a zero selector still takes the negative arm.
+    for (const synapse of json.synapses) {
+      if (synapse.type === "condition") synapse.weight = 0;
+    }
+  }
+  record(
+    name,
+    json,
+    "test/compact/CompactCreatureIfCollapse.ts",
+    false,
+    1e-6,
+    fixture,
   );
 }
 
