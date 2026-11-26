@@ -1,0 +1,96 @@
+# Legacy compaction baseline (Issue #776)
+
+This is the first capture slice of #776, not its acceptance gate. Production
+implementations remain unchanged. Do not start #777/#778 on the strength of
+these four captures: the remaining coverage and family checks below are open.
+
+## Revisions and original suites
+
+| Repository | Inspected revision | Verification |
+|---|---|---|
+| NEAT-AI-core | `3759355634b1cabc8034cd76df5dbd44a867d18c` | `cargo test --workspace --locked` passed |
+| NEAT-AI | `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab` | 238 compaction/simplification tests passed |
+| NEAT-AI-Ockham | `febc59d836bcb165e99aaa149a13f52bdcad431e` | `cargo test --workspace --locked` passed |
+
+The TypeScript baseline was run with every `.ts` file explicitly selected from
+`test/compact` and `test/optimize/simplify`. Deno's default directory discovery
+does **not** select most of these filenames. The original assertions and
+tolerances were not changed. This is not a claim that the entire family suite
+has passed.
+
+## Captures
+
+`neat-core/tests/golden/compact_legacy.json` stores the original input after its
+legacy wire round trip, the actual candidate or `null`, and original activation
+outputs at five deterministic probes. `complement_bypass` uses the input from
+`test/compact/CompactCreatureComplementBypass.ts`. The other three are explicitly
+synthetic variations of its squashes, not captures of three additional tests.
+
+| Capture | Observable legacy contract |
+|---|---|
+| `complement_bypass` | Remove the hidden COMPLEMENT; bias becomes `0.1 + 1.5 * (1 - 0.25) = 1.225`; weights become `-0.75` and `3.25` |
+| `identity_fanin_noop` | This two-input IDENTITY fan-in does not meet the legacy chain-fold guard; no candidate |
+| `aggregate_guard` | COMPLEMENT feeding MAXIMUM is not bypassed; no candidate |
+| `nonlinear_noop` | TANH feeding TANH is not algebraically folded; no candidate |
+
+`neat-core/tests/compact_legacy_capture.rs` checks the changed/no-op contracts
+and native activation of both halves against recorded legacy outputs at the
+original regression's `1e-5` activation tolerance. It does not compare a future
+Rust compactor yet, and five probes do not prove equivalence for every input.
+The unmodified legacy implementation remains the oracle. Mutation evidence:
+adding `0.1` to the compacted COMPLEMENT output bias fails at `[0, 0]` with
+`1.325 != 1.225`; the mutation was reverted.
+
+Regenerate only from a clean checkout at the recorded revision:
+
+```sh
+deno run -A --config ../NEAT-AI/deno.json \
+  scripts/capture_legacy_compaction.ts ../NEAT-AI \
+  neat-core/tests/golden/compact_legacy.json
+cargo test -p neat-core --test compact_legacy_capture
+```
+
+The capture script refuses another revision or tracked modifications. Outputs
+are records for review, never automatically updated by the native test.
+
+## Initial caller and ownership inventory
+
+Paths below are relative to the named repository. This is the inspected subset,
+not an exhaustive family caller-to-API matrix.
+
+| Repository / callers | Current API / ownership |
+|---|---|
+| NEAT-AI `src/Creature.ts` | `compact` and `compactVariants` delegate to `src/compact/CompactCreature.ts` |
+| NEAT-AI `src/blackbox/FineTune.ts`, `src/propagate/RemoveSyntheticSynapses.ts` | Candidate variants and caller-side selection |
+| NEAT-AI `src/architecture/training/TrainingTeardown.ts`, `TrainingPredictiveCoding.ts` | Trace-dependent `compactUnused`, then variant generation; training deadlines stay at the caller (these TS callers are distinct from the core engines removed in #414) |
+| NEAT-AI `src/NEAT/NeatEvolution.ts` | `src/optimize/Simplify.ts::simplify` |
+| Ockham `ockham/src/canonical.rs` | Exact fixed-point zero-edge and identity cleanup, deterministic report |
+| Ockham `ockham/src/collapse.rs` | Identity candidate; typed/aggregate/self-loop and cost guards |
+| Ockham `ockham/src/cascade.rs` | Removal **estimate**, not a graph rewrite; do not migrate it as a second cleanup engine |
+| Core `prune_cleanup`, `prune_rewrite`, `prune_json` | Existing shared rewrite owner and wire boundary; reuse the pruning parity matrix |
+
+The existing [pruning matrix](pruning-parity-matrix.md) documents deliberately
+different constant-support, IF-repair and memetic policies. Whole-creature
+compaction must not silently inherit one caller's policy for another. Preserve
+those distinctions in explicit contracts before moving algorithms.
+
+## Outstanding before accepting #776
+
+- Freeze remaining original fixtures: identity chains/parallel bridges, typed
+  IF, transitive constants, zero weights, recurrent refusal, ordering, metadata,
+  UUID/memetic invalidation, clipping, non-finite traces and deadlines.
+- Classify large-weight rescaling, aggressive pruning, trace-based pruning and
+  repair-only transforms from their actual guards; candidate acceptance and
+  authoritative scoring remain outside the graph engine.
+- Record Ockham outputs and original suites, all family callers and dependency
+  pins, and any additional engine/packaging consumers.
+- Extend replay to native and WASM compaction, with independent legacy oracles;
+  do not label activation-only checks as compaction parity.
+- Publish reproducible large public/synthetic creature benchmarks, allocation
+  and serialization costs, and original-versus-candidate scorer baselines.
+- Run every required family suite and release/artifact check. Private consumer
+  verification stays in its own environment.
+
+Later migration issues retain their explicit dependency gates. The final
+family acceptance issue #780 also depends on consumer cutovers and TypeScript
+retirement in other repositories; this baseline does not close those gates.

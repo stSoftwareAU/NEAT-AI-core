@@ -1,0 +1,384 @@
+[
+  {
+    "name": "complement_bypass",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "bias": 0.25,
+          "squash": "COMPLEMENT"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": -2,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1.225,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.75,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 3.25,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "1"
+        }
+      ]
+    },
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        1.225000023841858
+      ],
+      [
+        3.7249999046325684
+      ],
+      [
+        -1.274999976158142
+      ],
+      [
+        -1.399999976158142
+      ],
+      [
+        5.974999904632568
+      ]
+    ]
+  },
+  {
+    "name": "identity_fanin_noop",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": -2,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": null,
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        0.4749999940395355
+      ],
+      [
+        -1.524999976158142
+      ],
+      [
+        2.4749999046325684
+      ],
+      [
+        2.7249999046325684
+      ],
+      [
+        -3.7750000953674316
+      ]
+    ]
+  },
+  {
+    "name": "aggregate_guard",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "bias": 0.25,
+          "squash": "COMPLEMENT"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "MAXIMUM"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": -2,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": null,
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        1.225000023841858
+      ],
+      [
+        3.4749999046325684
+      ],
+      [
+        -0.15000000596046448
+      ],
+      [
+        -0.08749999850988388
+      ],
+      [
+        5.724999904632568
+      ]
+    ]
+  },
+  {
+    "name": "nonlinear_noop",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/CompactCreature.ts",
+    "test": "test/compact/CompactCreatureComplementBypass.ts",
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "bias": 0.25,
+          "squash": "TANH"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.1,
+          "squash": "TANH"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": -2,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "input-1",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "after": null,
+    "probes": [
+      [
+        0,
+        0
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -1,
+        -1
+      ],
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        -2,
+        1
+      ]
+    ],
+    "outputs": [
+      [
+        0.43607833981513977
+      ],
+      [
+        -0.7270427942276001
+      ],
+      [
+        0.8516319990158081
+      ],
+      [
+        0.8725265264511108
+      ],
+      [
+        -0.813668429851532
+      ]
+    ]
+  }
+]
