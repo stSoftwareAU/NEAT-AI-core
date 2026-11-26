@@ -26,7 +26,45 @@ const { compactCreature } = await import(
   new URL("src/compact/CompactCreature.ts", root).href
 );
 const probes = [[0, 0], [1, 1], [-1, -1], [0.25, -0.75], [-2, 1]];
-const captures = [];
+const { calculate } = await import(
+  new URL("src/architecture/Score.ts", root).href
+);
+const { initWasmForTests } = await import(
+  new URL("test/_initWasm.ts", root).href
+);
+await initWasmForTests();
+const captures: unknown[] = [];
+function record(
+  name: string,
+  json: unknown,
+  test: string,
+  feedbackLoop: boolean,
+  activationTolerance: number,
+) {
+  const creature = Creature.fromJSON(json);
+  const before = creature.exportJSON();
+  const beforeScore = calculate(creature, 0, 0.0001);
+  const after = compactCreature(creature, feedbackLoop);
+  const caseProbes = probes.map((row) => row.slice(0, creature.input));
+  captures.push({
+    name,
+    revision,
+    source: "src/compact/CompactCreature.ts",
+    test,
+    feedbackLoop,
+    activationTolerance,
+    growthCost: 0.0001,
+    error: 0,
+    beforeScore,
+    afterScore: calculate(after ?? creature, 0, 0.0001),
+    before,
+    after: after?.exportJSON() ?? null,
+    probes: caseProbes,
+    outputs: caseProbes.map((probe) =>
+      Array.from(creature.activate(new Float32Array(probe), false))
+    ),
+  });
+}
 // First case is the original COMPLEMENT regression's input, unchanged.
 // The other cases vary only squash to cover fan-in refusal, aggregate refusal and no-op.
 for (
@@ -37,33 +75,56 @@ for (
     ["nonlinear_noop", "TANH", "TANH"],
   ]
 ) {
-  const creature = Creature.fromJSON({
-    input: 2,
-    output: 1,
-    neurons: [
-      { uuid: "hidden-0", type: "hidden", squash: hiddenSquash, bias: 0.25 },
-      { uuid: "output-0", type: "output", squash: outputSquash, bias: 0.1 },
-    ],
-    synapses: [
-      { fromUUID: "input-0", toUUID: "hidden-0", weight: 0.5 },
-      { fromUUID: "input-1", toUUID: "hidden-0", weight: -2 },
-      { fromUUID: "hidden-0", toUUID: "output-0", weight: 1.5 },
-      { fromUUID: "input-1", toUUID: "output-0", weight: 0.25 },
-    ],
-  });
-  const before = creature.exportJSON();
-  const after = compactCreature(creature, true);
-  captures.push({
+  record(
     name,
-    revision,
-    source: "src/compact/CompactCreature.ts",
-    test: "test/compact/CompactCreatureComplementBypass.ts",
-    before,
-    after: after?.exportJSON() ?? null,
-    probes,
-    outputs: probes.map((probe) =>
-      Array.from(creature.activate(new Float32Array(probe), false))
-    ),
-  });
+    {
+      input: 2,
+      output: 1,
+      neurons: [
+        { uuid: "hidden-0", type: "hidden", squash: hiddenSquash, bias: 0.25 },
+        { uuid: "output-0", type: "output", squash: outputSquash, bias: 0.1 },
+      ],
+      synapses: [
+        { fromUUID: "input-0", toUUID: "hidden-0", weight: 0.5 },
+        { fromUUID: "input-1", toUUID: "hidden-0", weight: -2 },
+        { fromUUID: "hidden-0", toUUID: "output-0", weight: 1.5 },
+        { fromUUID: "input-1", toUUID: "output-0", weight: 0.25 },
+      ],
+    },
+    "test/compact/CompactCreatureComplementBypass.ts",
+    true,
+    1e-5,
+  );
 }
+// Both inputs are copied from the original transitive-fold regression.
+for (const varying of [false, true]) {
+  record(
+    varying ? "constant_with_varying_input" : "constant_transitive_fold",
+    {
+      semanticVersion: "4.0.0",
+      forwardOnly: true,
+      input: 1,
+      output: 1,
+      neurons: [
+        { type: "constant", uuid: "const-c", bias: varying ? 0.4 : 0.5 },
+        { type: "hidden", uuid: "hidden-h", squash: "LOGISTIC", bias: 0.2 },
+        { type: "output", uuid: "output-0", squash: "IDENTITY", bias: 0.1 },
+      ],
+      synapses: [
+        { fromUUID: "const-c", toUUID: "hidden-h", weight: 0.5 },
+        ...(varying
+          ? [{ fromUUID: "input-0", toUUID: "hidden-h", weight: 0.7 }]
+          : []),
+        { fromUUID: "hidden-h", toUUID: "output-0", weight: 0.5 },
+        ...(!varying
+          ? [{ fromUUID: "input-0", toUUID: "output-0", weight: 0.6 }]
+          : []),
+      ],
+    },
+    "test/compact/CompactCreatureConstantTransitiveFold.ts",
+    false,
+    1e-6,
+  );
+}
+
 await Deno.writeTextFile(destination, JSON.stringify(captures, null, 2) + "\n");
