@@ -32,6 +32,10 @@ The [constant-merge helper baseline](compaction-constant-helper-baseline.md)
 captures all six original `ConstantMerge.ts` tests, including frozen inputs,
 canonical-slot reuse and the unchanged second pass, without whole-creature loading.
 
+The [tag-preservation baseline](compaction-tag-baseline.md) captures all eight
+original `CompactTagPreservation.ts` tests across their distinct raw-helper and
+whole-creature boundaries. These are metadata integrity checks, not native parity.
+
 The separate [bridge ordering and refusal baseline](compaction-bridge-baseline.md)
 captures four original helper boundaries, including recurrent refusal and
 MAXIMUM/IF targets. Its original large forest test passes but remains uncaptured.
