@@ -169,7 +169,8 @@ undone:
   JSON-round-trip validation. They pin existing behaviour and passed on their
   first run. No existing test was edited.
 - **Gate:** `./quality.sh < /dev/null` exited 0 ("All quality checks passed!")
-  on `448fc64`. The re-run on the final head is recorded below.
+  on `448fc64`, and again on `d8f2ccd` (the code, tests and this summary
+  before this line was filled in).
 - **Not run:**
   - `cargo check --target wasm32-unknown-unknown`: the target is not installed
     here, and the new module has no `cfg` or wasm code;
