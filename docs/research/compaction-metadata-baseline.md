@@ -1,6 +1,6 @@
 # Creature metadata repair and finite-guard captures (Issue #776)
 
-The first two of six records in `neat-core/tests/golden/compact_legacy_metadata.json` capture
+The first two of eight records in `neat-core/tests/golden/compact_legacy_metadata.json` capture
 the first two original tests in
 [`PruneOrphanMemeticReferences.ts`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/compact/PruneOrphanMemeticReferences.ts).
 All six tests in that file passed unchanged. The remaining four tests already
@@ -71,6 +71,44 @@ these original fixtures do not exercise a pre-existing cached UUID. Do not
 describe false as a universal whole-object no-op. Extreme graphs are not
 reloaded, exported, or repaired after injection.
 
+## Converted constants retain their UUIDs
+
+Two additional records capture both original
+[`ConvertedConstantKeepsUuid_test.ts`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/compact/ConvertedConstantKeepsUuid_test.ts)
+tests for NEAT-AI #4071. Each runs with the original seed `4071`, restoring the
+previous RNG in `finally`. Inputs are cloned before any loader or helper can
+add identity fields.
+
+- `converted_uuid_roundtrip` loads the original graph with DEBUG false, then
+  calls `cleanupOrphanedNeuronsInCreature`. Hidden `U` (input ID `1777777`)
+  becomes a constant with bias `0.3`; the existing constant
+  `legacy-neuron-1777777` stays distinct with bias `0.5`. Export and DEBUG-true
+  reload retain both UUIDs and their separate outward edges. Validation succeeds.
+  The intermediate export is recorded without validating or repairing it first.
+- `converted_uuid_raw` passes the original raw export directly to
+  `cleanupOrphanedNeurons`. Hidden `hidden-no-inward` retains its UUID, becomes a
+  constant and receives the f64 LOGISTIC value `1 / (1 + exp(-0.5))`. The output
+  and both synapses remain. The recorder does not add a loader or validation
+  step to this original raw-helper case.
+
+Both results are `{ removed: 0, converted: 1 }`. Complete before/after wire
+semantics are checked, including all neuron and edge records. Comparisons
+ignore added numeric handles and array ordering; those are not new ordering
+contracts. The raw graph's added handles must still agree with its UUID
+endpoints, and reloaded runtime IDs must be unique. The converted constant's
+wire UUID, not its original numeric ID, is the regression contract: wire export
+omits numeric IDs, and reload derives `U`'s ID as `1000085`. Neither the supplied
+`1777777` nor that derived value is imposed on a future native implementation.
+
+The fixture test failed before the records were added. Both unchanged original
+tests passed, both raw inputs and test names match the source declarations, and
+the earlier six metadata records are unchanged. Ten independent corruptions
+were rejected and restored: converted/reloaded UUID collisions, a missing
+outward connection, wrong conversion count, failed validation, duplicate runtime
+ID, lost raw UUID, untransformed LOGISTIC bias, wrong raw endpoint handle and a
+lost reloaded edge. These are capture-integrity checks, not native cleanup or
+activation parity. No activation samples or fitness policy were added.
+
 ## Integrity checks and reproduction
 
 `neat-core/tests/compact_legacy_metadata.rs` checks the validation outcomes,
@@ -98,12 +136,12 @@ replacement edge. All three capture modes regenerate byte-for-byte.
 deno run -A --config ../NEAT-AI/deno.json \
   scripts/capture_legacy_compaction.ts ../NEAT-AI \
   neat-core/tests/golden/compact_legacy_metadata.json metadata
-cargo test -p neat-core --test compact_legacy_metadata
+cargo test -p neat-core --test compact_legacy_metadata --test compact_legacy_converted_uuid
 ```
 
 The shared source guard requires clean tracked sources at the frozen revision.
 To reproduce the original tests from that checkout, run
-`deno test -A test/compact/PruneOrphanMemeticReferences.ts test/compact/CompactUnusedFiniteGuard.ts`. DEBUG validation
+`deno test -A test/compact/PruneOrphanMemeticReferences.ts test/compact/CompactUnusedFiniteGuard.ts test/compact/ConvertedConstantKeepsUuid_test.ts`. DEBUG validation
 may write its normal diagnostic file; this is not a fixture or private input.
-Other metadata, UUID, ordering, trace and repair contracts remain outstanding
+Other metadata, cached UUID invalidation, ordering, trace and repair contracts remain outstanding
 in the [overall baseline](compaction-baseline.md).

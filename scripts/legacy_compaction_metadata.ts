@@ -205,5 +205,124 @@ export async function captureLegacyMetadata(root: URL, revision: string) {
       after: runtimeSnapshot(creature),
     });
   }
+  // Issue #4071 originals use seed 4071 around each operation and restore it.
+  const { initWasmForTests } = await import(
+    new URL("test/_initWasm.ts", root).href
+  );
+  const { cleanupOrphanedNeurons, cleanupOrphanedNeuronsInCreature } =
+    await import(
+      new URL("src/compact/OrphanedNeuronCleanup.ts", root).href
+    );
+  await initWasmForTests();
+  const uuidInputs = [{
+    semanticVersion: "4.0.0",
+    input: 2,
+    output: 1,
+    neurons: [
+      // Legacy-labelled constant: its uuid is what a uuid-less conversion
+      // of the hidden neuron with id 1777777 would have collided with.
+      { type: "constant", uuid: "legacy-neuron-1777777", bias: 0.5 },
+      // Hidden neuron with no inward synapses: converted to a constant.
+      {
+        type: "hidden",
+        uuid: "U",
+        id: 1777777,
+        squash: "IDENTITY",
+        bias: 0.3,
+      },
+      { type: "hidden", uuid: "H2", squash: "IDENTITY", bias: 0 },
+      { type: "output", uuid: "output-0", squash: "IDENTITY", bias: 0 },
+    ],
+    synapses: [
+      { fromUUID: "input-0", toUUID: "H2", weight: 0.5 },
+      { fromUUID: "legacy-neuron-1777777", toUUID: "output-0", weight: 0.7 },
+      { fromUUID: "U", toUUID: "output-0", weight: 0.9 },
+      { fromUUID: "H2", toUUID: "output-0", weight: 0.4 },
+    ],
+  }, {
+    neurons: [
+      {
+        type: "hidden",
+        uuid: "hidden-no-inward",
+        squash: "LOGISTIC",
+        bias: 0.5,
+      },
+      {
+        type: "output",
+        uuid: "output-0",
+        squash: "LOGISTIC",
+        bias: 0.1,
+      },
+    ],
+    synapses: [
+      { fromUUID: "hidden-no-inward", toUUID: "output-0", weight: 1.0 },
+      { fromUUID: "input-0", toUUID: "output-0", weight: 1.0 },
+    ],
+    input: 2,
+    output: 1,
+  }];
+  for (const [index, input] of uuidInputs.entries()) {
+    const runtime = index === 0;
+    const previousRng = getRandomNumberGenerator();
+    setRandomNumberGenerator(createSeededRng(4071));
+    try {
+      const target = runtime
+        ? Creature.fromJSON(structuredClone(input), false)
+        : structuredClone(input);
+      // The loaded creature is DEBUG=false, as in the original. This export
+      // records its intermediate graph without validating or repairing it.
+      const before = runtime ? target.exportJSON() : structuredClone(target);
+      const result = runtime
+        ? cleanupOrphanedNeuronsInCreature(target)
+        : cleanupOrphanedNeurons(target);
+      const after = runtime ? target.exportJSON() : structuredClone(target);
+      const reloaded = runtime
+        ? Creature.fromJSON(structuredClone(after), true)
+        : null;
+      const validation = runtime ? validate(reloaded) : null;
+      if (validation && !validation.valid) {
+        throw new Error("Converted constant reload failed");
+      }
+      captures.push({
+        name: runtime ? "converted_uuid_roundtrip" : "converted_uuid_raw",
+        revision,
+        test: "test/compact/ConvertedConstantKeepsUuid_test.ts",
+        testName: runtime
+          ? "Issue #4071 - a converted constant survives an export round trip beside a legacy-labelled constant"
+          : "Issue #4071 - cleanupOrphanedNeurons keeps the source uuid on a hidden converted to a constant",
+        operation: runtime
+          ? "cleanupOrphanedNeuronsInCreature"
+          : "cleanupOrphanedNeurons",
+        preparation: runtime
+          ? "Creature.fromJSON(input, false)"
+          : "raw export; no loader",
+        seed: 4071,
+        input,
+        before,
+        result,
+        after,
+        reloaded: reloaded?.exportJSON() ?? null,
+        validation,
+        constants: reloaded
+          ? reloaded.neurons
+            .filter((n: { type: string }) => n.type === "constant")
+            .map((n: { uuid: string; index: number }) => ({
+              uuid: n.uuid,
+              outward: reloaded.outwardConnections(n.index).length,
+            })).sort((a: { uuid: string }, b: { uuid: string }) =>
+              a.uuid < b.uuid ? -1 : a.uuid > b.uuid ? 1 : 0
+            )
+          : null,
+        runtimeIds: reloaded
+          ? reloaded.neurons.map((n: { uuid: string; id: number }) => ({
+            uuid: n.uuid,
+            id: n.id,
+          }))
+          : null,
+      });
+    } finally {
+      setRandomNumberGenerator(previousRng);
+    }
+  }
   return captures;
 }

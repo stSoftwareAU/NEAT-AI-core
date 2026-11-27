@@ -176,8 +176,9 @@ those distinctions in explicit contracts before moving algorithms.
 ## Outstanding before accepting #776
 
 The [runtime repair captures](compaction-metadata-baseline.md) preserve
-the original stale-memetic validation failure, cleanup/repair, and four
-finite-value guards for trace-based bias adjustment. They retain runtime IDs
+the original stale-memetic validation failure, cleanup/repair, four
+finite-value guards for trace-based bias adjustment, and both original converted-constant
+UUID regression tests. They retain runtime IDs
 and post-load extreme values; broader metadata and native repair parity remain open.
 
 The [variant and selection captures](compaction-variant-baseline.md) record
