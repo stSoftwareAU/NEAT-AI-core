@@ -703,8 +703,381 @@ export async function captureLegacyUnused(root: URL, revision: string) {
     },
   ];
 
+  // ── FixIF.ts, CompactConstant.ts, CompactKeepOrder.ts: IF and constant neurons ──
+  type Trainable = {
+    validate(): void;
+    activate(input: Float32Array, flag: boolean): Float32Array;
+    activateAndTrace(
+      input: Float32Array,
+      flag: boolean,
+      sparse: unknown,
+    ): Float32Array;
+    propagate(output: Float32Array, config: unknown, sparse: unknown): unknown;
+    traceJSON(): unknown;
+  };
+
+  /** Rows as the frozen tests draw them: `Math.random() * scale - shift`, from the seeded generator. */
+  function signedRows(
+    rng: Rng,
+    count: number,
+    scale: number,
+    shift: number,
+  ): number[][] {
+    const data: number[][] = [];
+    for (let i = count; i--;) {
+      data.push([
+        rng.random() * scale - shift,
+        rng.random() * scale - shift,
+        rng.random() * scale - shift,
+      ]);
+    }
+    return data;
+  }
+
+  /** Fails loud when an output strays from the frozen tests' 1e-6 bound. */
+  function assertOutputs(
+    actual: ArrayLike<number>,
+    expected: Float32Array,
+    label: string,
+  ) {
+    for (const k of [0, 1]) {
+      if (Math.abs(actual[k] - expected[k]) > 0.000_001) {
+        throw new Error(
+          `${label}: output ${k} is ${actual[k]}, expected ${expected[k]}`,
+        );
+      }
+    }
+  }
+
+  /** The frozen tests' trace pass: each row is traced and propagated, and its traced outputs checked. */
+  function tracePass(
+    creature: Trainable,
+    data: number[][],
+    outputs: Float32Array[],
+    config: unknown,
+    sparseConfig: unknown,
+  ) {
+    for (let i = data.length; i--;) {
+      const actual = creature.activateAndTrace(
+        new Float32Array(data[i]),
+        false,
+        sparseConfig,
+      );
+      creature.propagate(new Float32Array(outputs[i]), config, sparseConfig);
+      assertOutputs(actual, outputs[i], `trace row ${i}`);
+    }
+  }
+
+  /** The frozen tests' activation check: every row must reproduce the original outputs. */
+  function checkActivations(
+    creature: Trainable,
+    data: number[][],
+    outputs: Float32Array[],
+  ) {
+    for (let i = data.length; i--;) {
+      assertOutputs(
+        creature.activate(new Float32Array(data[i]), false),
+        outputs[i],
+        `activation row ${i}`,
+      );
+    }
+  }
+
+  /** The frozen tests' first half: build the creature, record the activations, then trace every row. */
+  function buildAndTrace(
+    rng: Rng,
+    json: () => unknown,
+    count: number,
+    scale: number,
+    shift: number,
+  ) {
+    const creature: Trainable = Creature.fromJSON(json());
+    creature.validate();
+    const data = signedRows(rng, count, scale, shift);
+    const outputs: Float32Array[] = new Array(data.length);
+    for (let i = data.length; i--;) {
+      outputs[i] = creature.activate(new Float32Array(data[i]), false);
+    }
+    const config = createBackPropagationConfig();
+    const sparseConfig = new SparseConfig(
+      exportJSONWithRuntimeIds(creature),
+      config,
+    );
+    tracePass(creature, data, outputs, config, sparseConfig);
+    return { creature, data, outputs, config, sparseConfig };
+  }
+
+  /**
+   * The test's own first compaction, run unrecorded inside a chained case so the
+   * recorded second call sees the creature the test sees. Any constant it mints
+   * is pinned as `first-constant-N`, so it cannot collide with the recorded
+   * call's `unity-constant-N`.
+   */
+  function firstCompaction(traced: unknown, plankConstant: number): Trainable {
+    const originalRandomUUID = crypto.randomUUID.bind(crypto);
+    let minted = 0;
+    crypto.randomUUID = () =>
+      `first-constant-${minted++}` as `${string}-${string}-${string}-${string}-${string}`;
+    let compacted: Trainable | undefined;
+    try {
+      compacted = compactUnused(traced, plankConstant);
+    } finally {
+      crypto.randomUUID = originalRandomUUID;
+    }
+    if (compacted === undefined) {
+      throw new Error("the first compaction must return a creature");
+    }
+    return compacted;
+  }
+
+  const fixIfJson = () => ({
+    neurons: [
+      { type: "hidden", uuid: "hidden-3", squash: "CLIPPED", bias: 2 },
+      { type: "hidden", uuid: "hidden-4", squash: "IF", bias: 0 },
+      { type: "output", squash: "IDENTITY", uuid: "output-0", bias: 1 },
+      { type: "output", squash: "IDENTITY", uuid: "output-1", bias: 0 },
+    ],
+    synapses: [
+      { fromUUID: "input-0", toUUID: "hidden-3", weight: -0.3 },
+      {
+        fromUUID: "input-0",
+        toUUID: "hidden-4",
+        weight: -0.3,
+        type: "condition",
+      },
+      { fromUUID: "input-1", toUUID: "hidden-3", weight: 0.3 },
+      {
+        fromUUID: "input-1",
+        toUUID: "hidden-4",
+        weight: 0.3,
+        type: "positive",
+      },
+      { fromUUID: "hidden-3", toUUID: "output-0", weight: 0.6 },
+      {
+        fromUUID: "hidden-3",
+        toUUID: "hidden-4",
+        weight: 0.3,
+        type: "negative",
+      },
+      { fromUUID: "hidden-4", toUUID: "output-1", weight: 0.7 },
+      { fromUUID: "input-2", toUUID: "output-1", weight: 0.8 },
+    ],
+    input: 3,
+    output: 2,
+  });
+
+  const constantJson = () => ({
+    neurons: [
+      { type: "hidden", uuid: "hidden-3", squash: "CLIPPED", bias: 2.5 },
+      { type: "hidden", uuid: "hidden-3b", squash: "INVERSE", bias: -0.1 },
+      { type: "hidden", uuid: "hidden-4", squash: "IF", bias: 0 },
+      { type: "output", squash: "IDENTITY", uuid: "output-0", bias: 1 },
+      { type: "output", squash: "IDENTITY", uuid: "output-1", bias: 0 },
+    ],
+    synapses: [
+      { fromUUID: "input-0", toUUID: "hidden-3", weight: -0.3 },
+      {
+        fromUUID: "input-0",
+        toUUID: "hidden-4",
+        weight: -0.3,
+        type: "condition",
+      },
+      { fromUUID: "hidden-3", toUUID: "hidden-3b", weight: 0.3 },
+      {
+        fromUUID: "hidden-3",
+        toUUID: "hidden-4",
+        weight: 0.3,
+        type: "positive",
+      },
+      { fromUUID: "hidden-3", toUUID: "output-0", weight: 0.6 },
+      {
+        fromUUID: "hidden-3b",
+        toUUID: "hidden-4",
+        weight: 0.3,
+        type: "negative",
+      },
+      { fromUUID: "hidden-4", toUUID: "output-1", weight: 0.7 },
+      { fromUUID: "input-2", toUUID: "output-1", weight: 0.8 },
+    ],
+    input: 3,
+    output: 2,
+  });
+
+  const keepOrderJson = () => ({
+    neurons: [
+      { type: "constant", uuid: "first-one", bias: 1 },
+      { type: "hidden", uuid: "hidden-3", squash: "CLIPPED", bias: 2.5 },
+      { type: "hidden", uuid: "hidden-3b", squash: "INVERSE", bias: -0.1 },
+      { type: "hidden", uuid: "hidden-4", squash: "IF", bias: 0 },
+      { type: "output", squash: "IDENTITY", uuid: "output-0", bias: 1 },
+      { type: "output", squash: "IDENTITY", uuid: "output-1", bias: 0 },
+    ],
+    synapses: [
+      { fromUUID: "input-0", toUUID: "hidden-3", weight: -0.3 },
+      {
+        fromUUID: "input-0",
+        toUUID: "hidden-4",
+        weight: -0.3,
+        type: "condition",
+      },
+      { fromUUID: "hidden-3", toUUID: "hidden-3b", weight: 0.3 },
+      {
+        fromUUID: "hidden-3",
+        toUUID: "hidden-4",
+        weight: 0.3,
+        type: "positive",
+      },
+      { fromUUID: "hidden-3", toUUID: "output-0", weight: 0.6 },
+      {
+        fromUUID: "hidden-3b",
+        toUUID: "hidden-4",
+        weight: 0.3,
+        type: "negative",
+      },
+      { fromUUID: "hidden-4", toUUID: "output-1", weight: 0.7 },
+      { fromUUID: "input-2", toUUID: "output-1", weight: 0.8 },
+      { fromUUID: "first-one", toUUID: "output-1", weight: 0.8 },
+      { fromUUID: "first-one", toUUID: "output-0", weight: 0.9 },
+    ],
+    input: 3,
+    output: 2,
+  });
+
+  const ifPrep =
+    "Creature fixture copied from the test named in the test field; the original Math.random() data is drawn from a seeded generator, and the .trace/ and .test/ files are not written.";
+  const ifCases: CaseSpec[] = [
+    {
+      name: "fix_if_compact",
+      test: "test/compact/FixIF.ts",
+      preparation:
+        `${ifPrep} The 1000 rows x 3 are Math.random() * 2 - 1 in the original (seed 778021). The single compactUnused call is recorded.`,
+      seed: 778021,
+      retry: false,
+      expectCompacted: true,
+      maxAttempts: 1,
+      prepare: (rng) => () => {
+        const run = buildAndTrace(rng, fixIfJson, 1000, 2, 1);
+        return {
+          traced: run.creature.traceJSON(),
+          plankConstant: run.config.plankConstant,
+        };
+      },
+    },
+    {
+      name: "compact_constant_first",
+      test: "test/compact/CompactConstant.ts",
+      preparation:
+        `${ifPrep} The 1000 rows x 3 are Math.random() * 2 - 1 in the original (seed 778031). The first compactUnused call of the test is recorded.`,
+      seed: 778031,
+      retry: false,
+      expectCompacted: true,
+      maxAttempts: 1,
+      prepare: (rng) => () => {
+        const run = buildAndTrace(rng, constantJson, 1000, 2, 1);
+        return {
+          traced: run.creature.traceJSON(),
+          plankConstant: run.config.plankConstant,
+        };
+      },
+    },
+    {
+      name: "compact_constant_second",
+      test: "test/compact/CompactConstant.ts",
+      preparation:
+        `${ifPrep} The second compactUnused call of the test, on the creature the test builds from its first compaction (seed 778031, the same data run). The first call runs unrecorded with pinned constant UUIDs; the test's activation and trace passes then run on the compacted creature, and its traceJSON is recorded.`,
+      seed: 778031,
+      retry: false,
+      expectCompacted: true,
+      maxAttempts: 1,
+      prepare: (rng) => () => {
+        const run = buildAndTrace(rng, constantJson, 1000, 2, 1);
+        const compacted = firstCompaction(
+          run.creature.traceJSON(),
+          run.config.plankConstant,
+        );
+        checkActivations(compacted, run.data, run.outputs);
+        for (let i = run.data.length; i--;) {
+          const sparseConfig = new SparseConfig(
+            exportJSONWithRuntimeIds(compacted),
+            run.config,
+          );
+          const actual = compacted.activateAndTrace(
+            new Float32Array(run.data[i]),
+            false,
+            sparseConfig,
+          );
+          compacted.propagate(
+            new Float32Array(run.outputs[i]),
+            run.config,
+            sparseConfig,
+          );
+          assertOutputs(actual, run.outputs[i], `compacted trace row ${i}`);
+        }
+        return {
+          traced: compacted.traceJSON(),
+          plankConstant: run.config.plankConstant,
+        };
+      },
+    },
+    {
+      name: "compact_keep_order_first",
+      test: "test/compact/CompactKeepOrder.ts",
+      preparation:
+        `${ifPrep} The 10 000 rows x 3 are Math.random() * 3 - 1.5 in the original (seed 778041). The first compactUnused call of the test is recorded.`,
+      seed: 778041,
+      retry: false,
+      expectCompacted: true,
+      maxAttempts: 1,
+      prepare: (rng) => () => {
+        const run = buildAndTrace(rng, keepOrderJson, 10_000, 3, 1.5);
+        return {
+          traced: run.creature.traceJSON(),
+          plankConstant: run.config.plankConstant,
+        };
+      },
+    },
+    {
+      name: "compact_keep_order_second",
+      test: "test/compact/CompactKeepOrder.ts",
+      preparation:
+        `${ifPrep} The second compactUnused call of the test, on the creature the test builds from its first compaction (seed 778041, the same data run). The first call runs unrecorded with pinned constant UUIDs; the test's activation and trace passes, which trace the compacted creature with the original sparse config, then run, and its traceJSON is recorded.`,
+      seed: 778041,
+      retry: false,
+      expectCompacted: true,
+      maxAttempts: 1,
+      prepare: (rng) => () => {
+        const run = buildAndTrace(rng, keepOrderJson, 10_000, 3, 1.5);
+        const compacted = firstCompaction(
+          run.creature.traceJSON(),
+          run.config.plankConstant,
+        );
+        compacted.validate();
+        checkActivations(compacted, run.data, run.outputs);
+        tracePass(
+          compacted,
+          run.data,
+          run.outputs,
+          run.config,
+          run.sparseConfig,
+        );
+        return {
+          traced: compacted.traceJSON(),
+          plankConstant: run.config.plankConstant,
+        };
+      },
+    },
+  ];
+
   const captures: unknown[] = [];
-  for (const spec of [...newborn, unusedClipped, cascade, ...orphanCases]) {
+  for (
+    const spec of [
+      ...newborn,
+      unusedClipped,
+      cascade,
+      ...orphanCases,
+      ...ifCases,
+    ]
+  ) {
     captures.push(captureCase(spec));
   }
   return captures;

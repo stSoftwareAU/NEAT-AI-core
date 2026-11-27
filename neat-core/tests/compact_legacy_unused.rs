@@ -1,29 +1,31 @@
 //! Frozen replay of the legacy `compactUnused` neuron choice and removal (Issue #778).
 //!
-//! `golden/compact_legacy_unused.json` holds nine captures of the frozen TypeScript
+//! `golden/compact_legacy_unused.json` holds fourteen captures of the frozen TypeScript
 //! `compactUnused` at NEAT-AI 60d6b4e5, written by `scripts/legacy_compaction_unused.ts`
 //! (see `docs/research/compaction-unused-choice-baseline.md`). Each capture is replayed
 //! through the two halves of the port: `choose_unused_neuron` must pick the neuron the
 //! capture picked, and `remove_neuron` must reproduce the captured creature bit for bit
-//! while drawing exactly the captured reconnect draws and minting exactly the captured
-//! constants.
+//! while drawing exactly the captured reconnect draws and minting the constant the
+//! capture keeps. A second call minted one constant more in TypeScript, a temporary
+//! that it discarded; the port mints the survivor only.
 //!
 //! The replay builds its input from `aligned`, the creature the TypeScript iterates,
-//! and reads `traced` only for the input and output counts.
+//! and reads `traced` for the input and output counts and for the caller's
+//! `compact-unity-slot` tags.
 
 use std::cell::Cell;
 
 use neat_core::{
-    CreatureExport, NeuronExport, NeuronTraceStats, SynapseExport, UnusedNeuronCandidate,
-    UnusedNeuronChoice, choose_unused_neuron, remove_neuron,
+    CreatureExport, NeuronExport, NeuronTraceStats, SynapseExport, UnitySlot,
+    UnusedNeuronCandidate, UnusedNeuronChoice, choose_unused_neuron, remove_neuron,
 };
 use serde_json::Value;
 
 /// The NEAT-AI revision every capture was taken at.
 const REVISION: &str = "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab";
 
-/// The nine captured cases, in capture order. A dropped or renamed case fails the count.
-const CASES: [&str; 9] = [
+/// The fourteen captured cases, in capture order. A dropped or renamed case fails the count.
+const CASES: [&str; 14] = [
     "newborn_no_grace",
     "newborn_grace_1",
     "newborn_grace_2",
@@ -33,6 +35,11 @@ const CASES: [&str; 9] = [
     "cascade_cosine_clipped",
     "orphan_cleanup_feeder",
     "orphan_cleanup_cascade",
+    "fix_if_compact",
+    "compact_constant_first",
+    "compact_constant_second",
+    "compact_keep_order_first",
+    "compact_keep_order_second",
 ];
 
 fn golden() -> Vec<Value> {
@@ -176,6 +183,55 @@ fn choose(record: &Value, shuffled: &[usize]) -> Option<UnusedNeuronChoice> {
         .unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
+/// The slot a neuron's `compact-unity-slot` tag holds, when it carries one.
+fn unity_slot_tag(neuron: &Value) -> Option<u8> {
+    neuron["tags"]
+        .as_array()?
+        .iter()
+        .find(|tag| tag["name"].as_str() == Some("compact-unity-slot"))
+        .map(|tag| tag["value"].as_str().unwrap().parse().unwrap())
+}
+
+/// The `compact-unity-slot` tags on the captured input, which the caller passes to
+/// `remove_neuron`. `aligned` carries no tags, so they are read from `traced`.
+fn unity_slots_from_input(record: &Value) -> Vec<UnitySlot> {
+    record["traced"]["neurons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|neuron| {
+            unity_slot_tag(neuron).map(|slot| UnitySlot {
+                uuid: neuron["uuid"].as_str().unwrap().to_string(),
+                slot,
+            })
+        })
+        .collect()
+}
+
+/// The unity constant `remove_neuron` must name: the neuron the TypeScript minted
+/// and tagged in `result.after`. A removal that minted nothing names nothing.
+fn expected_unity_constant(record: &Value) -> Option<UnitySlot> {
+    if record["minted"].as_u64().unwrap() == 0 {
+        return None;
+    }
+    let input: Vec<&str> = record["traced"]["neurons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|neuron| neuron["uuid"].as_str().unwrap())
+        .collect();
+    record["result"]["after"]["neurons"]
+        .as_array()?
+        .iter()
+        .filter(|neuron| !input.contains(&neuron["uuid"].as_str().unwrap()))
+        .find_map(|neuron| {
+            unity_slot_tag(neuron).map(|slot| UnitySlot {
+                uuid: neuron["uuid"].as_str().unwrap().to_string(),
+                slot,
+            })
+        })
+}
+
 /// Compares the rewritten creature with the captured `result.after`. Neuron and
 /// synapse order are both checked, and weights and biases bit for bit. Tags are not
 /// compared: `CreatureExport` carries none, and the caller writes the `unused` tag.
@@ -255,7 +311,7 @@ fn frozen_compact_unused_captures_replay_exactly() {
         .collect();
     assert_eq!(
         names, CASES,
-        "the golden holds exactly the nine frozen cases"
+        "the golden holds exactly the fourteen frozen cases"
     );
 
     for record in &records {
@@ -292,18 +348,25 @@ fn frozen_compact_unused_captures_replay_exactly() {
         let expected_tag = record["result"]["unusedTag"].as_str().unwrap();
         assert_eq!(choice.uuid, expected_tag, "{name}: chosen neuron");
 
+        let unity_slots = unity_slots_from_input(record);
         let draws = f64_list(&record["removalDraws"]);
         let draws_used = Cell::new(0_usize);
         let mints = Cell::new(0_u64);
+        // The uuid the port mints is the one the capture kept. On a second call
+        // TypeScript minted a temporary constant first and then discarded it, so
+        // the survivor is not `unity-constant-0`. It is the captured after-neuron
+        // that carries a slot tag. When no minted constant survives, nothing in the
+        // capture names one, and any fresh name will do.
+        let survivor = expected_unity_constant(record)
+            .map_or_else(|| "unity-constant-0".to_string(), |constant| constant.uuid);
         let removal = remove_neuron(
             &creature,
             &choice.uuid,
             choice.activation,
-            &[],
+            &unity_slots,
             || {
-                let n = mints.get();
-                mints.set(n + 1);
-                format!("unity-constant-{n}")
+                mints.set(mints.get() + 1);
+                survivor.clone()
             },
             || {
                 let i = draws_used.get();
@@ -325,14 +388,31 @@ fn frozen_compact_unused_captures_replay_exactly() {
             draws.len(),
             "{name}: reconnect draws used"
         );
+        // A removal that takes the constant branch mints exactly one constant. On a
+        // second call TypeScript minted two, a temporary constant and the survivor;
+        // the port mints the survivor alone.
+        let captured_mints = record["minted"].as_u64().unwrap();
         assert_eq!(
             mints.get(),
-            record["minted"].as_u64().unwrap(),
+            u64::from(captured_mints > 0),
             "{name}: constants minted"
         );
+        if captured_mints == 2 {
+            assert_eq!(
+                mints.get(),
+                1,
+                "{name}: the port mints once where TypeScript minted twice"
+            );
+            assert_eq!(
+                removal.unity_constant.as_ref().map(|constant| constant.slot),
+                Some(1),
+                "{name}: the survivor holds slot 1"
+            );
+        }
         assert_eq!(
-            removal.unity_constant, None,
-            "{name}: no constant was minted, so the bias fold ran"
+            removal.unity_constant,
+            expected_unity_constant(record),
+            "{name}: the unity constant named by its after-neuron's slot tag"
         );
         assert_same_creature(name, &removal.creature, &record["result"]["after"]);
     }
