@@ -78,5 +78,5 @@ flowchart LR
   - The doctests passed.
   - `cargo clippy -p neat-core --all-targets -- -D warnings`: clean.
   - `deno fmt --check`, `deno lint` and `deno check` on the two scripts: clean.
-- The quality-gate result for the final head is recorded below.
+- `./quality.sh < /dev/null` passed (exit 0, "All quality checks passed!") on commit 4107d17. That commit holds all code, tests and docs; the only later change is this result line.
 - Not run: `scripts/check-downstream-consumers.sh`, the `wasm32` check and the `wasm64` check. These modules hold no wasm-specific code and change no existing public surface.
