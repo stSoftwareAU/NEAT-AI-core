@@ -1,0 +1,4302 @@
+[
+  {
+    "name": "complement_pair",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 3.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": -1,
+          "toUUID": "h1"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": -0.44999999999999996
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "complement_weights",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 3
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": -1,
+          "toUUID": "h1"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": -0.44999999999999996
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "mixed_squash",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "logistic_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "tanh_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "TANH",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "TANH",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "TANH",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "TANH",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "TANH",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "TANH",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "relu_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "RELU",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "RELU",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "RELU",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "RELU",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "RELU",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "RELU",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "absolute_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "ABSOLUTE",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "ABSOLUTE",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "ABSOLUTE",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "ABSOLUTE",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "ABSOLUTE",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "ABSOLUTE",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "maximum_neuron_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "MAXIMUM",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "MAXIMUM",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "MAXIMUM",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "MAXIMUM",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "MAXIMUM",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "MAXIMUM",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "complement_three",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": -0.3
+        },
+        {
+          "type": "hidden",
+          "uuid": "h2",
+          "id": 5002,
+          "squash": "COMPLEMENT",
+          "bias": 0.3
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 1
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 0.5
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 2
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 0.8
+        },
+        {
+          "fromId": 2,
+          "toId": 5002,
+          "weight": -1
+        },
+        {
+          "fromId": 5002,
+          "toId": -1,
+          "weight": 1.2
+        }
+      ]
+    },
+    "before": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": -0.3
+        },
+        {
+          "type": "hidden",
+          "uuid": "h2",
+          "id": 5002,
+          "squash": "COMPLEMENT",
+          "bias": 0.3
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 1
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 0.5
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 2
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 0.8
+        },
+        {
+          "fromId": 2,
+          "toId": 5002,
+          "weight": -1
+        },
+        {
+          "fromId": 5002,
+          "toId": -1,
+          "weight": 1.2
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 2
+    },
+    "after": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h2",
+          "id": 5002,
+          "squash": "IDENTITY",
+          "bias": 2.13
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5002,
+          "weight": -0.5,
+          "toUUID": "h2"
+        },
+        {
+          "fromId": 1,
+          "toId": 5002,
+          "weight": -1.6,
+          "toUUID": "h2"
+        },
+        {
+          "fromId": 2,
+          "toId": 5002,
+          "weight": 1.2
+        },
+        {
+          "fromId": 5002,
+          "toId": -1,
+          "weight": 1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "identity_still_merges",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": 1,
+          "toUUID": "h1"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.44999999999999996
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "uuid_only",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelIdentityBridgeUnification.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "h0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "h0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "h1",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "h1",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "h0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "h0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "h1",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "h1",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "squash": "IDENTITY",
+          "bias": 0.5,
+          "id": 1003273
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "h1",
+          "weight": 1,
+          "fromId": 0,
+          "toId": 1003273
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "h1",
+          "weight": 0.44999999999999996,
+          "fromId": 1,
+          "toId": 1003273
+        },
+        {
+          "fromUUID": "h1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 1003273,
+          "toId": -1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "typed_condition",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.3,
+          "type": "condition"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.4
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.3,
+          "type": "condition"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.4
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.3,
+          "type": "condition"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.4
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "typed_positive",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.4
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.4
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.4
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "kept_source",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5002,
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5002,
+          "weight": 1
+        },
+        {
+          "fromId": 5002,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        },
+        {
+          "fromId": 5002,
+          "toId": -1,
+          "weight": 0.1
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5002,
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5002,
+          "weight": 1
+        },
+        {
+          "fromId": 5002,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        },
+        {
+          "fromId": 5002,
+          "toId": -1,
+          "weight": 0.1
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5002,
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5002,
+          "weight": 1
+        },
+        {
+          "fromId": 5002,
+          "toId": 5001,
+          "weight": 1
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.44999999999999996
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1
+        },
+        {
+          "fromId": 5002,
+          "toId": -1,
+          "weight": 0.1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "duplicate_sources",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "post_prune_shape",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": 1,
+          "toUUID": "h1"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.44999999999999996
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "complement_typed",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.1,
+          "type": "negative"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.1,
+          "type": "negative"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 2,
+          "toId": 5000,
+          "weight": 0.1,
+          "type": "negative"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "identity_integrity",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": 1,
+          "toUUID": "h1"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.44999999999999996
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "complement_integrity",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelMergeCornerCases.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "id": 5000,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "COMPLEMENT",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5000,
+          "weight": 0.5
+        },
+        {
+          "fromId": 5000,
+          "toId": -1,
+          "weight": 2
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": 0.3
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "id": 5001,
+          "squash": "IDENTITY",
+          "bias": 3.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "id": -1,
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromId": 0,
+          "toId": 5001,
+          "weight": -1,
+          "toUUID": "h1"
+        },
+        {
+          "fromId": 1,
+          "toId": 5001,
+          "weight": -0.44999999999999996
+        },
+        {
+          "fromId": 5001,
+          "toId": -1,
+          "weight": 1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "if_target_declined",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeExactness.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "forwardOnly": true,
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": -0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "output-0",
+          "weight": 2,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 1.5,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-0",
+          "weight": -1,
+          "type": "negative"
+        }
+      ]
+    },
+    "before": {
+      "forwardOnly": true,
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": -0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "output-0",
+          "weight": 2,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 1.5,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-0",
+          "weight": -1,
+          "type": "negative"
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "forwardOnly": true,
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0.25,
+          "id": 195505501
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": -0.5,
+          "id": 195505502
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5,
+          "fromId": 0,
+          "toId": 195505501
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "output-0",
+          "weight": 2,
+          "type": "condition",
+          "fromId": 195505501,
+          "toId": -1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.3,
+          "fromId": 1,
+          "toId": 195505502
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 1.5,
+          "type": "condition",
+          "fromId": 195505502,
+          "toId": -1
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "positive",
+          "fromId": 2,
+          "toId": -1
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-0",
+          "weight": -1,
+          "type": "negative",
+          "fromId": 2,
+          "toId": -1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "maximum_target_declined",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeExactness.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "forwardOnly": true,
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MAXIMUM",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "forwardOnly": true,
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MAXIMUM",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "forwardOnly": true,
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 195505501
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 195505502
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MAXIMUM",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5,
+          "fromId": 0,
+          "toId": 195505501
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "output-0",
+          "weight": 2,
+          "fromId": 195505501,
+          "toId": -1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.3,
+          "fromId": 1,
+          "toId": 195505502
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 1.5,
+          "fromId": 195505502,
+          "toId": -1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "backward_source_left",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeExactness.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "none",
+    "input": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "back-fed",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "later",
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-c",
+          "squash": "IDENTITY",
+          "bias": -0.3
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "later",
+          "toUUID": "back-fed",
+          "weight": 0.4
+        },
+        {
+          "fromUUID": "back-fed",
+          "toUUID": "output-0",
+          "weight": 1.1
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "later",
+          "weight": 0.7
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "bridge-c",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-c",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "back-fed",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "later",
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-c",
+          "squash": "IDENTITY",
+          "bias": -0.3
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "later",
+          "toUUID": "back-fed",
+          "weight": 0.4
+        },
+        {
+          "fromUUID": "back-fed",
+          "toUUID": "output-0",
+          "weight": 1.1
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "later",
+          "weight": 0.7
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-b",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "bridge-c",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-c",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "back-fed",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 121776671
+        },
+        {
+          "type": "hidden",
+          "uuid": "later",
+          "squash": "LOGISTIC",
+          "bias": 0,
+          "id": 103744716
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-c",
+          "squash": "IDENTITY",
+          "bias": -0.04999999999999993,
+          "id": 195505503
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "later",
+          "toUUID": "back-fed",
+          "weight": 0.4,
+          "fromId": 103744716,
+          "toId": 121776671
+        },
+        {
+          "fromUUID": "back-fed",
+          "toUUID": "output-0",
+          "weight": 1.1,
+          "fromId": 121776671,
+          "toId": -1
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "later",
+          "weight": 0.7,
+          "fromId": 0,
+          "toId": 103744716
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-c",
+          "weight": 1,
+          "fromId": 1,
+          "toId": 195505503
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "bridge-c",
+          "weight": 0.44999999999999996,
+          "fromId": 2,
+          "toId": 195505503
+        },
+        {
+          "fromUUID": "bridge-c",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 195505503,
+          "toId": -1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "keep_last_bridge",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeExactness.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "operation": "mergeParallelBridges",
+    "preparation": "Creature.fromJSON; exportJSONUnchecked",
+    "input": {
+      "forwardOnly": true,
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-early",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "late-source",
+          "squash": "LOGISTIC",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "squash": "IDENTITY",
+          "bias": -0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.75
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-early",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-early",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "late-source",
+          "weight": 0.8
+        },
+        {
+          "fromUUID": "late-source",
+          "toUUID": "bridge-late",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-early",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "late-source",
+          "bias": 0.1,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "bias": -0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.75,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-early"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-1",
+          "toUUID": "late-source"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "bridge-early",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "late-source",
+          "toUUID": "bridge-late"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "late-source",
+          "bias": 0.1,
+          "squash": "LOGISTIC",
+          "id": 1574840606
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "bias": -0.25,
+          "squash": "IDENTITY",
+          "id": 603922602
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.75,
+          "squash": "IDENTITY",
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-late",
+          "fromId": 0,
+          "toId": 603922602
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-1",
+          "toUUID": "late-source",
+          "fromId": 1,
+          "toId": 1574840606
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "late-source",
+          "toUUID": "bridge-late",
+          "fromId": 1574840606,
+          "toId": 603922602
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0",
+          "fromId": 603922602,
+          "toId": -1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "reloaded": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "late-source",
+          "bias": 0.1,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "bias": -0.25,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.75,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-late"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-1",
+          "toUUID": "late-source"
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "late-source",
+          "toUUID": "bridge-late"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "identity_compact",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelIdentityBridgeUnification.ts",
+    "source": "src/compact/CompactCreature.ts",
+    "operation": "compactCreature",
+    "preparation": "Creature.fromJSON",
+    "feedbackLoop": false,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "h0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "h0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "h1",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "h1",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0.2,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "result": {
+      "candidate": true
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": [
+      [
+        0.25,
+        -0.75
+      ],
+      [
+        1,
+        1
+      ],
+      [
+        -2,
+        0.5
+      ]
+    ],
+    "activationTolerance": 0.000001,
+    "beforeOutputs": [
+      [
+        0.41249996423721313
+      ],
+      [
+        1.9500000476837158
+      ],
+      [
+        -1.2749998569488525
+      ]
+    ],
+    "afterOutputs": [
+      [
+        0.4125000238418579
+      ],
+      [
+        1.9500000476837158
+      ],
+      [
+        -1.274999976158142
+      ]
+    ]
+  },
+  {
+    "name": "complement_compact",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMerge.ts",
+    "source": "src/compact/CompactCreature.ts",
+    "operation": "compactCreature",
+    "preparation": "Creature.fromJSON",
+    "feedbackLoop": false,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "squash": "COMPLEMENT",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "squash": "COMPLEMENT",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "h0",
+          "weight": 0.4
+        },
+        {
+          "fromUUID": "h0",
+          "toUUID": "output-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "h1",
+          "weight": 0.6
+        },
+        {
+          "fromUUID": "h1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h0",
+          "bias": 0.1,
+          "squash": "COMPLEMENT"
+        },
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0.2,
+          "squash": "COMPLEMENT"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.4,
+          "fromUUID": "input-0",
+          "toUUID": "h0"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "result": {
+      "candidate": true
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "h1",
+          "bias": 0.2,
+          "squash": "COMPLEMENT"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.9,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.4,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "input-1",
+          "toUUID": "h1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "h1",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  }
+]

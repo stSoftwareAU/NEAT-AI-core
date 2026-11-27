@@ -188,6 +188,10 @@ typed zero-weight pruning, duplicate-role policies and backward-edge repair.
 Those intermediate inputs must not be normalized through a whole-creature
 loader before invoking their original helper.
 
+The [bridge case captures](compaction-bridge-cases-baseline.md) add the small
+COMPLEMENT, refusal, corner-case and deterministic ordering tests. The public
+forest fixture and the unseeded activation samples stay in the original suite.
+
 - Freeze remaining original fixtures: identity chains/parallel bridges, typed
   remaining typed-IF guards, remaining transitive-constant cases, zero weights, recurrent refusal, ordering, metadata,
   UUID/memetic invalidation, clipping, non-finite traces and deadlines.

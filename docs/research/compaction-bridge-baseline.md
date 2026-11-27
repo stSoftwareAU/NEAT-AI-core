@@ -64,5 +64,7 @@ cargo test -p neat-core --test compact_legacy_bridges
 The shared source guard requires clean tracked sources at the frozen revision.
 Run the unchanged original suite from that checkout with
 `deno test -A test/compact/ParallelBridgeMergeOrdering.ts`.
-The public forest capture, other bridge boundaries and remaining family
-acceptance work stay open in the [overall baseline](compaction-baseline.md).
+The small COMPLEMENT, refusal and corner-case contracts are recorded separately
+in the [bridge case captures](compaction-bridge-cases-baseline.md). The public
+forest fixture and remaining family acceptance work stay open in the
+[overall baseline](compaction-baseline.md).
