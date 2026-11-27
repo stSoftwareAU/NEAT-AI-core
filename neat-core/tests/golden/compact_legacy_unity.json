@@ -1,0 +1,760 @@
+[
+  {
+    "name": "unity_if",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronUnityConstant",
+    "preparation": "Creature.fromJSON(input), then tag unitySlots",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "unitySlots": {},
+    "remove": "hidden-0",
+    "activation": 1.5,
+    "minted": 1,
+    "result": true,
+    "after": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "unity-constant-0",
+          "squash": null,
+          "bias": 1,
+          "unitySlot": "0"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0.25,
+          "unitySlot": null
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "unity-constant-0",
+          "toUUID": "output-0",
+          "weight": 3,
+          "type": null
+        }
+      ],
+      "memetic": null
+    }
+  },
+  {
+    "name": "unity_mixed_targets",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronUnityConstant",
+    "preparation": "Creature.fromJSON(input), then tag unitySlots",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "TANH",
+          "bias": 0.1
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0.25
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": -0.5
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": -1,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-1",
+          "weight": 0.75
+        }
+      ],
+      "input": 2,
+      "output": 2
+    },
+    "unitySlots": {},
+    "remove": "hidden-0",
+    "activation": 0.4,
+    "minted": 1,
+    "result": true,
+    "after": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "unity-constant-0",
+          "squash": null,
+          "bias": 1,
+          "unitySlot": "0"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0.25,
+          "unitySlot": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": -0.5,
+          "unitySlot": null
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": -1,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "unity-constant-0",
+          "toUUID": "output-0",
+          "weight": 0.8,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "unity-constant-0",
+          "toUUID": "output-1",
+          "weight": 0.30000000000000004,
+          "type": null
+        }
+      ],
+      "memetic": null
+    }
+  },
+  {
+    "name": "unity_two_roles",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronUnityConstant",
+    "preparation": "Creature.fromJSON(input), then tag unitySlots",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": -2,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 3,
+          "type": "negative"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "unitySlots": {},
+    "remove": "hidden-0",
+    "activation": 2,
+    "minted": 1,
+    "result": true,
+    "after": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "unity-constant-0",
+          "squash": null,
+          "bias": 1,
+          "unitySlot": "0"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0,
+          "unitySlot": null
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 3,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "unity-constant-0",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "unity-constant-0",
+          "toUUID": "output-0",
+          "weight": -4,
+          "type": "positive"
+        }
+      ],
+      "memetic": null
+    }
+  },
+  {
+    "name": "unity_after_existing_constants",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronUnityConstant",
+    "preparation": "Creature.fromJSON(input), then tag unitySlots",
+    "input": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "k0",
+          "bias": 0.7
+        },
+        {
+          "type": "constant",
+          "uuid": "k1",
+          "bias": -0.2
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-a",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MAXIMUM",
+          "bias": 0.1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-a",
+          "weight": 1
+        },
+        {
+          "fromUUID": "k0",
+          "toUUID": "hidden-a",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "k1",
+          "toUUID": "output-0",
+          "weight": 0.25
+        },
+        {
+          "fromUUID": "hidden-a",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-a",
+          "toUUID": "output-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 3
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "unitySlots": {},
+    "remove": "hidden-0",
+    "activation": -0.5,
+    "minted": 1,
+    "result": true,
+    "after": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "k0",
+          "squash": null,
+          "bias": 0.7,
+          "unitySlot": null
+        },
+        {
+          "type": "constant",
+          "uuid": "k1",
+          "squash": null,
+          "bias": -0.2,
+          "unitySlot": null
+        },
+        {
+          "type": "constant",
+          "uuid": "unity-constant-0",
+          "squash": null,
+          "bias": 1,
+          "unitySlot": "0"
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-a",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "unitySlot": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MAXIMUM",
+          "bias": 0.1,
+          "unitySlot": null
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-a",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "k0",
+          "toUUID": "hidden-a",
+          "weight": 0.5,
+          "type": null
+        },
+        {
+          "fromUUID": "k1",
+          "toUUID": "output-0",
+          "weight": 0.25,
+          "type": null
+        },
+        {
+          "fromUUID": "unity-constant-0",
+          "toUUID": "output-0",
+          "weight": -1.5,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-a",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": null
+        }
+      ],
+      "memetic": null
+    }
+  },
+  {
+    "name": "unity_feeder_cascade",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronUnityConstant",
+    "preparation": "Creature.fromJSON(input), then tag unitySlots",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-a",
+          "squash": "IDENTITY",
+          "bias": 0.3
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MEAN",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-a",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-a",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "unitySlots": {},
+    "remove": "hidden-0",
+    "activation": 0.3,
+    "minted": 1,
+    "result": true,
+    "after": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "unity-constant-0",
+          "squash": null,
+          "bias": 1,
+          "unitySlot": "0"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MEAN",
+          "bias": 0,
+          "unitySlot": null
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "unity-constant-0",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        }
+      ],
+      "memetic": null
+    }
+  },
+  {
+    "name": "unity_overflow",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronUnityConstant",
+    "preparation": "Creature.fromJSON(input), then tag unitySlots",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "HYPOT",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 10
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "unitySlots": {},
+    "remove": "hidden-0",
+    "activation": 1e+308,
+    "minted": 1,
+    "result": {
+      "threw": "weight must be a number"
+    },
+    "after": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "unity-constant-0",
+          "squash": null,
+          "bias": 1,
+          "unitySlot": "0"
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "unitySlot": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "HYPOT",
+          "bias": 0,
+          "unitySlot": null
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 10,
+          "type": null
+        }
+      ],
+      "memetic": null
+    }
+  },
+  {
+    "name": "unity_reuse_tagged_slot",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronUnityConstant",
+    "preparation": "Creature.fromJSON(input), then tag unitySlots",
+    "input": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "k0",
+          "bias": 0.7
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-1",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-1",
+          "weight": 1
+        },
+        {
+          "fromUUID": "k0",
+          "toUUID": "hidden-1",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "hidden-1",
+          "toUUID": "output-0",
+          "weight": 3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "negative"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "unitySlots": {
+      "k0": "0"
+    },
+    "remove": "hidden-1",
+    "activation": 1.5,
+    "minted": 1,
+    "result": true,
+    "after": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "unitySlot": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0.25,
+          "unitySlot": null
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 4.5,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2,
+          "type": "positive"
+        }
+      ],
+      "memetic": null
+    }
+  }
+]

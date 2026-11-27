@@ -26,7 +26,7 @@
 //!   puts it;
 //! - the memetic record is cleared on removal, as `removeHiddenNeuron` does.
 //!
-//! What stays with the caller, or is not ported:
+//! What stays with the caller, or is refused here:
 //!
 //! - choosing the neuron — `compactUnused`'s trace statistics, shuffle and
 //!   newborn-grace skip are caller policy; this function only rewrites;
@@ -35,9 +35,11 @@
 //!   define `propagate` at the frozen revision), TypeScript rewires through a
 //!   reusable constant neuron keyed on the
 //!   `compact-unity-slot` neuron tag.
-//!   [`crate::creature::NeuronExport`] carries no tags, so that branch is
-//!   refused with [`RemoveNeuronError::ConstantBranchNotPorted`] rather than
-//!   approximated.
+//!   [`crate::creature::NeuronExport`] carries no tags, so this function still
+//!   refuses that branch with [`RemoveNeuronError::ConstantBranchNotPorted`]
+//!   rather than approximating it. The branch is ported in
+//!   [`crate::compact_unity_constant::remove_neuron`], which takes the caller's
+//!   slot tags and calls this function for every other case.
 
 use std::collections::{HashMap, HashSet};
 
@@ -65,8 +67,10 @@ pub enum RemoveNeuronError {
         /// Its type.
         neuron_type: String,
     },
-    /// An outward target needs TypeScript's constant-neuron branch, which is
-    /// not ported because it is keyed on neuron tags core does not carry.
+    /// An outward target needs TypeScript's constant-neuron branch. This
+    /// function refuses it, because that branch is keyed on neuron tags core
+    /// does not carry; [`crate::compact_unity_constant::remove_neuron`] runs it
+    /// with the caller's slot tags.
     ConstantBranchNotPorted {
         /// The target whose squash needs that branch.
         target: String,
@@ -96,7 +100,7 @@ impl std::fmt::Display for RemoveNeuronError {
             ),
             RemoveNeuronError::ConstantBranchNotPorted { target } => write!(
                 f,
-                "Target {target} needs the constant-neuron branch of removeNeuron, which is not ported"
+                "Target {target} needs the constant-neuron branch of removeNeuron, which remove_neuron_by_bias_fold does not take; use remove_neuron"
             ),
             RemoveNeuronError::DanglingTarget { target } => {
                 write!(f, "Outward synapse targets unknown neuron {target}")
@@ -306,7 +310,7 @@ pub fn remove_neuron_by_bias_fold(
 /// `removeHiddenNeuron`: drop the neuron and every synapse touching it, then
 /// remove, recursively, each hidden or constant feeder left with no outward
 /// synapse.
-fn remove_with_orphan_cascade(creature: &mut CreatureExport, uuid: &str) {
+pub(crate) fn remove_with_orphan_cascade(creature: &mut CreatureExport, uuid: &str) {
     let removable: HashSet<String> = creature
         .neurons
         .iter()

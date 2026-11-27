@@ -80,8 +80,9 @@ record stores `definesPropagate` (read from `findSquash()`), the successful
 result, a `constantNeuronAdded` flag and the target's bias, which stays at its
 original `0.25`: TypeScript wires in a unity constant instead of folding into
 the bias. The constant neuron's uuid is random, so no other state is kept.
-`neat-core/tests/compact_remove_neuron.rs` asserts the native port refuses all
-six with `ConstantBranchNotPorted`.
+`neat-core/tests/compact_remove_neuron.rs` asserts that `remove_neuron_by_bias_fold`
+refuses all six with `ConstantBranchNotPorted`. The constant branch itself is
+ported in `crate::compact_unity_constant::remove_neuron` (Issue #778).
 
 ## Converted constants retain their UUIDs
 

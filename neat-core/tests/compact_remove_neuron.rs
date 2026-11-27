@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 
 use neat_core::{
     CreatureExport, MemeticExport, MemeticWeights, NeuronExport, RemoveNeuronError, SquashType,
-    SynapseExport, compile_creature, remove_neuron_by_bias_fold, squash_name_from,
+    SynapseExport, ValidateOptions, compile_creature, creature_to_json, creature_validate,
+    parse_creature_json, remove_neuron_by_bias_fold, squash_name_from,
 };
 use serde_json::Value;
 
@@ -676,4 +677,106 @@ fn a_creature_with_no_inputs_is_refused_by_the_width_rule() {
         matches!(refused, Err(RemoveNeuronError::InvalidWidth { .. })),
         "{refused:?}"
     );
+}
+
+/// A `constant` neuron: a source with no squash, emitting its bias (rule 15).
+fn constant_neuron(uuid: &str, bias: f64) -> NeuronExport {
+    NeuronExport {
+        id: None,
+        neuron_type: "constant".to_string(),
+        uuid: uuid.to_string(),
+        bias,
+        squash: None,
+    }
+}
+
+/// Native counterpart of TypeScript `creatureValidate` after
+/// `Creature.fromJSON(creature.exportJSON())`: serialise, parse back, then
+/// validate under the production feed-forward rules.
+fn assert_valid_after_round_trip(creature: &CreatureExport) {
+    let json = creature_to_json(creature).expect("the compacted creature serialises");
+    let parsed = parse_creature_json(&json).expect("the compacted creature parses");
+    creature_validate(
+        &parsed,
+        &ValidateOptions {
+            neurons: None,
+            connections: None,
+            feedback_loop: None,
+            forward_only: true,
+        },
+    )
+    .expect("the compacted creature validates after a round trip");
+}
+
+/// Native counterpart of the first case in NEAT-AI
+/// `test/compact/RemoveHiddenNeuronCascade.ts`. `H` is the only consumer of
+/// constant `C`, so removing `H` orphans `C`, which must cascade away.
+///
+/// The TypeScript test first disconnects `H -> output-0` to make `H` removable.
+/// That edge is left out of this fixture, so `H` has no outward synapses: no
+/// fold and no reconnect, which is why the draw panics.
+#[test]
+fn removal_cascades_to_a_constant_that_fed_only_the_removed_neuron() {
+    let base = creature(
+        1,
+        vec![
+            constant_neuron("C", 0.5),
+            neuron("hidden", "H", "LOGISTIC", 0.1),
+            neuron("output", "output-0", "LOGISTIC", 0.0),
+        ],
+        vec![
+            edge("input-0", "H", 1.0),
+            edge("C", "H", 1.0),
+            edge("input-0", "output-0", 1.0),
+        ],
+    );
+    let removed = remove_neuron_by_bias_fold(&base, "H", 0.5, never_draw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        removed.neurons,
+        vec![neuron("output", "output-0", "LOGISTIC", 0.0)]
+    );
+    assert_eq!(removed.synapses, vec![edge("input-0", "output-0", 1.0)]);
+    assert_valid_after_round_trip(&removed);
+}
+
+/// Native counterpart of the second case in
+/// `test/compact/RemoveHiddenNeuronCascade.ts`. `C` also feeds `output-0`, so it
+/// keeps an outward synapse once `H` is gone and must survive.
+///
+/// Synapses are listed in `(from, to)` runtime order (`input-0` is 0, `C` is 1,
+/// `H` is 2, `output-0` is 3), which `remove_neuron_by_bias_fold` expects; the
+/// surviving edges keep that order.
+#[test]
+fn removal_keeps_a_constant_that_still_feeds_another_neuron() {
+    let base = creature(
+        1,
+        vec![
+            constant_neuron("C", 0.5),
+            neuron("hidden", "H", "LOGISTIC", 0.1),
+            neuron("output", "output-0", "LOGISTIC", 0.0),
+        ],
+        vec![
+            edge("input-0", "H", 1.0),
+            edge("input-0", "output-0", 1.0),
+            edge("C", "H", 1.0),
+            edge("C", "output-0", 1.0),
+        ],
+    );
+    let removed = remove_neuron_by_bias_fold(&base, "H", 0.5, never_draw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        removed.neurons,
+        vec![
+            constant_neuron("C", 0.5),
+            neuron("output", "output-0", "LOGISTIC", 0.0),
+        ]
+    );
+    assert_eq!(
+        removed.synapses,
+        vec![edge("input-0", "output-0", 1.0), edge("C", "output-0", 1.0)]
+    );
+    assert_valid_after_round_trip(&removed);
 }
