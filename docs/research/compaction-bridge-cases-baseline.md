@@ -12,7 +12,8 @@ The first corner-case test supplies two helper calls, so twenty-four tests
 become twenty-five records. This extends the
 [ordering captures](compaction-bridge-baseline.md). It does not complete #776.
 
-The public forest regression in the exactness file is not in this file. Its
+The public forest regression in the exactness file is summarised in the
+[forest baseline](compaction-forest-baseline.md), not in this file. Its
 creature is about 3.4 MB, and its activation sample draws unseeded
 `Math.random`. The "loads last" test's fifty-row sample is unseeded for the
 same reason. Both activation checks stay in the original suite. This capture
@@ -79,5 +80,6 @@ deno test -A \
   test/compact/ParallelBridgeMergeExactness.ts
 ```
 
-The forest fixture, native replay and the remaining #776 acceptance work stay
-open in the [overall baseline](compaction-baseline.md).
+Native replay and the remaining #776 acceptance work stay open in the
+[overall baseline](compaction-baseline.md). The forest summary is in the
+[forest baseline](compaction-forest-baseline.md).

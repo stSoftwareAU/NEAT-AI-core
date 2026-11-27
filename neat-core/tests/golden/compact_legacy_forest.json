@@ -1,0 +1,40 @@
+{
+  "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+  "fixture": "test/data/grq-23-forests-constants.json",
+  "fixtureSha256": "36dcda9e779c785ecc9d50bbf53e859170bb8671a539d0e11a205f4c63cabb0a",
+  "fixtureBytes": 3516246,
+  "input": 2511,
+  "output": 1,
+  "declaredNeurons": 2538,
+  "declaredSynapses": 24100,
+  "cases": [
+    {
+      "name": "ordering_declines_if_bridges",
+      "test": "test/compact/ParallelBridgeMergeOrdering.ts",
+      "source": "src/compact/ParallelBridgeMerge.ts",
+      "preparation": "mergeRedundantConstants",
+      "neuronsBefore": 2263,
+      "neuronsAfter": 2263,
+      "synapsesBefore": 24100,
+      "synapsesAfterHelper": 24100,
+      "synapsesAfterReload": 24100,
+      "removedNeurons": 0,
+      "probeRows": 25,
+      "probe": "sine",
+      "worstOutputDelta": 0
+    },
+    {
+      "name": "exactness_fixpoint_stays_forward",
+      "test": "test/compact/ParallelBridgeMergeExactness.ts",
+      "source": "src/compact/ParallelBridgeMerge.ts",
+      "preparation": "mergeToFixpoint",
+      "neuronsBefore": 5049,
+      "neuronsAfter": 5049,
+      "synapsesBefore": 24100,
+      "synapsesAfter": 24100,
+      "removedNeurons": 0,
+      "backwardSynapses": 0,
+      "outputCheck": "unseeded"
+    }
+  ]
+}
