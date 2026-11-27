@@ -1,5 +1,5 @@
 //! Frozen parallel-bridge case observations, not a native rewrite (#776).
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const REVISION: &str = "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab";
 
@@ -136,11 +136,13 @@ fn bridge_case_captures_preserve_original_contracts() {
 
     let kept_source = find(&cases, "kept_source");
     assert_eq!(kept_source["result"]["removedNeurons"], 1);
-    assert!(kept_source["after"]["neurons"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|n| n["id"] == 5002));
+    assert!(
+        kept_source["after"]["neurons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == 5002)
+    );
     near(&weight_between(kept_source, 5002, 5001), 1.0);
     near(&weight_between(kept_source, 5002, -1), 0.1);
 
