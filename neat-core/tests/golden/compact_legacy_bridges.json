@@ -1,0 +1,2656 @@
+[
+  {
+    "name": "late_source",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeOrdering.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "preparation": "Creature.fromJSON; exportJSONUnchecked",
+    "input": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-early",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "source-late",
+          "squash": "LOGISTIC",
+          "bias": -0.4
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-early",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-early",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "source-late",
+          "weight": 0.9
+        },
+        {
+          "fromUUID": "source-late",
+          "toUUID": "bridge-late",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0",
+          "weight": 1.5
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-early",
+          "bias": 0.1,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "source-late",
+          "bias": -0.4,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "bias": 0.2,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-early"
+        },
+        {
+          "weight": 0.9,
+          "fromUUID": "input-1",
+          "toUUID": "source-late"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "bridge-early",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "source-late",
+          "toUUID": "bridge-late"
+        },
+        {
+          "weight": 1.5,
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "result": {
+      "removedNeurons": 1
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "source-late",
+          "bias": -0.4,
+          "squash": "LOGISTIC",
+          "id": 132062504
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "bias": 0.5,
+          "squash": "IDENTITY",
+          "id": 603922602
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-late",
+          "fromId": 0,
+          "toId": 603922602
+        },
+        {
+          "weight": 0.9,
+          "fromUUID": "input-1",
+          "toUUID": "source-late",
+          "fromId": 1,
+          "toId": 132062504
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "source-late",
+          "toUUID": "bridge-late",
+          "fromId": 132062504,
+          "toId": 603922602
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0",
+          "fromId": 603922602,
+          "toId": -1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "reloaded": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "source-late",
+          "bias": -0.4,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-late",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-late"
+        },
+        {
+          "weight": 0.9,
+          "fromUUID": "input-1",
+          "toUUID": "source-late"
+        },
+        {
+          "weight": 0.44999999999999996,
+          "fromUUID": "source-late",
+          "toUUID": "bridge-late"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-late",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "probes": [
+      [
+        0.6442176699638367,
+        0.9854497313499451
+      ],
+      [
+        0.9050905704498291,
+        0.4183179438114166
+      ],
+      [
+        -0.17746242880821228,
+        -0.769723117351532
+      ],
+      [
+        -0.9966079592704773,
+        -0.8152642250061035
+      ],
+      [
+        -0.33648836612701416,
+        0.3492913246154785
+      ],
+      [
+        0.8230808973312378,
+        0.9953937530517578
+      ],
+      [
+        0.7609512209892273,
+        0.16403330862522125
+      ],
+      [
+        -0.4306582808494568,
+        -0.9108017683029175
+      ],
+      [
+        -0.9830417037010193,
+        -0.633733868598938
+      ],
+      [
+        -0.07629639655351639,
+        0.5839852094650269
+      ],
+      [
+        0.9436956644058228,
+        0.9348950386047363
+      ],
+      [
+        0.5629603266716003,
+        -0.10185976326465607
+      ],
+      [
+        -0.6533769965171814,
+        -0.9874241352081299
+      ],
+      [
+        -0.8999068737030029,
+        -0.4073549211025238
+      ],
+      [
+        0.1892949640750885,
+        0.7773512005805969
+      ],
+      [
+        0.9975262880325317,
+        0.8082349896430969
+      ],
+      [
+        0.3251294195652008,
+        -0.360544353723526
+      ],
+      [
+        -0.8298570513725281,
+        -0.9941677451133728
+      ],
+      [
+        -0.7530867457389832,
+        -0.15214800834655762
+      ],
+      [
+        0.44149014353752136,
+        0.9157049655914307
+      ],
+      [
+        0.9807632565498352,
+        0.6243771314620972
+      ],
+      [
+        0.06428951025009155,
+        -0.593713641166687
+      ],
+      [
+        -0.9476091265678406,
+        -0.9305552840232849
+      ],
+      [
+        -0.552971601486206,
+        0.113826222717762
+      ],
+      [
+        0.6624416708946228,
+        0.9892554879188538
+      ]
+    ],
+    "activationTolerance": 0.000001,
+    "beforeOutputs": [
+      [
+        1.4229373931884766
+      ],
+      [
+        1.6274454593658447
+      ],
+      [
+        0.4355328679084778
+      ],
+      [
+        -0.38704556226730347
+      ],
+      [
+        0.3788832426071167
+      ],
+      [
+        1.6027491092681885
+      ],
+      [
+        1.4577093124389648
+      ],
+      [
+        0.17193515598773956
+      ],
+      [
+        -0.35937780141830444
+      ],
+      [
+        0.6628135442733765
+      ],
+      [
+        1.7175630331039429
+      ],
+      [
+        1.2337350845336914
+      ],
+      [
+        -0.05614280700683594
+      ],
+      [
+        -0.2571619749069214
+      ],
+      [
+        0.9477518796920776
+      ],
+      [
+        1.7590346336364746
+      ],
+      [
+        0.9720116853713989
+      ],
+      [
+        -0.23308467864990234
+      ],
+      [
+        -0.0870811939239502
+      ],
+      [
+        1.2135026454925537
+      ],
+      [
+        1.7239418029785156
+      ],
+      [
+        0.6912095546722412
+      ],
+      [
+        -0.3464169502258301
+      ],
+      [
+        0.13879811763763428
+      ],
+      [
+        1.4415245056152344
+      ]
+    ],
+    "afterOutputs": [
+      [
+        1.4229373931884766
+      ],
+      [
+        1.6274453401565552
+      ],
+      [
+        0.4355328679084778
+      ],
+      [
+        -0.38704559206962585
+      ],
+      [
+        0.3788832426071167
+      ],
+      [
+        1.602748990058899
+      ],
+      [
+        1.4577094316482544
+      ],
+      [
+        0.17193517088890076
+      ],
+      [
+        -0.35937780141830444
+      ],
+      [
+        0.6628135442733765
+      ],
+      [
+        1.7175629138946533
+      ],
+      [
+        1.2337350845336914
+      ],
+      [
+        -0.05614278465509415
+      ],
+      [
+        -0.2571619749069214
+      ],
+      [
+        0.9477518796920776
+      ],
+      [
+        1.759034514427185
+      ],
+      [
+        0.9720116257667542
+      ],
+      [
+        -0.23308464884757996
+      ],
+      [
+        -0.087081179022789
+      ],
+      [
+        1.2135026454925537
+      ],
+      [
+        1.723941683769226
+      ],
+      [
+        0.6912095546722412
+      ],
+      [
+        -0.3464169502258301
+      ],
+      [
+        0.13879811763763428
+      ],
+      [
+        1.4415245056152344
+      ]
+    ]
+  },
+  {
+    "name": "backward_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeOrdering.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "preparation": "none",
+    "input": {
+      "semanticVersion": "4.0.0",
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "target",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "back-source",
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "target",
+          "weight": 2
+        },
+        {
+          "fromUUID": "target",
+          "toUUID": "back-source",
+          "weight": 0.7
+        },
+        {
+          "fromUUID": "back-source",
+          "toUUID": "bridge-b",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "target",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "target",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0.1
+        },
+        {
+          "type": "hidden",
+          "uuid": "target",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "back-source",
+          "squash": "LOGISTIC",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0.2
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "target",
+          "weight": 2
+        },
+        {
+          "fromUUID": "target",
+          "toUUID": "back-source",
+          "weight": 0.7
+        },
+        {
+          "fromUUID": "back-source",
+          "toUUID": "bridge-b",
+          "weight": 0.3
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "target",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "target",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-a",
+          "squash": "IDENTITY",
+          "bias": 0.1,
+          "id": 195505501
+        },
+        {
+          "type": "hidden",
+          "uuid": "target",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 881905839
+        },
+        {
+          "type": "hidden",
+          "uuid": "back-source",
+          "squash": "LOGISTIC",
+          "bias": 0,
+          "id": 1745686017
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-b",
+          "squash": "IDENTITY",
+          "bias": 0.2,
+          "id": 195505502
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-a",
+          "weight": 0.5,
+          "fromId": 0,
+          "toId": 195505501
+        },
+        {
+          "fromUUID": "bridge-a",
+          "toUUID": "target",
+          "weight": 2,
+          "fromId": 195505501,
+          "toId": 881905839
+        },
+        {
+          "fromUUID": "target",
+          "toUUID": "back-source",
+          "weight": 0.7,
+          "fromId": 881905839,
+          "toId": 1745686017
+        },
+        {
+          "fromUUID": "back-source",
+          "toUUID": "bridge-b",
+          "weight": 0.3,
+          "fromId": 1745686017,
+          "toId": 195505502
+        },
+        {
+          "fromUUID": "bridge-b",
+          "toUUID": "target",
+          "weight": 1.5,
+          "fromId": 195505502,
+          "toId": 881905839
+        },
+        {
+          "fromUUID": "target",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 881905839,
+          "toId": -1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "maximum_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeOrdering.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "preparation": "none",
+    "input": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "input": 6,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-1",
+          "squash": "IDENTITY",
+          "bias": 0.125
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-2",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-3",
+          "squash": "IDENTITY",
+          "bias": 0.375
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-4",
+          "squash": "IDENTITY",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-5",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "aggregate",
+          "squash": "MAXIMUM",
+          "bias": 0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-0",
+          "toUUID": "aggregate",
+          "weight": 0.25
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-1",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-1",
+          "toUUID": "aggregate",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "bridge-2",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-2",
+          "toUUID": "aggregate",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "input-3",
+          "toUUID": "bridge-3",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-3",
+          "toUUID": "aggregate",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-4",
+          "toUUID": "bridge-4",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-4",
+          "toUUID": "aggregate",
+          "weight": 0.25
+        },
+        {
+          "fromUUID": "input-5",
+          "toUUID": "bridge-5",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-5",
+          "toUUID": "aggregate",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "aggregate",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "input": 6,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-1",
+          "squash": "IDENTITY",
+          "bias": 0.125
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-2",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-3",
+          "squash": "IDENTITY",
+          "bias": 0.375
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-4",
+          "squash": "IDENTITY",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-5",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "aggregate",
+          "squash": "MAXIMUM",
+          "bias": 0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-0",
+          "toUUID": "aggregate",
+          "weight": 0.25
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-1",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-1",
+          "toUUID": "aggregate",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "bridge-2",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-2",
+          "toUUID": "aggregate",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "input-3",
+          "toUUID": "bridge-3",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-3",
+          "toUUID": "aggregate",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-4",
+          "toUUID": "bridge-4",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-4",
+          "toUUID": "aggregate",
+          "weight": 0.25
+        },
+        {
+          "fromUUID": "input-5",
+          "toUUID": "bridge-5",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-5",
+          "toUUID": "aggregate",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "aggregate",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ]
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "input": 6,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 195505452
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-1",
+          "squash": "IDENTITY",
+          "bias": 0.125,
+          "id": 195505453
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-2",
+          "squash": "IDENTITY",
+          "bias": 0.25,
+          "id": 195505454
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-3",
+          "squash": "IDENTITY",
+          "bias": 0.375,
+          "id": 195505455
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-4",
+          "squash": "IDENTITY",
+          "bias": 0.5,
+          "id": 195505456
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-5",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": 195505457
+        },
+        {
+          "type": "hidden",
+          "uuid": "aggregate",
+          "squash": "MAXIMUM",
+          "bias": 0.5,
+          "id": 176177151
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-0",
+          "weight": 0.5,
+          "fromId": 0,
+          "toId": 195505452
+        },
+        {
+          "fromUUID": "bridge-0",
+          "toUUID": "aggregate",
+          "weight": 0.25,
+          "fromId": 195505452,
+          "toId": 176177151
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-1",
+          "weight": 0.75,
+          "fromId": 1,
+          "toId": 195505453
+        },
+        {
+          "fromUUID": "bridge-1",
+          "toUUID": "aggregate",
+          "weight": 0.5,
+          "fromId": 195505453,
+          "toId": 176177151
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "bridge-2",
+          "weight": 1,
+          "fromId": 2,
+          "toId": 195505454
+        },
+        {
+          "fromUUID": "bridge-2",
+          "toUUID": "aggregate",
+          "weight": 0.75,
+          "fromId": 195505454,
+          "toId": 176177151
+        },
+        {
+          "fromUUID": "input-3",
+          "toUUID": "bridge-3",
+          "weight": 0.5,
+          "fromId": 3,
+          "toId": 195505455
+        },
+        {
+          "fromUUID": "bridge-3",
+          "toUUID": "aggregate",
+          "weight": 1,
+          "fromId": 195505455,
+          "toId": 176177151
+        },
+        {
+          "fromUUID": "input-4",
+          "toUUID": "bridge-4",
+          "weight": 0.75,
+          "fromId": 4,
+          "toId": 195505456
+        },
+        {
+          "fromUUID": "bridge-4",
+          "toUUID": "aggregate",
+          "weight": 0.25,
+          "fromId": 195505456,
+          "toId": 176177151
+        },
+        {
+          "fromUUID": "input-5",
+          "toUUID": "bridge-5",
+          "weight": 1,
+          "fromId": 5,
+          "toId": 195505457
+        },
+        {
+          "fromUUID": "bridge-5",
+          "toUUID": "aggregate",
+          "weight": 0.5,
+          "fromId": 195505457,
+          "toId": 176177151
+        },
+        {
+          "fromUUID": "aggregate",
+          "toUUID": "output-0",
+          "weight": 1,
+          "fromId": 176177151,
+          "toId": -1
+        }
+      ]
+    },
+    "reloaded": null,
+    "probes": null,
+    "activationTolerance": null,
+    "beforeOutputs": null,
+    "afterOutputs": null
+  },
+  {
+    "name": "if_refusal",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/ParallelBridgeMergeOrdering.ts",
+    "source": "src/compact/ParallelBridgeMerge.ts",
+    "preparation": "Creature.fromJSON; exportJSONUnchecked",
+    "input": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "input": 12,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-1",
+          "squash": "IDENTITY",
+          "bias": 0.125
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-2",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-3",
+          "squash": "IDENTITY",
+          "bias": 0.375
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-4",
+          "squash": "IDENTITY",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-5",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-6",
+          "squash": "IDENTITY",
+          "bias": 0.125
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-7",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-8",
+          "squash": "IDENTITY",
+          "bias": 0.375
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-9",
+          "squash": "IDENTITY",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-10",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-11",
+          "squash": "IDENTITY",
+          "bias": 0.125
+        },
+        {
+          "type": "hidden",
+          "uuid": "aggregate",
+          "squash": "IF",
+          "bias": 0.5
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "bridge-0",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-0",
+          "toUUID": "aggregate",
+          "weight": 0.25,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "bridge-1",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-1",
+          "toUUID": "aggregate",
+          "weight": 0.5,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "bridge-2",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-2",
+          "toUUID": "aggregate",
+          "weight": 0.75,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "input-3",
+          "toUUID": "bridge-3",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-3",
+          "toUUID": "aggregate",
+          "weight": 1,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-4",
+          "toUUID": "bridge-4",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-4",
+          "toUUID": "aggregate",
+          "weight": 0.25,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-5",
+          "toUUID": "bridge-5",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-5",
+          "toUUID": "aggregate",
+          "weight": 0.5,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "input-6",
+          "toUUID": "bridge-6",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-6",
+          "toUUID": "aggregate",
+          "weight": 0.75,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-7",
+          "toUUID": "bridge-7",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-7",
+          "toUUID": "aggregate",
+          "weight": 1,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-8",
+          "toUUID": "bridge-8",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-8",
+          "toUUID": "aggregate",
+          "weight": 0.25,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "input-9",
+          "toUUID": "bridge-9",
+          "weight": 0.5
+        },
+        {
+          "fromUUID": "bridge-9",
+          "toUUID": "aggregate",
+          "weight": 0.5,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-10",
+          "toUUID": "bridge-10",
+          "weight": 0.75
+        },
+        {
+          "fromUUID": "bridge-10",
+          "toUUID": "aggregate",
+          "weight": 0.75,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-11",
+          "toUUID": "bridge-11",
+          "weight": 1
+        },
+        {
+          "fromUUID": "bridge-11",
+          "toUUID": "aggregate",
+          "weight": 1,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "aggregate",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ]
+    },
+    "before": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-1",
+          "bias": 0.125,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-2",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-3",
+          "bias": 0.375,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-4",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-5",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-6",
+          "bias": 0.125,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-7",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-8",
+          "bias": 0.375,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-9",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-10",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-11",
+          "bias": 0.125,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "aggregate",
+          "bias": 0.5,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-0"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-1",
+          "toUUID": "bridge-1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-2",
+          "toUUID": "bridge-2"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-3",
+          "toUUID": "bridge-3"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-4",
+          "toUUID": "bridge-4"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-5",
+          "toUUID": "bridge-5"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-6",
+          "toUUID": "bridge-6"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-7",
+          "toUUID": "bridge-7"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-8",
+          "toUUID": "bridge-8"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-9",
+          "toUUID": "bridge-9"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-10",
+          "toUUID": "bridge-10"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-11",
+          "toUUID": "bridge-11"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-0",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-1",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-2",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-3",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-4",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-5",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-6",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-7",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-8",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-9",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-10",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-11",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "aggregate",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 12,
+      "output": 1
+    },
+    "result": {
+      "removedNeurons": 0
+    },
+    "after": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-0",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "id": 195505452
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-1",
+          "bias": 0.125,
+          "squash": "IDENTITY",
+          "id": 195505453
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-2",
+          "bias": 0.25,
+          "squash": "IDENTITY",
+          "id": 195505454
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-3",
+          "bias": 0.375,
+          "squash": "IDENTITY",
+          "id": 195505455
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-4",
+          "bias": 0.5,
+          "squash": "IDENTITY",
+          "id": 195505456
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-5",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "id": 195505457
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-6",
+          "bias": 0.125,
+          "squash": "IDENTITY",
+          "id": 195505458
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-7",
+          "bias": 0.25,
+          "squash": "IDENTITY",
+          "id": 195505459
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-8",
+          "bias": 0.375,
+          "squash": "IDENTITY",
+          "id": 195505460
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-9",
+          "bias": 0.5,
+          "squash": "IDENTITY",
+          "id": 195505461
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-10",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "id": 1735701795
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-11",
+          "bias": 0.125,
+          "squash": "IDENTITY",
+          "id": 1735701796
+        },
+        {
+          "type": "hidden",
+          "uuid": "aggregate",
+          "bias": 0.5,
+          "squash": "IF",
+          "id": 176177151
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "id": -1
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-0",
+          "fromId": 0,
+          "toId": 195505452
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-1",
+          "toUUID": "bridge-1",
+          "fromId": 1,
+          "toId": 195505453
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-2",
+          "toUUID": "bridge-2",
+          "fromId": 2,
+          "toId": 195505454
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-3",
+          "toUUID": "bridge-3",
+          "fromId": 3,
+          "toId": 195505455
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-4",
+          "toUUID": "bridge-4",
+          "fromId": 4,
+          "toId": 195505456
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-5",
+          "toUUID": "bridge-5",
+          "fromId": 5,
+          "toId": 195505457
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-6",
+          "toUUID": "bridge-6",
+          "fromId": 6,
+          "toId": 195505458
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-7",
+          "toUUID": "bridge-7",
+          "fromId": 7,
+          "toId": 195505459
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-8",
+          "toUUID": "bridge-8",
+          "fromId": 8,
+          "toId": 195505460
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-9",
+          "toUUID": "bridge-9",
+          "fromId": 9,
+          "toId": 195505461
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-10",
+          "toUUID": "bridge-10",
+          "fromId": 10,
+          "toId": 1735701795
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-11",
+          "toUUID": "bridge-11",
+          "fromId": 11,
+          "toId": 1735701796
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-0",
+          "toUUID": "aggregate",
+          "type": "condition",
+          "fromId": 195505452,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-1",
+          "toUUID": "aggregate",
+          "type": "positive",
+          "fromId": 195505453,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-2",
+          "toUUID": "aggregate",
+          "type": "negative",
+          "fromId": 195505454,
+          "toId": 176177151
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-3",
+          "toUUID": "aggregate",
+          "type": "condition",
+          "fromId": 195505455,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-4",
+          "toUUID": "aggregate",
+          "type": "positive",
+          "fromId": 195505456,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-5",
+          "toUUID": "aggregate",
+          "type": "negative",
+          "fromId": 195505457,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-6",
+          "toUUID": "aggregate",
+          "type": "condition",
+          "fromId": 195505458,
+          "toId": 176177151
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-7",
+          "toUUID": "aggregate",
+          "type": "positive",
+          "fromId": 195505459,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-8",
+          "toUUID": "aggregate",
+          "type": "negative",
+          "fromId": 195505460,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-9",
+          "toUUID": "aggregate",
+          "type": "condition",
+          "fromId": 195505461,
+          "toId": 176177151
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-10",
+          "toUUID": "aggregate",
+          "type": "positive",
+          "fromId": 1735701795,
+          "toId": 176177151
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-11",
+          "toUUID": "aggregate",
+          "type": "negative",
+          "fromId": 1735701796,
+          "toId": 176177151
+        },
+        {
+          "weight": 1,
+          "fromUUID": "aggregate",
+          "toUUID": "output-0",
+          "fromId": 176177151,
+          "toId": -1
+        }
+      ],
+      "input": 12,
+      "output": 1
+    },
+    "reloaded": {
+      "semanticVersion": "4.0.0",
+      "forwardOnly": true,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "bridge-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-1",
+          "bias": 0.125,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-2",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-3",
+          "bias": 0.375,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-4",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-5",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-6",
+          "bias": 0.125,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-7",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-8",
+          "bias": 0.375,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-9",
+          "bias": 0.5,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-10",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "bridge-11",
+          "bias": 0.125,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "aggregate",
+          "bias": 0.5,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 0.5,
+          "fromUUID": "input-0",
+          "toUUID": "bridge-0"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-1",
+          "toUUID": "bridge-1"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-2",
+          "toUUID": "bridge-2"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-3",
+          "toUUID": "bridge-3"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-4",
+          "toUUID": "bridge-4"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-5",
+          "toUUID": "bridge-5"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-6",
+          "toUUID": "bridge-6"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-7",
+          "toUUID": "bridge-7"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-8",
+          "toUUID": "bridge-8"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "input-9",
+          "toUUID": "bridge-9"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "input-10",
+          "toUUID": "bridge-10"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-11",
+          "toUUID": "bridge-11"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-0",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-1",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-2",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-3",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-4",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-5",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-6",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-7",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 0.25,
+          "fromUUID": "bridge-8",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "bridge-9",
+          "toUUID": "aggregate",
+          "type": "condition"
+        },
+        {
+          "weight": 0.75,
+          "fromUUID": "bridge-10",
+          "toUUID": "aggregate",
+          "type": "positive"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "bridge-11",
+          "toUUID": "aggregate",
+          "type": "negative"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "aggregate",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 12,
+      "output": 1
+    },
+    "probes": [
+      [
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25
+      ],
+      [
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0
+      ],
+      [
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25
+      ],
+      [
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5
+      ],
+      [
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5
+      ],
+      [
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25
+      ],
+      [
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0
+      ],
+      [
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25
+      ],
+      [
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5
+      ],
+      [
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5
+      ],
+      [
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25
+      ],
+      [
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0
+      ],
+      [
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25
+      ],
+      [
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5
+      ],
+      [
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5
+      ],
+      [
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25
+      ],
+      [
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0
+      ],
+      [
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25
+      ],
+      [
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5
+      ],
+      [
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5
+      ],
+      [
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25
+      ],
+      [
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0
+      ],
+      [
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25
+      ],
+      [
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5
+      ],
+      [
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5,
+        -0.25,
+        0,
+        0.25,
+        0.5,
+        -0.5
+      ]
+    ],
+    "activationTolerance": 0,
+    "beforeOutputs": [
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ]
+    ],
+    "afterOutputs": [
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.65625
+      ],
+      [
+        0.890625
+      ],
+      [
+        1.359375
+      ],
+      [
+        0.890625
+      ],
+      [
+        0.890625
+      ]
+    ]
+  }
+]
