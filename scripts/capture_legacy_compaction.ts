@@ -7,10 +7,30 @@ import {
 const [checkout, destination, mode = "creature"] = Deno.args;
 if (!checkout || !destination) {
   throw new Error(
-    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json> [creature|helpers|variants|bridges|bridge-cases|metadata]",
+    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json> [creature|helpers|variants|bridges|bridge-cases|metadata|tags|constants]",
   );
 }
 const root = await legacyCompactionSource(checkout);
+if (mode === "constants") {
+  const { captureLegacyConstants } = await import(
+    "./legacy_compaction_constants.ts"
+  );
+  const captures = await captureLegacyConstants(root, revision);
+  await Deno.writeTextFile(
+    destination,
+    JSON.stringify(captures, null, 2) + "\n",
+  );
+  Deno.exit(0);
+}
+if (mode === "tags") {
+  const { captureLegacyTags } = await import("./legacy_compaction_tags.ts");
+  const captures = await captureLegacyTags(root, revision);
+  await Deno.writeTextFile(
+    destination,
+    JSON.stringify(captures, null, 2) + "\n",
+  );
+  Deno.exit(0);
+}
 if (mode === "bridges") {
   const { captureLegacyBridges } = await import(
     "./legacy_compaction_bridges.ts"
