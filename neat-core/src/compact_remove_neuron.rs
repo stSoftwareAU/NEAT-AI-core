@@ -41,7 +41,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::creature::{CreatureExport, SynapseExport, validate_creature_width};
+use crate::creature::{CreatureExport, SynapseExport, parse_squash_name, validate_creature_width};
+use crate::squash::SquashType;
 
 /// Why [`remove_neuron_by_bias_fold`] refused its arguments.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,16 +110,19 @@ impl std::fmt::Display for RemoveNeuronError {
 
 impl std::error::Error for RemoveNeuronError {}
 
-/// The squashes whose TypeScript activation defines `propagate`: `removeNeuron`
-/// sends a target with any of them down the constant branch. The set is the
-/// six registered at the frozen revision (IF, MINIMUM, MAXIMUM, MEAN, HYPOT,
-/// HYPOTv2) and `neat-core/tests/golden/compact_legacy_metadata.json` records
-/// TypeScript taking that branch for each.
+/// Whether `removeNeuron` sends a target with this squash down the constant
+/// branch: it does for every squash whose TypeScript activation defines
+/// `propagate`. Those are exactly the aggregates, so the set is read from
+/// [`SquashType::is_aggregate`], the single home of that rule (Issue #446),
+/// rather than restated here: a seventh aggregate is refused without an edit.
+/// `neat-core/tests/golden/compact_legacy_metadata.json` records TypeScript
+/// taking that branch for each of the six at the frozen revision, and
+/// `neat-core/tests/compact_remove_neuron.rs` sweeps every aggregate. A name
+/// core cannot parse is not an aggregate.
 fn needs_constant_branch(squash: Option<&str>) -> bool {
-    matches!(
-        squash,
-        Some("IF" | "MINIMUM" | "MAXIMUM" | "MEAN" | "HYPOT" | "HYPOTv2")
-    )
+    squash
+        .and_then(|name| parse_squash_name(name).ok())
+        .is_some_and(SquashType::is_aggregate)
 }
 
 /// Remove `uuid`, folding `activation` into the biases of its targets.

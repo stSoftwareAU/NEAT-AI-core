@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 
 use neat_core::{
-    CreatureExport, MemeticExport, MemeticWeights, NeuronExport, RemoveNeuronError, SynapseExport,
-    compile_creature, remove_neuron_by_bias_fold,
+    CreatureExport, MemeticExport, MemeticWeights, NeuronExport, RemoveNeuronError, SquashType,
+    SynapseExport, compile_creature, remove_neuron_by_bias_fold, squash_name_from,
 };
 use serde_json::Value;
 
@@ -425,6 +425,64 @@ fn every_propagate_squash_target_is_refused_as_the_unported_constant_branch() {
             "{squash}"
         );
     }
+}
+
+/// The refusal follows core's aggregate set, not a list kept beside it: every
+/// `SquashType` for which `is_aggregate()` holds is refused as a target, and
+/// every other one folds. A seventh aggregate added to `squash.rs` therefore
+/// fails here, or is refused, instead of being folded into silently.
+#[test]
+fn every_aggregate_squash_target_is_refused_and_every_other_folds() {
+    let (mut refused, mut folded) = (0, 0);
+    for code in 0u8..=u8::MAX {
+        let ty = SquashType::from(code);
+        // `From<u8>` maps every unknown code to Identity, so a code that does
+        // not round-trip is an alias of one already swept.
+        if ty as u8 != code {
+            continue;
+        }
+        let base = creature(
+            2,
+            vec![
+                neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+                neuron("output", "output-0", squash_name_from(ty), 0.25),
+            ],
+            vec![
+                edge("input-0", "hidden-0", 1.0),
+                edge("hidden-0", "output-0", 2.0),
+                edge("input-1", "output-0", 1.0),
+            ],
+        );
+        let result = remove_neuron_by_bias_fold(&base, "hidden-0", 1.5, never_draw);
+        if ty.is_aggregate() {
+            assert_eq!(
+                result,
+                Err(RemoveNeuronError::ConstantBranchNotPorted {
+                    target: "output-0".to_string()
+                }),
+                "{ty:?} is an aggregate and must be refused"
+            );
+            refused += 1;
+        } else {
+            let removed = result
+                .unwrap()
+                .unwrap_or_else(|| panic!("{ty:?} did not fold"));
+            let target = removed
+                .neurons
+                .iter()
+                .find(|n| n.uuid == "output-0")
+                .unwrap();
+            assert_eq!(target.bias, 3.25, "{ty:?}: 0.25 + 2.0 * 1.5");
+            folded += 1;
+        }
+    }
+    // The six aggregates SquashType::is_aggregate names, and a guard against a
+    // vacuous sweep that reached none of the others.
+    assert_eq!(refused, 6, "the sweep did not reach six aggregates");
+    assert!(
+        folded > 20,
+        "the sweep reached only {folded} point-wise squashes"
+    );
 }
 
 /// The positive control: a target without `propagate` folds into its bias.
