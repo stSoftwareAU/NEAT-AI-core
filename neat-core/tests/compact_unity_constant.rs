@@ -436,11 +436,19 @@ fn reusing_a_tagged_slot_is_refused_and_the_capture_shows_why() {
 
 #[test]
 fn a_legacy_slot_zero_id_is_refused_like_a_tagged_one() {
+    // `legacy-k` holds slot 0 by its id -1000 alone. `hidden-9` sits between the
+    // constants and the removed `hidden-0`, so the insertion point (index 1) names
+    // `hidden-9`, not `hidden-0`. That is the defective shape of
+    // `unity_reuse_tagged_slot`, where the stale index rewires through another
+    // neuron, so the port refuses it. A removed neuron directly after the constants
+    // takes the sound reuse path instead.
     let edges = vec![
         edge("input-0", "hidden-0", 1.0),
         edge("hidden-0", "output-0", 2.0),
         edge("input-1", "output-0", 1.0),
         edge("legacy-k", "output-0", 0.5),
+        edge("input-1", "hidden-9", 1.0),
+        edge("hidden-9", "output-0", 0.5),
     ];
     let legacy = NeuronExport {
         id: Some(-1000),
@@ -450,6 +458,7 @@ fn a_legacy_slot_zero_id_is_refused_like_a_tagged_one() {
         2,
         vec![
             legacy,
+            neuron("hidden", "hidden-9", Some("IDENTITY"), 0.0),
             neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
             neuron("output", "output-0", Some("IF"), 0.25),
         ],
@@ -475,6 +484,7 @@ fn a_legacy_slot_zero_id_is_refused_like_a_tagged_one() {
         2,
         vec![
             neuron("constant", "legacy-k", None, 1.0),
+            neuron("hidden", "hidden-9", Some("IDENTITY"), 0.0),
             neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
             neuron("output", "output-0", Some("IF"), 0.25),
         ],
@@ -497,6 +507,364 @@ fn a_legacy_slot_zero_id_is_refused_like_a_tagged_one() {
             slot: 0,
         })
     );
+}
+
+/// The edges of the held-slot fixtures: `hidden-0` (IDENTITY) feeds the IF target
+/// `output-0` at 2.0, and the constant `k0` feeds the same target at 0.25.
+fn held_slot_zero_edges() -> Vec<SynapseExport> {
+    vec![
+        edge("input-0", "hidden-0", 1.0),
+        edge("hidden-0", "output-0", 2.0),
+        edge("input-1", "output-0", 1.0),
+        edge("k0", "output-0", 0.25),
+    ]
+}
+
+/// `hidden-0` is the first neuron after the leading constants, so the insertion
+/// point names it. `holder` is the constant `k0` that holds slot 0 ahead of it.
+fn held_slot_zero_fixture(holder: NeuronExport) -> CreatureExport {
+    creature(
+        2,
+        vec![
+            holder,
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        held_slot_zero_edges(),
+    )
+}
+
+fn slot_zero_held_by_k0() -> [UnitySlot; 1] {
+    [UnitySlot {
+        uuid: "k0".to_string(),
+        slot: 0,
+    }]
+}
+
+fn survivor_in_slot_one() -> Option<UnitySlot> {
+    Some(UnitySlot {
+        uuid: "unity-constant-0".to_string(),
+        slot: 1,
+    })
+}
+
+/// The sound reuse, checked against its derivation. TypeScript reaches `k0` through
+/// the stale index and sets its bias to 1; the new constant takes slot 1 right after
+/// `k0`; `k0` keeps its own edge; and the new constant feeds the IF target at
+/// 2.0 * 1.5 = 3.0, the role it had. The port mints the survivor once.
+fn assert_sound_reuse(removal: &NeuronRemoval, mints: u64) {
+    assert_eq!(mints, 1, "the port mints the survivor only");
+    assert_eq!(removal.unity_constant, survivor_in_slot_one());
+    let uuids: Vec<&str> = removal
+        .creature
+        .neurons
+        .iter()
+        .map(|n| n.uuid.as_str())
+        .collect();
+    assert_eq!(uuids, ["k0", "unity-constant-0", "output-0"]);
+    assert_eq!(
+        removal.creature.neurons[0].bias.to_bits(),
+        1.0_f64.to_bits(),
+        "k0's bias becomes 1.0"
+    );
+    assert!(
+        removal
+            .creature
+            .synapses
+            .contains(&edge("k0", "output-0", 0.25)),
+        "k0 keeps its own edge"
+    );
+    assert!(
+        removal
+            .creature
+            .synapses
+            .contains(&edge("unity-constant-0", "output-0", 3.0)),
+        "the survivor feeds the IF target at 2.0 * 1.5"
+    );
+}
+
+#[test]
+fn a_tagged_slot_zero_constant_ahead_of_the_removed_neuron_is_reused_as_slot_one() {
+    // `k0` carries bias 0.7, so the reset to 1.0 is visible.
+    let fixture = held_slot_zero_fixture(neuron("constant", "k0", None, 0.7));
+    let mints = Cell::new(0_u64);
+    let removal = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slot_zero_held_by_k0(),
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    )
+    .expect("the sound reuse is accepted")
+    .expect("the removal is applied");
+    assert_sound_reuse(&removal, mints.get());
+}
+
+#[test]
+fn a_legacy_slot_zero_id_ahead_of_the_removed_neuron_is_reused_as_slot_one() {
+    let legacy = NeuronExport {
+        id: Some(-1000),
+        ..neuron("constant", "k0", None, 0.7)
+    };
+    let fixture = held_slot_zero_fixture(legacy);
+    let mints = Cell::new(0_u64);
+    let removal = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &[],
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    )
+    .expect("the sound reuse is accepted")
+    .expect("the removal is applied");
+    assert_sound_reuse(&removal, mints.get());
+}
+
+#[test]
+fn a_held_slot_zero_behind_the_removed_neuron_is_refused() {
+    // `k0` follows `hidden-0`, so it is not one of the leading constants. TypeScript
+    // would merge the temporary constant into `k0`, and the port refuses that shape.
+    let behind = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("constant", "k0", None, 0.7),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        held_slot_zero_edges(),
+    );
+    let refused = remove_neuron(
+        &behind,
+        "hidden-0",
+        1.5,
+        &slot_zero_held_by_k0(),
+        fresh_uuid,
+        never_draw,
+    );
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k0".to_string(),
+        })
+    );
+
+    // Control: the same constant moved ahead of `hidden-0` takes the sound reuse.
+    let ahead = held_slot_zero_fixture(neuron("constant", "k0", None, 0.7));
+    let accepted = remove_neuron(
+        &ahead,
+        "hidden-0",
+        1.5,
+        &slot_zero_held_by_k0(),
+        fresh_uuid,
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(accepted.unity_constant, survivor_in_slot_one());
+}
+
+/// Two constants lead the list, ahead of `hidden-0`: `k0` and `second`. Both feed
+/// the IF target, so TypeScript's dedupe loop would have a synapse to re-source.
+fn two_leading_constants_fixture(second: NeuronExport) -> CreatureExport {
+    let mut edges = held_slot_zero_edges();
+    edges.push(edge("k2", "output-0", 0.125));
+    creature(
+        2,
+        vec![
+            neuron("constant", "k0", None, 0.7),
+            second,
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        edges,
+    )
+}
+
+#[test]
+fn a_second_tagged_slot_zero_constant_is_refused_and_named() {
+    // TypeScript meets `k0` first and `k2` second, re-sources `k2`'s synapses onto
+    // `k0`, removes `k2` and never takes slot 1. The port does not merge, so it
+    // refuses before minting anything.
+    let fixture = two_leading_constants_fixture(neuron("constant", "k2", None, -0.2));
+    let slots = |second: u8| {
+        [
+            UnitySlot {
+                uuid: "k0".to_string(),
+                slot: 0,
+            },
+            UnitySlot {
+                uuid: "k2".to_string(),
+                slot: second,
+            },
+        ]
+    };
+    let mints = Cell::new(0_u64);
+    let refused = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slots(0),
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    );
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k2".to_string(),
+        })
+    );
+    assert_eq!(mints.get(), 0, "a refusal mints no UUID");
+
+    // Control: the same creature with `k2` tagged slot 2 holds one slot-0 constant
+    // only, so the sound reuse runs and `k2` is left alone.
+    let accepted = remove_neuron(&fixture, "hidden-0", 1.5, &slots(2), fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.unity_constant, survivor_in_slot_one());
+    assert!(accepted.creature.neurons.iter().any(|n| n.uuid == "k2"));
+}
+
+#[test]
+fn a_legacy_slot_zero_id_followed_by_a_tagged_slot_zero_constant_is_refused() {
+    let legacy = NeuronExport {
+        id: Some(-1000),
+        ..neuron("constant", "k0", None, 0.7)
+    };
+    let mut fixture = two_leading_constants_fixture(neuron("constant", "k2", None, -0.2));
+    fixture.neurons[0] = legacy;
+    let slot_zero = |slot: u8| {
+        [UnitySlot {
+            uuid: "k2".to_string(),
+            slot,
+        }]
+    };
+    let refused = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slot_zero(0),
+        fresh_uuid,
+        never_draw,
+    );
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k2".to_string(),
+        })
+    );
+
+    // Control: `k2` tagged slot 2 leaves the legacy-id constant as the only holder.
+    let accepted = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slot_zero(2),
+        fresh_uuid,
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(accepted.unity_constant, survivor_in_slot_one());
+}
+
+/// `k0` holds slot 0 ahead of `hidden-0`, and `holder` sits between them, so the
+/// sound path runs unless `holder` also holds slot 1.
+fn slot_one_fixture(holder: NeuronExport) -> CreatureExport {
+    let mut edges = held_slot_zero_edges();
+    edges.push(edge("k1", "output-0", 0.25));
+    creature(
+        2,
+        vec![
+            neuron("constant", "k0", None, 0.7),
+            holder,
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        edges,
+    )
+}
+
+#[test]
+fn a_slot_one_tag_on_a_constant_blocks_the_slot_zero_reuse_and_names_it() {
+    let fixture = slot_one_fixture(neuron("constant", "k1", None, -0.2));
+    let slots = [
+        UnitySlot {
+            uuid: "k0".to_string(),
+            slot: 0,
+        },
+        UnitySlot {
+            uuid: "k1".to_string(),
+            slot: 1,
+        },
+    ];
+    let refused = remove_neuron(&fixture, "hidden-0", 1.5, &slots, fresh_uuid, never_draw);
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k1".to_string(),
+        })
+    );
+
+    // Control: without the slot-1 tag `k1` holds nothing, and the sound reuse runs.
+    let accepted = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slots[..1],
+        fresh_uuid,
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(accepted.unity_constant, survivor_in_slot_one());
+}
+
+#[test]
+fn a_legacy_slot_one_id_on_a_constant_blocks_the_slot_zero_reuse_and_names_it() {
+    let legacy = NeuronExport {
+        id: Some(-1001),
+        ..neuron("constant", "k1", None, -0.2)
+    };
+    let fixture = slot_one_fixture(legacy);
+    let refused = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slot_zero_held_by_k0(),
+        fresh_uuid,
+        never_draw,
+    );
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k1".to_string(),
+        })
+    );
+
+    // Control: the same constant without the legacy id holds no slot.
+    let untagged = slot_one_fixture(neuron("constant", "k1", None, -0.2));
+    let accepted = remove_neuron(
+        &untagged,
+        "hidden-0",
+        1.5,
+        &slot_zero_held_by_k0(),
+        fresh_uuid,
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(accepted.unity_constant, survivor_in_slot_one());
 }
 
 #[test]
@@ -1278,4 +1646,232 @@ fn the_new_constant_lands_right_after_an_untagged_constant() {
     assert_eq!(removal.creature.neurons[first + 1].uuid, "unity-constant-0");
     assert_eq!(removal.creature.neurons[first + 1].neuron_type, "constant");
     assert_same_outputs_on_grid(&before, &removal.creature);
+}
+
+/// `hidden-0` (IDENTITY, bias 0) feeds `output-0` at `outward_weight` with the
+/// `condition` role. `output-0` carries `squash` and bias 0.25, and `input-0` also
+/// feeds it at 0.5. Once `hidden-0` is gone `output-0` still has two inbound
+/// synapses, so the bias fold takes no reconnect draw.
+fn aggregate_target_fixture(squash: &str, outward_weight: f64) -> CreatureExport {
+    creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some(squash), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("input-0", "output-0", 0.5),
+            edge("input-1", "output-0", 1.0),
+            synapse("hidden-0", "output-0", outward_weight, Some("condition")),
+        ],
+    )
+}
+
+#[test]
+fn a_minimum_or_hypotv2_target_takes_the_constant_branch() {
+    // The constant's edge into output-0 has weight 2.0 * 1.5 = 3.0. Both factors
+    // are exact in f64, so the product is exactly 3.0, and the edge keeps the
+    // outward `condition` role.
+    for squash in ["MINIMUM", "HYPOTv2"] {
+        let mints = Cell::new(0_u64);
+        let removal = remove_neuron(
+            &aggregate_target_fixture(squash, 2.0),
+            "hidden-0",
+            1.5,
+            &[],
+            || {
+                mints.set(mints.get() + 1);
+                fresh_uuid()
+            },
+            never_draw,
+        )
+        .unwrap_or_else(|error| panic!("{squash}: refused with {error}"))
+        .unwrap_or_else(|| panic!("{squash}: the removal was not applied"));
+
+        assert_eq!(
+            mints.get(),
+            1,
+            "{squash}: the constant branch mints one constant"
+        );
+        assert_eq!(
+            removal.unity_constant,
+            Some(UnitySlot {
+                uuid: "unity-constant-0".to_string(),
+                slot: 0,
+            }),
+            "{squash}: unity constant"
+        );
+        assert!(
+            removal
+                .creature
+                .neurons
+                .iter()
+                .all(|n| n.uuid != "hidden-0"),
+            "{squash}: hidden-0 is removed"
+        );
+        let constant_edges: Vec<&SynapseExport> = removal
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.from_uuid == "unity-constant-0")
+            .collect();
+        assert_eq!(constant_edges.len(), 1, "{squash}: one constant edge");
+        let constant_edge = constant_edges[0];
+        assert_eq!(constant_edge.to_uuid, "output-0", "{squash}: target");
+        assert_eq!(
+            constant_edge.weight.to_bits(),
+            3.0_f64.to_bits(),
+            "{squash}: weight 2.0 * 1.5"
+        );
+        assert_eq!(
+            constant_edge.synapse_type.as_deref(),
+            Some("condition"),
+            "{squash}: role preserved"
+        );
+    }
+}
+
+#[test]
+fn an_identity_target_on_the_same_fixture_takes_the_bias_fold() {
+    // Control: with IDENTITY the target needs no constant. The fold adds
+    // weight * activation = 2.0 * 1.5 = 3.0 to the bias 0.25, giving 3.25.
+    let mints = Cell::new(0_u64);
+    let removal = remove_neuron(
+        &aggregate_target_fixture("IDENTITY", 2.0),
+        "hidden-0",
+        1.5,
+        &[],
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(mints.get(), 0, "the bias fold mints no constant");
+    assert_eq!(removal.unity_constant, None);
+    assert!(
+        removal
+            .creature
+            .neurons
+            .iter()
+            .all(|n| n.uuid != "unity-constant-0"),
+        "no constant neuron is added"
+    );
+    assert!(
+        removal
+            .creature
+            .synapses
+            .iter()
+            .all(|s| s.from_uuid != "unity-constant-0"),
+        "no constant synapse is added"
+    );
+    let output = removal
+        .creature
+        .neurons
+        .iter()
+        .find(|n| n.uuid == "output-0")
+        .unwrap();
+    assert_eq!(
+        output.bias.to_bits(),
+        3.25_f64.to_bits(),
+        "0.25 + 2.0 * 1.5"
+    );
+}
+
+#[test]
+fn a_non_finite_activation_through_the_constant_branch_is_refused_naming_the_target() {
+    // The constant's weight into output-0 is 2.0 * activation. NaN gives NaN,
+    // +inf gives +inf and -inf gives -inf, and none of those is finite. The
+    // refusal names output-0 and takes no UUID.
+    let fixture = aggregate_target_fixture("IF", 2.0);
+    for activation in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mints = Cell::new(0_u64);
+        let refused = remove_neuron(
+            &fixture,
+            "hidden-0",
+            activation,
+            &[],
+            || {
+                mints.set(mints.get() + 1);
+                fresh_uuid()
+            },
+            never_draw,
+        );
+        assert_eq!(
+            refused,
+            Err(NeuronRemovalError::NonFiniteConstantWeight {
+                target: "output-0".to_string(),
+            }),
+            "activation {activation}"
+        );
+        assert_eq!(
+            mints.get(),
+            0,
+            "activation {activation}: a refused constant takes no UUID"
+        );
+    }
+
+    // Control: a finite activation on the same fixture is accepted.
+    let accepted = remove_neuron(&fixture, "hidden-0", 1.5, &[], fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        accepted.unity_constant,
+        Some(UnitySlot {
+            uuid: "unity-constant-0".to_string(),
+            slot: 0,
+        })
+    );
+}
+
+#[test]
+fn a_zero_outward_weight_with_an_infinite_activation_is_refused() {
+    // The constant's weight is 0.0 * activation. IEEE 754 makes zero times an
+    // infinity NaN, not zero, so for +inf and -inf the weight is not finite and
+    // the branch refuses, even though the synapse carries no signal.
+    let fixture = aggregate_target_fixture("IF", 0.0);
+    for activation in [f64::INFINITY, f64::NEG_INFINITY] {
+        let mints = Cell::new(0_u64);
+        let refused = remove_neuron(
+            &fixture,
+            "hidden-0",
+            activation,
+            &[],
+            || {
+                mints.set(mints.get() + 1);
+                fresh_uuid()
+            },
+            never_draw,
+        );
+        assert_eq!(
+            refused,
+            Err(NeuronRemovalError::NonFiniteConstantWeight {
+                target: "output-0".to_string(),
+            }),
+            "activation {activation}"
+        );
+        assert_eq!(
+            mints.get(),
+            0,
+            "activation {activation}: a refused constant takes no UUID"
+        );
+    }
+
+    // Control: a finite activation gives 0.0 * 1.5 = 0.0, which is finite, so the
+    // constant is accepted with a +0.0 edge weight.
+    let accepted = remove_neuron(&fixture, "hidden-0", 1.5, &[], fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
+    let constant_edge = accepted
+        .creature
+        .synapses
+        .iter()
+        .find(|s| s.from_uuid == "unity-constant-0")
+        .expect("the accepted constant feeds output-0");
+    assert_eq!(constant_edge.to_uuid, "output-0");
+    assert_eq!(constant_edge.weight.to_bits(), 0.0_f64.to_bits());
 }

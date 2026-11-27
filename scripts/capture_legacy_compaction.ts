@@ -7,7 +7,7 @@ import {
 const [checkout, destination, mode = "creature"] = Deno.args;
 if (!checkout || !destination) {
   throw new Error(
-    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json> [creature|helpers|variants|bridges|bridge-cases|metadata|tags|constants|behaviour|forest|simplify|unity]",
+    "Usage: capture_legacy_compaction.ts <NEAT-AI checkout> <output.json> [creature|helpers|variants|bridges|bridge-cases|metadata|tags|constants|behaviour|forest|simplify|unity|unused]",
   );
 }
 const root = await legacyCompactionSource(checkout);
@@ -113,6 +113,17 @@ if (mode === "unity") {
     "./legacy_compaction_unity.ts"
   );
   const captures = await captureLegacyUnity(root, revision);
+  await Deno.writeTextFile(
+    destination,
+    JSON.stringify(captures, null, 2) + "\n",
+  );
+  Deno.exit(0);
+}
+if (mode === "unused") {
+  const { captureLegacyUnused } = await import(
+    "./legacy_compaction_unused.ts"
+  );
+  const captures = await captureLegacyUnused(root, revision);
   await Deno.writeTextFile(
     destination,
     JSON.stringify(captures, null, 2) + "\n",

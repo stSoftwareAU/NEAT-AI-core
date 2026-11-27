@@ -30,11 +30,22 @@ squash, and the tag `compact-unity-slot` = `"0"`. Every outward synapse of the
 removed neuron is re-sourced from it with weight `w * activation` and the same
 role. No target bias changes, and no zero-weight reconnect is added.
 
-**(b) Reuse path defect.** With an existing constant tagged slot `"0"`, the
-frozen code returns the constant it has just removed, with a stale index, so
-removal rewires through another neuron. `unity_reuse_tagged_slot` ends with both
-constants gone and `hidden-0` carrying the condition weight 4.5 (the condition
-weight 3 times the activation 1.5). The native port refuses this path.
+**(b) Reuse path.** With an existing constant tagged slot `"0"`, the frozen code
+returns the constant it has just removed, with a stale index, so removal rewires
+through whatever neuron sits at that index. `unity_reuse_tagged_slot` ends with
+both constants gone and `hidden-0` carrying the condition weight 4.5 (the
+condition weight 3 times the activation 1.5). The reuse is sound only when that
+index lands on the removed neuron, which needs the holder to lead the constants
+and the removed neuron to sit directly after them. The second call of
+`CompactConstant` and `CompactKeepOrder` has that shape. Its replay is captured
+as `compact_constant_second` and `compact_keep_order_second` in
+`compact_legacy_unused.json`, and the native port takes it: the holder's bias is
+set to 1 as TypeScript does, the survivor takes slot 1, and only the survivor is
+minted. The defective shape, `unity_reuse_tagged_slot`, stays refused.
+A second constant that also holds slot 0 stays refused too: TypeScript's
+dedupe loop re-sources it onto the first holder, removes it and never takes
+slot 1, a merge the port does not do. This is read from the frozen source, not
+captured.
 
 **(c) Overflow.** TypeScript throws `weight must be a number` after it has
 inserted the constant. The `after` block keeps that constant with no outward
