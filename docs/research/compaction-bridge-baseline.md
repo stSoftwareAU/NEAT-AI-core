@@ -45,6 +45,10 @@ exact equality. Neither is widened. These are frozen observations and capture
 integrity checks, **not native bridge rewrite or activation parity**. The raw
 recurrent case makes no claim about recurrent activation equivalence.
 
+`merge_parallel_bridges` (Issue #777) now replays the `mergeParallelBridges`
+helper captures natively, in `neat-core/tests/compact_parallel_bridge.rs`; the
+`compactCreature` whole-pipeline captures stay TypeScript-only.
+
 ## Verification and reproduction
 
 The integrity test failed before the new fixture existed. All four raw inputs

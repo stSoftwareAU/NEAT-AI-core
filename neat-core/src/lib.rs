@@ -19,6 +19,7 @@
 // Core computation modules
 pub mod accumulate;
 pub mod batch_scoring;
+pub mod compact_parallel_bridge;
 pub mod compact_zero_weight;
 pub mod creature;
 pub mod creature_validate;
@@ -111,6 +112,10 @@ pub use if_graft::{
     graft_if_node, graft_if_nodes, graft_if_tree, graft_relay_node, validate_creature_topology,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
+// Issue #777 — exact parallel-bridge merging from the safe compact pass.
+pub use compact_parallel_bridge::{
+    ParallelBridgeMerge, ParallelBridgeMergeError, merge_parallel_bridges,
+};
 // Issue #777 — exact zero-weight synapse pruning from the safe compact pass.
 pub use compact_zero_weight::{ZeroWeightPrune, prune_zero_weight_synapses};
 // Issue #589 — the canonical fixed-point cleanup every prune operation reuses.
