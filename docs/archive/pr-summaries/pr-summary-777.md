@@ -108,8 +108,20 @@ Captures replayed:
   `compact_legacy_tags` suites passed.
 - `cargo test --doc merge_parallel_bridges` passed.
 - `cargo clippy -p neat-core --lib --tests -- -D warnings` passed.
-- `./quality.sh` passed on the final code, after a codespell fix to
-  "unparsable". The only commit after that run is this summary.
+- `./quality.sh` passed on the final head, including the `bump-deps.sh`
+  commit and the `wasm-bindgen` repin described below. The only commit after
+  that run is this summary.
+
+The branch also carries the worker's `bump-deps.sh` commit. It moved the
+`wasm-bindgen` crates to 0.2.130 and `js-sys`/`web-sys` to 0.3.107 in the root
+`Cargo.lock`. `.github/workflows/wasm-bundle.yml` still pins the wasm-bindgen
+CLI at 0.2.128, so the bats test "the pinned wasm-bindgen CLI version already
+agrees with Cargo.lock" in `tests/scripts/wasm_bundle_wasm64_dual_ship.bats`
+went red. A follow-up commit moves only those six packages back to their
+pre-bump versions with `cargo update --precise`. Every other bumped crate
+stays bumped. Moving the CLI pin to 0.2.130 instead would mean pinning a new
+release binary hash, which this compaction PR leaves to the scheduled
+dependency upgrade.
 
 Not checked:
 
