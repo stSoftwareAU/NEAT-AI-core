@@ -2,37 +2,28 @@
 
 `neat-core/tests/golden/compact_legacy_unused.json` freezes what `compactUnused`
 chooses at NEAT-AI revision `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`: the
-neuron it removes, the removal branch, and every RNG draw it makes. It holds 9
-cases, taken from `test/compact/NewbornGrace.ts`, `UnusedClipped.ts`,
-`Cascade.ts` and `CompactUnusedOrphanCleanup.ts`.
-
-`scripts/legacy_compaction_unused.ts` calls the frozen `compactUnused` and does
-not copy the algorithm. The TypeScript stays in NEAT-AI, and no caller is
-switched by this change.
+removed neuron, the removal branch and every RNG draw. It holds 9 cases from
+`test/compact/`. `scripts/legacy_compaction_unused.ts` calls the frozen
+`compactUnused` and does not copy the algorithm. No caller is switched.
 
 ## What is captured
 
-Per case: `traced` (the trace passed in), `aligned` (the neurons and synapses
-`compactUnused` iterates), `runtimeGraphMatchesAligned` (with `runtimeGraph`
-recorded only when the order differs), `graceRemaining`, `plankConstant`,
-`shuffled` (after `CreatureUtil.shuffle`), `removalDraws` (draws made after the
-shuffle returned), `minted` (`crypto.randomUUID` calls), `result`, and
-`chosenUUID` (read from the `unused` tag, not computed).
+Per case: `traced`, `aligned` (what `compactUnused` iterates), `graceRemaining`,
+`plankConstant`, `shuffled`, `removalDraws` (draws after the shuffle), `minted`,
+`result`, and `chosenUUID` (read from the `unused` tag). `runtimeGraph` is
+recorded only when its order differs from `aligned`.
 
 ## Deviations
 
-- Data for the three data-driven test files comes from `createSeededRng(seed)`
-  instead of `Math.random()`. Seeds: 778011 to 778014.
-- The global RNG that the recorder wraps is seeded in every case, so the shuffle
-  is reproducible too. The original tests leave it unseeded.
-- Each data case records the first attempt that compacts. The original
-  orphan-cleanup test runs all 20 attempts, so the capture covers only the first.
-
-Nothing else differs from the frozen tests.
+- Data comes from `createSeededRng(seed)`, not `Math.random()` (seeds 778011 to 778014).
+- The recorded global RNG is seeded in every case, so the shuffle is reproducible
+  too; the originals leave it unseeded.
+- Each data case records its first compacting attempt; all four compact on
+  attempt 1. The orphan-cleanup test runs all 20 attempts, the capture stops at one.
 
 ## Captured cases
 
-| Case | Seed | Chosen | Removal branch | Draws |
+| Case | Seed | Chosen | Branch | Draws |
 | --- | --- | --- | --- | --- |
 | `newborn_no_grace` | 778001 | `hidden-quiet` | bias fold | 0 |
 | `newborn_grace_1` | 778002 | `hidden-loud` | bias fold | 0 |
@@ -46,28 +37,19 @@ Nothing else differs from the frozen tests.
 
 ## Findings
 
-- **Branch.** All nine removals took the bias-fold branch. Every outward target
-  is IDENTITY, which has no `propagate`, and `minted` is 0 in every case, so no
-  constant neuron was created. The constant branch is not exercised here.
-- **Draws.** Each data case draws once, for the target with a single inward
-  connection. The draw picks the zero-weight reconnect source as
-  `floor(draw * input)`: `input-2` (unused_clipped), `input-1` (cascade),
-  `input-0` (both orphan cases). The NewbornGrace cases draw nothing, because
-  every target keeps two or more inward connections.
-- **Reconnect kept.** The drawn weight-0 synapse stays in `result.after`, for
-  example `input-2 -> output-0` with weight 0 in `unused_clipped`.
-- **Bias fold.** In `newborn_grace_1`, `output-0` bias 0 becomes 0.45
-  (0.9 × 0.5). In `unused_clipped`, `output-0` bias 1 becomes 1.6 and
-  `output-1` bias 0 becomes 0.7.
-- **Grace.** The `newborn_grace_2` survivor keeps `newborn-grace` = "1". The
-  `newborn_grace_1` survivor has its tag removed (`tags` is `[]`).
-- **Orphans.** Removing `hidden-B` also drops `hidden-A`, which is left with no
-  outward connection, so the result keeps only `hidden-C` and `output-0`.
-- **Order.** `runtimeGraphMatchesAligned` is true in all nine cases, so
-  `runtimeGraph` is null throughout.
-- **Attempts.** All four data cases compact on attempt 1.
-- **Squash.** The CLIPPED fixture neurons are recorded as `HARD_TANH` in both
-  `traced` and `aligned`.
+- **Branch.** Every outward target is IDENTITY, with no `propagate`, and `minted`
+  is 0 in all nine cases. The constant branch is not exercised.
+- **Draws.** Each data case draws once, for the target with one inward edge. The
+  draw picks the zero-weight reconnect source as `floor(draw * input)`:
+  `input-2`, `input-1`, `input-0`, `input-0`. The NewbornGrace cases draw nothing.
+- **Reconnect kept.** The weight-0 synapse stays in `result.after`, e.g.
+  `input-2 -> output-0` in `unused_clipped`.
+- **Bias fold.** `newborn_grace_1`: `output-0` bias 0 becomes 0.45 (0.9 × 0.5).
+  `unused_clipped`: `output-0` 1 becomes 1.6, `output-1` 0 becomes 0.7.
+- **Grace.** The `newborn_grace_2` survivor keeps `newborn-grace` = "1"; the
+  `newborn_grace_1` survivor's tag is removed.
+- **Orphans.** Removing `hidden-B` also drops `hidden-A`, left with no outward edge.
+- **Order and squash.** `runtimeGraphMatchesAligned` is true in all nine. CLIPPED is recorded as `HARD_TANH`.
 
 ## Reproduction
 
