@@ -22,19 +22,18 @@ still to come. Part of #777.
 
 ### Essential Design Decisions
 
-- The function is pure and returns `Result`. Where TypeScript asserts
-  finiteness mid-mutation, core returns `ParallelBridgeMergeError::NonFiniteWeight`
-  or `NonFiniteBias`, naming the bridge, and leaves the input untouched.
+- The function is pure and returns `Result`. Where TypeScript asserts finiteness
+  mid-mutation, core returns `ParallelBridgeMergeError::NonFiniteWeight` or
+  `NonFiniteBias`, naming the bridge, and leaves the input untouched.
 - It is stricter than TypeScript in two places, and both only decline a merge.
-  The target check uses core's single aggregate set,
-  `SquashType::is_aggregate`, which includes `MEAN`. A MEAN target averages its
-  inputs, so merging two of them is not exact. A target squash that core cannot
-  parse is also refused. A missing squash is accepted, as in TypeScript. No
-  frozen capture exercises either difference.
-- Each call merges one group, as TypeScript does. Callers loop to a fixed
-  point. Tags are not part of `CreatureExport`, so `mergeTagsByNameValue` stays
-  on the TypeScript wire adapter. The tag captures are replayed for topology
-  only.
+  The target check uses core's single aggregate set, `SquashType::is_aggregate`,
+  which includes `MEAN`. A MEAN target averages its inputs, so merging two of
+  them is not exact. A target squash that core cannot parse is also refused. A
+  missing squash is accepted, as in TypeScript. No frozen capture exercises
+  either difference.
+- Each call merges one group, as TypeScript does. Callers loop to a fixed point.
+  Tags are not part of `CreatureExport`, so `mergeTagsByNameValue` stays on the
+  TypeScript wire adapter. The tag captures are replayed for topology only.
 - Memetic data goes through `prune_memetic`, as in `compact_zero_weight`.
   TypeScript leaves memetic data untouched here.
 
@@ -83,14 +82,15 @@ Captures replayed:
 ## Test Plan
 
 - Added `neat-core/tests/compact_parallel_bridge.rs` (10 tests).
-  - Three tests replay the captures (`legacy_bridge_captures_replay_bit_exactly`,
+  - Three tests replay the captures
+    (`legacy_bridge_captures_replay_bit_exactly`,
     `bridge_case_captures_replay_bit_exactly`,
     `tag_captures_replay_topology_bit_exactly`). They compare neuron order,
     type, UUID, bias and squash, synapse order, endpoints, weight and type, and
     the removed count.
   - Hand-derived tests cover:
-    - MEAN and unknown-squash targets are refused, each with an IDENTITY
-      control that merges;
+    - MEAN and unknown-squash targets are refused, each with an IDENTITY control
+      that merges;
     - weight and bias overflow errors name the bridge;
     - one group is merged per call;
     - memetic rows are pruned while the record stays;
