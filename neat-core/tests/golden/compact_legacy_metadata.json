@@ -1079,6 +1079,300 @@
     }
   },
   {
+    "name": "constant_branch_IF",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronConstantBranch",
+    "preparation": "Creature.fromJSON(input)",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IF",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "squash": "IF",
+    "definesPropagate": true,
+    "activation": 1.5,
+    "result": true,
+    "targetBias": 0.25,
+    "constantNeuronAdded": true
+  },
+  {
+    "name": "constant_branch_MINIMUM",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronConstantBranch",
+    "preparation": "Creature.fromJSON(input)",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MINIMUM",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "squash": "MINIMUM",
+    "definesPropagate": true,
+    "activation": 1.5,
+    "result": true,
+    "targetBias": 0.25,
+    "constantNeuronAdded": true
+  },
+  {
+    "name": "constant_branch_MAXIMUM",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronConstantBranch",
+    "preparation": "Creature.fromJSON(input)",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MAXIMUM",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "squash": "MAXIMUM",
+    "definesPropagate": true,
+    "activation": 1.5,
+    "result": true,
+    "targetBias": 0.25,
+    "constantNeuronAdded": true
+  },
+  {
+    "name": "constant_branch_MEAN",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronConstantBranch",
+    "preparation": "Creature.fromJSON(input)",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "MEAN",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "squash": "MEAN",
+    "definesPropagate": true,
+    "activation": 1.5,
+    "result": true,
+    "targetBias": 0.25,
+    "constantNeuronAdded": true
+  },
+  {
+    "name": "constant_branch_HYPOT",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronConstantBranch",
+    "preparation": "Creature.fromJSON(input)",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "HYPOT",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "squash": "HYPOT",
+    "definesPropagate": true,
+    "activation": 1.5,
+    "result": true,
+    "targetBias": 0.25,
+    "constantNeuronAdded": true
+  },
+  {
+    "name": "constant_branch_HYPOTv2",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "src/compact/CompactUnused.ts removeNeuron",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "removeNeuronConstantBranch",
+    "preparation": "Creature.fromJSON(input)",
+    "input": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "HYPOTv2",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": 2
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "squash": "HYPOTv2",
+    "definesPropagate": true,
+    "activation": 1.5,
+    "result": true,
+    "targetBias": 0.25,
+    "constantNeuronAdded": true
+  },
+  {
     "name": "converted_uuid_roundtrip",
     "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
     "test": "test/compact/ConvertedConstantKeepsUuid_test.ts",
