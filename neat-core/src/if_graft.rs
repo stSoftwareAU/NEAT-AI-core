@@ -72,9 +72,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::creature::{
-    CreatureError, CreatureExport, NeuronExport, SynapseExport, is_if_squash, parse_squash_name,
-    parse_synapse_type, squash_name_from, synapse_type_name_from, validate_creature_width,
-    validate_no_duplicate_synapses,
+    CreatureError, CreatureExport, NeuronExport, SynapseExport, input_wire_uuid, is_if_squash,
+    parse_squash_name, parse_synapse_type, squash_name_from, synapse_type_name_from,
+    validate_creature_width, validate_no_duplicate_synapses,
 };
 use crate::squash::SquashType;
 use crate::synapse_type::SynapseType;
@@ -587,7 +587,7 @@ impl From<CreatureError> for GraftError {
 fn index_map(creature: &CreatureExport) -> HashMap<String, usize> {
     let mut map = HashMap::with_capacity(creature.input + creature.neurons.len());
     for i in 0..creature.input {
-        map.insert(format!("input-{i}"), i);
+        map.insert(input_wire_uuid(i), i);
     }
     for (j, neuron) in creature.neurons.iter().enumerate() {
         map.insert(neuron.uuid.clone(), creature.input + j);

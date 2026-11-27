@@ -43,7 +43,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::creature::{CreatureExport, SynapseExport, parse_squash_name, validate_creature_width};
+use crate::creature::{
+    CreatureExport, SynapseExport, canonical_input_index, input_wire_uuid, parse_squash_name,
+    validate_creature_width,
+};
 use crate::squash::SquashType;
 
 /// Why [`remove_neuron_by_bias_fold`] refused its arguments.
@@ -224,8 +227,7 @@ pub fn remove_neuron_by_bias_fold(
         .collect();
     // Runtime index: inputs first, then the listed neurons in order.
     let index_of = |uuid: &str| {
-        uuid.strip_prefix("input-")
-            .and_then(|i| i.parse::<usize>().ok())
+        canonical_input_index(uuid)
             .filter(|&i| i < creature.input)
             .or_else(|| position.get(uuid).map(|&p| creature.input + p))
     };
@@ -293,7 +295,7 @@ pub fn remove_neuron_by_bias_fold(
             result.synapses.insert(
                 at,
                 SynapseExport {
-                    from_uuid: format!("input-{input}"),
+                    from_uuid: input_wire_uuid(input),
                     to_uuid: synapse.to_uuid.clone(),
                     weight: 0.0,
                     synapse_type: None,

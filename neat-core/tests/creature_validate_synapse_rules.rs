@@ -13,7 +13,8 @@ use neat_core::creature_validate::{
     validate_synapse_and_memetic_rules,
 };
 use neat_core::{
-    CreatureExport, NeuronExport, SynapseExport, stump_creature, validate_no_duplicate_synapses,
+    CreatureError, CreatureExport, NeuronExport, SynapseExport, compile_creature, stump_creature,
+    validate_no_duplicate_synapses,
 };
 
 // ---------------------------------------------------------------------------
@@ -551,6 +552,35 @@ fn forward_only_structural_integrity_catches_a_dead_end_hidden_neuron() {
 // ---------------------------------------------------------------------------
 // Input format — an endpoint naming no neuron.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn a_non_canonical_input_spelling_does_not_name_a_neuron() {
+    for spelling in ["input-00", "input-+0", "input-", "input-007"] {
+        let mut creature = linear_creature();
+        creature.synapses[0].from_uuid = spelling.to_string();
+
+        let failure = run_err(&creature, &ValidateOptions::default());
+
+        assert_eq!(failure.class, FailureClass::Topology, "{spelling}");
+        assert_eq!(
+            failure.reason,
+            reason::INVALID_SYNAPSE_REFERENCE,
+            "{spelling}"
+        );
+        assert_eq!(
+            failure.message,
+            format!("0) synapse from {spelling} does not name a neuron"),
+            "{spelling}"
+        );
+        assert_eq!(failure.synapse_index, Some(0), "{spelling}");
+
+        match compile_creature(&creature) {
+            Err(CreatureError::UnknownSourceUuid(uuid)) => assert_eq!(uuid, spelling),
+            Err(other) => panic!("{spelling}: compile refused with {other}"),
+            Ok(_) => panic!("{spelling}: compile accepted a name validate rejected"),
+        }
+    }
+}
 
 #[test]
 fn a_synapse_endpoint_naming_no_neuron_is_an_invalid_reference() {

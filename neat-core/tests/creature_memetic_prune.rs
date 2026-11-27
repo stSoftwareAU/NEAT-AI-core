@@ -125,6 +125,38 @@ fn prune_drops_the_row_naming_a_removed_edge() {
     creature_validate(&host, &OPTIONS).expect("a pruned creature satisfies rule 31");
 }
 
+/// `input-00` is not the wire name `input-0`. A live canonical edge must not
+/// keep a memetic row or bias written with the padded spelling.
+#[test]
+fn prune_drops_a_row_keyed_by_a_non_canonical_input_name() {
+    let mut host = creature();
+    host.memetic = Some(MemeticExport {
+        biases: BTreeMap::from([
+            ("input-00".to_string(), 0.1),
+            ("input-+0".to_string(), 0.2),
+            ("input-".to_string(), 0.3),
+            ("h1".to_string(), 0.4),
+        ]),
+        weights: MemeticWeights::Rows(vec![
+            row("input-00", "h1", 0.3),
+            row("input-+0", "h1", 0.2),
+            row("input-", "h1", 0.1),
+            row("input-0", "h1", 0.4),
+        ]),
+        extra: serde_json::Map::new(),
+    });
+
+    host.prune_memetic();
+
+    let memetic = host.memetic.as_ref().expect("the record itself survives");
+    assert_eq!(memetic.biases.keys().collect::<Vec<_>>(), vec!["h1"]);
+    assert_eq!(
+        rows_of(memetic),
+        vec![("input-0".to_string(), "h1".to_string())]
+    );
+    creature_validate(&host, &OPTIONS).expect("the surviving row names a real edge");
+}
+
 /// The id-keyed map form: an entry naming a removed edge goes, a key naming no
 /// neuron goes with its entries, and a still-live entry stays.
 #[test]
