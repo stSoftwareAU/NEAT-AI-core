@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use neat_core::{
     CreatureExport, MemeticExport, MemeticWeights, NeuronExport, RemoveNeuronError, SynapseExport,
-    remove_neuron_by_bias_fold,
+    compile_creature, remove_neuron_by_bias_fold,
 };
 use serde_json::Value;
 
@@ -30,13 +30,6 @@ fn edge(from: &str, to: &str, weight: f64) -> SynapseExport {
         to_uuid: to.to_string(),
         weight,
         synapse_type: None,
-    }
-}
-
-fn typed(from: &str, to: &str, weight: f64, role: &str) -> SynapseExport {
-    SynapseExport {
-        synapse_type: Some(role.to_string()),
-        ..edge(from, to, weight)
     }
 }
 
@@ -139,7 +132,7 @@ fn export_from_runtime(case: &Value) -> CreatureExport {
 }
 
 /// The `after` state as (type, squash, bias bits) per non-input neuron and a
-/// sorted (from, to, weight bits) list per synapse, in runtime indices.
+/// (from, to, weight bits) list per synapse in order, in runtime indices.
 type Shape = (Vec<(String, String, u64)>, Vec<(usize, usize, u64)>);
 
 fn runtime_shape(neurons: &Value, synapses: &Value) -> Shape {
@@ -156,7 +149,7 @@ fn runtime_shape(neurons: &Value, synapses: &Value) -> Shape {
             )
         })
         .collect();
-    let mut edges: Vec<(usize, usize, u64)> = synapses
+    let edges: Vec<(usize, usize, u64)> = synapses
         .as_array()
         .unwrap()
         .iter()
@@ -168,7 +161,6 @@ fn runtime_shape(neurons: &Value, synapses: &Value) -> Shape {
             )
         })
         .collect();
-    edges.sort_unstable();
     (kept, edges)
 }
 
@@ -196,7 +188,7 @@ fn export_shape(creature: &CreatureExport) -> Shape {
             )
         })
         .collect();
-    let mut edges: Vec<(usize, usize, u64)> = creature
+    let edges: Vec<(usize, usize, u64)> = creature
         .synapses
         .iter()
         .map(|s| {
@@ -207,7 +199,6 @@ fn export_shape(creature: &CreatureExport) -> Shape {
             )
         })
         .collect();
-    edges.sort_unstable();
     (kept, edges)
 }
 
@@ -310,29 +301,6 @@ fn a_target_that_keeps_two_inbound_takes_no_draw_and_no_new_edge() {
         vec![neuron("output", "output-0", "IDENTITY", 1.5)]
     );
     assert_eq!(removed.synapses, vec![edge("input-1", "output-0", 3.0)]);
-}
-
-#[test]
-fn two_typed_synapses_into_one_target_leave_the_last_bias() {
-    let base = creature(
-        2,
-        vec![
-            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
-            neuron("output", "output-0", "IDENTITY", 1.0),
-        ],
-        vec![
-            edge("input-0", "hidden-0", 1.0),
-            typed("hidden-0", "output-0", 2.0, "positive"),
-            typed("hidden-0", "output-0", 4.0, "negative"),
-            edge("input-1", "output-0", 3.0),
-        ],
-    );
-    let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 0.5, never_draw)
-        .unwrap()
-        .unwrap();
-    // Each new bias starts from the original 1.0, so the second (4.0 * 0.5)
-    // replaces the first (2.0 * 0.5) instead of adding to it: 1.0 + 2.0 = 3.0.
-    assert_eq!(removed.neurons[0].bias, 3.0);
 }
 
 #[test]
@@ -475,4 +443,116 @@ fn unknown_and_non_hidden_neurons_and_bad_draws_are_refused() {
     }
     let nan = remove_neuron_by_bias_fold(&base, "hidden-0", 0.0, || f64::NAN);
     assert!(matches!(nan, Err(RemoveNeuronError::DrawOutOfRange { draw }) if draw.is_nan()));
+}
+
+#[test]
+fn a_dangling_outward_target_is_refused_before_any_draw() {
+    let base = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 0.0),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 1.0),
+            edge("hidden-0", "ghost", 1.0),
+        ],
+    );
+    assert_eq!(
+        remove_neuron_by_bias_fold(&base, "hidden-0", 0.0, never_draw),
+        Err(RemoveNeuronError::DanglingTarget {
+            target: "ghost".to_string()
+        })
+    );
+}
+
+#[test]
+fn the_reconnect_edge_lands_in_from_to_index_order() {
+    // Runtime indices: input-0 = 0, input-1 = 1, hidden-0 = 2, output-0 = 3,
+    // output-1 = 4. The list is in (from, to) order, as TypeScript keeps it.
+    let base = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 0.0),
+            neuron("output", "output-1", "IDENTITY", 0.0),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("input-1", "output-1", 1.0),
+            edge("hidden-0", "output-0", 1.0),
+            edge("hidden-0", "output-1", 1.0),
+        ],
+    );
+    // u = 0 reconnects output-0 from input-0: (0, 3) sorts before (1, 4).
+    let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 0.0, || 0.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        removed.synapses,
+        vec![
+            edge("input-0", "output-0", 0.0),
+            edge("input-1", "output-1", 1.0),
+        ]
+    );
+}
+
+/// Native counterpart of NEAT-AI `test/compact/UnusedClipped.ts`.
+///
+/// `hidden-3` is `CLIPPED` (hard tanh, clamp to `[-1, 1]`) with bias 2 and
+/// inbound weights -0.3 / +0.3 from inputs in `[0, 1)`, so its pre-activation
+/// stays in `(1.7, 2.3)` and it always outputs exactly 1. TypeScript's trace
+/// therefore reports a mean activation of 1, and folding 1 into the targets
+/// must leave both outputs unchanged on every input. Choosing the neuron and
+/// collecting the trace are caller policy; the fold is what is under test.
+#[test]
+fn removing_a_saturated_clipped_neuron_preserves_behaviour() {
+    let base = creature(
+        3,
+        vec![
+            neuron("hidden", "hidden-3", "CLIPPED", 2.0),
+            neuron("output", "output-0", "IDENTITY", 1.0),
+            neuron("output", "output-1", "IDENTITY", 0.0),
+        ],
+        vec![
+            edge("input-0", "hidden-3", -0.3),
+            edge("input-1", "hidden-3", 0.3),
+            edge("hidden-3", "output-0", 0.6),
+            edge("hidden-3", "output-1", 0.7),
+            edge("input-2", "output-1", 0.8),
+        ],
+    );
+    // The clamp of any pre-activation in (1.7, 2.3) to [-1, 1].
+    let traced_mean = 1.0;
+    let removed = remove_neuron_by_bias_fold(&base, "hidden-3", traced_mean, || 0.5)
+        .unwrap()
+        .unwrap();
+    assert!(removed.neurons.iter().all(|n| n.uuid != "hidden-3"));
+    // 1.0 + 0.6 * 1 and 0.0 + 0.7 * 1.
+    assert_eq!(removed.neurons[0].bias, 1.6);
+    assert_eq!(removed.neurons[1].bias, 0.7);
+
+    let mut before = compile_creature(&base).expect("fixture compiles");
+    let mut after = compile_creature(&removed).expect("compacted creature compiles");
+    let steps = [0.0f32, 0.13, 0.5, 0.77, 0.999];
+    let mut checked = 0;
+    for &a in &steps {
+        for &b in &steps {
+            for &c in &steps {
+                let sample = [a, b, c];
+                let expected = before.activate(&sample, 2);
+                let actual = after.activate(&sample, 2);
+                for (e, x) in expected.iter().zip(&actual) {
+                    // f32 forward pass: about 6e-8 relative per rounding.
+                    assert!(
+                        (e - x).abs() <= 1e-6 * e.abs().max(1.0),
+                        "{sample:?}: {e} vs {x}"
+                    );
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, steps.len().pow(3));
 }

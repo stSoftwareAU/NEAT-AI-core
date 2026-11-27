@@ -17,13 +17,11 @@
 //! - every new bias is computed first and, if any is non-finite, nothing is
 //!   applied and the creature is left unchanged (`Ok(None)`, TypeScript's
 //!   `false`);
-//! - a new bias is computed from the target's bias *before* the pass, so two
-//!   typed synapses into one target leave the last one's bias, as in
-//!   TypeScript;
 //! - a target left with fewer than two inbound synapses gets a zero-weight
 //!   synapse from the input `floor(u * input)`, where `u` is the caller's
 //!   uniform draw (TypeScript's `Math.random`), taken once per such target in
-//!   target order;
+//!   target order, and inserted where TypeScript's `(from, to)` index order
+//!   puts it;
 //! - the memetic record is cleared on removal, as `removeHiddenNeuron` does.
 //!
 //! What stays with the caller, or is not ported:
@@ -63,6 +61,11 @@ pub enum RemoveNeuronError {
         /// The target whose squash needs that branch.
         target: String,
     },
+    /// An outward synapse names a target that is not in `creature.neurons`.
+    DanglingTarget {
+        /// The missing target UUID.
+        target: String,
+    },
     /// A reconnect draw was outside `[0, 1)`, so it names no input.
     DrawOutOfRange {
         /// The draw supplied.
@@ -84,6 +87,9 @@ impl std::fmt::Display for RemoveNeuronError {
                 f,
                 "Target {target} needs the constant-neuron branch of removeNeuron, which is not ported"
             ),
+            RemoveNeuronError::DanglingTarget { target } => {
+                write!(f, "Outward synapse targets unknown neuron {target}")
+            }
             RemoveNeuronError::DrawOutOfRange { draw } => {
                 write!(f, "Reconnect draw {draw} is outside [0, 1)")
             }
@@ -110,8 +116,10 @@ fn needs_constant_branch(squash: Option<&str>) -> bool {
 /// # Errors
 ///
 /// [`RemoveNeuronError::UnknownNeuron`], [`RemoveNeuronError::NotRemovable`]
-/// for an input or output, [`RemoveNeuronError::ConstantBranchNotPorted`] for
-/// an `IF`/`MINIMUM`/`MAXIMUM` target, and
+/// for an input or output, [`RemoveNeuronError::DanglingTarget`] for an
+/// outward synapse into no listed neuron,
+/// [`RemoveNeuronError::ConstantBranchNotPorted`] for an
+/// `IF`/`MINIMUM`/`MAXIMUM` target, and
 /// [`RemoveNeuronError::DrawOutOfRange`] for a draw outside `[0, 1)`.
 ///
 /// # Examples
@@ -179,24 +187,30 @@ pub fn remove_neuron_by_bias_fold(
         .enumerate()
         .map(|(position, neuron)| (neuron.uuid.as_str(), position))
         .collect();
-    let squash_of = |target: &str| {
-        position
-            .get(target)
-            .and_then(|&position| creature.neurons[position].squash.as_deref())
+    // Runtime index: inputs first, then the listed neurons in order.
+    let index_of = |uuid: &str| {
+        uuid.strip_prefix("input-")
+            .and_then(|i| i.parse::<usize>().ok())
+            .filter(|&i| i < creature.input)
+            .or_else(|| position.get(uuid).map(|&p| creature.input + p))
     };
 
     // TypeScript walks `outwardConnections`, which the runtime keeps sorted by
     // target index; inputs never receive synapses, so neuron order is enough.
-    let mut outward: Vec<&SynapseExport> = creature
-        .synapses
-        .iter()
-        .filter(|synapse| synapse.from_uuid == uuid)
-        .collect();
-    outward.sort_by_key(|synapse| position.get(synapse.to_uuid.as_str()).copied());
+    let mut outward: Vec<(usize, &SynapseExport)> = Vec::new();
+    for synapse in creature.synapses.iter().filter(|s| s.from_uuid == uuid) {
+        let Some(&target) = position.get(synapse.to_uuid.as_str()) else {
+            return Err(RemoveNeuronError::DanglingTarget {
+                target: synapse.to_uuid.clone(),
+            });
+        };
+        outward.push((target, synapse));
+    }
+    outward.sort_by_key(|&(target, _)| target);
 
-    if let Some(synapse) = outward
+    if let Some(&(_, synapse)) = outward
         .iter()
-        .find(|synapse| needs_constant_branch(squash_of(&synapse.to_uuid)))
+        .find(|&&(target, _)| needs_constant_branch(creature.neurons[target].squash.as_deref()))
     {
         return Err(RemoveNeuronError::ConstantBranchNotPorted {
             target: synapse.to_uuid.clone(),
@@ -204,10 +218,7 @@ pub fn remove_neuron_by_bias_fold(
     }
 
     let mut adjustments = Vec::with_capacity(outward.len());
-    for synapse in &outward {
-        let Some(&target) = position.get(synapse.to_uuid.as_str()) else {
-            continue;
-        };
+    for &(target, synapse) in &outward {
         let new_bias = creature.neurons[target].bias + synapse.weight * activation;
         if !new_bias.is_finite() {
             return Ok(None);
@@ -220,7 +231,7 @@ pub fn remove_neuron_by_bias_fold(
         result.neurons[target].bias = new_bias;
     }
 
-    for synapse in &outward {
+    for &(target, synapse) in &outward {
         let inbound = result
             .synapses
             .iter()
@@ -233,12 +244,26 @@ pub fn remove_neuron_by_bias_fold(
             }
             // `u < 1` and `input >= 1` keep the floor inside `0..input`.
             let input = (u * creature.input as f64).floor() as usize;
-            result.synapses.push(SynapseExport {
-                from_uuid: format!("input-{input}"),
-                to_uuid: synapse.to_uuid.clone(),
-                weight: 0.0,
-                synapse_type: None,
-            });
+            let key = (input, creature.input + target);
+            let at = result
+                .synapses
+                .iter()
+                .position(|existing| {
+                    match (index_of(&existing.from_uuid), index_of(&existing.to_uuid)) {
+                        (Some(from), Some(to)) => (from, to) > key,
+                        _ => false,
+                    }
+                })
+                .unwrap_or(result.synapses.len());
+            result.synapses.insert(
+                at,
+                SynapseExport {
+                    from_uuid: format!("input-{input}"),
+                    to_uuid: synapse.to_uuid.clone(),
+                    weight: 0.0,
+                    synapse_type: None,
+                },
+            );
         }
     }
 
