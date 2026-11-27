@@ -168,3 +168,8 @@ Not done: `cargo check --target wasm32-unknown-unknown` (the target is not
 installed here, and the new code is target-independent);
 `scripts/check-downstream-consumers.sh` (no local consumer checkouts; the change
 is additive, and code search finds no consumer of the narrowed refusal).
+
+CI fix: the dependency bump moved the `wasm-bindgen` crate to 0.2.130, so the
+`wasm-bundle.yml` CLI pin (`WASM_BINDGEN_VERSION`, `WASM_BINDGEN_SHA256`) was
+moved to 0.2.130 with it (digest from the GitHub release asset, published
+2026-10-30). `tests/scripts/wasm_bundle_wasm64_dual_ship.bats` now passes.
