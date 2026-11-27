@@ -42,7 +42,9 @@ whole-creature boundaries. These are metadata integrity checks, not native parit
 
 The separate [bridge ordering and refusal baseline](compaction-bridge-baseline.md)
 captures four original helper boundaries, including recurrent refusal and
-MAXIMUM/IF targets. Its original large forest test passes but remains uncaptured.
+MAXIMUM/IF targets. The public forest regressions are summarised in the
+[forest baseline](compaction-forest-baseline.md); their creature is not copied
+into this repository.
 
 `neat-core/tests/golden/compact_legacy.json` stores the original input after its
 legacy wire round trip, the actual candidate or `null`, and original activation

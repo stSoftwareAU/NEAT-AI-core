@@ -66,5 +66,6 @@ Run the unchanged original suite from that checkout with
 `deno test -A test/compact/ParallelBridgeMergeOrdering.ts`.
 The small COMPLEMENT, refusal and corner-case contracts are recorded separately
 in the [bridge case captures](compaction-bridge-cases-baseline.md). The public
-forest fixture and remaining family acceptance work stay open in the
-[overall baseline](compaction-baseline.md).
+forest regressions are summarised in the
+[forest baseline](compaction-forest-baseline.md). Remaining family acceptance
+work stays open in the [overall baseline](compaction-baseline.md).
