@@ -28,6 +28,10 @@ The matrix lists the remaining work before the family inventory is exhaustive.
 
 ## Captures
 
+The separate [bridge ordering and refusal baseline](compaction-bridge-baseline.md)
+captures four original helper boundaries, including recurrent refusal and
+MAXIMUM/IF targets. Its original large forest test passes but remains uncaptured.
+
 `neat-core/tests/golden/compact_legacy.json` stores the original input after its
 legacy wire round trip, the actual candidate or `null`, and original activation
 outputs at five deterministic probes. `complement_bypass` uses the input from
