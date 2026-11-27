@@ -71,9 +71,15 @@ scores; it does not measure a fitness loss. The `compactCreature` wrapper also
 computes both variants internally, so wrapper equality is a compatibility
 assertion, not evidence of executing only the safe pass.
 
-Typed-edge, IF-target and non-finite-weight guards described by the helper
-require coverage beyond these seven tests. Other aggressive, trace and
-consumer acceptance cases remain open under #776.
+Typed-edge, IF-target and non-finite-weight guards are now covered natively.
+`aggressive_prune` replays the three raw `aggressivePrune` captures in
+`neat-core/tests/compact_aggressive_prune.rs`, which also covers typed and
+empty-string roles, IF targets, non-finite weights, frozen indices and the
+threshold boundary. Core takes frozen synapses as indices, because
+`SynapseExport` has no `frozen` field. Choosing between the safe and
+aggressive variants stays a caller policy, and trace-based `compactUnused`
+is still TypeScript-only. Other trace and consumer acceptance cases remain
+open under #778.
 
 ## Integrity and reproduction
 
