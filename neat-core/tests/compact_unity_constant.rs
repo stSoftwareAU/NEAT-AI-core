@@ -1279,3 +1279,231 @@ fn the_new_constant_lands_right_after_an_untagged_constant() {
     assert_eq!(removal.creature.neurons[first + 1].neuron_type, "constant");
     assert_same_outputs_on_grid(&before, &removal.creature);
 }
+
+/// `hidden-0` (IDENTITY, bias 0) feeds `output-0` at `outward_weight` with the
+/// `condition` role. `output-0` carries `squash` and bias 0.25, and `input-0` also
+/// feeds it at 0.5. Once `hidden-0` is gone `output-0` still has two inbound
+/// synapses, so the bias fold takes no reconnect draw.
+fn aggregate_target_fixture(squash: &str, outward_weight: f64) -> CreatureExport {
+    creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some(squash), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("input-0", "output-0", 0.5),
+            edge("input-1", "output-0", 1.0),
+            synapse("hidden-0", "output-0", outward_weight, Some("condition")),
+        ],
+    )
+}
+
+#[test]
+fn a_minimum_or_hypotv2_target_takes_the_constant_branch() {
+    // The constant's edge into output-0 has weight 2.0 * 1.5 = 3.0. Both factors
+    // are exact in f64, so the product is exactly 3.0, and the edge keeps the
+    // outward `condition` role.
+    for squash in ["MINIMUM", "HYPOTv2"] {
+        let mints = Cell::new(0_u64);
+        let removal = remove_neuron(
+            &aggregate_target_fixture(squash, 2.0),
+            "hidden-0",
+            1.5,
+            &[],
+            || {
+                mints.set(mints.get() + 1);
+                fresh_uuid()
+            },
+            never_draw,
+        )
+        .unwrap_or_else(|error| panic!("{squash}: refused with {error}"))
+        .unwrap_or_else(|| panic!("{squash}: the removal was not applied"));
+
+        assert_eq!(
+            mints.get(),
+            1,
+            "{squash}: the constant branch mints one constant"
+        );
+        assert_eq!(
+            removal.unity_constant,
+            Some(UnitySlot {
+                uuid: "unity-constant-0".to_string(),
+                slot: 0,
+            }),
+            "{squash}: unity constant"
+        );
+        assert!(
+            removal
+                .creature
+                .neurons
+                .iter()
+                .all(|n| n.uuid != "hidden-0"),
+            "{squash}: hidden-0 is removed"
+        );
+        let constant_edges: Vec<&SynapseExport> = removal
+            .creature
+            .synapses
+            .iter()
+            .filter(|s| s.from_uuid == "unity-constant-0")
+            .collect();
+        assert_eq!(constant_edges.len(), 1, "{squash}: one constant edge");
+        let constant_edge = constant_edges[0];
+        assert_eq!(constant_edge.to_uuid, "output-0", "{squash}: target");
+        assert_eq!(
+            constant_edge.weight.to_bits(),
+            3.0_f64.to_bits(),
+            "{squash}: weight 2.0 * 1.5"
+        );
+        assert_eq!(
+            constant_edge.synapse_type.as_deref(),
+            Some("condition"),
+            "{squash}: role preserved"
+        );
+    }
+}
+
+#[test]
+fn an_identity_target_on_the_same_fixture_takes_the_bias_fold() {
+    // Control: with IDENTITY the target needs no constant. The fold adds
+    // weight * activation = 2.0 * 1.5 = 3.0 to the bias 0.25, giving 3.25.
+    let mints = Cell::new(0_u64);
+    let removal = remove_neuron(
+        &aggregate_target_fixture("IDENTITY", 2.0),
+        "hidden-0",
+        1.5,
+        &[],
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(mints.get(), 0, "the bias fold mints no constant");
+    assert_eq!(removal.unity_constant, None);
+    assert!(
+        removal
+            .creature
+            .neurons
+            .iter()
+            .all(|n| n.uuid != "unity-constant-0"),
+        "no constant neuron is added"
+    );
+    assert!(
+        removal
+            .creature
+            .synapses
+            .iter()
+            .all(|s| s.from_uuid != "unity-constant-0"),
+        "no constant synapse is added"
+    );
+    let output = removal
+        .creature
+        .neurons
+        .iter()
+        .find(|n| n.uuid == "output-0")
+        .unwrap();
+    assert_eq!(
+        output.bias.to_bits(),
+        3.25_f64.to_bits(),
+        "0.25 + 2.0 * 1.5"
+    );
+}
+
+#[test]
+fn a_non_finite_activation_through_the_constant_branch_is_refused_naming_the_target() {
+    // The constant's weight into output-0 is 2.0 * activation. NaN gives NaN,
+    // +inf gives +inf and -inf gives -inf, and none of those is finite. The
+    // refusal names output-0 and takes no UUID.
+    let fixture = aggregate_target_fixture("IF", 2.0);
+    for activation in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mints = Cell::new(0_u64);
+        let refused = remove_neuron(
+            &fixture,
+            "hidden-0",
+            activation,
+            &[],
+            || {
+                mints.set(mints.get() + 1);
+                fresh_uuid()
+            },
+            never_draw,
+        );
+        assert_eq!(
+            refused,
+            Err(NeuronRemovalError::NonFiniteConstantWeight {
+                target: "output-0".to_string(),
+            }),
+            "activation {activation}"
+        );
+        assert_eq!(
+            mints.get(),
+            0,
+            "activation {activation}: a refused constant takes no UUID"
+        );
+    }
+
+    // Control: a finite activation on the same fixture is accepted.
+    let accepted = remove_neuron(&fixture, "hidden-0", 1.5, &[], fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        accepted.unity_constant,
+        Some(UnitySlot {
+            uuid: "unity-constant-0".to_string(),
+            slot: 0,
+        })
+    );
+}
+
+#[test]
+fn a_zero_outward_weight_with_an_infinite_activation_is_refused() {
+    // The constant's weight is 0.0 * activation. IEEE 754 makes zero times an
+    // infinity NaN, not zero, so for +inf and -inf the weight is not finite and
+    // the branch refuses, even though the synapse carries no signal.
+    let fixture = aggregate_target_fixture("IF", 0.0);
+    for activation in [f64::INFINITY, f64::NEG_INFINITY] {
+        let mints = Cell::new(0_u64);
+        let refused = remove_neuron(
+            &fixture,
+            "hidden-0",
+            activation,
+            &[],
+            || {
+                mints.set(mints.get() + 1);
+                fresh_uuid()
+            },
+            never_draw,
+        );
+        assert_eq!(
+            refused,
+            Err(NeuronRemovalError::NonFiniteConstantWeight {
+                target: "output-0".to_string(),
+            }),
+            "activation {activation}"
+        );
+        assert_eq!(
+            mints.get(),
+            0,
+            "activation {activation}: a refused constant takes no UUID"
+        );
+    }
+
+    // Control: a finite activation gives 0.0 * 1.5 = 0.0, which is finite, so the
+    // constant is accepted with a +0.0 edge weight.
+    let accepted = remove_neuron(&fixture, "hidden-0", 1.5, &[], fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
+    let constant_edge = accepted
+        .creature
+        .synapses
+        .iter()
+        .find(|s| s.from_uuid == "unity-constant-0")
+        .expect("the accepted constant feeds output-0");
+    assert_eq!(constant_edge.to_uuid, "output-0");
+    assert_eq!(constant_edge.weight.to_bits(), 0.0_f64.to_bits());
+}
