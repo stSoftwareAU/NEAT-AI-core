@@ -218,6 +218,8 @@ pub fn merge_parallel_bridges(
         }
         let in_syn = &creature.synapses[ins[0]];
         let out_syn = &creature.synapses[outs[0]];
+        // Defensive, mirroring the TypeScript self-loop check: the ordering
+        // test below already refuses a self-loop (`source == bridge`).
         if in_syn.from_uuid == neuron.uuid || out_syn.to_uuid == neuron.uuid {
             continue;
         }
@@ -231,6 +233,8 @@ pub fn merge_parallel_bridges(
         if source_pos >= bridge_pos || bridge_pos >= target_pos {
             continue;
         }
+        // Defensive: a target after a listed bridge is itself listed, since
+        // every input precedes every listed neuron.
         let Some(&target_k) = neuron_index.get(out_syn.to_uuid.as_str()) else {
             continue;
         };
