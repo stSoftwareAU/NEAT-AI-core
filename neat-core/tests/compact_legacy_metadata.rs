@@ -15,7 +15,7 @@ fn captures() -> Vec<Value> {
 #[test]
 fn creature_metadata_captures_preserve_original_validation_contracts() {
     let cases = captures();
-    assert_eq!(cases.len(), 2 + 4); // Two metadata and four finite-guard inputs.
+    assert_eq!(cases.len(), 2 + 4 + 2); // Metadata, finite guards and UUID conversions.
     for name in ["creature_memetic_prune", "creature_memetic_fix"] {
         let found: Vec<_> = cases.iter().filter(|c| c["name"] == name).collect();
         assert_eq!(found.len(), 1, "missing or duplicate {name}");

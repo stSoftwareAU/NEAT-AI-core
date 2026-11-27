@@ -1,0 +1,616 @@
+[
+  {
+    "name": "logistic_chain",
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "chain-a",
+          "squash": "LOGISTIC",
+          "bias": 0.5
+        },
+        {
+          "type": "hidden",
+          "uuid": "chain-b",
+          "squash": "LOGISTIC",
+          "bias": -0.75
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "chain-a",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "chain-a",
+          "toUUID": "chain-b",
+          "weight": 2
+        },
+        {
+          "fromUUID": "chain-b",
+          "toUUID": "output-0",
+          "weight": 1
+        }
+      ]
+    },
+    "testName": "safe compaction never returns a creature that changed behaviour",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactBehaviourGuard.ts",
+    "operation": "compactCreature",
+    "feedbackLoop": false,
+    "preparation": "Creature.fromJSON(input, false)",
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "chain-a",
+          "bias": 0.5,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "hidden",
+          "uuid": "chain-b",
+          "bias": -0.75,
+          "squash": "LOGISTIC"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1.5,
+          "fromUUID": "input-0",
+          "toUUID": "chain-a"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "chain-a",
+          "toUUID": "chain-b"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "chain-b",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "candidate": null,
+    "guard": null
+  },
+  {
+    "name": "identity_chain",
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "id-a",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "id-b",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "id-a",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "id-a",
+          "toUUID": "id-b",
+          "weight": 2
+        },
+        {
+          "fromUUID": "id-b",
+          "toUUID": "output-0",
+          "weight": 0.5
+        }
+      ]
+    },
+    "testName": "safe compaction still folds an exactly foldable creature",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactBehaviourGuard.ts",
+    "operation": "compactCreature",
+    "feedbackLoop": false,
+    "preparation": "Creature.fromJSON(input, false)",
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "id-a",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "id-b",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1.5,
+          "fromUUID": "input-0",
+          "toUUID": "id-a"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "id-a",
+          "toUUID": "id-b"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "id-b",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "candidate": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "id-a",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1.5,
+          "fromUUID": "input-0",
+          "toUUID": "id-a"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "id-a",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "guard": {
+      "deviation": {
+        "rows": 24,
+        "comparisons": 24,
+        "worstDelta": 0,
+        "meanDelta": 0,
+        "scale": 4.5653886795043945,
+        "nonFinite": false
+      },
+      "preserved": true,
+      "noiseFloor": 0.00001,
+      "relativeTolerance": 0.0001,
+      "probes": [
+        [
+          0.8874916434288025
+        ],
+        [
+          0.003165723290294409
+        ],
+        [
+          0.03089439868927002
+        ],
+        [
+          -0.2451186180114746
+        ],
+        [
+          0.5730528831481934
+        ],
+        [
+          0.062105774879455566
+        ],
+        [
+          -0.47191953659057617
+        ],
+        [
+          2.8769259452819824
+        ],
+        [
+          -0.05377185344696045
+        ],
+        [
+          -0.12249517440795898
+        ],
+        [
+          -1.1943154335021973
+        ],
+        [
+          -0.017368674278259277
+        ],
+        [
+          0.594017505645752
+        ],
+        [
+          -2.1690831184387207
+        ],
+        [
+          -0.07243619859218597
+        ],
+        [
+          0.2547123432159424
+        ],
+        [
+          -0.5145714282989502
+        ],
+        [
+          -0.1474401354789734
+        ],
+        [
+          -0.9036385416984558
+        ],
+        [
+          -2.2014079093933105
+        ],
+        [
+          -0.002360895276069641
+        ],
+        [
+          0.2840461730957031
+        ],
+        [
+          0.8850860595703125
+        ],
+        [
+          -0.1772623062133789
+        ]
+      ],
+      "beforeOutputs": [
+        [
+          1.5812374353408813
+        ],
+        [
+          0.2547485828399658
+        ],
+        [
+          0.29634159803390503
+        ],
+        [
+          -0.11767792701721191
+        ],
+        [
+          1.10957932472229
+        ],
+        [
+          0.34315866231918335
+        ],
+        [
+          -0.45787930488586426
+        ],
+        [
+          4.5653886795043945
+        ],
+        [
+          0.16934221982955933
+        ],
+        [
+          0.06625723838806152
+        ],
+        [
+          -1.541473150253296
+        ],
+        [
+          0.22394698858261108
+        ],
+        [
+          1.141026258468628
+        ],
+        [
+          -3.003624677658081
+        ],
+        [
+          0.14134570956230164
+        ],
+        [
+          0.6320685148239136
+        ],
+        [
+          -0.5218571424484253
+        ],
+        [
+          0.028839796781539917
+        ],
+        [
+          -1.1054577827453613
+        ],
+        [
+          -3.052111864089966
+        ],
+        [
+          0.24645864963531494
+        ],
+        [
+          0.6760692596435547
+        ],
+        [
+          1.5776290893554688
+        ],
+        [
+          -0.01589345932006836
+        ]
+      ],
+      "afterOutputs": [
+        [
+          1.5812374353408813
+        ],
+        [
+          0.2547485828399658
+        ],
+        [
+          0.29634159803390503
+        ],
+        [
+          -0.11767792701721191
+        ],
+        [
+          1.10957932472229
+        ],
+        [
+          0.34315866231918335
+        ],
+        [
+          -0.45787930488586426
+        ],
+        [
+          4.5653886795043945
+        ],
+        [
+          0.16934221982955933
+        ],
+        [
+          0.06625723838806152
+        ],
+        [
+          -1.541473150253296
+        ],
+        [
+          0.22394698858261108
+        ],
+        [
+          1.141026258468628
+        ],
+        [
+          -3.003624677658081
+        ],
+        [
+          0.14134570956230164
+        ],
+        [
+          0.6320685148239136
+        ],
+        [
+          -0.5218571424484253
+        ],
+        [
+          0.028839796781539917
+        ],
+        [
+          -1.1054577827453613
+        ],
+        [
+          -3.052111864089966
+        ],
+        [
+          0.24645864963531494
+        ],
+        [
+          0.6760692596435547
+        ],
+        [
+          1.5776290893554688
+        ],
+        [
+          -0.01589345932006836
+        ]
+      ]
+    }
+  },
+  {
+    "name": "provenance",
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "id-a",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "hidden",
+          "uuid": "id-b",
+          "squash": "IDENTITY",
+          "bias": 0
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0.25
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "id-a",
+          "weight": 1.5
+        },
+        {
+          "fromUUID": "id-a",
+          "toUUID": "id-b",
+          "weight": 2
+        },
+        {
+          "fromUUID": "id-b",
+          "toUUID": "output-0",
+          "weight": 0.5
+        }
+      ]
+    },
+    "testName": "safe compaction carries the creature's provenance tags",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactBehaviourGuard.ts",
+    "operation": "compactCreature",
+    "feedbackLoop": false,
+    "preparation": "Creature.fromJSON(input, false), then add original provenance tags",
+    "before": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "id-a",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "hidden",
+          "uuid": "id-b",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1.5,
+          "fromUUID": "input-0",
+          "toUUID": "id-a"
+        },
+        {
+          "weight": 2,
+          "fromUUID": "id-a",
+          "toUUID": "id-b"
+        },
+        {
+          "weight": 0.5,
+          "fromUUID": "id-b",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "trainID",
+          "value": "T-3840"
+        },
+        {
+          "name": "error",
+          "value": "0.6310"
+        }
+      ]
+    },
+    "candidate": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "id-a",
+          "bias": 0,
+          "squash": "IDENTITY"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0.25,
+          "squash": "IDENTITY"
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 1.5,
+          "fromUUID": "input-0",
+          "toUUID": "id-a"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "id-a",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1,
+      "tags": [
+        {
+          "name": "trainID",
+          "value": "T-3840"
+        },
+        {
+          "name": "error",
+          "value": "0.6310"
+        },
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "2"
+        }
+      ]
+    },
+    "guard": null
+  }
+]
