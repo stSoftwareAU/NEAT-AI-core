@@ -115,8 +115,8 @@ flowchart LR
 <!-- vibe-spec-review inputs="diff+issue-body" -->
 
 The issue has no acceptance-criteria heading. The criteria below come from its
-text. Each verdict is the Spec reviewer's, run over `git diff origin/Develop...HEAD`
-and the issue body at `970e470`.
+text. Each verdict is the Spec reviewer's, run over
+`git diff origin/Develop...HEAD` and the issue body at `970e470`.
 
 - **partial** — "Inventory TS AggressivePrune, CompactUnused and
   simplify/large-weight transforms from #776; port only existing compaction
@@ -156,8 +156,8 @@ and the issue body at `970e470`.
 - **met** — "Additive changes only; do not switch callers or introduce new
   rules" — evidence: `neat-core/src/compact_unity_constant.rs` (new module and
   re-exports only), `neat-core/src/compact_remove_neuron.rs` (docs, an error
-  message, and `remove_with_orphan_cascade` widened to `pub(crate)`) —
-  reviewer: met
+  message, and `remove_with_orphan_cascade` widened to `pub(crate)`) — reviewer:
+  met
 - **unrequested** — `docs/archive/pr-summaries/pr-summary-778.md` is rewritten
   over PR #802's archived summary for this issue — reviewer: unrequested —
   reason: the worker reads the summary at this one path per issue. #802's
@@ -180,8 +180,8 @@ and the issue body at `970e470`.
     on a hidden neuron other than the one being removed. Slot 0 is the only slot
     that can trigger the reuse refusal;
   - `a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it`:
-    an `IF`-target removal carrying a `MemeticExport` returns `memetic: None`.
-    A `NonFiniteConstantWeight` refusal leaves the input's record intact;
+    an `IF`-target removal carrying a `MemeticExport` returns `memetic: None`. A
+    `NonFiniteConstantWeight` refusal leaves the input's record intact;
   - `a_constant_the_cascade_removes_again_is_not_returned_as_a_slot`: a
     `MAXIMUM` hidden neuron whose only outward synapse is its own self-loop, in
     a creature that is not forward-only. The minted UUID is absent from
@@ -211,11 +211,11 @@ and the issue body at `970e470`.
   `neat-core/src/compact_unity_constant.rs`, run against
   `cargo test -p neat-core --test compact_unity_constant`, then reverted:
 
-  | Mutation | Result |
-  | --- | --- |
-  | `result.memetic = None;` deleted | red: `a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it` |
-  | `neuron.neuron_type == "constant"` → `true` in `holds_slot_zero` | red: `a_unity_slot_on_a_non_constant_neuron_is_ignored` |
-  | survival check forced to `true` (always `Some(UnitySlot)`) | red: `a_constant_the_cascade_removes_again_is_not_returned_as_a_slot` |
+  | Mutation                                                         | Result                                                                            |
+  | ---------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+  | `result.memetic = None;` deleted                                 | red: `a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it` |
+  | `neuron.neuron_type == "constant"` → `true` in `holds_slot_zero` | red: `a_unity_slot_on_a_non_constant_neuron_is_ignored`                           |
+  | survival check forced to `true` (always `Some(UnitySlot)`)       | red: `a_constant_the_cascade_removes_again_is_not_returned_as_a_slot`             |
 
   Before this change, all three left the suite green.
 - **Added to `neat-core/tests/compact_remove_neuron.rs`:**
@@ -227,18 +227,22 @@ and the issue body at `970e470`.
 - **Dependency bump reverted.** The `bump-deps.sh` commit `8163e3c` moved the
   root `Cargo.lock` `wasm-bindgen` from 0.2.128 to 0.2.130. The
   `.github/workflows/wasm-bundle.yml` CLI pin stayed at 0.2.128, so
-  `wasm_bundle_wasm64_dual_ship.bats` (`the pinned wasm-bindgen CLI version
-  already agrees with Cargo.lock`) failed. `Cargo.lock` is restored to
-  `origin/Develop`, which is 0.2.128, and this branch no longer changes it.
-  `./scripts/lockfile-freshness.sh --check` reports both lockfiles OK.
-- **Gate:** `./quality.sh < /dev/null` exited 0 ("All quality checks passed!") on
-  `970e470`, the code and tests of this head. Bats test 709 (`the pinned
-  wasm-bindgen CLI version already agrees with Cargo.lock`) now passes.
+  `wasm_bundle_wasm64_dual_ship.bats`
+  (`the pinned wasm-bindgen CLI version
+  already agrees with Cargo.lock`)
+  failed. `Cargo.lock` is restored to `origin/Develop`, which is 0.2.128, and
+  this branch no longer changes it. `./scripts/lockfile-freshness.sh --check`
+  reports both lockfiles OK.
+- **Gate:** `./quality.sh < /dev/null` exited 0 ("All quality checks passed!")
+  on `970e470`, the code and tests of this head. Bats test 709
+  (`the pinned
+  wasm-bindgen CLI version already agrees with Cargo.lock`) now
+  passes.
 - **Not run:**
   - `cargo check --target wasm32-unknown-unknown`: the target is not installed
     here, and the new module has no `cfg` or wasm code;
   - `scripts/check-downstream-consumers.sh`: the change only adds a module and
     exports, and changes no public item;
   - a mutation sweep beyond the five mutations above;
-  - Standards reviewer: no `CODING-STANDARDS.md` request was made for this
-    pass. The Spec reviewer ran, and its verdicts are above.
+  - Standards reviewer: no `CODING-STANDARDS.md` request was made for this pass.
+    The Spec reviewer ran, and its verdicts are above.
