@@ -15,8 +15,10 @@
 //!
 //! The caller keeps these parts:
 //!
-//! - choosing the neuron, and the trace statistics, shuffle and newborn-grace
-//!   skip that `compactUnused` uses to choose it;
+//! - collecting the trace statistics, the shuffle and the newborn-grace tag that
+//!   `compactUnused` chooses from. The choice itself is ported as
+//!   [`crate::compact_unused_choice::choose_unused_neuron`], and its
+//!   `activation` is what this function takes;
 //! - writing the `compact-unity-slot` tag back. [`crate::creature::NeuronExport`]
 //!   carries no tags, so [`NeuronRemoval::unity_constant`] names the constant
 //!   and the caller tags it;
