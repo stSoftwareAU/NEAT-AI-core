@@ -20,6 +20,7 @@
 pub mod accumulate;
 pub mod batch_scoring;
 pub mod compact_aggressive_prune;
+pub mod compact_remove_neuron;
 pub mod compact_simplify_large_weights;
 pub mod compact_zero_weight;
 pub mod creature;
@@ -118,6 +119,8 @@ pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_sy
 pub use compact_aggressive_prune::{
     AGGRESSIVE_PRUNE_WEIGHT_THRESHOLD, AggressivePrune, AggressivePruneError, aggressive_prune,
 };
+// Issue #778 — bias-fold removal of one hidden neuron (the tag-free branch of `compactUnused`).
+pub use compact_remove_neuron::{RemoveNeuronError, remove_neuron_by_bias_fold};
 // Issue #778 — large-weight rescaling for homogeneous squashes, and the magnitude penalty it uses.
 pub use compact_simplify_large_weights::{
     McmcAcceptance, SimplifiedLargeWeights, simplify_large_weights, weight_bias_penalty,

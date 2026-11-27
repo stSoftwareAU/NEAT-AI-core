@@ -1,0 +1,478 @@
+//! Bias-fold removal of one hidden neuron, ported from `compactUnused`'s
+//! `removeNeuron` (Issue #778).
+//!
+//! The four `removeNeuron` captures frozen by #776 in
+//! `golden/compact_legacy_metadata.json` are the oracle: they were produced by
+//! running the TypeScript at NEAT-AI 60d6b4e5, not by this crate. The other
+//! tests derive their expected values by hand from the TypeScript rule.
+
+use std::collections::BTreeMap;
+
+use neat_core::{
+    CreatureExport, MemeticExport, MemeticWeights, NeuronExport, RemoveNeuronError, SynapseExport,
+    remove_neuron_by_bias_fold,
+};
+use serde_json::Value;
+
+fn neuron(kind: &str, uuid: &str, squash: &str, bias: f64) -> NeuronExport {
+    NeuronExport {
+        id: None,
+        neuron_type: kind.to_string(),
+        uuid: uuid.to_string(),
+        bias,
+        squash: Some(squash.to_string()),
+    }
+}
+
+fn edge(from: &str, to: &str, weight: f64) -> SynapseExport {
+    SynapseExport {
+        from_uuid: from.to_string(),
+        to_uuid: to.to_string(),
+        weight,
+        synapse_type: None,
+    }
+}
+
+fn typed(from: &str, to: &str, weight: f64, role: &str) -> SynapseExport {
+    SynapseExport {
+        synapse_type: Some(role.to_string()),
+        ..edge(from, to, weight)
+    }
+}
+
+fn creature(
+    input: usize,
+    neurons: Vec<NeuronExport>,
+    synapses: Vec<SynapseExport>,
+) -> CreatureExport {
+    let output = neurons.iter().filter(|n| n.neuron_type == "output").count();
+    CreatureExport {
+        input,
+        output,
+        neurons,
+        synapses,
+        semantic_version: None,
+        forward_only: true,
+        memetic: None,
+    }
+}
+
+fn never_draw() -> f64 {
+    panic!("no target needed a reconnect draw")
+}
+
+fn memetic() -> MemeticExport {
+    MemeticExport {
+        biases: BTreeMap::from([("output-0".to_string(), 0.01)]),
+        weights: MemeticWeights::default(),
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn number(value: &Value) -> f64 {
+    match value {
+        Value::String(text) => text.parse().unwrap(),
+        other => other.as_f64().unwrap(),
+    }
+}
+
+fn captures() -> Vec<Value> {
+    let cases: Vec<Value> = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/golden/compact_legacy_metadata.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    cases
+        .into_iter()
+        .filter(|case| case["operation"] == "removeNeuron")
+        .collect()
+}
+
+/// Rebuild the runtime `before` state as an export: input neurons are implicit,
+/// the rest keep the capture's `input` UUIDs in runtime order. `before` carries
+/// the original runtime injections, which `input` does not.
+fn export_from_runtime(case: &Value) -> CreatureExport {
+    let input = case["input"]["input"].as_u64().unwrap() as usize;
+    let uuids: Vec<&str> = case["input"]["neurons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["uuid"].as_str().unwrap())
+        .collect();
+    let uuid_of = |index: usize| {
+        if index < input {
+            format!("input-{index}")
+        } else {
+            uuids[index - input].to_string()
+        }
+    };
+    let neurons = case["before"]["neurons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["type"] != "input")
+        .map(|n| {
+            neuron(
+                n["type"].as_str().unwrap(),
+                &uuid_of(n["index"].as_u64().unwrap() as usize),
+                n["squash"].as_str().unwrap(),
+                number(&n["bias"]),
+            )
+        })
+        .collect();
+    let synapses = case["before"]["synapses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            edge(
+                &uuid_of(s["from"].as_u64().unwrap() as usize),
+                &uuid_of(s["to"].as_u64().unwrap() as usize),
+                number(&s["weight"]),
+            )
+        })
+        .collect();
+    creature(input, neurons, synapses)
+}
+
+/// The `after` state as (type, squash, bias bits) per non-input neuron and a
+/// sorted (from, to, weight bits) list per synapse, in runtime indices.
+type Shape = (Vec<(String, String, u64)>, Vec<(usize, usize, u64)>);
+
+fn runtime_shape(neurons: &Value, synapses: &Value) -> Shape {
+    let kept: Vec<(String, String, u64)> = neurons
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["type"] != "input")
+        .map(|n| {
+            (
+                n["type"].as_str().unwrap().to_string(),
+                n["squash"].as_str().unwrap().to_string(),
+                number(&n["bias"]).to_bits(),
+            )
+        })
+        .collect();
+    let mut edges: Vec<(usize, usize, u64)> = synapses
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["from"].as_u64().unwrap() as usize,
+                s["to"].as_u64().unwrap() as usize,
+                number(&s["weight"]).to_bits(),
+            )
+        })
+        .collect();
+    edges.sort_unstable();
+    (kept, edges)
+}
+
+fn export_shape(creature: &CreatureExport) -> Shape {
+    let index_of = |uuid: &str| {
+        uuid.strip_prefix("input-")
+            .and_then(|i| i.parse::<usize>().ok())
+            .unwrap_or_else(|| {
+                creature.input
+                    + creature
+                        .neurons
+                        .iter()
+                        .position(|n| n.uuid == uuid)
+                        .unwrap()
+            })
+    };
+    let kept = creature
+        .neurons
+        .iter()
+        .map(|n| {
+            (
+                n.neuron_type.clone(),
+                n.squash.clone().unwrap(),
+                n.bias.to_bits(),
+            )
+        })
+        .collect();
+    let mut edges: Vec<(usize, usize, u64)> = creature
+        .synapses
+        .iter()
+        .map(|s| {
+            (
+                index_of(&s.from_uuid),
+                index_of(&s.to_uuid),
+                s.weight.to_bits(),
+            )
+        })
+        .collect();
+    edges.sort_unstable();
+    (kept, edges)
+}
+
+#[test]
+fn frozen_remove_neuron_captures_replay_exactly() {
+    let cases = captures();
+    let names: Vec<&str> = cases.iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        [
+            "finite_normal",
+            "finite_overflow",
+            "finite_nan",
+            "finite_atomic"
+        ]
+    );
+    for case in &cases {
+        let name = case["name"].as_str().unwrap();
+        let before = export_from_runtime(case);
+        let hidden = before.neurons[0].uuid.clone();
+        assert_eq!(before.neurons[0].neuron_type, "hidden", "{name}");
+        let activation = number(&case["activation"]);
+        let expected = runtime_shape(&case["after"]["neurons"], &case["after"]["synapses"]);
+
+        // finite_normal's seeded draw reconnected output-0 from input 1 of 2,
+        // so any u in [0.5, 1) reproduces it.
+        let mut draws = vec![0.75];
+        let result =
+            remove_neuron_by_bias_fold(&before, &hidden, activation, || draws.pop().unwrap())
+                .unwrap();
+        match case["result"].as_bool().unwrap() {
+            true => {
+                let removed = result.unwrap_or_else(|| panic!("{name}: expected a removal"));
+                assert_eq!(export_shape(&removed), expected, "{name}");
+                assert!(draws.is_empty(), "{name}: the reconnect draw was not taken");
+            }
+            false => {
+                assert!(
+                    result.is_none(),
+                    "{name}: expected the finite guard to refuse"
+                );
+                assert_eq!(
+                    export_shape(&before),
+                    expected,
+                    "{name}: refusal changed nothing"
+                );
+                assert_eq!(draws, vec![0.75], "{name}: a refusal takes no draw");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_reconnect_input_is_the_floor_of_the_draw_times_the_input_count() {
+    let base = creature(
+        3,
+        vec![
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 0.0),
+        ],
+        vec![
+            edge("input-1", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 1.0),
+        ],
+    );
+    // floor(u * 3): 0.0 -> 0, 0.34 -> 1, 0.999 -> 2.
+    for (u, expected) in [(0.0, "input-0"), (0.34, "input-1"), (0.999, "input-2")] {
+        let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 0.0, || u)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            removed.synapses,
+            vec![edge(expected, "output-0", 0.0)],
+            "u = {u}"
+        );
+    }
+}
+
+#[test]
+fn a_target_that_keeps_two_inbound_takes_no_draw_and_no_new_edge() {
+    let base = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 1.0),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 2.0),
+            edge("input-1", "output-0", 3.0),
+        ],
+    );
+    let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 0.25, never_draw)
+        .unwrap()
+        .unwrap();
+    // 1.0 + 2.0 * 0.25 — the inbound count is taken before removal, so the
+    // edge from hidden-0 still counts and output-0 is not reconnected.
+    assert_eq!(
+        removed.neurons,
+        vec![neuron("output", "output-0", "IDENTITY", 1.5)]
+    );
+    assert_eq!(removed.synapses, vec![edge("input-1", "output-0", 3.0)]);
+}
+
+#[test]
+fn two_typed_synapses_into_one_target_leave_the_last_bias() {
+    let base = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 1.0),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            typed("hidden-0", "output-0", 2.0, "positive"),
+            typed("hidden-0", "output-0", 4.0, "negative"),
+            edge("input-1", "output-0", 3.0),
+        ],
+    );
+    let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 0.5, never_draw)
+        .unwrap()
+        .unwrap();
+    // Each new bias starts from the original 1.0, so the second (4.0 * 0.5)
+    // replaces the first (2.0 * 0.5) instead of adding to it: 1.0 + 2.0 = 3.0.
+    assert_eq!(removed.neurons[0].bias, 3.0);
+}
+
+#[test]
+fn a_feeder_left_without_outward_synapses_is_removed_in_cascade() {
+    let base = creature(
+        2,
+        vec![
+            neuron("hidden", "feeder-only", "TANH", 0.0),
+            neuron("hidden", "feeder-shared", "TANH", 0.0),
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 0.0),
+        ],
+        vec![
+            edge("input-0", "feeder-only", 1.0),
+            edge("input-0", "feeder-shared", 1.0),
+            edge("feeder-only", "hidden-0", 1.0),
+            edge("feeder-shared", "hidden-0", 1.0),
+            edge("feeder-shared", "output-0", 1.0),
+            edge("hidden-0", "output-0", 1.0),
+        ],
+    );
+    let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 0.0, never_draw)
+        .unwrap()
+        .unwrap();
+    let uuids: Vec<&str> = removed.neurons.iter().map(|n| n.uuid.as_str()).collect();
+    assert_eq!(uuids, ["feeder-shared", "output-0"]);
+    assert_eq!(
+        removed.synapses,
+        vec![
+            edge("input-0", "feeder-shared", 1.0),
+            edge("feeder-shared", "output-0", 1.0),
+        ]
+    );
+}
+
+#[test]
+fn removal_clears_the_memetic_record_and_a_refusal_keeps_it() {
+    let mut base = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 0.0),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 2.0),
+            edge("input-1", "output-0", 1.0),
+        ],
+    );
+    base.memetic = Some(memetic());
+    let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 1.0, never_draw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(removed.memetic, None);
+
+    // f64::MAX * 2.0 overflows the folded bias, so nothing is applied.
+    let refused = remove_neuron_by_bias_fold(&base, "hidden-0", f64::MAX, never_draw);
+    assert_eq!(refused, Ok(None));
+    let refused_nan = remove_neuron_by_bias_fold(&base, "hidden-0", f64::NAN, never_draw);
+    assert_eq!(refused_nan, Ok(None));
+    assert_eq!(base.memetic, Some(memetic()), "the input is never modified");
+}
+
+#[test]
+fn propagate_squash_targets_are_refused_as_the_unported_constant_branch() {
+    for squash in ["IF", "MINIMUM", "MAXIMUM"] {
+        let base = creature(
+            2,
+            vec![
+                neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+                neuron("output", "output-0", squash, 0.0),
+            ],
+            vec![
+                edge("input-0", "hidden-0", 1.0),
+                edge("hidden-0", "output-0", 1.0),
+                edge("input-1", "output-0", 1.0),
+            ],
+        );
+        assert_eq!(
+            remove_neuron_by_bias_fold(&base, "hidden-0", 1.0, never_draw),
+            Err(RemoveNeuronError::ConstantBranchNotPorted {
+                target: "output-0".to_string()
+            }),
+            "{squash}"
+        );
+    }
+
+    // MEAN and HYPOT have no `propagate` in TypeScript, so they fold into the bias.
+    for squash in ["MEAN", "HYPOT"] {
+        let base = creature(
+            2,
+            vec![
+                neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+                neuron("output", "output-0", squash, 0.0),
+            ],
+            vec![
+                edge("input-0", "hidden-0", 1.0),
+                edge("hidden-0", "output-0", 2.0),
+                edge("input-1", "output-0", 1.0),
+            ],
+        );
+        let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 1.5, never_draw)
+            .unwrap()
+            .unwrap();
+        assert_eq!(removed.neurons[0].bias, 3.0, "{squash}: 0.0 + 2.0 * 1.5");
+    }
+}
+
+#[test]
+fn unknown_and_non_hidden_neurons_and_bad_draws_are_refused() {
+    let base = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", "IDENTITY", 0.0),
+            neuron("output", "output-0", "IDENTITY", 0.0),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 1.0),
+        ],
+    );
+    assert_eq!(
+        remove_neuron_by_bias_fold(&base, "missing", 0.0, never_draw),
+        Err(RemoveNeuronError::UnknownNeuron {
+            uuid: "missing".to_string()
+        })
+    );
+    assert_eq!(
+        remove_neuron_by_bias_fold(&base, "output-0", 0.0, never_draw),
+        Err(RemoveNeuronError::NotRemovable {
+            uuid: "output-0".to_string(),
+            neuron_type: "output".to_string()
+        })
+    );
+    for draw in [1.0, -0.1] {
+        assert_eq!(
+            remove_neuron_by_bias_fold(&base, "hidden-0", 0.0, || draw),
+            Err(RemoveNeuronError::DrawOutOfRange { draw })
+        );
+    }
+    let nan = remove_neuron_by_bias_fold(&base, "hidden-0", 0.0, || f64::NAN);
+    assert!(matches!(nan, Err(RemoveNeuronError::DrawOutOfRange { draw }) if draw.is_nan()));
+}
