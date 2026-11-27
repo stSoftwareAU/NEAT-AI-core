@@ -404,7 +404,10 @@ fn frozen_compact_unused_captures_replay_exactly() {
                 "{name}: the port mints once where TypeScript minted twice"
             );
             assert_eq!(
-                removal.unity_constant.as_ref().map(|constant| constant.slot),
+                removal
+                    .unity_constant
+                    .as_ref()
+                    .map(|constant| constant.slot),
                 Some(1),
                 "{name}: the survivor holds slot 1"
             );

@@ -40,9 +40,9 @@ recorded only when its order differs from `aligned`.
 | `orphan_cleanup_cascade` | 778014 | `hidden-B` | bias fold | 1 |
 | `fix_if_compact` | 778021 | `hidden-3` | constant (minted 1) | 0 |
 | `compact_constant_first` | 778031 | `hidden-3b` | constant (minted 1) | 0 |
-| `compact_constant_second` | 778031 | `hidden-3` | constant (minted 2) | 0 |
+| `compact_constant_second` | 778031 | `hidden-3` | constant (minted 2, replays natively) | 0 |
 | `compact_keep_order_first` | 778041 | `hidden-3` | constant (minted 1) | 0 |
-| `compact_keep_order_second` | 778041 | `hidden-3b` | constant (minted 2) | 0 |
+| `compact_keep_order_second` | 778041 | `hidden-3b` | constant (minted 2, replays natively) | 0 |
 
 ## Findings
 
@@ -62,10 +62,12 @@ recorded only when its order differs from `aligned`.
 - **Slot tags.** Each new constant carries `compact-unity-slot`. On a second
   call the input holds `first-constant-0` at slot `"0"`, so the new constant
   takes `"1"`. `unity-constant-0` is minted there but absent from `result.after`.
-- **Replay.** `compact_legacy_unused.rs` matches the other twelve cases. Both
-  second calls pick the captured neuron, then `remove_neuron` refuses with
-  `UnitySlotReuseNotPorted` (slot 0 is held by `first-constant-0`; the capture
-  shows none). The test is red on both.
+- **Replay.** `compact_legacy_unused.rs` replays all fourteen cases bit for bit.
+  Both second calls pick the captured neuron, and `remove_neuron` then takes the
+  sound reuse of `first-constant-0` (its bias is set to 1, as TypeScript does).
+  The port mints the survivor once, where TypeScript minted `unity-constant-0`
+  as well and discarded it. The survivor is `unity-constant-1` at slot `"1"`,
+  and the replay takes its uuid from the capture.
 - **Order and squash.** `runtimeGraphMatchesAligned` is true in all fourteen.
   CLIPPED is recorded as `HARD_TANH`.
 
