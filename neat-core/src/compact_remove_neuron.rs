@@ -11,6 +11,8 @@
 //!
 //! The rewrite is **approximate**: it is exact only while the removed neuron's
 //! activation equals the folded constant, which a trace mean does not promise.
+//! That holds for every target the function accepts, because every squash
+//! whose result is not `squash(sum + bias)` is refused (see below).
 //!
 //! The TypeScript guards are kept:
 //!
@@ -28,9 +30,10 @@
 //!
 //! - choosing the neuron — `compactUnused`'s trace statistics, shuffle and
 //!   newborn-grace skip are caller policy; this function only rewrites;
-//! - the **constant branch**: when any outward target is an `IF`, `MINIMUM` or
-//!   `MAXIMUM` neuron (the squashes with their own `propagate`), TypeScript
-//!   rewires through a reusable constant neuron keyed on the
+//! - the **constant branch**: when any outward target is an `IF`, `MINIMUM`,
+//!   `MAXIMUM`, `MEAN`, `HYPOT` or `HYPOTv2` neuron (the six squashes that
+//!   define `propagate` at the frozen revision), TypeScript rewires through a
+//!   reusable constant neuron keyed on the
 //!   `compact-unity-slot` neuron tag.
 //!   [`crate::creature::NeuronExport`] carries no tags, so that branch is
 //!   refused with [`RemoveNeuronError::ConstantBranchNotPorted`] rather than
@@ -106,9 +109,16 @@ impl std::fmt::Display for RemoveNeuronError {
 
 impl std::error::Error for RemoveNeuronError {}
 
-/// The squashes whose TypeScript activation defines `propagate`.
+/// The squashes whose TypeScript activation defines `propagate`: `removeNeuron`
+/// sends a target with any of them down the constant branch. The set is the
+/// six registered at the frozen revision (IF, MINIMUM, MAXIMUM, MEAN, HYPOT,
+/// HYPOTv2) and `neat-core/tests/golden/compact_legacy_metadata.json` records
+/// TypeScript taking that branch for each.
 fn needs_constant_branch(squash: Option<&str>) -> bool {
-    matches!(squash, Some("IF" | "MINIMUM" | "MAXIMUM"))
+    matches!(
+        squash,
+        Some("IF" | "MINIMUM" | "MAXIMUM" | "MEAN" | "HYPOT" | "HYPOTv2")
+    )
 }
 
 /// Remove `uuid`, folding `activation` into the biases of its targets.
@@ -133,7 +143,7 @@ fn needs_constant_branch(squash: Option<&str>) -> bool {
 /// for an input or output, [`RemoveNeuronError::DanglingTarget`] for an
 /// outward synapse into no listed neuron,
 /// [`RemoveNeuronError::ConstantBranchNotPorted`] for an
-/// `IF`/`MINIMUM`/`MAXIMUM` target, and
+/// `IF`/`MINIMUM`/`MAXIMUM`/`MEAN`/`HYPOT`/`HYPOTv2` target, and
 /// [`RemoveNeuronError::DrawOutOfRange`] for a draw outside `[0, 1)`.
 ///
 /// # Examples

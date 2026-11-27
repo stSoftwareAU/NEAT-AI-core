@@ -150,7 +150,9 @@ fn frozen_captures_replay_bit_for_bit() {
         );
         replayed += 1;
     }
-    assert_eq!(replayed, 15);
+    // 15 hand-made cases plus the 8 per-squash fixtures of the original
+    // `CompactCreatureSimplifyLargeWeightsSupportedSquashes.ts`.
+    assert_eq!(replayed, 15 + 8);
 }
 
 #[test]
@@ -217,22 +219,46 @@ fn outputs(creature: &CreatureExport, inputs: &[f32]) -> Vec<f32> {
 #[test]
 fn rescaling_preserves_behaviour() {
     let mut checked = 0;
-    for name in ["absolute", "relu_negative", "tiny_inbound", "typed_if"] {
+    // Every squash `CANDIDATE_SQUASHES` lists is rescaled by at least one case.
+    for name in [
+        "absolute",
+        "relu_negative",
+        "tiny_inbound",
+        "typed_if",
+        "supported_ReLU",
+        "supported_LeakyReLU",
+        "supported_MAXIMUM",
+        "supported_MINIMUM",
+        "supported_IF",
+        "supported_HYPOT",
+        "supported_HYPOTv2",
+        "supported_MEAN",
+    ] {
         let r = record(name);
         let input = creature_from(&r["input"], false);
         let result = simplify_large_weights(&input, None);
         assert!(result.changed(), "{name}");
-        let samples: Vec<Vec<f32>> = if input.input == 1 {
-            [-2.0, -0.25, 0.0, 0.5, 3.0]
+        // The sample points of the original tests, by input width.
+        let samples: Vec<Vec<f32>> = match input.input {
+            1 => [-3.0, -1.0, -0.25, 0.0, 0.25, 1.0, 3.0, 0.5, -2.0]
                 .iter()
                 .map(|&x| vec![x])
-                .collect()
-        } else {
-            vec![
+                .collect(),
+            2 => vec![
+                vec![-2.0, -2.0],
+                vec![-2.0, 2.0],
+                vec![2.0, -2.0],
+                vec![2.0, 2.0],
+            ],
+            _ => vec![
+                vec![-2.0, -3.0, -4.0],
+                vec![-2.0, 3.0, 4.0],
+                vec![2.0, -3.0, -4.0],
+                vec![2.0, 3.0, 4.0],
                 vec![1.0, 2.0, 3.0],
                 vec![-1.0, 2.0, 3.0],
                 vec![0.5, -2.0, 4.0],
-            ]
+            ],
         };
         for sample in samples {
             let before = outputs(&input, &sample);
@@ -248,7 +274,7 @@ fn rescaling_preserves_behaviour() {
         }
         checked += 1;
     }
-    assert_eq!(checked, 4);
+    assert_eq!(checked, 12);
 }
 
 #[test]
@@ -275,10 +301,13 @@ fn a_non_positive_temperature_is_greedy() {
 }
 
 #[test]
-fn the_input_creature_is_left_unchanged() {
+fn the_rescaled_copy_differs_from_an_input_that_is_left_alone() {
     let input = creature_from(&record("absolute")["input"], true);
     let snapshot = input.clone();
     let result = simplify_large_weights(&input, None);
     assert!(result.changed());
-    assert_eq!(input, snapshot);
+    // Derivation: the frozen capture rescales ABSOLUTE's 1e6 bias, so the
+    // returned copy must differ from the input, which stays as it was.
+    assert_ne!(result.creature, input);
+    assert_eq!(input, snapshot, "the input must not be modified");
 }

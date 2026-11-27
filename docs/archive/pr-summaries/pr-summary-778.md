@@ -19,7 +19,8 @@ struct changes.
   `removeHiddenNeuron` orphan cascade it ends with.
 
 A new `simplify` capture mode freezes the TypeScript results so the native tests
-can replay them bit for bit. Two parts of `compactUnused` are not ported, so
+can replay them bit for bit, and the `metadata` capture mode now also records
+TypeScript's constant branch for every target squash that defines `propagate`. Two parts of `compactUnused` are not ported, so
 this is Part of #778:
 
 - its neuron selection, which reads trace statistics and the newborn-grace tag
@@ -43,7 +44,10 @@ the CLI.
 - The `simplifyLargeWeights` captures did not exist yet.
   `scripts/legacy_compaction_simplify.ts` generates them from the frozen
   checkout in the same way as the other capture modes, so the expected values
-  come from TypeScript and not from the Rust under test.
+  come from TypeScript and not from the Rust under test. They include the eight
+  per-squash fixtures of the original
+  `CompactCreatureSimplifyLargeWeightsSupportedSquashes.ts` (ReLU, LeakyReLU,
+  MAXIMUM, MINIMUM, IF, HYPOT, HYPOTv2, MEAN).
 
 ### Essential Design Decisions
 
@@ -86,12 +90,18 @@ the CLI.
     A draw outside `[0, 1)` names no input and is refused, as is an outward
     synapse into a target that is not listed (`DanglingTarget`, where TypeScript
     would throw).
-  - TypeScript sends a target with its own `propagate` (`IF`, `MINIMUM`,
-    `MAXIMUM`) down the constant branch. That branch reuses a constant neuron
+  - TypeScript sends a target whose squash defines `propagate` down the
+    constant branch. At the frozen revision that is six squashes: `IF`,
+    `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT` and `HYPOTv2`. The `metadata` capture
+    records TypeScript taking that branch for each (a unity constant neuron is
+    wired in and the target's bias is left alone). That branch reuses a constant neuron
     keyed on the `compact-unity-slot` neuron tag, and `NeuronExport` has no
     tags. Adding a field breaks the scorer's struct literals and needs the
-    three-phase flow in `RELEASING.md`. That target is therefore refused with
-    `ConstantBranchNotPorted`, not approximated.
+    three-phase flow in `RELEASING.md`. Such a target is therefore refused with
+    `ConstantBranchNotPorted`, not approximated. Folding into a `MEAN`, `HYPOT`
+    or `HYPOTv2` bias would be wrong even for an exactly constant activation,
+    because dropping an inbound edge changes `MEAN`'s `n` and the sum of squares
+    under `HYPOT`.
   - Choosing the neuron stays with the caller: the trace statistics, the shuffle
     and the newborn-grace skip (also a neuron tag).
 
@@ -126,22 +136,31 @@ evidence is the tests below.
   - The other 15 tests cover typed IF roles, empty-string roles, IF targets,
     aggregate targets (MINIMUM/HYPOT), the threshold boundary, negative weights,
     NaN and infinite weights, the last inbound edge of an output, frozen
-    indices, the NaN threshold, memetic rows, neuron retention and input
-    immutability.
+    indices, the NaN threshold, memetic rows and neuron retention.
+    `the_result_is_a_pruned_copy_that_leaves_the_input_alone` asserts the
+    returned creature holds exactly the surviving synapse (1e-9 is below the
+    1e-3 threshold, so one edge goes) and that the input is unchanged.
 - `neat-core/tests/compact_simplify_large_weights.rs`:
-  - `frozen_captures_replay_bit_for_bit` replays all 15 cases in
+  - `frozen_captures_replay_bit_for_bit` replays all 23 cases in
     `neat-core/tests/golden/compact_legacy_simplify.json`. It checks the
     `changed` flag, the draw count, every bias and weight by `to_bits`, the
     memetic clearing, and the before and after penalties within `1e-12`.
-  - The 15 cases are: ABSOLUTE, ReLU with negative values, a tiny inbound edge,
-    typed IF, MEAN/HYPOTv2, TANH left alone, a balanced creature, a skipped
-    output, a NaN bias, a NaN first inbound edge, an infinite inbound edge, a
-    self-loop, a greedy reject, an MCMC accept and an MCMC reject.
+  - The 23 cases are 15 hand-made ones — ABSOLUTE, ReLU with negative values, a
+    tiny inbound edge, typed IF, MEAN/HYPOTv2, TANH left alone, a balanced
+    creature, a skipped output, a NaN bias, a NaN first inbound edge, an
+    infinite inbound edge, a self-loop, a greedy reject, an MCMC accept and an
+    MCMC reject — and the 8 original per-squash fixtures `supported_ReLU`,
+    `supported_LeakyReLU`, `supported_MAXIMUM`, `supported_MINIMUM`,
+    `supported_IF`, `supported_HYPOT`, `supported_HYPOTv2` and `supported_MEAN`.
   - `magnitude_penalty_matches_the_shared_corpus` checks every corpus case
     within the corpus tolerance.
   - `rescaling_preserves_behaviour` compiles the creature before and after for
-    the `absolute`, `relu_negative`, `tiny_inbound` and `typed_if` cases and
-    compares their activations.
+    the `absolute`, `relu_negative`, `tiny_inbound` and `typed_if` cases and the
+    eight `supported_*` fixtures, and compares their activations at the sample
+    points of the original tests. Together these rescale every squash in
+    `CANDIDATE_SQUASHES`.
+  - `the_rescaled_copy_differs_from_an_input_that_is_left_alone` asserts the
+    returned copy differs from the input and the input is unchanged.
   - `a_non_positive_temperature_is_greedy` checks that a temperature of 0 or -1
     never draws and never accepts a worse rescale.
 - `neat-core/tests/compact_remove_neuron.rs`:
@@ -159,6 +178,14 @@ evidence is the tests below.
     both outputs unchanged. It checks a 125-point input grid through
     `compile_creature` + `activate` within `1e-6`. As in TypeScript, the trace
     collection and the neuron choice belong to the caller.
+  - `every_propagate_squash_target_is_refused_as_the_unported_constant_branch`
+    reads the six `removeNeuronConstantBranch` captures in the same golden file
+    (`IF`, `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`, `HYPOTv2`). Each records
+    `definesPropagate`, a successful TypeScript removal that wired in a constant
+    neuron, and the target's bias left at 0.25. The test asserts the port
+    returns `ConstantBranchNotPorted` for all six.
+  - `a_target_without_propagate_takes_the_bias_fold` is the positive control:
+    `IDENTITY`, `TANH` and `ReLU` targets fold to `0.25 + 2.0 * 1.5 = 3.25`.
   - The other 8 tests cover:
     - the draw-to-input mapping;
     - a target that keeps two inbound synapses;
@@ -166,7 +193,7 @@ evidence is the tests below.
     - a dangling outward target;
     - the feeder cascade;
     - memetic clearing on removal and keeping it on refusal;
-    - the `IF`/`MINIMUM`/`MAXIMUM` refusal against `MEAN`/`HYPOT` folding;
+    - the width refusal for a creature with no inputs;
     - unknown and non-hidden neurons, and out-of-range draws.
   - Each mutation below turned the suite red and was reverted:
     - drop the finite guard;
@@ -177,7 +204,12 @@ evidence is the tests below.
     - skip the cascade;
     - round instead of floor;
     - keep the memetic record;
-    - drop `MAXIMUM` from the constant-branch set.
+    - drop each of `IF`, `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT` and `HYPOTv2` from
+      the constant-branch set (six runs, each red in
+      `every_propagate_squash_target_is_refused_as_the_unported_constant_branch`);
+    - misspell each of the eight non-trivial entries of `CANDIDATE_SQUASHES`
+      (`ReLU`, `LeakyReLU`, `MAXIMUM`, `MINIMUM`, `IF`, `HYPOT`, `HYPOTv2`,
+      `MEAN`): two simplify tests go red for every one.
 - `docs/research/compaction-simplify-baseline.md` records the new capture, a
   table of the cases, the exactness classification and the reproduction command.
   `docs/research/compaction-variant-baseline.md` now names the native coverage
@@ -214,7 +246,8 @@ refusal, which one of them suggested.
   `neat-core/tests/compact_remove_neuron.rs::frozen_remove_neuron_captures_replay_exactly`
   — reviewer: partial — reason: the bias-fold branch of `removeNeuron` and the
   `removeHiddenNeuron` cascade are ported. The constant branch
-  (`IF`/`MINIMUM`/`MAXIMUM` targets) is refused with `ConstantBranchNotPorted`,
+  (`IF`/`MINIMUM`/`MAXIMUM`/`MEAN`/`HYPOT`/`HYPOTv2` targets, the six squashes
+  that define `propagate`) is refused with `ConstantBranchNotPorted`,
   because it is keyed on the `compact-unity-slot` neuron tag, and `NeuronExport`
   cannot carry tags without a three-phase public-struct change.
 - **met** — Keep speculative selection, statistics collection and authoritative
@@ -224,21 +257,29 @@ refusal, which one of them suggested.
 - **partial** — Preserve the safe/aggressive output contracts and the
   unsupported/no-op behaviour; keep the existing guards; no new thresholds —
   evidence:
-  `neat-core/tests/compact_aggressive_prune.rs::the_input_creature_is_left_unchanged`
+  `neat-core/tests/compact_aggressive_prune.rs::the_result_is_a_pruned_copy_that_leaves_the_input_alone`
   — reviewer: partial — reason: there are no new thresholds, but there are
   documented departures. `aggressive_prune` prunes memetic rows where TypeScript
   deletes the record. `NanThreshold`, `FrozenIndexOutOfRange`, `DrawOutOfRange`
   and `DanglingTarget` are new refusals.
 - **met** — Exactness classifications follow the actual semantics — evidence:
-  `docs/research/compaction-simplify-baseline.md`, module docs — reviewer: met
+  `docs/research/compaction-simplify-baseline.md` and the module docs. The bias
+  fold is classified exact only while the activation equals the folded
+  constant, and that now holds for every accepted target, because the six
+  `propagate` squashes (including `MEAN`, `HYPOT` and `HYPOTv2`) are refused,
+  as `every_propagate_squash_target_is_refused_as_the_unported_constant_branch`
+  pins against TypeScript's own captures — reviewer: met
 - **met** — Tests for typed IF — evidence:
   `compact_aggressive_prune.rs::an_if_output_keeps_every_typed_tiny_edge`, the
   simplify `typed_if` capture, and
-  `compact_remove_neuron.rs::propagate_squash_targets_are_refused_as_the_unported_constant_branch`
+  `compact_remove_neuron.rs::every_propagate_squash_target_is_refused_as_the_unported_constant_branch`
   — reviewer: met
 - **met** — Tests for aggregation — evidence:
   `compact_aggressive_prune.rs::tiny_edges_into_aggregate_hidden_neurons_are_removed`,
-  the `mean_hypot` capture, and MEAN/HYPOT folding in `compact_remove_neuron.rs`
+  the `mean_hypot` capture and the `supported_MAXIMUM`, `supported_MINIMUM`,
+  `supported_HYPOT`, `supported_HYPOTv2` and `supported_MEAN` simplify captures,
+  and `compact_remove_neuron.rs::every_propagate_squash_target_is_refused_as_the_unported_constant_branch`
+  (MEAN, HYPOT and HYPOTv2 take TypeScript's constant branch and are refused)
   — reviewer: met
 - **met** — Tests for clipping — evidence:
   `compact_remove_neuron.rs::removing_a_saturated_clipped_neuron_preserves_behaviour`
@@ -260,8 +301,11 @@ refusal, which one of them suggested.
   creature tags (`unused`, `approach`, `old-*`, `compact-unity-slot`) are not
   represented in core's structs, so they are neither ported nor tested.
 - **met** — Parity with the original fixtures — evidence: 3 aggressive captures,
-  15 simplify captures, and the 4 #776 `removeNeuron` captures, replayed bit for
-  bit and in order — reviewer: met (for the ported scope)
+  23 simplify captures (the 15 hand-made cases plus the 8 original per-squash
+  fixtures of `CompactCreatureSimplifyLargeWeightsSupportedSquashes.ts`), the 4
+  #776 `removeNeuron` captures and the 6 constant-branch `removeNeuron`
+  captures, replayed bit for bit and in order — reviewer: met (for the ported
+  scope)
 - **met** — Additive changes only; callers not switched — evidence:
   `neat-core/src/lib.rs` adds modules and re-exports only — reviewer: met
 - **unrequested** — The `Cargo.lock` refresh from `bump-deps.sh` (9d134a8), with
@@ -274,7 +318,12 @@ refusal, which one of them suggested.
 - Added tests:
   - `neat-core/tests/compact_aggressive_prune.rs` (16 tests);
   - `neat-core/tests/compact_simplify_large_weights.rs` (7 tests);
-  - `neat-core/tests/compact_remove_neuron.rs` (11 tests).
+  - `neat-core/tests/compact_remove_neuron.rs` (12 tests).
+
+  This fix also added the `simplify` fixtures and the `removeNeuronConstantBranch`
+  captures to the two golden files and the `scripts/legacy_compaction_*.ts`
+  capture scripts. The existing records in both files regenerate byte for byte
+  before the additions, and the additions are deterministic across two runs.
 
   Doctests were added on `aggressive_prune`, `simplify_large_weights`,
   `magnitude_penalty`, `mean_magnitude_penalty` and
@@ -286,13 +335,12 @@ refusal, which one of them suggested.
 - The `wasm-bindgen` family is held at the pinned CLI version.
   `bats tests/scripts/wasm_bundle_wasm64_dual_ship.bats` passes (14/14), and so
   does `scripts/lockfile-freshness.sh --check`.
-- `cargo test --workspace` passed on 5fbf16b.
-  `cargo clippy -p neat-core --all-targets -- -D warnings`, `cargo fmt --check`
-  and the `compact_remove_neuron` tests and doctest pass on 958b6ad.
-- `./quality.sh < /dev/null` passed on 958b6ad, the final code commit (exit 0,
-  "All quality checks passed!", 771 bats `ok` lines with no `not ok`). That run
-  covers `cargo test --workspace`, clippy, fmt, doc, the bats gates and the deno
-  checks. The only later change is this summary file.
+- `./quality.sh < /dev/null` passed on the working tree of the review fix
+  (exit 0, "All quality checks passed!"). That run covers
+  `cargo test --workspace`, clippy, fmt, doc, the bats gates and the deno
+  checks. `markdownlint-cli2` reports 0 issues on this summary and the two
+  baseline notes edited with it. The only change after that run is prose in
+  this summary and the baseline notes.
 - Not run:
   - `scripts/check-downstream-consumers.sh`. The change only adds modules and
     re-exports, and changes no existing public item.

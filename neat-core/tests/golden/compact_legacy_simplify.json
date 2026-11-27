@@ -1380,6 +1380,642 @@
     ]
   },
   {
+    "name": "supported_ReLU",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "ReLU",
+          "bias": "1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.24975,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "ReLU",
+        "bias": "1"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "1"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1"
+      }
+    ]
+  },
+  {
+    "name": "supported_LeakyReLU",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 1,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "LeakyReLU",
+          "bias": "-1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.24975,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "LeakyReLU",
+        "bias": "-1"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "1"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1"
+      }
+    ]
+  },
+  {
+    "name": "supported_MAXIMUM",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "MAXIMUM",
+          "bias": "1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0",
+          "weight": "-2000000"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.3047121494278053,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0.0050121494278052865,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "MAXIMUM",
+        "bias": "0.7071067811865476"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "0.7071067811865476"
+      },
+      {
+        "fromUUID": "input-1",
+        "toUUID": "hidden-0",
+        "weight": "-1.4142135623730951"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1.414213562373095"
+      }
+    ]
+  },
+  {
+    "name": "supported_MINIMUM",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "MINIMUM",
+          "bias": "1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0",
+          "weight": "-2000000"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.3047121494278053,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0.0050121494278052865,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "MINIMUM",
+        "bias": "0.7071067811865476"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "0.7071067811865476"
+      },
+      {
+        "fromUUID": "input-1",
+        "toUUID": "hidden-0",
+        "weight": "-1.4142135623730951"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1.414213562373095"
+      }
+    ]
+  },
+  {
+    "name": "supported_IF",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 3,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "IF",
+          "bias": "1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000",
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0",
+          "weight": "1000000",
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "hidden-0",
+          "weight": "-1000000",
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.333,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "IF",
+        "bias": "1"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "1",
+        "type": "condition"
+      },
+      {
+        "fromUUID": "input-1",
+        "toUUID": "hidden-0",
+        "weight": "1",
+        "type": "positive"
+      },
+      {
+        "fromUUID": "input-2",
+        "toUUID": "hidden-0",
+        "weight": "-1",
+        "type": "negative"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1"
+      }
+    ]
+  },
+  {
+    "name": "supported_HYPOT",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "HYPOT",
+          "bias": "1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0",
+          "weight": "-2000000"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.3047121494278053,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0.0050121494278052865,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "HYPOT",
+        "bias": "0.7071067811865476"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "0.7071067811865476"
+      },
+      {
+        "fromUUID": "input-1",
+        "toUUID": "hidden-0",
+        "weight": "-1.4142135623730951"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1.414213562373095"
+      }
+    ]
+  },
+  {
+    "name": "supported_HYPOTv2",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "HYPOTv2",
+          "bias": "1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0",
+          "weight": "-2000000"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.3047121494278053,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0.0050121494278052865,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "HYPOTv2",
+        "bias": "0.7071067811865476"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "0.7071067811865476"
+      },
+      {
+        "fromUUID": "input-1",
+        "toUUID": "hidden-0",
+        "weight": "-1.4142135623730951"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1.414213562373095"
+      }
+    ]
+  },
+  {
+    "name": "supported_MEAN",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "source": "src/compact/SimplifyLargeWeights.ts",
+    "operation": "simplifyLargeWeights",
+    "preparation": "normaliseCreatureExport, then attach an empty memetic record",
+    "temperature": null,
+    "draw": null,
+    "draws": 0,
+    "input": {
+      "input": 2,
+      "output": 1,
+      "neurons": [
+        {
+          "uuid": "hidden-0",
+          "type": "hidden",
+          "squash": "MEAN",
+          "bias": "1000000"
+        },
+        {
+          "uuid": "output-0",
+          "type": "output",
+          "squash": "IDENTITY",
+          "bias": "0"
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-0",
+          "weight": "1000000"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-0",
+          "weight": "-2000000"
+        },
+        {
+          "fromUUID": "hidden-0",
+          "toUUID": "output-0",
+          "weight": "0.000001"
+        }
+      ]
+    },
+    "before": 0.3047121494278053,
+    "changed": true,
+    "memeticKept": false,
+    "after": 0.0050121494278052865,
+    "neurons": [
+      {
+        "uuid": "hidden-0",
+        "type": "hidden",
+        "squash": "MEAN",
+        "bias": "0.7071067811865476"
+      },
+      {
+        "uuid": "output-0",
+        "type": "output",
+        "squash": "IDENTITY",
+        "bias": "0"
+      }
+    ],
+    "synapses": [
+      {
+        "fromUUID": "input-0",
+        "toUUID": "hidden-0",
+        "weight": "0.7071067811865476"
+      },
+      {
+        "fromUUID": "input-1",
+        "toUUID": "hidden-0",
+        "weight": "-1.4142135623730951"
+      },
+      {
+        "fromUUID": "hidden-0",
+        "toUUID": "output-0",
+        "weight": "1.414213562373095"
+      }
+    ]
+  },
+  {
     "name": "penalty_empty",
     "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
     "source": "src/compact/SimplifyLargeWeights.ts",

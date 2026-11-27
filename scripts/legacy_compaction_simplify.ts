@@ -75,6 +75,54 @@ export async function captureLegacySimplify(root: URL, revision: string) {
       ...(s.type === undefined ? {} : { type: s.type }),
     }));
 
+  // The originals share one shape: a hidden neuron with large inbound weights
+  // and bias, and a tiny weight out to an IDENTITY output.
+  function supportedSquashCases(): [
+    string,
+    Export,
+    number | undefined,
+    number | undefined,
+  ][] {
+    const fixture = (
+      squash: string,
+      bias: number,
+      inbound: Synapse[],
+      inputs: number,
+    ): [string, Export, number | undefined, number | undefined] => [
+      `supported_${squash}`,
+      {
+        input: inputs,
+        output: 1,
+        neurons: [
+          N("hidden-0", "hidden", squash, bias),
+          N("output-0", "output", "IDENTITY", 0),
+        ],
+        synapses: [...inbound, S("hidden-0", "output-0", 1e-6)],
+      },
+      undefined,
+      undefined,
+    ];
+    const two = [
+      S("input-0", "hidden-0", 1e6),
+      S("input-1", "hidden-0", -2e6),
+    ];
+    const one = [S("input-0", "hidden-0", 1e6)];
+    return [
+      fixture("ReLU", 1e6, one, 1),
+      fixture("LeakyReLU", -1e6, one, 1),
+      fixture("MAXIMUM", 1e6, two, 2),
+      fixture("MINIMUM", 1e6, two, 2),
+      fixture("IF", 1e6, [
+        S("input-0", "hidden-0", 1e6, "condition"),
+        S("input-1", "hidden-0", 1e6, "positive"),
+        S("input-2", "hidden-0", -1e6, "negative"),
+      ], 3),
+      fixture("HYPOT", 1e6, two, 2),
+      fixture("HYPOTv2", 1e6, two, 2),
+      fixture("MEAN", 1e6, two, 2),
+    ];
+  }
+
   const cases: [string, Export, number | undefined, number | undefined][] = [
     [
       "absolute",
@@ -287,6 +335,11 @@ export async function captureLegacySimplify(root: URL, revision: string) {
     ["worse_greedy", worse(), undefined, undefined],
     ["worse_mcmc_accept", worse(), 1, 0],
     ["worse_mcmc_reject", worse(), 1, 0.999999],
+    // The eight per-squash fixtures of
+    // test/compact/CompactCreatureSimplifyLargeWeightsSupportedSquashes.ts,
+    // one for each squash simplifyLargeWeights rescales besides ABSOLUTE and
+    // IDENTITY. Each is the original creature, unedited.
+    ...supportedSquashCases(),
   ];
 
   const captures: unknown[] = [];

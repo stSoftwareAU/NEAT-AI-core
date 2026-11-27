@@ -364,37 +364,78 @@ fn removal_clears_the_memetic_record_and_a_refusal_keeps_it() {
     assert_eq!(base.memetic, Some(memetic()), "the input is never modified");
 }
 
+/// Every squash TypeScript sends down the constant branch is refused, taken
+/// from the frozen captures rather than listed here: each capture records
+/// `definesPropagate`, a successful removal and a unity constant neuron wired in
+/// with the target's bias untouched.
 #[test]
-fn propagate_squash_targets_are_refused_as_the_unported_constant_branch() {
-    for squash in ["IF", "MINIMUM", "MAXIMUM"] {
+fn every_propagate_squash_target_is_refused_as_the_unported_constant_branch() {
+    let all: Vec<Value> = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/golden/compact_legacy_metadata.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let cases: Vec<&Value> = all
+        .iter()
+        .filter(|c| c["operation"] == "removeNeuronConstantBranch")
+        .collect();
+    let squashes: Vec<&str> = cases
+        .iter()
+        .map(|c| c["squash"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        squashes,
+        ["IF", "MINIMUM", "MAXIMUM", "MEAN", "HYPOT", "HYPOTv2"]
+    );
+    for case in cases {
+        let squash = case["squash"].as_str().unwrap();
+        assert_eq!(case["definesPropagate"], true, "{squash}");
+        assert_eq!(case["result"], true, "{squash}: TypeScript removed it");
+        assert_eq!(
+            case["constantNeuronAdded"], true,
+            "{squash}: TypeScript wired in a constant neuron"
+        );
+        assert_eq!(
+            number(&case["targetBias"]),
+            0.25,
+            "{squash}: the bias was not folded"
+        );
+
+        // The capture's own creature, replayed through the port.
         let base = creature(
             2,
             vec![
                 neuron("hidden", "hidden-0", "IDENTITY", 0.0),
-                neuron("output", "output-0", squash, 0.0),
+                neuron("output", "output-0", squash, 0.25),
             ],
             vec![
                 edge("input-0", "hidden-0", 1.0),
-                edge("hidden-0", "output-0", 1.0),
+                edge("hidden-0", "output-0", 2.0),
                 edge("input-1", "output-0", 1.0),
             ],
         );
         assert_eq!(
-            remove_neuron_by_bias_fold(&base, "hidden-0", 1.0, never_draw),
+            remove_neuron_by_bias_fold(&base, "hidden-0", number(&case["activation"]), never_draw),
             Err(RemoveNeuronError::ConstantBranchNotPorted {
                 target: "output-0".to_string()
             }),
             "{squash}"
         );
     }
+}
 
-    // MEAN and HYPOT have no `propagate` in TypeScript, so they fold into the bias.
-    for squash in ["MEAN", "HYPOT"] {
+/// The positive control: a target without `propagate` folds into its bias.
+#[test]
+fn a_target_without_propagate_takes_the_bias_fold() {
+    for squash in ["IDENTITY", "TANH", "ReLU"] {
         let base = creature(
             2,
             vec![
                 neuron("hidden", "hidden-0", "IDENTITY", 0.0),
-                neuron("output", "output-0", squash, 0.0),
+                neuron("output", "output-0", squash, 0.25),
             ],
             vec![
                 edge("input-0", "hidden-0", 1.0),
@@ -405,7 +446,12 @@ fn propagate_squash_targets_are_refused_as_the_unported_constant_branch() {
         let removed = remove_neuron_by_bias_fold(&base, "hidden-0", 1.5, never_draw)
             .unwrap()
             .unwrap();
-        assert_eq!(removed.neurons[0].bias, 3.0, "{squash}: 0.0 + 2.0 * 1.5");
+        let target = removed
+            .neurons
+            .iter()
+            .find(|n| n.uuid == "output-0")
+            .unwrap();
+        assert_eq!(target.bias, 3.25, "{squash}: 0.25 + 2.0 * 1.5");
     }
 }
 

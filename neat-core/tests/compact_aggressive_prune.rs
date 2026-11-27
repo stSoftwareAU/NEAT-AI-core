@@ -410,12 +410,20 @@ fn a_hidden_neuron_loses_its_tiny_outward_edge_but_stays_listed() {
 }
 
 #[test]
-fn the_input_creature_is_left_unchanged() {
+fn the_result_is_a_pruned_copy_that_leaves_the_input_alone() {
     let original = output_with(vec![
         edge("input-0", "output-0", 1.0),
         edge("input-1", "output-0", 1e-9),
     ]);
     let snapshot = original.clone();
-    let _ = aggressive_prune(&original, T, &[]).unwrap();
-    assert_eq!(original, snapshot);
+    let pruned = aggressive_prune(&original, T, &[]).unwrap();
+    // Derivation: input-1's weight 1e-9 is below T = 1e-3, so exactly that
+    // synapse goes; the unit-weight edge survives untouched.
+    assert_eq!(pruned.removed_synapses, 1);
+    assert_eq!(
+        pruned.creature.synapses,
+        vec![edge("input-0", "output-0", 1.0)]
+    );
+    assert_eq!(pruned.creature.neurons, original.neurons);
+    assert_eq!(original, snapshot, "the input must not be modified");
 }

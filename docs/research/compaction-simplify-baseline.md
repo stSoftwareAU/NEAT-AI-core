@@ -2,7 +2,7 @@
 
 `neat-core/tests/golden/compact_legacy_simplify.json` freezes
 `simplifyLargeWeights` from NEAT-AI at revision
-`60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`. It holds 15 cases, a
+`60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`. It holds 23 cases, a
 `penalty_empty` record, and the shared `magnitude-penalty-corpus.json` with the
 penalties the legacy code computed for it. Numbers are stored as JS
 `String(value)`, so `NaN` and `Infinity` survive JSON.
@@ -28,6 +28,7 @@ switched by this change.
 | `infinite_inbound` | An infinite inbound weight gives an infinite scale factor, which is refused before any rescale | unchanged |
 | `worse_greedy` | Rescale would worsen the penalty and there is no temperature | unchanged |
 | `worse_mcmc_reject` | Same worsening rescale, draw 0.999999 rejects it | unchanged |
+| `supported_ReLU`, `supported_LeakyReLU`, `supported_MAXIMUM`, `supported_MINIMUM`, `supported_IF`, `supported_HYPOT`, `supported_HYPOTv2`, `supported_MEAN` | The eight original per-squash fixtures of `test/compact/CompactCreatureSimplifyLargeWeightsSupportedSquashes.ts`, unedited | changed |
 
 ## Exactness classification
 
