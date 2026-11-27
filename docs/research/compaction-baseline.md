@@ -28,6 +28,10 @@ The matrix lists the remaining work before the family inventory is exhaustive.
 
 ## Captures
 
+The [constant-merge helper baseline](compaction-constant-helper-baseline.md)
+captures all six original `ConstantMerge.ts` tests, including frozen inputs,
+canonical-slot reuse and the unchanged second pass, without whole-creature loading.
+
 The separate [bridge ordering and refusal baseline](compaction-bridge-baseline.md)
 captures four original helper boundaries, including recurrent refusal and
 MAXIMUM/IF targets. Its original large forest test passes but remains uncaptured.
