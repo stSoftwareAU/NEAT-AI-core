@@ -4,7 +4,12 @@
  * not copy the 3.4 MB creature into core.
  */
 
-type Synapse = { fromId?: number; toId?: number; fromUUID?: string; toUUID?: string };
+type Synapse = {
+  fromId?: number;
+  toId?: number;
+  fromUUID?: string;
+  toUUID?: string;
+};
 type Neuron = { id?: number };
 type Graph = { input: number; neurons: Neuron[]; synapses: Synapse[] };
 
@@ -45,7 +50,11 @@ function backwardSynapses(json: Graph): string[] {
 }
 
 function worstOutputDelta(
-  before: { input: number; output: number; activate: (row: Float32Array, trace: boolean) => Float32Array },
+  before: {
+    input: number;
+    output: number;
+    activate: (row: Float32Array, trace: boolean) => Float32Array;
+  },
   after: { activate: (row: Float32Array, trace: boolean) => Float32Array },
   rows: Float32Array[],
 ): number {
@@ -98,7 +107,11 @@ export async function captureLegacyForest(root: URL, revision: string) {
     .join("");
   const source = JSON.parse(new TextDecoder().decode(bytes));
 
-  const orderingCreature = Creature.fromJSON(structuredClone(source), false, "#3809");
+  const orderingCreature = Creature.fromJSON(
+    structuredClone(source),
+    false,
+    "#3809",
+  );
   const orderingExport = exportJSONUnchecked(orderingCreature);
   mergeRedundantConstants(orderingExport);
   const orderingNeurons = orderingExport.neurons.length;

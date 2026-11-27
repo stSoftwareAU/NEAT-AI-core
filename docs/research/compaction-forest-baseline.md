@@ -11,7 +11,8 @@ records the counts and refusals those tests assert.
 | `exactness_fixpoint_stays_forward` | `mergeParallelBridges` to a fixpoint. A loaded creature lists 2,511 inputs plus 2,538 exported neurons. The fixpoint removes no neuron and emits no backward synapse, so the synapse count stays 24,100. The original output sample uses unseeded `Math.random` and is not frozen. |
 
 These observations are not a native bridge implementation and do not accept
-#776. Reproduce from a clean checkout at `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`:
+issue #776. Reproduce from a clean checkout at
+`60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`:
 
 ```sh
 deno run -A --config ../NEAT-AI/deno.json \
