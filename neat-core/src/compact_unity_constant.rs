@@ -39,7 +39,9 @@
 //!   [`NeuronRemovalError::UnitySlotReuseNotPorted`] before any change: the holder
 //!   does not lead the list, the stale index names another neuron (the defect in
 //!   `unity_reuse_tagged_slot`, `docs/research/compaction-unity-constant-baseline.md`),
-//!   or slot 1 is held.
+//!   a second constant also holds slot 0 (TypeScript's dedupe loop merges it into
+//!   the first and never reaches slot 1, which the port does not do), or slot 1
+//!   is held.
 //! - **The reuse path mints one UUID, where TypeScript mints two.** TypeScript
 //!   mints a temporary constant, then removes it again. The port mints only the
 //!   surviving constant, so `mint_uuid` is called once.
@@ -96,7 +98,8 @@ pub enum NeuronRemovalError {
     /// A held unity slot cannot be reused the way this removal needs, so the
     /// removal is refused. Either slot 0 is held by a constant that does not
     /// lead the list or is not at the insertion point with the removed neuron,
-    /// or slot 1 is held when slot 0 would be reused. The field names the
+    /// a second constant also holds slot 0, or slot 1 is held when slot 0 would
+    /// be reused. The field names the
     /// constant in the way, and nothing is changed.
     UnitySlotReuseNotPorted {
         /// The constant that holds the slot in the way.
@@ -304,6 +307,15 @@ fn constant_branch(
                     constant: held.uuid.clone(),
                 });
             }
+            // A second slot-0 holder is merged away by TypeScript's dedupe loop,
+            // which removes it and never calls `createConstantOne(creature, 1)`.
+            // The port does not merge, so it refuses and names the second holder.
+            if let Some((_, second)) = slot_holders(&creature.neurons, unity_slots, 0, -1000).nth(1)
+            {
+                return Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+                    constant: second.uuid.clone(),
+                });
+            }
             if let Some((_, other)) = slot_holder(&creature.neurons, unity_slots, 1, -1001) {
                 return Err(NeuronRemovalError::UnitySlotReuseNotPorted {
                     constant: other.uuid.clone(),
@@ -442,19 +454,29 @@ fn constant_branch(
 /// The first constant that holds `slot`, tagged or with `legacy_id`, with its
 /// position in `neurons`. It is the search `createConstantOne` makes over the
 /// creature's constants, in list order.
-fn slot_holder<'a>(
+fn slot_holders<'a>(
     neurons: &'a [NeuronExport],
-    unity_slots: &[UnitySlot],
+    unity_slots: &'a [UnitySlot],
     slot: u8,
     legacy_id: i64,
-) -> Option<(usize, &'a NeuronExport)> {
-    neurons.iter().enumerate().find(|(_, neuron)| {
+) -> impl Iterator<Item = (usize, &'a NeuronExport)> {
+    neurons.iter().enumerate().filter(move |(_, neuron)| {
         neuron.neuron_type == "constant"
             && (neuron.id == Some(legacy_id)
                 || unity_slots
                     .iter()
                     .any(|tag| tag.slot == slot && tag.uuid == neuron.uuid))
     })
+}
+
+/// The first constant that holds `slot`, which is the one TypeScript resolves.
+fn slot_holder<'a>(
+    neurons: &'a [NeuronExport],
+    unity_slots: &'a [UnitySlot],
+    slot: u8,
+    legacy_id: i64,
+) -> Option<(usize, &'a NeuronExport)> {
+    slot_holders(neurons, unity_slots, slot, legacy_id).next()
 }
 
 /// The role rank TypeScript's `getSynapseTypeCode` gives a synapse: `standard`

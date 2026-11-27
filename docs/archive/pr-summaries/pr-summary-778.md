@@ -44,7 +44,10 @@ Part of #778.
   leading constants and the removed neuron sits at the insertion point. In that
   case, and only when slot 1 is free, the port reuses slot 0. It mints a slot-1
   constant and sets the holder's bias to 1.0, as TypeScript does. Every other
-  shape is refused with `UnitySlotReuseNotPorted` before anything changes.
+  shape is refused with `UnitySlotReuseNotPorted` before anything changes. That
+  includes a second constant that also holds slot 0 (tagged, or by legacy id
+  -1000). TypeScript's dedupe loop merges that one into the first and never
+  takes slot 1, which the port does not do, so it names the second holder.
 - On the reuse path the port calls `mint_uuid` once. TypeScript mints two UUIDs:
   one for a temporary constant it then removes, and one for the constant that
   survives. `mint_uuid` keeps its `FnOnce` bound, so no signature changes.
@@ -107,7 +110,8 @@ undone are listed here in the issue's own words.
 - **missing** — "port only existing compaction rules" (the held-slot reuse
   shapes other than the sound one, and slot 2) — reason: those shapes are
   refused with `UnitySlotReuseNotPorted`. The holder may not be a leading
-  constant, and TypeScript then merges two constants. The stale position may
+  constant, and TypeScript then merges two constants. A second constant may also
+  hold slot 0, which TypeScript merges into the first. The stale position may
   name another neuron, which is the `unity_reuse_tagged_slot` defect. Or slot 1
   may already be held. No capture shows a sound outcome for any of these.
 
@@ -142,8 +146,14 @@ undone are listed here in the issue's own words.
   - the sound reuse, tagged and by legacy id, takes slot 1 and sets the holder's
     bias to 1;
   - the reuse is refused when the holder is behind the removed neuron, or when
-    slot 1 is held by tag or by legacy id. Each refusal has a control that
-    differs only in that fact.
+    slot 1 is held by tag or by legacy id, or when a second constant also holds
+    slot 0 (`a_second_tagged_slot_zero_constant_is_refused_and_named`, tagged
+    and tagged, and
+    `a_legacy_slot_zero_id_followed_by_a_tagged_slot_zero_constant_is_refused`,
+    legacy id and tagged). Each refusal has a control that differs only in that
+    fact, and asserts no UUID is minted.
+  - Weakening the second-holder check so it never fires turned both new tests
+    red. The mutation was reverted.
   - These reuse tests were red before the source change.
   - Ignoring whether the removed neuron sits at the insertion point turned
     `a_legacy_slot_zero_id_is_refused_like_a_tagged_one` and

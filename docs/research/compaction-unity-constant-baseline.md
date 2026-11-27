@@ -42,6 +42,10 @@ as `compact_constant_second` and `compact_keep_order_second` in
 `compact_legacy_unused.json`, and the native port takes it: the holder's bias is
 set to 1 as TypeScript does, the survivor takes slot 1, and only the survivor is
 minted. The defective shape, `unity_reuse_tagged_slot`, stays refused.
+A second constant that also holds slot 0 stays refused too: TypeScript's
+dedupe loop re-sources it onto the first holder, removes it and never takes
+slot 1, a merge the port does not do. This is read from the frozen source, not
+captured.
 
 **(c) Overflow.** TypeScript throws `weight must be a number` after it has
 inserted the constant. The `after` block keeps that constant with no outward

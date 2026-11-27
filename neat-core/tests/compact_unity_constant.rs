@@ -671,6 +671,113 @@ fn a_held_slot_zero_behind_the_removed_neuron_is_refused() {
     assert_eq!(accepted.unity_constant, survivor_in_slot_one());
 }
 
+/// Two constants lead the list, ahead of `hidden-0`: `k0` and `second`. Both feed
+/// the IF target, so TypeScript's dedupe loop would have a synapse to re-source.
+fn two_leading_constants_fixture(second: NeuronExport) -> CreatureExport {
+    let mut edges = held_slot_zero_edges();
+    edges.push(edge("k2", "output-0", 0.125));
+    creature(
+        2,
+        vec![
+            neuron("constant", "k0", None, 0.7),
+            second,
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        edges,
+    )
+}
+
+#[test]
+fn a_second_tagged_slot_zero_constant_is_refused_and_named() {
+    // TypeScript meets `k0` first and `k2` second, re-sources `k2`'s synapses onto
+    // `k0`, removes `k2` and never takes slot 1. The port does not merge, so it
+    // refuses before minting anything.
+    let fixture = two_leading_constants_fixture(neuron("constant", "k2", None, -0.2));
+    let slots = |second: u8| {
+        [
+            UnitySlot {
+                uuid: "k0".to_string(),
+                slot: 0,
+            },
+            UnitySlot {
+                uuid: "k2".to_string(),
+                slot: second,
+            },
+        ]
+    };
+    let mints = Cell::new(0_u64);
+    let refused = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slots(0),
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    );
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k2".to_string(),
+        })
+    );
+    assert_eq!(mints.get(), 0, "a refusal mints no UUID");
+
+    // Control: the same creature with `k2` tagged slot 2 holds one slot-0 constant
+    // only, so the sound reuse runs and `k2` is left alone.
+    let accepted = remove_neuron(&fixture, "hidden-0", 1.5, &slots(2), fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.unity_constant, survivor_in_slot_one());
+    assert!(accepted.creature.neurons.iter().any(|n| n.uuid == "k2"));
+}
+
+#[test]
+fn a_legacy_slot_zero_id_followed_by_a_tagged_slot_zero_constant_is_refused() {
+    let legacy = NeuronExport {
+        id: Some(-1000),
+        ..neuron("constant", "k0", None, 0.7)
+    };
+    let mut fixture = two_leading_constants_fixture(neuron("constant", "k2", None, -0.2));
+    fixture.neurons[0] = legacy;
+    let slot_zero = |slot: u8| {
+        [UnitySlot {
+            uuid: "k2".to_string(),
+            slot,
+        }]
+    };
+    let refused = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slot_zero(0),
+        fresh_uuid,
+        never_draw,
+    );
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k2".to_string(),
+        })
+    );
+
+    // Control: `k2` tagged slot 2 leaves the legacy-id constant as the only holder.
+    let accepted = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slot_zero(2),
+        fresh_uuid,
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(accepted.unity_constant, survivor_in_slot_one());
+}
+
 /// `k0` holds slot 0 ahead of `hidden-0`, and `holder` sits between them, so the
 /// sound path runs unless `holder` also holds slot 1.
 fn slot_one_fixture(holder: NeuronExport) -> CreatureExport {
