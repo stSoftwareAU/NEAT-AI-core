@@ -5,8 +5,10 @@ These eleven records supplement the
 NEAT-AI helpers at `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`, using inputs copied
 unchanged from the original tests. All twelve original tests in the five
 selected source files passed unchanged. The records cover ten of those tests:
-one memetic test supplies both a dirty and a clean input; the two creature-based
-memetic/`fix()` tests are not captured by this raw-helper mode.
+one memetic test supplies both a dirty and a clean input. The two creature-based
+memetic/`fix()` tests are captured separately at their
+[runtime preparation boundary](compaction-metadata-baseline.md), rather than
+through this raw-helper mode.
 This remains a partial #776 baseline, not its acceptance gate.
 
 ## Preserve the helper boundary

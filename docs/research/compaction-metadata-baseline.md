@@ -1,0 +1,109 @@
+# Creature metadata repair and finite-guard captures (Issue #776)
+
+The first two of six records in `neat-core/tests/golden/compact_legacy_metadata.json` capture
+the first two original tests in
+[`PruneOrphanMemeticReferences.ts`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/compact/PruneOrphanMemeticReferences.ts).
+All six tests in that file passed unchanged. The remaining four tests already
+have five [raw helper records](compaction-helper-baseline.md), because the
+exact-count test supplies both dirty and clean inputs. Together the two modes
+cover this file's six tests; they do not complete #776 or its metadata coverage.
+Four additional records capture every original test in
+[`CompactUnusedFiniteGuard.ts`](https://github.com/stSoftwareAU/NEAT-AI/blob/60d6b4e5d3af20afbaaeb3420d588ad673ab8dab/test/compact/CompactUnusedFiniteGuard.ts).
+All ten original tests across the two files passed unchanged.
+
+## Runtime preparation matters
+
+Both original tests load the same two-input graph with
+`Creature.fromJSON(json, true)`, then attach stale memetic data. Attaching that
+data before loading would let load-time cleanup remove the failure being
+tested. The capture preserves the raw graph before the loader adds IDs and
+records the actual runtime hidden-neuron ID, `1775329602`, derived by the
+legacy loader. Synapse endpoints in the runtime snapshots are neuron indices,
+not those IDs. Memetic bias keys are IDs; valid exported keys are UUID labels.
+
+The recorder takes an explicit runtime projection of neurons, synapses,
+memetic data and the forward-only flag. It does not export the invalid creature
+first: `exportJSON()` validates DEBUG creatures and converts memetic references
+to wire labels. Input-neuron bias sentinels are explicitly encoded as
+`"Infinity"`; a normal JSON encoding would silently turn them into `null`.
+No private fields or executable methods are serialized.
+
+| Capture | Original operation | Frozen observable outcome |
+|---|---|---|
+| `creature_memetic_prune` | `pruneOrphanMemeticReferences(creature)` | Validation first fails with `ValidationError` naming absent ID `1998066541`. Pruning returns one removal, retains the valid hidden bias `0.1`, and validation succeeds. The valid wire export maps that bias to `hidden-a` and represents empty weights as `[]`. |
+| `creature_memetic_fix` | `fix(creature, {forwardOnly: true})` | The original test only validates after repair, so `beforeValidation` is `null`. `fix` returns `undefined` (recorded as `null`), removes the sole stale bias, retains empty memetic metadata, and sets `forwardOnly: true`. Validation with that option succeeds. |
+
+Both captured cases preserve all graph neurons and synapses. That is an
+observation about these inputs, not a claim that `fix()` generally preserves
+topology, metadata or fitness. The recorder invokes the original functions;
+it does not duplicate the repair algorithm or use a whole-creature compactor.
+
+## Non-constant removal and finite guards
+
+The four `removeNeuron` records retain original raw `input`, a `loaded`
+runtime projection, and the actual `before` projection after any injections.
+The overflow tests inject extreme weights and biases **after** loading, just
+as the original tests do, to bypass load-time clamping. Runtime neuron IDs
+identify the hidden neuron; synapse endpoints are indices. The NaN activation
+argument is encoded explicitly as `"NaN"`. Finite `Number.MAX_VALUE` values
+remain numbers, with the repository's round-trip float parser preserving them.
+
+| Capture | Original call and observable contract |
+|---|---|
+| `finite_normal` | Activation `0.5` removes the IDENTITY hidden neuron and changes output bias to `0.5 + 0.3 * 0.5 = 0.65`, within the original `1e-12` bound. |
+| `finite_overflow` | Output bias `MAX_VALUE / 2`, outward weight `MAX_VALUE`, activation `1`: the addition would overflow, so return false without changing the captured topology or biases. |
+| `finite_nan` | Activation NaN with outward weight `0.5`: return false and preserve the runtime projection. |
+| `finite_atomic` | Two outputs have outward weights `0.5` and `MAX_VALUE`, with activation `MAX_VALUE`. The second product overflows; reject without changing either output bias, including the first finite adjustment. |
+
+Successful removal adds a temporary zero-weight edge from a randomly chosen
+input to keep the output connected. The capture sets the legacy RNG to seed
+`1910` immediately before that one call and restores the previous RNG in
+`finally`. The original test remains unmodified and does not assert a
+particular input source. The integrity test permits either original input;
+the stored seeded record chooses input index `1`. Seeding is a reproducibility
+choice for the recorder, not a new deterministic-selection contract.
+
+No activation-equivalence claim is made: the supplied activation is an
+argument to trace-based bias adjustment, not an algebraic identity for every
+input. Refusal equality covers the recorded runtime projection only.
+`removeNeuron` deletes cached UUID state on entry, including failed calls;
+these original fixtures do not exercise a pre-existing cached UUID. Do not
+describe false as a universal whole-object no-op. Extreme graphs are not
+reloaded, exported, or repaired after injection.
+
+## Integrity checks and reproduction
+
+`neat-core/tests/compact_legacy_metadata.rs` checks the validation outcomes,
+removal/void results, stale-key removal, valid-bias retention, unchanged runtime
+topology, forward-only repair and the complete valid wire export. Expected
+runtime memetic data is the original object with only the stale key removed;
+expected wire data uses the original graph and the explicitly converted
+memetic fields. These are capture integrity checks, not native repair,
+validation or activation parity.
+
+The fixture test failed before capture generation. Raw graphs, runtime hidden
+IDs and attached memetic objects were independently compared against both
+original declarations. Deliberate corruptions of validation results, removal
+count, stale/valid bias entries, topology, forward-only state, sentinel encoding
+and wire metadata were rejected and restored. Both existing modes and the new
+metadata mode regenerate byte-for-byte; existing records are unchanged.
+The finite-guard tests also failed before adding their four records. Their
+raw inputs match the original source literals and the earlier two records
+remain unchanged. Seven additional corruptions were rejected and restored:
+wrong successful bias, false success on overflow, NaN encoded as null, a
+partial change to either output bias, a clamped extreme weight, and a nonzero
+replacement edge. All three capture modes regenerate byte-for-byte.
+
+```sh
+deno run -A --config ../NEAT-AI/deno.json \
+  scripts/capture_legacy_compaction.ts ../NEAT-AI \
+  neat-core/tests/golden/compact_legacy_metadata.json metadata
+cargo test -p neat-core --test compact_legacy_metadata
+```
+
+The shared source guard requires clean tracked sources at the frozen revision.
+To reproduce the original tests from that checkout, run
+`deno test -A test/compact/PruneOrphanMemeticReferences.ts test/compact/CompactUnusedFiniteGuard.ts`. DEBUG validation
+may write its normal diagnostic file; this is not a fixture or private input.
+Other metadata, UUID, ordering, trace and repair contracts remain outstanding
+in the [overall baseline](compaction-baseline.md).
