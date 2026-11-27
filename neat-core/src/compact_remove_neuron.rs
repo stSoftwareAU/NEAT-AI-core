@@ -38,11 +38,17 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::creature::{CreatureExport, SynapseExport};
+use crate::creature::{CreatureExport, SynapseExport, validate_creature_width};
 
 /// Why [`remove_neuron_by_bias_fold`] refused its arguments.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RemoveNeuronError {
+    /// The creature fails [`validate_creature_width`]; with no inputs a
+    /// reconnect would name an input that does not exist.
+    InvalidWidth {
+        /// The width rule's message.
+        reason: String,
+    },
     /// No neuron in `creature.neurons` has this UUID.
     UnknownNeuron {
         /// The UUID asked for.
@@ -76,6 +82,7 @@ pub enum RemoveNeuronError {
 impl std::fmt::Display for RemoveNeuronError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RemoveNeuronError::InvalidWidth { reason } => write!(f, "{reason}"),
             RemoveNeuronError::UnknownNeuron { uuid } => {
                 write!(f, "No neuron with UUID {uuid}")
             }
@@ -109,13 +116,20 @@ fn needs_constant_branch(squash: Option<&str>) -> bool {
 /// `draw` supplies one uniform value in `[0, 1)` for each target that would be
 /// left with fewer than two inbound synapses; it is not called otherwise.
 ///
+/// The synapses are expected in TypeScript's `(from, to)` runtime index order,
+/// as every TypeScript export lists them: the reconnect edge is inserted at the
+/// slot that order gives it, and the rest keep their order. TypeScript
+/// re-sorts the whole list; for an already sorted list the two agree.
+///
 /// Returns `Ok(Some(creature))` after a removal and `Ok(None)` when a folded
 /// bias would be non-finite, in which case nothing changed. The input is never
 /// modified.
 ///
 /// # Errors
 ///
-/// [`RemoveNeuronError::UnknownNeuron`], [`RemoveNeuronError::NotRemovable`]
+/// [`RemoveNeuronError::InvalidWidth`] when [`validate_creature_width`]
+/// refuses the creature, [`RemoveNeuronError::UnknownNeuron`],
+/// [`RemoveNeuronError::NotRemovable`]
 /// for an input or output, [`RemoveNeuronError::DanglingTarget`] for an
 /// outward synapse into no listed neuron,
 /// [`RemoveNeuronError::ConstantBranchNotPorted`] for an
@@ -167,6 +181,9 @@ pub fn remove_neuron_by_bias_fold(
     activation: f64,
     mut draw: impl FnMut() -> f64,
 ) -> Result<Option<CreatureExport>, RemoveNeuronError> {
+    validate_creature_width(creature).map_err(|error| RemoveNeuronError::InvalidWidth {
+        reason: error.to_string(),
+    })?;
     let neuron = creature
         .neurons
         .iter()

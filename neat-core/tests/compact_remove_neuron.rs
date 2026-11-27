@@ -556,3 +556,20 @@ fn removing_a_saturated_clipped_neuron_preserves_behaviour() {
     }
     assert_eq!(checked, steps.len().pow(3));
 }
+
+#[test]
+fn a_creature_with_no_inputs_is_refused_by_the_width_rule() {
+    let base = creature(
+        0,
+        vec![
+            neuron("constant", "constant-0", "IDENTITY", 1.0),
+            neuron("output", "output-0", "IDENTITY", 0.0),
+        ],
+        vec![edge("constant-0", "output-0", 1.0)],
+    );
+    let refused = remove_neuron_by_bias_fold(&base, "constant-0", 1.0, never_draw);
+    assert!(
+        matches!(refused, Err(RemoveNeuronError::InvalidWidth { .. })),
+        "{refused:?}"
+    );
+}
