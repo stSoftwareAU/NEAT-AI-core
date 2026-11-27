@@ -727,6 +727,56 @@ fn a_unity_slot_outside_zero_to_two_is_refused_before_removal() {
 }
 
 #[test]
+fn a_unity_slot_two_tag_is_accepted_and_does_not_block_a_fresh_slot_zero() {
+    // `createConstantOne(creature, 2)` tags a constant with slot 2. Slot 2 is
+    // the top of `0..=2`, so it is accepted; it is not slot 0, so the removal
+    // still mints a fresh slot-0 constant and leaves the slot-2 constant alone.
+    let fixture = creature(
+        2,
+        vec![
+            neuron("constant", "constant-2", None, 1.0),
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 2.0),
+            edge("input-0", "output-0", 0.5),
+            edge("input-1", "output-0", 1.0),
+        ],
+    );
+    let slots = [UnitySlot {
+        uuid: "constant-2".to_string(),
+        slot: 2,
+    }];
+    let removal = remove_neuron(&fixture, "hidden-0", 1.5, &slots, fresh_uuid, never_draw)
+        .expect("slot 2 is in range")
+        .expect("the removal is applied");
+
+    assert_eq!(
+        removal.unity_constant,
+        Some(UnitySlot {
+            uuid: "unity-constant-0".to_string(),
+            slot: 0,
+        })
+    );
+    let uuids: Vec<&str> = removal
+        .creature
+        .neurons
+        .iter()
+        .map(|n| n.uuid.as_str())
+        .collect();
+    assert!(
+        uuids.contains(&"constant-2"),
+        "the slot-2 constant survives"
+    );
+    assert!(
+        uuids.contains(&"unity-constant-0"),
+        "a fresh slot-0 constant is minted"
+    );
+}
+
+#[test]
 fn a_unity_slot_naming_no_neuron_is_refused_before_removal() {
     let slots = [UnitySlot {
         uuid: "ghost-0".to_string(),
@@ -874,6 +924,95 @@ fn a_target_without_an_aggregate_squash_delegates_to_the_bias_fold() {
         .find(|n| n.uuid == "output-0")
         .unwrap();
     assert_eq!(output.bias, 3.25);
+}
+
+/// `hidden-0` is the only synapse into `output-0` (IDENTITY), so the fold
+/// leaves that target short of two inbound synapses and takes one reconnect
+/// draw. Two inputs make a draw `u` pick input `floor(u * 2)`.
+fn reconnect_fixture() -> CreatureExport {
+    creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IDENTITY"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 2.0),
+        ],
+    )
+}
+
+#[test]
+fn the_callers_reconnect_draw_picks_the_input_of_the_delegated_bias_fold() {
+    // A draw of 0.75 over two inputs is floor(0.75 * 2) = 1, so the zero-weight
+    // reconnect edge comes from input-1; a draw of 0.25 is floor(0.5) = 0 and
+    // gives input-0. The two differ, so a fixed draw inside `remove_neuron`
+    // could not satisfy both.
+    for (draw, source) in [(0.75, "input-1"), (0.25, "input-0")] {
+        let calls = Cell::new(0_u32);
+        let removal = remove_neuron(
+            &reconnect_fixture(),
+            "hidden-0",
+            1.5,
+            &[],
+            fresh_uuid,
+            || {
+                calls.set(calls.get() + 1);
+                draw
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(calls.get(), 1, "one reconnect draw for draw {draw}");
+        assert_eq!(removal.unity_constant, None);
+        assert_eq!(
+            removal.creature.synapses,
+            vec![edge(source, "output-0", 0.0)],
+            "draw {draw} reconnects from {source}"
+        );
+        let output = removal
+            .creature
+            .neurons
+            .iter()
+            .find(|n| n.uuid == "output-0")
+            .unwrap();
+        assert_eq!(output.bias, 3.25, "0.25 + 2.0 * 1.5");
+    }
+}
+
+#[test]
+fn a_reconnect_draw_outside_zero_to_one_is_refused_with_its_message() {
+    for draw in [1.0, -0.5] {
+        let error = remove_neuron(
+            &reconnect_fixture(),
+            "hidden-0",
+            1.5,
+            &[],
+            fresh_uuid,
+            || draw,
+        )
+        .expect_err("a draw outside [0, 1) is refused");
+        assert_eq!(
+            error,
+            NeuronRemovalError::Remove(RemoveNeuronError::DrawOutOfRange { draw })
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("Reconnect draw {draw} is outside [0, 1)")
+        );
+    }
+
+    let accepted = remove_neuron(
+        &reconnect_fixture(),
+        "hidden-0",
+        1.5,
+        &[],
+        fresh_uuid,
+        || 0.0,
+    );
+    assert!(accepted.unwrap().is_some(), "control with an in-range draw");
 }
 
 #[test]

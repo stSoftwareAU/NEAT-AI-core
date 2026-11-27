@@ -168,13 +168,16 @@ text. Each verdict is the Spec reviewer's, run over
 
 ## Test Plan
 
-- Added `neat-core/tests/compact_unity_constant.rs` (18 tests):
+- Added `neat-core/tests/compact_unity_constant.rs` (21 tests):
   - the replay and the three behaviour tests above;
   - `the_overflow_capture_is_refused_before_any_change` (no UUID minted; control
     with a finite activation accepted);
   - `reusing_a_tagged_slot_is_refused_and_the_capture_shows_why` (asserts the
     capture's defect facts; control without tags accepted) and
     `a_legacy_slot_zero_id_is_refused_like_a_tagged_one`;
+  - `a_unity_slot_two_tag_is_accepted_and_does_not_block_a_fresh_slot_zero`:
+    slot 2, the top of the accepted `0..=2` range, is accepted on the fresh
+    slot-0 path. The slot-2 constant survives and a slot-0 constant is minted;
   - `a_slot_one_tag_does_not_block_the_fresh_slot_zero_path` and
     `a_unity_slot_on_a_non_constant_neuron_is_ignored`. The second puts slot 0
     on a hidden neuron other than the one being removed. Slot 0 is the only slot
@@ -188,10 +191,19 @@ text. Each verdict is the Spec reviewer's, run over
     `neurons` and `synapses`, and `unity_constant` is `None`;
   - refusals, each with an accepted control and a message check:
     - `a_unity_slot_outside_zero_to_two_is_refused_before_removal`;
+    - `a_reconnect_draw_outside_zero_to_one_is_refused_with_its_message` (draws
+      `1.0` and `-0.5` give
+      `NeuronRemovalError::Remove(RemoveNeuronError::DrawOutOfRange { .. })`
+      with its message; control with draw `0.0` accepted);
     - `a_unity_slot_naming_no_neuron_is_refused_before_removal`;
     - `a_minted_uuid_naming_a_neuron_or_an_input_is_refused`;
     - `an_unknown_neuron_is_refused_by_the_shared_bias_fold_validation`;
   - delegation:
+    - `the_callers_reconnect_draw_picks_the_input_of_the_delegated_bias_fold`:
+      on an `IDENTITY` target left with one inbound synapse, draw `0.75` over two
+      inputs reconnects from `input-1` and draw `0.25` from `input-0`, each
+      taking exactly one draw, with `unity_constant` `None` and the target bias
+      `0.25 + 2.0 * 1.5 = 3.25`;
     - `a_target_without_an_aggregate_squash_delegates_to_the_bias_fold` (literal
       fold `0.25 + 2.0 * 1.5 = 3.25`, no mint);
     - `a_non_finite_fold_on_a_bias_fold_target_returns_none_and_mints_nothing`;
@@ -218,6 +230,17 @@ text. Each verdict is the Spec reviewer's, run over
   | survival check forced to `true` (always `Some(UnitySlot)`)       | red: `a_constant_the_cascade_removes_again_is_not_returned_as_a_slot`             |
 
   Before this change, all three left the suite green.
+- **Mutation evidence for the two review findings on the delegated path and the
+  slot range.** Each was applied alone to
+  `neat-core/src/compact_unity_constant.rs`, run against the same command, then
+  reverted:
+
+  | Mutation                                                    | Result                                                                   |
+  | ----------------------------------------------------------- | ------------------------------------------------------------------------ |
+  | `slot.slot > 2` → `slot.slot > 1`                           | red: `a_unity_slot_two_tag_is_accepted_and_does_not_block_a_fresh_slot_zero` |
+  | the caller's `draw` replaced by `\|\| 0.0` in the delegation | red: `the_callers_reconnect_draw_picks_the_input_of_the_delegated_bias_fold` and `a_reconnect_draw_outside_zero_to_one_is_refused_with_its_message` |
+
+  Before this change, both left the suite green.
 - **Added to `neat-core/tests/compact_remove_neuron.rs`:**
   `removal_cascades_to_a_constant_that_fed_only_the_removed_neuron` and
   `removal_keeps_a_constant_that_still_feeds_another_neuron`. They are the
@@ -234,7 +257,8 @@ text. Each verdict is the Spec reviewer's, run over
   this branch no longer changes it. `./scripts/lockfile-freshness.sh --check`
   reports both lockfiles OK.
 - **Gate:** `./quality.sh < /dev/null` exited 0 ("All quality checks passed!")
-  on `970e470`, the code and tests of this head. Bats test 709
+  on the tree with the review-fix tests, which changed only
+  `neat-core/tests/compact_unity_constant.rs` and this summary. Bats test 709
   (`the pinned
   wasm-bindgen CLI version already agrees with Cargo.lock`) now
   passes.
@@ -243,6 +267,6 @@ text. Each verdict is the Spec reviewer's, run over
     here, and the new module has no `cfg` or wasm code;
   - `scripts/check-downstream-consumers.sh`: the change only adds a module and
     exports, and changes no public item;
-  - a mutation sweep beyond the five mutations above;
+  - a mutation sweep beyond the seven mutations above;
   - Standards reviewer: no `CODING-STANDARDS.md` request was made for this pass.
     The Spec reviewer ran, and its verdicts are above.
