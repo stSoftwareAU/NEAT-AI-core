@@ -15,7 +15,9 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::collections::BTreeMap;
 
+use neat_core::creature::{MemeticExport, MemeticWeightRowExport, MemeticWeights};
 use neat_core::network::MAX_NODE_COUNT;
 use neat_core::{CreatureExport, NeuronExport, SynapseExport, merge_parallel_bridges};
 
@@ -97,8 +99,8 @@ fn edge(from: &str, to: &str) -> SynapseExport {
 
 /// Two parallel IDENTITY bridges from `input-0` and `input-1`, which merge into
 /// one. Only the declared width varies.
-fn bridges_declaring(input: usize) -> CreatureExport {
-    CreatureExport {
+fn bridges_declaring(input: usize, with_memetic: bool) -> CreatureExport {
+    let mut creature = CreatureExport {
         input,
         output: 1,
         neurons: vec![
@@ -115,13 +117,25 @@ fn bridges_declaring(input: usize) -> CreatureExport {
         semantic_version: None,
         forward_only: true,
         memetic: None,
+    };
+    if with_memetic {
+        creature.memetic = Some(MemeticExport {
+            biases: BTreeMap::from([("h0".to_string(), 0.1), ("h1".to_string(), 0.2)]),
+            weights: MemeticWeights::Rows(vec![MemeticWeightRowExport {
+                from_uuid: Some("h0".to_string()),
+                to_uuid: Some("output-0".to_string()),
+                weight: Some(0.3),
+            }]),
+            extra: serde_json::Map::new(),
+        });
     }
+    creature
 }
 
 /// Bytes this thread allocated while one merge ran at `input`. The creature is
 /// built before the counter is zeroed, so only the merge is billed.
-fn cost_of_merging(input: usize) -> usize {
-    let creature = bridges_declaring(input);
+fn cost_of_merging(input: usize, with_memetic: bool) -> usize {
+    let creature = bridges_declaring(input, with_memetic);
 
     THREAD_BYTES.with(|counter| counter.set(0));
     let merged = merge_parallel_bridges(&creature);
@@ -132,24 +146,42 @@ fn cost_of_merging(input: usize) -> usize {
         merged.removed_neurons, 1,
         "the pair must merge at a declared input of {input}"
     );
+    if with_memetic {
+        // Guard against a vacuous reading: the prune ran and dropped the
+        // removed bridge's bias, so the memetic path was really measured.
+        let memetic = merged.creature.memetic.expect("the record stays");
+        assert_eq!(memetic.biases.get("h0"), None);
+        assert_eq!(memetic.biases.get("h1"), Some(&0.2));
+    }
     spent
 }
 
-#[test]
-fn a_merge_costs_the_same_whatever_input_width_is_declared() {
-    let at_width = cost_of_merging(OVERSIZED_INPUT);
-    let at_quadruple = cost_of_merging(QUADRUPLED_INPUT);
+fn assert_cost_independent_of_width(with_memetic: bool) {
+    let at_width = cost_of_merging(OVERSIZED_INPUT, with_memetic);
+    let at_quadruple = cost_of_merging(QUADRUPLED_INPUT, with_memetic);
     let growth = at_quadruple.saturating_sub(at_width);
 
     assert!(
         at_width <= WIDTH_BUDGET_BYTES,
-        "merge_parallel_bridges allocated {at_width} B against a declared input of \
-         {OVERSIZED_INPUT} (budget {WIDTH_BUDGET_BYTES} B); the declared width is being walked"
+        "merge_parallel_bridges (memetic: {with_memetic}) allocated {at_width} B against a \
+         declared input of {OVERSIZED_INPUT} (budget {WIDTH_BUDGET_BYTES} B); the declared \
+         width is being walked"
     );
     assert!(
         growth <= GROWTH_SLACK_BYTES,
-        "merge_parallel_bridges spent {growth} B more at {QUADRUPLED_INPUT} inputs than at \
-         {OVERSIZED_INPUT} ({at_quadruple} B against {at_width} B, slack \
-         {GROWTH_SLACK_BYTES} B); its cost follows the declared width, not the payload"
+        "merge_parallel_bridges (memetic: {with_memetic}) spent {growth} B more at \
+         {QUADRUPLED_INPUT} inputs than at {OVERSIZED_INPUT} ({at_quadruple} B against \
+         {at_width} B, slack {GROWTH_SLACK_BYTES} B); its cost follows the declared width, \
+         not the payload"
     );
+}
+
+#[test]
+fn a_merge_costs_the_same_whatever_input_width_is_declared() {
+    assert_cost_independent_of_width(false);
+}
+
+#[test]
+fn a_merge_with_memetic_data_costs_the_same_whatever_input_width_is_declared() {
+    assert_cost_independent_of_width(true);
 }

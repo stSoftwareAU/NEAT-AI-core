@@ -2,8 +2,9 @@
 
 Ports NEAT-AI `mergeParallelBridges` (`src/compact/ParallelBridgeMerge.ts` at
 `60d6b4e5`) into core as `merge_parallel_bridges`. It merges IDENTITY and
-COMPLEMENT parallel bridges and replays every frozen `mergeParallelBridges`
-capture from #776 bit-exactly. The change is additive: no caller switches and no
+COMPLEMENT parallel bridges and replays the 30 frozen `mergeParallelBridges`
+helper captures from #776 bit-exactly. The two forest captures of this helper
+are not replayed (see Evidence). The change is additive: no caller switches and no
 new rule is added. This is the second #777 rule after zero-weight pruning
 (#798). COMPLEMENT bypass, constant fold/merge and constant IF collapse are
 still to come. The branch also moves the pinned `wasm-bindgen` CLI to 0.2.130,
@@ -16,7 +17,7 @@ to match the crate version `bump-deps.sh` locked. Part of #777.
 - #777 asks for one small, green PR per independent rule. Parallel bridge merge
   stands on its own: it has no `frozen` guard, and core's `CreatureExport` has
   no `frozen` field. It also has 30 frozen helper captures to check parity
-  against.
+  against, plus two forest captures that core cannot replay (see Evidence).
 - The port follows the TypeScript operation by operation, all in `f64` and in
   the same order. That is why the captures compare with `assert_eq!` on `f64`
   rather than within a tolerance.
@@ -42,7 +43,13 @@ to match the crate version `bump-deps.sh` locked. Part of #777.
   same name, then the canonical `input-N` with `N < input`. Positions are an
   `Input(n) < Neuron(k)` enum rather than `input + k`. A width near `usize::MAX`
   therefore neither overflows nor allocates per declared input, which follows
-  AGENTS.md "One width check for creature JSON" (#622/#650). `input-01`,
+  AGENTS.md "One width check for creature JSON" (#622/#650). The memetic prune
+  that ends a merge resolves wire UUIDs through `WireIndex`. Its build summed
+  `input + i` unchecked, which overflowed at a width near `usize::MAX` (and
+  wrapped onto `input-0` in release). It now uses `u32::try_from` over a
+  saturating sum, as `NeuronIdIndex::build` does. A neuron whose walk index does
+  not fit in `u32` is stored under no UUID, so a memetic reference to it is
+  pruned as dangling rather than aliased. `input-01`,
   `input-+0` and `input-N` with `N >= input` name no neuron, the same answer the
   first port's formatted-name map gave.
 
@@ -72,6 +79,19 @@ Captures replayed:
   `compactCreature` cases are out of scope for this helper.
 - `compact_legacy_tags.json`: 3 `mergeParallelBridges` cases.
 
+Not replayed: the two `compact_legacy_forest.json` captures whose source is
+`src/compact/ParallelBridgeMerge.ts`.
+
+- `ordering_declines_if_bridges` runs `mergeRedundantConstants` first, which is
+  not ported (it is a later #777 rule).
+- `exactness_fixpoint_stays_forward` loads the forest creature fixture named in
+  `compact_legacy_forest.json` (3.4 MB, SHA-256 `36dcda9e…cabb0a`), which
+  stays in the legacy checkout and is not available to core. Only its counts
+  are recorded, in `compact_legacy_forest.rs`.
+
+Both stay observations of the TypeScript helper, as the forest baseline doc now
+says.
+
 ## Acceptance Criteria
 
 <!-- vibe-spec-review inputs="diff+issue-body" -->
@@ -99,18 +119,27 @@ Captures replayed:
   It depends on the constant-value fixed point from constant fold and has
   `frozen` guards.
 - **partial** — preserve guardrails for the ported rule — evidence:
-  `::a_mean_target_is_refused_but_an_identity_target_merges`, the typed and
-  backward refusal captures, the three overflow tests,
+  `::a_mean_target_is_refused_but_an_identity_target_merges`,
+  `::bridges_whose_outbound_synapse_types_differ_never_share_a_group` (the typed
+  role guard; the typed captures refuse on inbound count or an IF target, so
+  they do not exercise it), `::a_target_with_no_squash_is_accepted_like_a_plain_sum`,
+  the three overflow tests,
   `compact_parallel_bridge_allocations.rs::a_merge_costs_the_same_whatever_input_width_is_declared`
+  and `::a_merge_with_memetic_data_costs_the_same_whatever_input_width_is_declared`
   — reviewer: partial — reason: no test builds an explicit `forward_only: false`
   recurrent creature, the output is not re-checked with
   `validate_creature_topology`, and tags are stripped before comparison (tag
   merging stays on the TypeScript wire adapter). The rule is a standalone pass
   that calls only `prune_memetic`, not `prune_rewrite`/#688 splicing.
-- **met** — run the original tests/fixtures for the rule ported — evidence:
-  every `mergeParallelBridges` capture at `60d6b4e5` is replayed with count
-  assertions; the `compactCreature` captures are left out, and the docs say so —
-  reviewer: met
+- **partial** — run the original tests/fixtures for the rule ported — evidence:
+  the 30 `mergeParallelBridges` helper captures at `60d6b4e5` in
+  `compact_legacy_bridges`, `compact_legacy_bridge_cases` and
+  `compact_legacy_tags` are replayed with count assertions — reviewer: partial —
+  reason: the `compactCreature` captures and both forest captures
+  (`ordering_declines_if_bridges`, blocked on the unported
+  `mergeRedundantConstants`; `exactness_fixpoint_stays_forward`, blocked on the
+  3.4 MB fixture that stays in the legacy checkout) are not replayed. The forest
+  baseline doc says so.
 - **met** — additive only: no callers switched, no arbitrary new simplification
   — evidence: `neat-core/src/lib.rs` exports only — reviewer: met with caveats —
   reason: the MEAN and unparsable-squash refusals only decline merges, and
@@ -144,7 +173,7 @@ Captures replayed:
 
 ## Test Plan
 
-- Added `neat-core/tests/compact_parallel_bridge.rs` (13 tests).
+- Added `neat-core/tests/compact_parallel_bridge.rs` (17 tests).
   - Three tests replay the captures
     (`legacy_bridge_captures_replay_bit_exactly`,
     `bridge_case_captures_replay_bit_exactly`,
@@ -161,14 +190,30 @@ Captures replayed:
     - memetic rows are pruned while the record stays;
     - only the canonical `input-N` with `N < input` resolves to an input;
     - a listed neuron named `input-0` shadows the implicit input;
-    - a declared width of `usize::MAX` still merges.
+    - a declared width of `usize::MAX` still merges;
+    - bridges whose outbound synapse types differ (`positive` vs none, none vs
+      `positive`, `positive` vs `negative`) are left unchanged, with controls
+      where the types match, typed and untyped, and derived merged values
+      (bias 2.0 * 0.25 + 2.0 * 0.5 = 1.5, weights 6.0 / 6.0 / 1.0);
+    - a target with no squash merges with the same derived values;
+    - at a declared input of `u32::MAX - 1`, where the merged neurons are still
+      addressable, memetic prune drops only the removed bridge's bias and row;
+    - at a declared input of `usize::MAX` with a memetic record, the merge
+      happens, the removed bridge's bias goes, and no row from it survives.
 - Added `neat-core/tests/compact_parallel_bridge_allocations.rs`. A counting
   global allocator checks that a merge at a declared input of 4,000,000 costs no
-  more than one at 1,000,000 (4 KiB slack), and that the merge happened.
+  more than one at 1,000,000 (4 KiB slack), and that the merge happened. A
+  second reading carries a memetic record and asserts the prune ran.
 - Removed `the_input_creature_is_never_mutated`. The function takes
   `&CreatureExport`, which has no interior mutability, so that test could not
   fail.
 - Red evidence. Every mutation below was reverted before commit.
+  - Restoring the unchecked `(creature.input + i) as u32` in
+    `WireIndex::build` fails
+    `a_declared_width_near_usize_max_prunes_memetic_data_without_aliasing` with
+    `attempt to add with overflow`.
+  - Dropping the outbound synapse type from the group key fails
+    `bridges_whose_outbound_synapse_types_differ_never_share_a_group`.
   - The allocation test and the `usize::MAX` test both fail against the pre-fix
     module (the `HEAD` copy of `compact_parallel_bridge.rs` at `67a32be`). The
     other tests pass there, because the resolution answers are unchanged.
@@ -187,15 +232,15 @@ Captures replayed:
   separate red run was observed for the capture replays. Their oracle is the
   frozen TypeScript output, not core code. The fix commit's tests were
   red-checked as listed above.
-- `cargo test -p neat-core --test compact_parallel_bridge` passed (13 tests),
-  and `--test compact_parallel_bridge_allocations` passed (1 test).
+- `cargo test -p neat-core --test compact_parallel_bridge` passed (17 tests),
+  and `--test compact_parallel_bridge_allocations` passed (2 tests).
 - The `compact_legacy_bridges`, `compact_legacy_bridge_cases` and
   `compact_legacy_tags` suites passed.
 - `cargo test --doc merge_parallel_bridges` passed.
 - `cargo clippy -p neat-core --lib --tests -- -D warnings` passed.
 - `bats tests/scripts/wasm_bundle_wasm64_dual_ship.bats` passed, including test
   11, "the pinned wasm-bindgen CLI version already agrees with Cargo.lock".
-- `cargo test --workspace` passed (94 test binaries, no failures), and
+- `cargo test --workspace` passed (94 test results, no failures), and
   `bats tests/scripts` passed (767 tests, none `not ok`).
 - `./quality.sh` was not re-run in this pass. The worker re-runs it on the final
   head.

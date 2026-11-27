@@ -445,3 +445,135 @@ fn a_declared_width_near_usize_max_still_merges() {
     assert_eq!(merged.creature.synapses[0].to_uuid, "h1");
     assert_eq!(merged.creature.synapses[0].weight, 6.0);
 }
+
+// ---- outbound synapse type, missing target squash, memetic at wide input ---
+
+/// `two_bridges` with the outbound synapse of each bridge carrying a type.
+fn two_typed_bridges(h0_out: Option<&str>, h1_out: Option<&str>) -> CreatureExport {
+    let mut creature = two_bridges("IDENTITY", 2.0, 3.0);
+    creature.synapses[1].synapse_type = h0_out.map(str::to_string);
+    creature.synapses[3].synapse_type = h1_out.map(str::to_string);
+    creature
+}
+
+#[test]
+fn bridges_whose_outbound_synapse_types_differ_never_share_a_group() {
+    // Both bridges feed the same plain-sum target with the same squash and a
+    // single inbound edge each; only the outbound role differs, so only the
+    // group key can keep them apart.
+    for (h0_out, h1_out) in [
+        (Some("positive"), None),
+        (None, Some("positive")),
+        (Some("positive"), Some("negative")),
+    ] {
+        let creature = two_typed_bridges(h0_out, h1_out);
+        let result = merge_parallel_bridges(&creature).unwrap();
+        assert_eq!(
+            result.removed_neurons, 0,
+            "{h0_out:?} vs {h1_out:?} must not merge"
+        );
+        assert_eq!(result.creature, creature, "{h0_out:?} vs {h1_out:?}");
+    }
+
+    // Controls: the same fixtures merge when the types match, typed or not.
+    for typed in [None, Some("positive")] {
+        let merged = merge_parallel_bridges(&two_typed_bridges(typed, typed)).unwrap();
+        assert_eq!(merged.removed_neurons, 1, "{typed:?} pair merges");
+        // Kept h1: bias = 2.0 * 0.25 + 2.0 * 0.5 = 1.5; redirected weight
+        // 2.0 * 3.0 = 6.0; kept h1's own inbound 2.0 * 3.0 = 6.0; outbound 1.0.
+        assert_eq!(merged.creature.neurons[0].uuid, "h1");
+        assert_eq!(merged.creature.neurons[0].bias, 1.5);
+        assert_eq!(merged.creature.synapses[0].to_uuid, "h1");
+        assert_eq!(merged.creature.synapses[0].weight, 6.0);
+        assert_eq!(merged.creature.synapses[1].weight, 6.0);
+        assert_eq!(merged.creature.synapses[2].weight, 1.0);
+    }
+}
+
+#[test]
+fn a_target_with_no_squash_is_accepted_like_a_plain_sum() {
+    let mut creature = two_bridges("IDENTITY", 2.0, 3.0);
+    creature.neurons[2].squash = None;
+    let merged = merge_parallel_bridges(&creature).unwrap();
+    assert_eq!(merged.removed_neurons, 1);
+    // Same derivation as the IDENTITY-target control: bias 2.0 * 0.25 + 2.0 *
+    // 0.5 = 1.5, redirected weight 2.0 * 3.0 = 6.0, kept inbound 6.0.
+    assert_eq!(merged.creature.neurons[0].uuid, "h1");
+    assert_eq!(merged.creature.neurons[0].bias, 1.5);
+    assert_eq!(merged.creature.synapses[0].to_uuid, "h1");
+    assert_eq!(merged.creature.synapses[0].weight, 6.0);
+    assert_eq!(merged.creature.synapses[1].weight, 6.0);
+    assert_eq!(merged.creature.synapses[2].weight, 1.0);
+    assert_eq!(merged.creature.neurons[1].squash, None, "target untouched");
+}
+
+/// A memetic record with one reference to each of the removed bridge `h0`, the
+/// kept bridge `h1` and the redirected `input-0 -> h1` edge.
+fn memetic_naming_both_bridges() -> MemeticExport {
+    let row = |from: &str, to: &str, weight: f64| MemeticWeightRowExport {
+        from_uuid: Some(from.to_string()),
+        to_uuid: Some(to.to_string()),
+        weight: Some(weight),
+    };
+    MemeticExport {
+        biases: BTreeMap::from([("h0".to_string(), 0.1), ("h1".to_string(), 0.2)]),
+        weights: MemeticWeights::Rows(vec![
+            row("h0", "output-0", 0.3),
+            row("h1", "output-0", 0.4),
+            row("input-0", "h1", 0.5),
+        ]),
+        extra: serde_json::Map::new(),
+    }
+}
+
+fn weight_rows(memetic: &MemeticExport) -> Vec<(String, String)> {
+    match &memetic.weights {
+        MemeticWeights::Rows(rows) => rows
+            .iter()
+            .map(|r| (r.from_uuid.clone().unwrap(), r.to_uuid.clone().unwrap()))
+            .collect(),
+        MemeticWeights::ById(_) => panic!("fixture is the row form"),
+    }
+}
+
+#[test]
+fn a_wide_declared_input_that_still_fits_prunes_only_the_removed_bridge() {
+    // The widest declaration whose listed neurons are still addressable: after
+    // the merge the neurons are [h1, output-0] at walk indices u32::MAX - 1 and
+    // u32::MAX.
+    let input = u32::MAX as usize - 1;
+    let mut creature = first_bridge_fed_from("input-0", input);
+    creature.memetic = Some(memetic_naming_both_bridges());
+    let merged = merge_parallel_bridges(&creature).unwrap();
+    assert_eq!(merged.removed_neurons, 1);
+    let memetic = merged.creature.memetic.expect("the record stays");
+    assert_eq!(memetic.biases.get("h0"), None, "removed bridge's bias goes");
+    assert_eq!(memetic.biases.get("h1"), Some(&0.2), "kept bridge's stays");
+    assert_eq!(
+        weight_rows(&memetic),
+        vec![
+            ("h1".to_string(), "output-0".to_string()),
+            ("input-0".to_string(), "h1".to_string()),
+        ],
+        "only the removed bridge's row goes"
+    );
+}
+
+#[test]
+fn a_declared_width_near_usize_max_prunes_memetic_data_without_aliasing() {
+    // Listed neurons sit past `u32::MAX` here, so none is addressable. The
+    // walk index must be refused, not wrapped: a wrapped `usize::MAX + 1` is 0
+    // and would alias `input-0`, and in a checked build the sum overflows.
+    let mut creature = first_bridge_fed_from("input-0", usize::MAX);
+    creature.memetic = Some(memetic_naming_both_bridges());
+    let merged = merge_parallel_bridges(&creature).unwrap();
+    assert_eq!(merged.removed_neurons, 1, "the merge still happens");
+    assert_eq!(merged.creature.synapses[0].to_uuid, "h1");
+    assert_eq!(merged.creature.synapses[0].weight, 6.0);
+    let memetic = merged.creature.memetic.expect("the record stays");
+    assert_eq!(memetic.biases.get("h0"), None, "removed bridge's bias goes");
+    assert!(
+        weight_rows(&memetic).iter().all(|(from, _)| from != "h0"),
+        "no row from the removed bridge survives by aliasing another neuron"
+    );
+}
