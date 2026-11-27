@@ -159,8 +159,9 @@ undone are listed here in the issue's own words.
   where `<checkout>` is a clean checkout at `60d6b4e5`. Repeated runs were
   byte-identical, and the first nine records did not change when the five new
   ones were added.
-- `./quality.sh < /dev/null` passed on `7d92a97`. The run on the final head is
-  recorded in the last commit of this branch.
+- `./quality.sh < /dev/null` passed on `7d92a97`, and again on `c2a174b`, the
+  last code and test commit ("All quality checks passed!"). Only this line
+  changed after it.
 
 Not done: `cargo check --target wasm32-unknown-unknown` (the target is not
 installed here, and the new code is target-independent);
