@@ -205,6 +205,58 @@ export async function captureLegacyMetadata(root: URL, revision: string) {
       after: runtimeSnapshot(creature),
     });
   }
+  // `removeNeuron` takes the constant branch for every target whose squash
+  // defines `propagate`: IF, MINIMUM, MAXIMUM, MEAN, HYPOT and HYPOTv2. The
+  // set is read from TypeScript here, not listed by hand: `definesPropagate`
+  // is what the frozen `findSquash()` reports, and the capture records the
+  // outcome (a unity constant neuron wired in, the target's bias untouched).
+  // Only stable facts are kept, because the constant neuron's uuid is random.
+  for (
+    const squash of ["IF", "MINIMUM", "MAXIMUM", "MEAN", "HYPOT", "HYPOTv2"]
+  ) {
+    const input = {
+      neurons: [
+        { type: "hidden", uuid: "hidden-0", squash: "IDENTITY", bias: 0 },
+        { type: "output", uuid: "output-0", squash, bias: 0.25 },
+      ],
+      synapses: [
+        { fromUUID: "input-0", toUUID: "hidden-0", weight: 1.0 },
+        { fromUUID: "hidden-0", toUUID: "output-0", weight: 2.0 },
+        { fromUUID: "input-1", toUUID: "output-0", weight: 1.0 },
+      ],
+      input: 2,
+      output: 1,
+    };
+    const creature = Creature.fromJSON(structuredClone(input));
+    const hidden = creature.neurons.find((n: { type: string }) =>
+      n.type === "hidden"
+    );
+    const output = creature.neurons.find((n: { type: string }) =>
+      n.type === "output"
+    );
+    const definesPropagate = output.findSquash().propagate !== undefined;
+    const result = removeNeuron(hidden.id, creature, 1.5);
+    const target = creature.neurons.find((n: { type: string }) =>
+      n.type === "output"
+    );
+    captures.push({
+      name: `constant_branch_${squash}`,
+      revision,
+      test: "src/compact/CompactUnused.ts removeNeuron",
+      source: "src/compact/CompactUnused.ts",
+      operation: "removeNeuronConstantBranch",
+      preparation: "Creature.fromJSON(input)",
+      input,
+      squash,
+      definesPropagate,
+      activation: 1.5,
+      result,
+      targetBias: target.bias,
+      constantNeuronAdded: creature.neurons.some((n: { type: string }) =>
+        n.type === "constant"
+      ),
+    });
+  }
   // Issue #4071 originals use seed 4071 around each operation and restore it.
   const { initWasmForTests } = await import(
     new URL("test/_initWasm.ts", root).href

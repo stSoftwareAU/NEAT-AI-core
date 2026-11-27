@@ -71,6 +71,18 @@ these original fixtures do not exercise a pre-existing cached UUID. Do not
 describe false as a universal whole-object no-op. Extreme graphs are not
 reloaded, exported, or repaired after injection.
 
+## Constant-branch targets
+
+Six further `removeNeuronConstantBranch` records run the frozen `removeNeuron`
+against an output whose squash is `IF`, `MINIMUM`, `MAXIMUM`, `MEAN`, `HYPOT`
+or `HYPOTv2`: every squash that defines `propagate` at the frozen revision. Each
+record stores `definesPropagate` (read from `findSquash()`), the successful
+result, a `constantNeuronAdded` flag and the target's bias, which stays at its
+original `0.25`: TypeScript wires in a unity constant instead of folding into
+the bias. The constant neuron's uuid is random, so no other state is kept.
+`neat-core/tests/compact_remove_neuron.rs` asserts the native port refuses all
+six with `ConstantBranchNotPorted`.
+
 ## Converted constants retain their UUIDs
 
 Two additional records capture both original
