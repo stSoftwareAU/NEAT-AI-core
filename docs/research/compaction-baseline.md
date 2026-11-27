@@ -28,6 +28,10 @@ The matrix lists the remaining work before the family inventory is exhaustive.
 
 ## Captures
 
+The [behaviour-guard baseline](compaction-behaviour-baseline.md) captures the
+three original conditional, exact-fold and provenance tests. It records the
+actual candidate/measurement boundaries and original probe policy.
+
 The [constant-merge helper baseline](compaction-constant-helper-baseline.md)
 captures all six original `ConstantMerge.ts` tests, including frozen inputs,
 canonical-slot reuse and the unchanged second pass, without whole-creature loading.
