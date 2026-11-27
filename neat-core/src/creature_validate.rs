@@ -1186,7 +1186,13 @@ impl<'a> WireIndex<'a> {
     fn build(creature: &'a CreatureExport) -> Self {
         let mut uuid_to_index: HashMap<&str, u32> = HashMap::with_capacity(creature.neurons.len());
         for (i, neuron) in creature.neurons.iter().enumerate() {
-            uuid_to_index.insert(neuron.uuid.as_str(), (creature.input + i) as u32);
+            // A walk index past `u32::MAX` names no neuron this vocabulary can
+            // address, so it is stored under no UUID rather than wrapped into
+            // an index that aliases another neuron; the saturating sum keeps
+            // an untrusted `input` near `usize::MAX` from overflowing.
+            if let Ok(index) = u32::try_from(creature.input.saturating_add(i)) {
+                uuid_to_index.insert(neuron.uuid.as_str(), index);
+            }
         }
 
         Self {
@@ -1202,7 +1208,9 @@ impl<'a> WireIndex<'a> {
         }
         // Implicit input neurons are wired as `input-N`, never listed.
         let index: usize = uuid.strip_prefix("input-")?.parse().ok()?;
-        (index < self.input).then_some(index as u32)
+        (index < self.input)
+            .then(|| u32::try_from(index).ok())
+            .flatten()
     }
 }
 

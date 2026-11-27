@@ -1,4 +1,6 @@
-//! Frozen parallel-bridge case observations, not a native rewrite (#776).
+//! Frozen TypeScript parallel-bridge case observations (#776). Native replay
+//! of the `mergeParallelBridges` cases lives in
+//! `neat-core/tests/compact_parallel_bridge.rs` (#777).
 use serde_json::{Value, json};
 
 const REVISION: &str = "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab";

@@ -21,8 +21,8 @@ COPY --from=denoland/deno:bin-2.9.3 /deno /usr/local/bin/deno
 # by version and SHA-256 exactly as .github/workflows/wasm-bundle.yml pins them.
 ARG WASM_PACK_VERSION=0.15.0
 ARG WASM_PACK_SHA256=c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a
-ARG WASM_BINDGEN_VERSION=0.2.128
-ARG WASM_BINDGEN_SHA256=b51f0208fdff83515a787bd8ab9ac5865ed84dabb66d0c709957bb59793c645f
+ARG WASM_BINDGEN_VERSION=0.2.130
+ARG WASM_BINDGEN_SHA256=9687f3bb551b9f66f37ed32a40d7913a00f7962db653054e56857bc306c3227f
 RUN rustup target add wasm32-unknown-unknown \
     && cd /tmp \
     && asset="wasm-pack-v${WASM_PACK_VERSION}-x86_64-unknown-linux-musl" \

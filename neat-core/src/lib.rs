@@ -20,6 +20,7 @@
 pub mod accumulate;
 pub mod batch_scoring;
 pub mod compact_aggressive_prune;
+pub mod compact_parallel_bridge;
 pub mod compact_remove_neuron;
 pub mod compact_simplify_large_weights;
 pub mod compact_unity_constant;
@@ -117,6 +118,10 @@ pub use if_graft::{
     graft_if_node, graft_if_nodes, graft_if_tree, graft_relay_node, validate_creature_topology,
 };
 pub use network::{CompiledNetwork, NetworkError, NeuronData, SynapseData, hot_synapse_soa};
+// Issue #777 — exact parallel-bridge merging from the safe compact pass.
+pub use compact_parallel_bridge::{
+    ParallelBridgeMerge, ParallelBridgeMergeError, merge_parallel_bridges,
+};
 // Issue #778 — speculative low-weight pruning (the aggressive compact pass).
 pub use compact_aggressive_prune::{
     AGGRESSIVE_PRUNE_WEIGHT_THRESHOLD, AggressivePrune, AggressivePruneError, aggressive_prune,

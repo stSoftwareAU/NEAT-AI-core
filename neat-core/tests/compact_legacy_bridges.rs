@@ -1,4 +1,6 @@
-//! Frozen bridge ordering/refusal observations, not native rewrite parity (#776).
+//! Frozen TypeScript observations of bridge ordering and refusal contracts
+//! (#776). Native replay of the same captures lives in
+//! `neat-core/tests/compact_parallel_bridge.rs` (#777).
 use serde_json::{Value, json};
 
 #[test]
