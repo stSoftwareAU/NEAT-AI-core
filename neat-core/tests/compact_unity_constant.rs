@@ -9,11 +9,13 @@
 //! the port's arithmetic.
 
 use neat_core::{
-    CreatureExport, NeuronExport, NeuronRemoval, NeuronRemovalError, RemoveNeuronError,
-    SynapseExport, UnitySlot, compile_creature, remove_neuron, remove_neuron_by_bias_fold,
+    CreatureExport, MemeticExport, MemeticWeights, NeuronExport, NeuronRemoval, NeuronRemovalError,
+    RemoveNeuronError, SynapseExport, UnitySlot, compile_creature, remove_neuron,
+    remove_neuron_by_bias_fold,
 };
 use serde_json::Value;
 use std::cell::Cell;
+use std::collections::BTreeMap;
 
 /// Points per input axis for the behaviour grids, spanning `[-1, 1]`.
 const GRID_POINTS: usize = 9;
@@ -532,26 +534,157 @@ fn a_slot_one_tag_does_not_block_the_fresh_slot_zero_path() {
 
 #[test]
 fn a_unity_slot_on_a_non_constant_neuron_is_ignored() {
+    // `hidden-1` is a hidden neuron, not a constant, and it is not the neuron
+    // being removed. It carries slot 0, the one slot that would trigger the
+    // reuse refusal if the tag were read regardless of the neuron's type.
+    let fixture = creature(
+        2,
+        vec![
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("hidden", "hidden-1", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("input-1", "hidden-1", 1.0),
+            edge("hidden-0", "output-0", 2.0),
+            edge("hidden-1", "output-0", 1.0),
+            edge("input-1", "output-0", 1.0),
+        ],
+    );
     let slots = [UnitySlot {
-        uuid: "hidden-0".to_string(),
-        slot: 2,
+        uuid: "hidden-1".to_string(),
+        slot: 0,
     }];
-    let removal = remove_neuron(
-        &if_target_fixture(),
-        "hidden-0",
-        1.5,
-        &slots,
-        fresh_uuid,
-        never_draw,
-    )
-    .unwrap()
-    .unwrap();
+    let removal = remove_neuron(&fixture, "hidden-0", 1.5, &slots, fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         removal.unity_constant,
         Some(UnitySlot {
             uuid: "unity-constant-0".to_string(),
             slot: 0,
         })
+    );
+    // The fresh path ran: the minted constant replaces `hidden-0`'s edge with
+    // weight 2.0 * 1.5 = 3.0, and the tagged hidden neuron is untouched.
+    let constant_edge = removal
+        .creature
+        .synapses
+        .iter()
+        .find(|s| s.from_uuid == "unity-constant-0")
+        .expect("the minted constant feeds the IF target");
+    assert_eq!(constant_edge.to_uuid, "output-0");
+    assert_eq!(constant_edge.weight.to_bits(), 3.0_f64.to_bits());
+    assert!(
+        removal
+            .creature
+            .neurons
+            .iter()
+            .any(|n| n.uuid == "hidden-1")
+    );
+    assert!(
+        !removal
+            .creature
+            .neurons
+            .iter()
+            .any(|n| n.uuid == "hidden-0")
+    );
+}
+
+fn memetic_record() -> MemeticExport {
+    MemeticExport {
+        biases: BTreeMap::from([("output-0".to_string(), 0.01)]),
+        weights: MemeticWeights::default(),
+        extra: serde_json::Map::new(),
+    }
+}
+
+#[test]
+fn a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it() {
+    let mut base = if_target_fixture();
+    base.memetic = Some(memetic_record());
+
+    let removal = remove_neuron(&base, "hidden-0", 1.5, &[], fresh_uuid, never_draw)
+        .unwrap()
+        .unwrap();
+    // The constant branch ran (a constant was minted), and it cleared the record.
+    assert_eq!(
+        removal.unity_constant,
+        Some(UnitySlot {
+            uuid: "unity-constant-0".to_string(),
+            slot: 0,
+        })
+    );
+    assert_eq!(removal.creature.memetic, None);
+
+    // f64::MAX * 2.0 overflows the constant's weight, so the branch refuses.
+    let refused = remove_neuron(&base, "hidden-0", f64::MAX, &[], fresh_uuid, never_draw);
+    assert_eq!(
+        refused,
+        Err(NeuronRemovalError::NonFiniteConstantWeight {
+            target: "output-0".to_string(),
+        })
+    );
+    assert_eq!(
+        base.memetic,
+        Some(memetic_record()),
+        "the input is never modified"
+    );
+}
+
+#[test]
+fn a_constant_the_cascade_removes_again_is_not_returned_as_a_slot() {
+    // `hidden-0` is a MAXIMUM aggregate whose only outward synapse is its own
+    // self-loop, so its one outward target is an aggregate and the constant
+    // branch runs. The minted constant then feeds nothing but the removed
+    // neuron, so the orphan cascade removes it again.
+    let mut fixture = creature(
+        1,
+        vec![
+            neuron("hidden", "hidden-0", Some("MAXIMUM"), 0.0),
+            neuron("output", "output-0", Some("IDENTITY"), 0.0),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "hidden-0", 0.5),
+            edge("input-0", "output-0", 1.0),
+        ],
+    );
+    fixture.forward_only = false;
+
+    let mints = Cell::new(0_u64);
+    let removal = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &[],
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(mints.get(), 1, "the constant branch minted a constant");
+    assert_eq!(removal.unity_constant, None);
+    assert!(
+        !removal
+            .creature
+            .neurons
+            .iter()
+            .any(|n| n.uuid == "unity-constant-0" || n.uuid == "hidden-0")
+    );
+    assert!(removal.creature.synapses.iter().all(|s| {
+        s.from_uuid != "unity-constant-0"
+            && s.to_uuid != "unity-constant-0"
+            && s.from_uuid != "hidden-0"
+            && s.to_uuid != "hidden-0"
+    }));
+    assert_eq!(
+        removal.creature.synapses,
+        vec![edge("input-0", "output-0", 1.0)]
     );
 }
 
