@@ -1,6 +1,7 @@
 //! Native replay of the frozen `mergeParallelBridges` captures (Issue #777),
 //! plus hand-derived tests for the two deliberate, stricter departures
-//! (`MEAN` and unparsable targets) and the failure and memetic contracts.
+//! (`MEAN` and unparsable targets), the failure and memetic contracts, and
+//! how a wire UUID resolves to its place in activation order.
 //!
 //! The oracle is the TypeScript output frozen at revision
 //! `60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`, compared bit-exactly.
@@ -365,15 +366,82 @@ fn memetic_rows_for_the_removed_bridge_are_pruned_and_the_record_stays() {
 }
 
 #[test]
-fn the_input_creature_is_never_mutated() {
-    for creature in [
-        two_bridges("IDENTITY", 2.0, 3.0),
-        two_bridges("MEAN", 2.0, 3.0),
-        two_bridges("IDENTITY", 1e200, 1e200),
-        two_groups(),
-    ] {
-        let snapshot = creature.clone();
-        let _ = merge_parallel_bridges(&creature);
-        assert_eq!(creature, snapshot);
+fn an_overflowing_redirect_names_the_removed_bridge_and_a_finite_one_merges() {
+    // Kept h1 has small weights and zero biases, so its own inbound weight
+    // (1.0 * 1.0) and the merged bias (1.0 * 0 + 1e200 * 0 = 0) stay finite.
+    // Only the removed h0's redirected weight, 1e200 * 1e200 = inf, overflows.
+    let removed_overflows = |w: f64| {
+        let mut creature = two_bridges("IDENTITY", 1.0, 1.0);
+        creature.neurons[0].bias = 0.0;
+        creature.neurons[1].bias = 0.0;
+        creature.synapses[0].weight = w; // input-0 -> h0
+        creature.synapses[1].weight = w; // h0 -> output-0
+        creature
+    };
+    let overflow = removed_overflows(1e200);
+    assert_eq!(
+        merge_parallel_bridges(&overflow),
+        Err(ParallelBridgeMergeError::NonFiniteWeight {
+            neuron_uuid: "h0".to_string()
+        })
+    );
+
+    // Control: the same shape at 1e100 merges, redirecting 1e100 * 1e100.
+    let merged = merge_parallel_bridges(&removed_overflows(1e100)).unwrap();
+    assert_eq!(merged.removed_neurons, 1);
+    assert_eq!(merged.creature.synapses[0].to_uuid, "h1");
+    assert_eq!(merged.creature.synapses[0].weight, 1e100 * 1e100);
+}
+
+/// `two_bridges`, with the first bridge fed from `source` instead of `input-0`.
+fn first_bridge_fed_from(source: &str, input: usize) -> CreatureExport {
+    let mut creature = two_bridges("IDENTITY", 2.0, 3.0);
+    creature.input = input;
+    creature.synapses[0].from_uuid = source.to_string();
+    creature
+}
+
+#[test]
+fn only_a_canonical_declared_input_name_feeds_a_mergeable_bridge() {
+    // Control: `input-0` is a declared input, so the pair merges.
+    assert_eq!(
+        merge_parallel_bridges(&first_bridge_fed_from("input-0", 2))
+            .unwrap()
+            .removed_neurons,
+        1
+    );
+    // Each of these names no neuron, so h0 has a dangling source, is not a
+    // bridge, and nothing merges.
+    for source in ["input-2", "input-00", "input-+0", "input-", "input-x"] {
+        let creature = first_bridge_fed_from(source, 2);
+        let result = merge_parallel_bridges(&creature).unwrap();
+        assert_eq!(result.removed_neurons, 0, "{source} must not resolve");
+        assert_eq!(result.creature, creature, "{source}: nothing rewritten");
     }
+}
+
+#[test]
+fn a_listed_neuron_named_like_an_input_is_ordered_as_a_listed_neuron() {
+    // A listed neuron named `input-0` that sits *after* h0 shadows the
+    // implicit input of the same name. h0's source then follows h0, so h0 is
+    // not a forward bridge and nothing merges.
+    let mut creature = first_bridge_fed_from("input-0", 2);
+    creature
+        .neurons
+        .insert(1, neuron("hidden", "input-0", 0.0, "TANH"));
+    let result = merge_parallel_bridges(&creature).unwrap();
+    assert_eq!(result.removed_neurons, 0);
+    assert_eq!(result.creature, creature);
+}
+
+#[test]
+fn a_declared_width_near_usize_max_still_merges() {
+    // `input` is a declared count no payload backs. Positions are ordered
+    // without `input + k`, so the widest declaration neither overflows nor
+    // costs one entry per declared input.
+    let creature = first_bridge_fed_from("input-0", usize::MAX);
+    let merged = merge_parallel_bridges(&creature).unwrap();
+    assert_eq!(merged.removed_neurons, 1);
+    assert_eq!(merged.creature.synapses[0].to_uuid, "h1");
+    assert_eq!(merged.creature.synapses[0].weight, 6.0);
 }

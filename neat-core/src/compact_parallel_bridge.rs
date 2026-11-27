@@ -190,17 +190,14 @@ pub fn merge_parallel_bridges(
             .push(index);
     }
 
-    // Activation order: inputs at 0..input, then neurons in array order.
-    let input_labels: Vec<String> = (0..creature.input).map(|i| format!("input-{i}")).collect();
-    let mut position: HashMap<&str, usize> = HashMap::new();
-    for (i, label) in input_labels.iter().enumerate() {
-        position.insert(label.as_str(), i);
-    }
-    let mut neuron_index: HashMap<&str, usize> = HashMap::new();
+    // Activation order: inputs first, then neurons in array order. Only the
+    // listed neurons are stored; an implicit `input-N` is resolved on demand,
+    // so the cost follows the payload rather than the declared width.
+    let mut neuron_index: HashMap<&str, usize> = HashMap::with_capacity(creature.neurons.len());
     for (k, neuron) in creature.neurons.iter().enumerate() {
-        position.insert(neuron.uuid.as_str(), creature.input + k);
         neuron_index.insert(neuron.uuid.as_str(), k);
     }
+    let position = |uuid: &str| activation_position(uuid, &neuron_index, creature.input);
 
     let mut candidates: Vec<usize> = Vec::new();
     for (k, neuron) in creature.neurons.iter().enumerate() {
@@ -224,10 +221,10 @@ pub fn merge_parallel_bridges(
         if in_syn.from_uuid == neuron.uuid || out_syn.to_uuid == neuron.uuid {
             continue;
         }
-        let (Some(&bridge_pos), Some(&source_pos), Some(&target_pos)) = (
-            position.get(neuron.uuid.as_str()),
-            position.get(in_syn.from_uuid.as_str()),
-            position.get(out_syn.to_uuid.as_str()),
+        let (Some(bridge_pos), Some(source_pos), Some(target_pos)) = (
+            position(neuron.uuid.as_str()),
+            position(in_syn.from_uuid.as_str()),
+            position(out_syn.to_uuid.as_str()),
         ) else {
             continue;
         };
@@ -283,10 +280,49 @@ pub fn merge_parallel_bridges(
         if duplicate {
             continue;
         }
-        return merge_group(creature, members, &inward, &outward, &position);
+        return merge_group(creature, members, &inward, &outward, &neuron_index);
     }
 
     Ok(unchanged())
+}
+
+/// A neuron's place in activation order: every implicit input precedes every
+/// listed neuron, and each half is ordered by its own index.
+///
+/// An enum rather than `input + k`, so a declared width near `usize::MAX`
+/// cannot overflow the sum or make two neurons share a position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Position {
+    /// Implicit input neuron `input-N`.
+    Input(usize),
+    /// Listed neuron at this index of `creature.neurons`.
+    Neuron(usize),
+}
+
+/// Where `uuid` sits in activation order, or `None` when it names no neuron.
+///
+/// A listed neuron shadows an input of the same name. Otherwise only the
+/// canonical `input-N` spelling with `N < input` names an input — no sign, no
+/// leading zero — so the answer is the one a map of the formatted names
+/// would give, without building one entry per declared input (AGENTS.md,
+/// "One width check for creature JSON").
+fn activation_position(
+    uuid: &str,
+    neuron_index: &HashMap<&str, usize>,
+    input: usize,
+) -> Option<Position> {
+    if let Some(&k) = neuron_index.get(uuid) {
+        return Some(Position::Neuron(k));
+    }
+    let digits = uuid.strip_prefix("input-")?;
+    let canonical = !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'));
+    if !canonical {
+        return None;
+    }
+    let index: usize = digits.parse().ok()?;
+    (index < input).then_some(Position::Input(index))
 }
 
 /// `true` when folding two synapses into one would not be exact for a target
@@ -307,7 +343,7 @@ fn merge_group(
     members: &[usize],
     inward: &HashMap<&str, Vec<usize>>,
     outward: &HashMap<&str, Vec<usize>>,
-    position: &HashMap<&str, usize>,
+    neuron_index: &HashMap<&str, usize>,
 ) -> Result<ParallelBridgeMerge, ParallelBridgeMergeError> {
     let mut merged = creature.clone();
     let in_of = |k: usize| inward[creature.neurons[k].uuid.as_str()][0];
@@ -324,7 +360,8 @@ fn merge_group(
     }
 
     // Keep the member latest in activation order (strictly greater wins).
-    let pos_of = |k: usize| position[creature.neurons[k].uuid.as_str()];
+    // Every member is a listed neuron, so its position is its array index.
+    let pos_of = |k: usize| Position::Neuron(k);
     let mut kept = members[0];
     for &k in members {
         if pos_of(k) > pos_of(kept) {
@@ -365,7 +402,11 @@ fn merge_group(
         // Holds by construction: every candidate's source precedes its own
         // bridge, and the kept neuron is at or after every member.
         debug_assert!(
-            position[creature.synapses[in_of(k)].from_uuid.as_str()] < pos_of(kept),
+            activation_position(
+                creature.synapses[in_of(k)].from_uuid.as_str(),
+                neuron_index,
+                creature.input,
+            ) < Some(pos_of(kept)),
             "redirected synapse must stay forward"
         );
         let syn = &mut merged.synapses[in_of(k)];
