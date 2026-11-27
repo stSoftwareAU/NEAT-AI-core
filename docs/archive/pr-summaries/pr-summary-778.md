@@ -95,8 +95,11 @@ flowchart LR
 - **Tests:** `neat-core/tests/compact_unity_constant.rs`.
   - `frozen_unity_captures_replay_exactly` replays the five fresh-path captures.
     It compares every neuron and synapse in order, with biases and weights
-    compared by `to_bits`. It also checks the mint count, the cleared memetic
-    record and the returned slot.
+    compared by `to_bits`. It also checks the mint count and the returned slot.
+    Its `memetic.is_none()` check cannot fail, because the captures carry no
+    memetic record. The clear is pinned by
+    `a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it`
+    instead (see Test Plan).
   - Three tests are the native counterparts of NEAT-AI `FixIF.ts`,
     `CompactConstant.ts` and `CompactKeepOrder.ts`. They copy those creatures
     and compare `compile_creature` + `activate` outputs before and after on a
@@ -109,31 +112,63 @@ flowchart LR
 
 ## Acceptance Criteria
 
-The issue has no acceptance-criteria heading. The parts of it that are still
-undone:
+<!-- vibe-spec-review inputs="diff+issue-body" -->
 
-- **missing** — "Inventory TS AggressivePrune, CompactUnused and
+The issue has no acceptance-criteria heading. The criteria below come from its
+text. Each verdict is the Spec reviewer's, run over `git diff origin/Develop...HEAD`
+and the issue body at `970e470`.
+
+- **partial** — "Inventory TS AggressivePrune, CompactUnused and
   simplify/large-weight transforms from #776; port only existing compaction
   rules" (CompactUnused's reuse of an existing `compact-unity-slot` constant,
-  slots 1 and 2, and the legacy ids) — reason: the frozen reuse path returns a
-  removed constant with a stale index. The port refuses it with
-  `UnitySlotReuseNotPorted`. The slot-0 path with no constant holding the slot
-  is ported.
-- **missing** — "Add tests for ... deadlines" — reason: none of the ported rules
-  has a deadline. The only one is the `skipCompaction` check in
-  `TrainingTeardown.ts`, which sits with the caller around `compactUnused`.
-- **missing** — "tag/memetic semantics" (the `unused`, `approach`, `old-*` and
-  newborn-grace tags) — reason: `CreatureExport` carries no tags, and these are
-  written by the `compactUnused` wrapper at the caller boundary. Only the
-  `compact-unity-slot` tag has a native contract (passed in and returned).
+  slots 1 and 2, and the legacy ids) — evidence:
+  `neat-core/tests/compact_unity_constant.rs::frozen_unity_captures_replay_exactly`,
+  `::reusing_a_tagged_slot_is_refused_and_the_capture_shows_why`,
+  `::a_legacy_slot_zero_id_is_refused_like_a_tagged_one` — reviewer: partial —
+  reason: the fresh slot-0 path is ported and replayed bit for bit. Reusing a
+  held slot 0 is refused with `UnitySlotReuseNotPorted`, because the frozen path
+  returns a removed constant with a stale index. Slots 1 and 2 are range-checked
+  only, and no legacy id other than `-1000` is handled.
+- **missing** — "Add tests for ... deadlines" — reviewer: missing — reason: no
+  ported rule has a deadline. The only one is the `skipCompaction` check in
+  `TrainingTeardown.ts`, which sits with the caller around `compactUnused`. No
+  test in `neat-core` covers one.
+- **partial** — "tag/memetic semantics" (the `unused`, `approach`, `old-*` and
+  newborn-grace tags) — evidence:
+  `neat-core/tests/compact_unity_constant.rs::a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it`,
+  `::a_unity_slot_on_a_non_constant_neuron_is_ignored` — reviewer: partial —
+  reason: the constant branch's memetic clear and the `compact-unity-slot`
+  contract are pinned. `CreatureExport` carries no tags, so the `unused`,
+  `approach`, `old-*` and newborn-grace tags have no native contract.
 - **missing** — "parity with original fixtures" (`NewbornGrace.ts`,
-  `Cascade.ts`, `CompactUnusedOrphanCleanup.ts`) — reason: these drive the whole
-  `compactUnused`, whose neuron choice from trace statistics and a shuffle stays
-  with the caller. They have no native replay.
+  `Cascade.ts`, `CompactUnusedOrphanCleanup.ts`) — reviewer: missing — reason:
+  these drive the whole `compactUnused`, and its neuron choice from trace
+  statistics and a shuffle stays with the caller. Only `FixIF.ts`,
+  `CompactConstant.ts`, `CompactKeepOrder.ts` and `RemoveHiddenNeuronCascade.ts`
+  have native counterparts.
+- **partial** — "Add tests for typed IF, aggregation, clipping, non-finite
+  statistics" (for the constant branch added here) — evidence:
+  `neat-core/tests/compact_unity_constant.rs::the_constant_edges_follow_typescript_order_whatever_order_they_are_listed_in`,
+  `::the_overflow_capture_is_refused_before_any_change` — reviewer: partial —
+  reason: typed IF roles and the `IF`, `MEAN`, `MAXIMUM` and `HYPOT` aggregates
+  are covered, as is a non-finite weight product. `MINIMUM`, `HYPOTv2`, clipping
+  and a NaN or infinite activation through the constant branch are not.
+- **met** — "Additive changes only; do not switch callers or introduce new
+  rules" — evidence: `neat-core/src/compact_unity_constant.rs` (new module and
+  re-exports only), `neat-core/src/compact_remove_neuron.rs` (docs, an error
+  message, and `remove_with_orphan_cascade` widened to `pub(crate)`) —
+  reviewer: met
+- **unrequested** — `docs/archive/pr-summaries/pr-summary-778.md` is rewritten
+  over PR #802's archived summary for this issue — reviewer: unrequested —
+  reason: the worker reads the summary at this one path per issue. #802's
+  version is kept in git history at `7b77939`.
+- **unrequested** — `Cargo.lock` churn: `8163e3c` bumped `wasm-bindgen` to
+  0.2.130 and `970e470` reverts it — reviewer: unrequested — reason: no net
+  effect. `git diff origin/Develop HEAD -- Cargo.lock` is empty.
 
 ## Test Plan
 
-- Added `neat-core/tests/compact_unity_constant.rs` (16 tests):
+- Added `neat-core/tests/compact_unity_constant.rs` (18 tests):
   - the replay and the three behaviour tests above;
   - `the_overflow_capture_is_refused_before_any_change` (no UUID minted; control
     with a finite activation accepted);
@@ -141,7 +176,16 @@ undone:
     capture's defect facts; control without tags accepted) and
     `a_legacy_slot_zero_id_is_refused_like_a_tagged_one`;
   - `a_slot_one_tag_does_not_block_the_fresh_slot_zero_path` and
-    `a_unity_slot_on_a_non_constant_neuron_is_ignored`;
+    `a_unity_slot_on_a_non_constant_neuron_is_ignored`. The second puts slot 0
+    on a hidden neuron other than the one being removed. Slot 0 is the only slot
+    that can trigger the reuse refusal;
+  - `a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it`:
+    an `IF`-target removal carrying a `MemeticExport` returns `memetic: None`.
+    A `NonFiniteConstantWeight` refusal leaves the input's record intact;
+  - `a_constant_the_cascade_removes_again_is_not_returned_as_a_slot`: a
+    `MAXIMUM` hidden neuron whose only outward synapse is its own self-loop, in
+    a creature that is not forward-only. The minted UUID is absent from
+    `neurons` and `synapses`, and `unity_constant` is `None`;
   - refusals, each with an accepted control and a message check:
     - `a_unity_slot_outside_zero_to_two_is_refused_before_removal`;
     - `a_unity_slot_naming_no_neuron_is_refused_before_removal`;
@@ -162,19 +206,39 @@ undone:
     red;
   - always inserting the constant at position 0 turned the replay and
     `the_new_constant_lands_right_after_an_untagged_constant` red.
+- **Mutation evidence for the three behaviours the pre-PR verifier found
+  unpinned.** Each mutation was applied alone to
+  `neat-core/src/compact_unity_constant.rs`, run against
+  `cargo test -p neat-core --test compact_unity_constant`, then reverted:
+
+  | Mutation | Result |
+  | --- | --- |
+  | `result.memetic = None;` deleted | red: `a_constant_branch_removal_clears_the_memetic_record_and_a_refusal_keeps_it` |
+  | `neuron.neuron_type == "constant"` → `true` in `holds_slot_zero` | red: `a_unity_slot_on_a_non_constant_neuron_is_ignored` |
+  | survival check forced to `true` (always `Some(UnitySlot)`) | red: `a_constant_the_cascade_removes_again_is_not_returned_as_a_slot` |
+
+  Before this change, all three left the suite green.
 - **Added to `neat-core/tests/compact_remove_neuron.rs`:**
   `removal_cascades_to_a_constant_that_fed_only_the_removed_neuron` and
   `removal_keeps_a_constant_that_still_feeds_another_neuron`. They are the
   native counterparts of `RemoveHiddenNeuronCascade.ts`, including the
   JSON-round-trip validation. They pin existing behaviour and passed on their
   first run. No existing test was edited.
-- **Gate:** `./quality.sh < /dev/null` exited 0 ("All quality checks passed!")
-  on `448fc64`, and again on `d8f2ccd` (the code, tests and this summary before
-  this line was filled in).
+- **Dependency bump reverted.** The `bump-deps.sh` commit `8163e3c` moved the
+  root `Cargo.lock` `wasm-bindgen` from 0.2.128 to 0.2.130. The
+  `.github/workflows/wasm-bundle.yml` CLI pin stayed at 0.2.128, so
+  `wasm_bundle_wasm64_dual_ship.bats` (`the pinned wasm-bindgen CLI version
+  already agrees with Cargo.lock`) failed. `Cargo.lock` is restored to
+  `origin/Develop`, which is 0.2.128, and this branch no longer changes it.
+  `./scripts/lockfile-freshness.sh --check` reports both lockfiles OK.
+- **Gate:** `./quality.sh < /dev/null` exited 0 ("All quality checks passed!") on
+  `970e470`, the code and tests of this head. Bats test 709 (`the pinned
+  wasm-bindgen CLI version already agrees with Cargo.lock`) now passes.
 - **Not run:**
   - `cargo check --target wasm32-unknown-unknown`: the target is not installed
     here, and the new module has no `cfg` or wasm code;
   - `scripts/check-downstream-consumers.sh`: the change only adds a module and
     exports, and changes no public item;
-  - a mutation sweep beyond the two breaks above;
-  - Spec and Standards reviewers: the issue has no acceptance-criteria heading.
+  - a mutation sweep beyond the five mutations above;
+  - Standards reviewer: no `CODING-STANDARDS.md` request was made for this
+    pass. The Spec reviewer ran, and its verdicts are above.
