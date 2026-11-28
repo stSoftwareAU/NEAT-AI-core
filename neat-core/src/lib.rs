@@ -21,6 +21,7 @@ pub mod accumulate;
 pub mod batch_scoring;
 pub mod compact_aggressive_prune;
 pub mod compact_complement_bypass;
+pub mod compact_constant_fold;
 pub mod compact_parallel_bridge;
 pub mod compact_remove_neuron;
 pub mod compact_simplify_large_weights;
@@ -153,6 +154,8 @@ pub use magnitude_penalty::{
 pub use compact_zero_weight::{ZeroWeightPrune, prune_zero_weight_synapses};
 // Issue #777 — exact COMPLEMENT bypass from the safe compact pass.
 pub use compact_complement_bypass::{ComplementBypass, bypass_complement};
+// Issue #777 — exact transitive constant folding from the safe compact pass.
+pub use compact_constant_fold::{ConstantFold, fold_constants};
 // Issue #589 — the canonical fixed-point cleanup every prune operation reuses.
 pub use prune_cleanup::{
     CleanupError, CleanupOptions, CleanupOutcome, IfRepair, MAX_NET_NEW_SYNAPSES_PER_SPLICE,
