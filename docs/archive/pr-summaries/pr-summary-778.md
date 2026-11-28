@@ -23,8 +23,8 @@ Part of #778.
 ### Intent and Rationale
 
 - PR #804's summary listed "tag/memetic semantics" as missing, because
-  `NeuronExport` carries no tags. The rules are pure functions of a tag value
-  or of the creature before the pass, so they can be ported without giving the
+  `NeuronExport` carries no tags. The rules are pure functions of a tag value or
+  of the creature before the pass, so they can be ported without giving the
   export a tags field.
 - The frozen `compactUnused` captures (`compact_legacy_unused.json`) record each
   neuron's tags before and after the pass, and the `compactCreature` capture
@@ -34,10 +34,10 @@ Part of #778.
 
 ### Essential Design Decisions
 
-- The caller reads and writes the tags. These functions only compute the
-  values. Adding a `tags` field to `NeuronExport` or `CreatureExport` would
-  break every consumer that builds them as struct literals, so it is a
-  three-phase public-API change (`RELEASING.md`), not an additive one.
+- The caller reads and writes the tags. These functions only compute the values.
+  Adding a `tags` field to `NeuronExport` or `CreatureExport` would break every
+  consumer that builds them as struct literals, so it is a three-phase
+  public-API change (`RELEASING.md`), not an additive one.
 - The `parseInt` emulation follows JavaScript in these respects:
   - it skips JS whitespace only, so it skips the BOM (U+FEFF) but not NEL
     (U+0085);
@@ -57,10 +57,9 @@ Part of #778.
 ### Undiscoverable Facts
 
 - I read the originals from a NEAT-AI checkout at `60d6b4e5`, the capture
-  revision. They are `src/architecture/NewbornGrace.ts`,
-  the post-pass tag writes in `src/compact/CompactUnused.ts` and
-  `src/compact/CompactCreature.ts`, and `getTag`/`addTag`/`removeTag` from
-  `jsr:@stsoftware/tags@1.0.41`.
+  revision. They are `src/architecture/NewbornGrace.ts`, the post-pass tag
+  writes in `src/compact/CompactUnused.ts` and `src/compact/CompactCreature.ts`,
+  and `getTag`/`addTag`/`removeTag` from `jsr:@stsoftware/tags@1.0.41`.
 - `src/compact` has no deadline. The only one is `skipCompaction` in
   `src/architecture/training/TrainingTeardown.ts`, which is asked before and
   after `compactUnused` runs.
@@ -87,8 +86,8 @@ undone are listed here in the issue's own words.
 
 - **missing** — "Add tests for ... deadlines" — reason: no compaction rule has a
   deadline. The only one is `skipCompaction` in `TrainingTeardown.ts`, which
-  sits with the caller around `compactUnused`. The issue keeps that boundary,
-  so no `neat-core` rule exists for a test to cover.
+  sits with the caller around `compactUnused`. The issue keeps that boundary, so
+  no `neat-core` rule exists for a test to cover.
 - **missing** — "port only existing compaction rules" (the held-slot reuse
   shapes other than the sound one, and slot 2) — reason: `remove_neuron` still
   refuses these shapes with `UnitySlotReuseNotPorted`. The shapes are:
@@ -130,8 +129,8 @@ undone are listed here in the issue's own words.
   equals the captured `old-neurons` tag (`2`), and it asserts that two records
   were checked. The `//!` header now names this one native check. The existing
   test in that file is unchanged.
-- Red run: before the module existed, both new test files failed to compile
-  with E0432 (unresolved imports). After the port they pass.
+- Red run: before the module existed, both new test files failed to compile with
+  E0432 (unresolved imports). After the port they pass.
 - `cargo test -p neat-core --test compact_unused_tags --test compact_legacy_unused --test compact_unused_choice --test compact_legacy_behaviour`
   passed. The module doctests also pass
   (`cargo test -p neat-core --doc compact_unused`). `cargo fmt --all -- --check`
