@@ -199,6 +199,212 @@ export async function captureLegacyUnity(root: URL, revision: string) {
       activation: 1.5,
       unitySlots: { k0: "0" },
     },
+    // Slots 0 and 1 are held by leading constants and the removed neuron sits at
+    // the insertion point. Both stale indices name the removed neuron, so
+    // removeNeuron's count loop reaches createConstantOne(creature, 2), which
+    // mints a fresh slot-2 constant.
+    {
+      name: "unity_reuse_slot_one_held",
+      input: {
+        neurons: [
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("constant", "k1", undefined, -0.2),
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0", "hidden-1", 0.5),
+          edge("k1", "hidden-1", 0.25),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+          edge("input-1", "output-0", 1, "negative"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0", k1: "1" },
+    },
+    // Frozen defect: all three slots are held, so every createConstantOne call
+    // returns a stale index naming the removed neuron, which is then treated as
+    // the constant it is already connected to.
+    {
+      name: "unity_reuse_slot_two_held",
+      input: {
+        neurons: [
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("constant", "k1", undefined, -0.2),
+          neuron("constant", "k2", undefined, 0.3),
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0", "hidden-1", 0.5),
+          edge("k1", "hidden-1", 0.25),
+          edge("k2", "hidden-1", 0.125),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+          edge("input-1", "output-0", 1, "negative"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0", k1: "1", k2: "2" },
+    },
+    // The slot-0 holder is listed behind the removed neuron. Creature.fromJSON
+    // moves the constants first, so the frozen code sees a leading holder and
+    // takes the slot-1 reuse.
+    {
+      name: "unity_reuse_holder_behind",
+      input: {
+        neurons: [
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0", "hidden-1", 0.5),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+          edge("input-1", "output-0", 1, "negative"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0" },
+    },
+    // Two leading constants hold slot 0. The dedupe loop re-sources the second
+    // onto the first and removes it.
+    {
+      name: "unity_reuse_second_slot_zero_holder",
+      input: {
+        neurons: [
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("constant", "k0b", undefined, -0.2),
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0b", "hidden-1", 0.25),
+          edge("k0", "output-0", 0.5, "negative"),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0", k0b: "0" },
+    },
+    // A third leading constant also holds slot 0. The dedupe loop merges the
+    // second holder into the first and stops, so the third is left as it is.
+    {
+      name: "unity_reuse_third_slot_zero_holder",
+      input: {
+        neurons: [
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("constant", "k0b", undefined, -0.2),
+          neuron("constant", "k0c", undefined, 0.3),
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0b", "hidden-1", 0.25),
+          edge("k0c", "hidden-1", 0.125),
+          edge("k0", "output-0", 0.5, "negative"),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0", k0b: "0", k0c: "0" },
+    },
+    // Slot 0 is held by one leading constant and slot 1 by two. The slot-0 reuse
+    // asks for slot 1, whose dedupe loop merges the second slot-1 holder into the
+    // first, so the temporary slot-1 constant survives.
+    {
+      name: "unity_reuse_second_slot_one_holder",
+      input: {
+        neurons: [
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("constant", "k1", undefined, -0.2),
+          neuron("constant", "k1b", undefined, 0.3),
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0", "hidden-1", 0.5),
+          edge("k1b", "hidden-1", 0.25),
+          edge("k1", "output-0", 0.5, "negative"),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0", k1: "1", k1b: "1" },
+    },
+    // Slots 0 and 1 are held by one leading constant each and slot 2 by two. The
+    // slot-1 reuse asks for slot 2, whose dedupe loop merges the second slot-2
+    // holder into the first, so the temporary slot-2 constant survives.
+    {
+      name: "unity_reuse_second_slot_two_holder",
+      input: {
+        neurons: [
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("constant", "k1", undefined, -0.2),
+          neuron("constant", "k2", undefined, 0.3),
+          neuron("constant", "k2b", undefined, 0.6),
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0", "hidden-1", 0.5),
+          edge("k1", "hidden-1", 0.25),
+          edge("k2b", "hidden-1", 0.125),
+          edge("k2", "output-0", 0.5, "negative"),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0", k1: "1", k2: "2", k2b: "2" },
+    },
   ];
   const captures: unknown[] = [];
   const originalRandomUUID = crypto.randomUUID.bind(crypto);

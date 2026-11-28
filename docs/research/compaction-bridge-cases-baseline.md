@@ -80,6 +80,10 @@ deno test -A \
   test/compact/ParallelBridgeMergeExactness.ts
 ```
 
-Native replay and the remaining #776 acceptance work stay open in the
-[overall baseline](compaction-baseline.md). The forest summary is in the
+`merge_parallel_bridges` (Issue #777) now replays the `mergeParallelBridges`
+cases natively, in `neat-core/tests/compact_parallel_bridge.rs`; the
+`compactCreature` whole-pipeline captures stay TypeScript-only.
+
+Native replay of the `compactCreature` whole-pipeline captures stays open,
+tracked in the [overall baseline](compaction-baseline.md). The forest summary is in the
 [forest baseline](compaction-forest-baseline.md).
