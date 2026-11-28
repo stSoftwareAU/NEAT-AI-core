@@ -13,10 +13,18 @@ TypeScript-only. The new module is `neat-core/src/compact_unused_tags.rs`:
 - `compact_unused_pass_tags` gives the `old-neurons` and `old-synapses` counts.
   `compactCreature` writes the same `old-neurons` count.
 
-The change is additive and no caller is switched. Deadlines and the remaining
-held-slot reuse shapes are still open, so this is
+It also widens `remove_neuron` to every held unity-slot reuse whose TypeScript
+outcome is sound. That covers slot 1 held (the survivor takes slot 2), and a
+second tagged holder of slot 0 or slot 1, which TypeScript's dedupe loop merges
+into the first. Six new frozen `removeNeuron` captures back this change. Four
+show the outcomes that are now ported. Two show why a shape stays refused: the
+defect with slot 2 held, and the loader order that never hands over a trailing
+holder. The remaining refusals are TypeScript defects or shapes its loader never
+produces. New tests also pin what core owes the caller-side compaction deadline.
 
-Part of #778.
+The change is additive and no caller is switched.
+
+Closes #778.
 
 ## Spec
 
@@ -54,6 +62,35 @@ Part of #778.
   `neurons.length - input - output`. The value is exact, and it is negative for
   a malformed creature, as in TypeScript.
 
+- How a held unity slot is reused. TypeScript's `createConstantOne(creature, n)`
+  inserts a temporary constant after the leading constants. Its dedupe loop then
+  meets the tagged constants for slot `n` in list order. Two outcomes follow:
+  - When a second tagged holder leads, the loop moves that holder's outward
+    synapses onto the first holder, removes it, re-sorts the synapses and
+    stops. The temporary constant survives in slot `n`.
+  - Otherwise it removes the temporary constant again and returns it with a
+    stale index. When that index names the removed neuron, `removeNeuron` asks
+    for the next slot.
+
+  The port follows both outcomes for slots 0 and 1. The survivor therefore takes
+  slot 0, 1 or 2, and every holder TypeScript resolves has its bias set to 1.
+  It refuses, before any change:
+  - the stale-index defect;
+  - a held slot 2, where TypeScript returns `false` after mutating biases;
+  - a merge that would duplicate a synapse, or would remove a holder that has an
+    inward synapse;
+  - one constant holding both slots;
+  - a lone holder that does not lead. TypeScript's loader never hands
+    `removeNeuron` that order.
+- The reuse is not exact even with a perfect activation. Resetting a holder's
+  bias to 1, and merging a second holder into the first, change what the
+  holders' other targets receive. The module docs now say so. It is TypeScript's
+  behaviour, ported as it is.
+- Deadlines stay with the caller. The tests pin what the caller's
+  `skipCompaction` relies on: re-running a stage after an abandoned attempt is
+  bit-identical, and the caller's single grace round equals the round a
+  compacting pass writes.
+
 ### Undiscoverable Facts
 
 - I read the originals from a NEAT-AI checkout at `60d6b4e5`, the capture
@@ -63,6 +100,17 @@ Part of #778.
 - `src/compact` has no deadline. The only one is `skipCompaction` in
   `src/architecture/training/TrainingTeardown.ts`, which is asked before and
   after `compactUnused` runs.
+  Both the skipped and the completed teardown age the trained creature exactly
+  once, so a deadline decides only whether a compacted copy exists.
+- `Creature.fromJSON` moves constants to the front. The new
+  `unity_reuse_holder_behind` capture lists its holder behind the removed
+  neuron, and TypeScript still runs the leading-holder reuse.
+- With slot 2 held, `removeNeuron` returns `false`, but `compactUnused` still
+  returns the creature with every holder's bias set to 1
+  (`unity_reuse_slot_two_held`).
+- The new captures came from `scripts/legacy_compaction_unity.ts`, run against a
+  clean NEAT-AI clone at `60d6b4e5`. The 7 existing records came out
+  byte-identical.
 
 ## Evidence
 
@@ -81,25 +129,78 @@ flowchart LR
 
 ## Acceptance Criteria
 
-The issue has no acceptance-criteria heading, so no reviewer ran. The parts left
-undone are listed here in the issue's own words.
+<!-- vibe-spec-review inputs="diff+issue-body" -->
 
-- **missing** — "Add tests for ... deadlines" — reason: no compaction rule has a
-  deadline. The only one is `skipCompaction` in `TrainingTeardown.ts`, which
-  sits with the caller around `compactUnused`. The issue keeps that boundary, so
-  no `neat-core` rule exists for a test to cover.
-- **missing** — "port only existing compaction rules" (the held-slot reuse
-  shapes other than the sound one, and slot 2) — reason: `remove_neuron` still
-  refuses these shapes with `UnitySlotReuseNotPorted`. The shapes are:
-  - the holder is not a leading constant;
-  - a second constant also holds slot 0;
-  - the stale position names another neuron;
-  - slot 1 is already held.
+These are the two criteria the PR-summary gate listed as unmet. An independent
+spec-review sub-agent judged each one against the issue body and the working
+tree diff. The first review gave both `partial`. Its findings were fixed: a
+vacuous deadline test was deleted, a wrong claim about the teardown was
+corrected, and three sound merge shapes that had been refused were ported. The
+re-review gave the verdicts below.
 
-  For the first two, TypeScript merges constants. No capture shows a sound
-  outcome for any of them.
+- **met** — "Add tests for ... deadlines" — evidence:
+  `neat-core/tests/compact_deadline_boundary.rs::the_callers_grace_round_matches_the_round_a_compacting_pass_writes`,
+  `neat-core/tests/compact_deadline_boundary.rs::rerunning_a_stage_after_an_abandoned_attempt_is_bit_identical`
+  — reviewer: met
+- **met** — "port only existing compaction rules" (the held-slot reuse shapes
+  other than the sound one, and slot 2) — evidence:
+  `neat-core/tests/compact_unity_constant.rs::the_frozen_slot_one_held_capture_replays_exactly`,
+  `::a_second_tagged_slot_zero_holder_is_merged_into_the_first_as_captured`,
+  `::a_third_slot_zero_holder_is_left_as_it_is_as_captured`,
+  `::a_second_tagged_slot_one_holder_is_merged_into_the_first_as_captured`,
+  `::a_holder_behind_the_removed_neuron_is_never_handed_over_by_typescripts_loader`,
+  `::a_held_slot_two_is_refused_and_the_capture_shows_why` — reviewer: met
 
 ## Test Plan
+
+- `neat-core/tests/golden/compact_legacy_unity.json` grows from 7 to 13 frozen
+  `removeNeuron` captures. They were made with `scripts/legacy_compaction_unity.ts`
+  against a clean NEAT-AI clone at `60d6b4e5`, and the first 7 records are
+  unchanged. The new cases are `unity_reuse_slot_one_held`,
+  `unity_reuse_slot_two_held`, `unity_reuse_holder_behind`,
+  `unity_reuse_second_slot_zero_holder`, `unity_reuse_third_slot_zero_holder` and
+  `unity_reuse_second_slot_one_holder`.
+- `neat-core/tests/compact_unity_constant.rs` has 46 tests, all passing:
+  - The four merge and slot-2 captures replay bit for bit. Each replay checks
+    neuron order, biases, synapse order, weights, roles, the reported slot and
+    a single mint.
+  - Derived cases cover the legacy ids `-1001` and `-1002`:
+    - a holder matched by legacy id alone is left as it is;
+    - a tagged holder behind the insertion point is not merged;
+    - a merged survivor lands right after the remaining leading constants.
+  - Each refusal is named and has an accepted control: slot 2 held, a slot-1
+    holder that does not lead, one constant holding both slots, a duplicate
+    synapse in a merge, and an inward synapse on the second holder.
+  - The two old `a_slot_one_*_blocks_the_slot_zero_reuse` tests asserted the
+    refusal this change replaces, so they became the slot-2 tests.
+  - Red run: against the previous `compact_unity_constant.rs`, 6 of the new
+    tests failed.
+  - Mutations, each reverted afterwards, with at least one test going red for
+    each:
+    - dropping a holder's bias reset;
+    - reporting slot 1 for slot 2;
+    - dropping the slot-2 refusal;
+    - dropping the slot-1 leads check or the both-slots check;
+    - dropping the slot-1 merge;
+    - dropping the merge's re-source, re-sort, bias reset, tag requirement,
+      leads requirement, inward check or duplicate check;
+    - dropping the insertion-point recompute.
+  - One mutation survived and its check was removed: a separate "first holder
+    leads" check that is implied by the second holder leading.
+- `neat-core/tests/compact_deadline_boundary.rs` is new, with 2 tests:
+  - The caller's single `age_newborn_grace` round gives every shared neuron the
+    tag the frozen pass wrote. It requires Keep, Remove and Set to each occur,
+    and it shows that ageing twice would differ.
+  - Re-running `remove_neuron`, over all 13 compacting captures, and
+    `aggressive_prune`, after an abandoned attempt and an unrelated call, is
+    bit-identical. The prune counts are derived by hand.
+  - Making `age_newborn_grace` stop decrementing turned the grace test red.
+  - An earlier draft had a vacuous stage-boundary test and a wrong claim that
+    the skipped and completed teardown paths age grace differently. Both were
+    removed after review.
+- `cargo test --workspace < /dev/null`: 0 failures. Also clean:
+  `cargo clippy -p neat-core --all-targets -- -D warnings`, `cargo fmt --all --check`,
+  `deno fmt --check`, and `markdownlint-cli2` on the research doc.
 
 - `neat-core/tests/compact_unused_tags.rs` is new, with 6 tests. Every expected
   value is a literal:
@@ -142,7 +243,11 @@ undone are listed here in the issue's own words.
   these parts" list and the `newborn_grace_remaining` field doc so they name the
   new helpers.
 - Not run:
-  - `cargo check --target wasm32-unknown-unknown`: the new code is
-    target-independent and holds no `cfg`.
-  - `scripts/check-downstream-consumers.sh`: the change only adds public items
-    and changes no existing ones.
+  - `cargo check --target wasm32-unknown-unknown`: the target is not installed
+    in this environment (E0463, no `std`). The new code is target-independent
+    and has no `cfg`.
+  - `scripts/check-downstream-consumers.sh`: no signature changes, and the only
+    public items are additions. `remove_neuron` now accepts shapes it used to
+    refuse with `UnitySlotReuseNotPorted`. Its signature and error enum are
+    unchanged. The only `remove_neuron` among the sibling checkouts here is
+    NEAT-AI-Rebase's own local function in `rebase/src/ockham.rs`, not core's.
