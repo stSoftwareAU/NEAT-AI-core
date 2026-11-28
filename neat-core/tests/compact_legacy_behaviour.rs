@@ -1,5 +1,40 @@
 //! Legacy behaviour-guard captures; integrity checks, not native compactor parity.
+//! The one native check is the `old-neurons` count; the compactor itself is not compared.
+use neat_core::{compact_unused_pass_tags, parse_creature_json};
 use serde_json::{Value, json};
+
+#[test]
+fn the_recorded_old_neurons_tag_matches_the_native_count() {
+    let cases: Vec<Value> = serde_json::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/golden/compact_legacy_behaviour.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut checked = 0;
+    for case in &cases {
+        let name = case["name"].as_str().unwrap();
+        let candidate = &case["candidate"];
+        if candidate.is_null() {
+            continue;
+        }
+        let creature = parse_creature_json(&case["before"].to_string()).unwrap();
+        let native = compact_unused_pass_tags(&creature).old_neurons.to_string();
+        let recorded = candidate["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "old-neurons")
+            .unwrap_or_else(|| panic!("{name}: no old-neurons tag"))["value"]
+            .as_str()
+            .unwrap();
+        assert_eq!(native, recorded, "{name}: old-neurons count");
+        checked += 1;
+    }
+    assert_eq!(checked, 2);
+}
 
 #[test]
 fn original_behaviour_cases_retain_guard_boundaries_and_provenance() {
