@@ -19,8 +19,10 @@ second tagged holder of slot 0 or slot 1, which TypeScript's dedupe loop merges
 into the first. Six new frozen `removeNeuron` captures back this change. Four
 show the outcomes that are now ported. Two show why a shape stays refused: the
 defect with slot 2 held, and the loader order that never hands over a trailing
-holder. The remaining refusals are TypeScript defects or shapes its loader never
-produces. New tests also pin what core owes the caller-side compaction deadline.
+holder. The remaining refusals are TypeScript defects, shapes its loader never
+produces, and one shape left unported: two tagged leading slot-2 holders, where
+TypeScript's dedupe loop would merge them and `removeNeuron` would succeed. That
+merge has no frozen capture, so the port refuses it and the docs say so. New tests also pin what core owes the caller-side compaction deadline.
 
 The change is additive and no caller is switched.
 
@@ -76,7 +78,15 @@ Closes #778.
   slot 0, 1 or 2, and every holder TypeScript resolves has its bias set to 1. It
   refuses, before any change:
   - the stale-index defect;
-  - a held slot 2, where TypeScript returns `false` after mutating biases;
+  - a held slot 2 with one holder, where TypeScript returns `false` after
+    mutating biases;
+  - two tagged leading slot-2 holders. TypeScript would merge them as it does
+    for slots 0 and 1 and `removeNeuron` would succeed, so this is **not** a
+    TypeScript defect. It is left unported because no capture backs it, and the
+    NEAT-AI checkout needed to make one was not available in this run;
+  - a removed constant that leads the list while a merge applies. It may be one
+    of the holders, and the merge would then return a creature no capture backs
+    (for example two duplicate synapses from the survivor);
   - a merge that would duplicate a synapse, or would remove a holder that has an
     inward synapse;
   - one constant holding both slots;
@@ -105,7 +115,7 @@ Closes #778.
 - `Creature.fromJSON` moves constants to the front. The new
   `unity_reuse_holder_behind` capture lists its holder behind the removed
   neuron, and TypeScript still runs the leading-holder reuse.
-- With slot 2 held, `removeNeuron` returns `false`, but `compactUnused` still
+- With slot 2 held by one constant, `removeNeuron` returns `false`, but `compactUnused` still
   returns the creature with every holder's bias set to 1
   (`unity_reuse_slot_two_held`).
 - The new captures came from `scripts/legacy_compaction_unity.ts`, run against a
@@ -136,20 +146,27 @@ spec-review sub-agent judged each one against the issue body and the working
 tree diff. The first review gave both `partial`. Its findings were fixed: a
 vacuous deadline test was deleted, a wrong claim about the teardown was
 corrected, and three sound merge shapes that had been refused were ported. The
-re-review gave the verdicts below.
+re-review gave the verdicts below. A later review found one more sound shape that
+is still refused, the slot-2 merge. This summary now names it as unported, and
+the second criterion is scoped to what is ported.
 
 - **met** — "Add tests for ... deadlines" — evidence:
   `neat-core/tests/compact_deadline_boundary.rs::the_callers_grace_round_matches_the_round_a_compacting_pass_writes`,
   `neat-core/tests/compact_deadline_boundary.rs::rerunning_a_stage_after_an_abandoned_attempt_is_bit_identical`
   — reviewer: met
-- **met** — "port only existing compaction rules" (the held-slot reuse shapes
-  other than the sound one, and slot 2) — evidence:
+- **met, for the shapes listed** — "port only existing compaction rules" (the
+  held-slot reuse shapes ported with a capture: slot 1 held, and a second tagged
+  holder of slot 0 or slot 1). The two-holder slot-2 merge is **not ported** and
+  is not claimed. — evidence:
   `neat-core/tests/compact_unity_constant.rs::the_frozen_slot_one_held_capture_replays_exactly`,
   `::a_second_tagged_slot_zero_holder_is_merged_into_the_first_as_captured`,
   `::a_third_slot_zero_holder_is_left_as_it_is_as_captured`,
   `::a_second_tagged_slot_one_holder_is_merged_into_the_first_as_captured`,
   `::a_holder_behind_the_removed_neuron_is_never_handed_over_by_typescripts_loader`,
-  `::a_held_slot_two_is_refused_and_the_capture_shows_why` — reviewer: met
+  `::a_held_slot_two_is_refused_and_the_capture_shows_why` (the single-holder
+  slot-2 refusal), `::two_tagged_slot_two_holders_are_refused_as_an_unported_merge`
+  (the unported shape stays refused and mints nothing) — reviewer: met for the
+  first review's shapes; the unported slot-2 merge came after it
 
 ## Test Plan
 
@@ -160,7 +177,7 @@ re-review gave the verdicts below.
   `unity_reuse_slot_one_held`, `unity_reuse_slot_two_held`,
   `unity_reuse_holder_behind`, `unity_reuse_second_slot_zero_holder`,
   `unity_reuse_third_slot_zero_holder` and `unity_reuse_second_slot_one_holder`.
-- `neat-core/tests/compact_unity_constant.rs` has 46 tests, all passing:
+- `neat-core/tests/compact_unity_constant.rs` has 48 tests, all passing:
   - The four merge and slot-2 captures replay bit for bit. Each replay checks
     neuron order, biases, synapse order, weights, roles, the reported slot and a
     single mint.
@@ -170,11 +187,17 @@ re-review gave the verdicts below.
     - a merged survivor lands right after the remaining leading constants.
   - Each refusal is named and has an accepted control: slot 2 held, a slot-1
     holder that does not lead, one constant holding both slots, a duplicate
-    synapse in a merge, and an inward synapse on the second holder.
+    synapse in a merge, an inward synapse on the second holder, two tagged
+    slot-2 holders (the unported merge), and removing either of two slot-0
+    holders.
   - The two old `a_slot_one_*_blocks_the_slot_zero_reuse` tests asserted the
     refusal this change replaces, so they became the slot-2 tests.
   - Red run: against the previous `compact_unity_constant.rs`, 6 of the new
-    tests failed.
+    tests failed. Before the removed-constant guard,
+    `removing_either_of_two_slot_zero_holders_is_refused_and_mints_nothing` failed:
+    removing `k0` returned a merged creature with duplicate synapses from the
+    survivor. The slot-2 two-holder test passes before and after, because it
+    pins a refusal that already held.
   - Mutations, each reverted afterwards, with at least one test going red for
     each:
     - dropping a holder's bias reset;
@@ -237,9 +260,8 @@ re-review gave the verdicts below.
   passed. The module doctests also pass
   (`cargo test -p neat-core --doc compact_unused`). `cargo fmt --all -- --check`
   and `cargo clippy -p neat-core --all-targets -- -D warnings` are clean.
-- `./quality.sh < /dev/null` exited 0 ("All quality checks passed!") on
-  `3646833`, the code and test commit. The commit after it changes only this
-  file.
+- `./quality.sh < /dev/null` exited 0 on the working tree that includes the
+  review fixes (the removed-constant guard, the two new tests and the docs).
 - Docs: in `neat-core/src/compact_unused_choice.rs` I reworded the "caller keeps
   these parts" list and the `newborn_grace_remaining` field doc so they name the
   new helpers.

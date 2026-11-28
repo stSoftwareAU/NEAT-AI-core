@@ -62,9 +62,15 @@
 //!     cascade;
 //!   - one constant holding slots 0 and 1, whose slot-0 tag TypeScript would
 //!     overwrite;
-//!   - slot 2 is held as well. TypeScript then treats the removed neuron as its
-//!     own constant and returns `false` after setting every holder's bias to 1
-//!     (`unity_reuse_slot_two_held`).
+//!   - slot 2 is held as well. With one slot-2 holder, TypeScript treats the
+//!     removed neuron as its own constant and returns `false` after setting every
+//!     holder's bias to 1 (`unity_reuse_slot_two_held`). With two tagged leading
+//!     slot-2 holders, `createConstantOne(creature, 2)` would run the same dedupe
+//!     merge as for slots 0 and 1 and `removeNeuron` would succeed. That merge is
+//!     read from the frozen source, not captured, so it is **not ported** and is
+//!     refused too;
+//!   - the removed constant itself leads the list while a merge applies: it may be
+//!     one of the holders, and no capture backs the result.
 //!
 //!   The caller writes the slot tag onto a holder matched by its legacy id, as
 //!   TypeScript's `addTag` does.
@@ -332,7 +338,7 @@ fn constant_branch(
     // resolves on the way has its bias set to 1.
     let mut reset_bias: Vec<&str> = Vec::new();
     let mut slot: u8 = 0;
-    let mut merged = merge_second_holder(creature, unity_slots, 0, -1000)?;
+    let mut merged = merge_second_holder(creature, uuid, unity_slots, 0, -1000)?;
     if merged.is_none()
         && let Some((held_at, held)) = slot_holder(&creature.neurons, unity_slots, 0, -1000)
     {
@@ -353,7 +359,7 @@ fn constant_branch(
         }
         reset_bias.push(&held.uuid);
         slot = 1;
-        merged = merge_second_holder(creature, unity_slots, 1, -1001)?;
+        merged = merge_second_holder(creature, uuid, unity_slots, 1, -1001)?;
         if merged.is_none()
             && let Some((one_at, one)) = slot_holder(&creature.neurons, unity_slots, 1, -1001)
         {
@@ -364,10 +370,13 @@ fn constant_branch(
                     constant: one.uuid.clone(),
                 });
             }
-            // A held slot 2 leaves `removeNeuron` treating the removed neuron as
-            // its own constant (`unity_reuse_slot_two_held`): TypeScript then
-            // returns `false` with every holder's bias already set to 1, or, for
-            // an untyped edge, folds the weight into the edge it removes.
+            // A held slot 2 is refused. With one holder, `removeNeuron` treats the
+            // removed neuron as its own constant (`unity_reuse_slot_two_held`):
+            // TypeScript then returns `false` with every holder's bias already
+            // set to 1, or, for an untyped edge, folds the weight into the edge
+            // it removes. With two tagged leading holders TypeScript would merge
+            // them and succeed, but no capture backs that merge, so it is not
+            // ported.
             if let Some((_, two)) = slot_holder(&creature.neurons, unity_slots, 2, -1002) {
                 return Err(NeuronRemovalError::UnitySlotReuseNotPorted {
                     constant: two.uuid.clone(),
@@ -533,9 +542,11 @@ fn insertion_point(creature: &CreatureExport) -> usize {
 /// the temporary constant again. A merge the frozen loop does not make soundly is
 /// refused before any change: the second holder has an inward synapse, whose
 /// removal could cascade into its feeder, or a synapse that would duplicate one of
-/// the first holder's.
+/// the first holder's, or the removed neuron `uuid` leads the list, where it may be
+/// a holder itself.
 fn merge_second_holder(
     creature: &CreatureExport,
+    uuid: &str,
     unity_slots: &[UnitySlot],
     slot: u8,
     legacy_id: i64,
@@ -554,6 +565,14 @@ fn merge_second_holder(
     }) else {
         return Ok(None);
     };
+    // The capture-backed merge removes a hidden neuron that sits at or after the
+    // insertion point. A removed constant that leads the list may itself be a holder
+    // or shift the stale index, so no frozen outcome backs it.
+    if creature.neurons.iter().position(|n| n.uuid == uuid) < Some(at) {
+        return Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: uuid.to_string(),
+        });
+    }
     let fed_by_first: Vec<(&str, u8)> = creature
         .synapses
         .iter()

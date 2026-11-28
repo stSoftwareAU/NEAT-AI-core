@@ -2576,3 +2576,121 @@ fn a_tagged_holder_behind_the_insertion_point_is_not_merged() {
         Some("negative")
     )));
 }
+
+/// Two leading constants hold slot 0 by tag, the second feeding `hidden-1`, and the
+/// IF `output-0` is fed by `hidden-0`, so removing a constant that feeds the IF
+/// reaches the constant branch. `k0b` is the second holder; `k0` the first.
+fn two_slot_zero_holders_fixture() -> CreatureExport {
+    in_typescript_order(creature(
+        2,
+        vec![
+            neuron("constant", "k0", None, 0.7),
+            neuron("constant", "k0b", None, 0.3),
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 2.0),
+            edge("input-1", "output-0", 1.0),
+            edge("k0", "output-0", 0.25),
+            synapse("k0b", "output-0", 0.5, Some("positive")),
+        ],
+    ))
+}
+
+fn slot_zero_held_by_k0_and_k0b() -> [UnitySlot; 2] {
+    [
+        UnitySlot {
+            uuid: "k0".to_string(),
+            slot: 0,
+        },
+        UnitySlot {
+            uuid: "k0b".to_string(),
+            slot: 0,
+        },
+    ]
+}
+
+#[test]
+fn removing_either_of_two_slot_zero_holders_is_refused_and_mints_nothing() {
+    // The merge re-sources and removes `k0b`, so a removal of `k0b` or of `k0`
+    // itself would be answered with a creature no capture backs. Both are refused
+    // before any change, naming the removed constant.
+    let fixture = two_slot_zero_holders_fixture();
+    for removed in ["k0", "k0b"] {
+        let mints = Cell::new(0_u64);
+        let result = remove_neuron(
+            &fixture,
+            removed,
+            1.5,
+            &slot_zero_held_by_k0_and_k0b(),
+            || {
+                mints.set(mints.get() + 1);
+                fresh_uuid()
+            },
+            never_draw,
+        );
+        assert_eq!(
+            result,
+            Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+                constant: removed.to_string(),
+            }),
+            "{removed}"
+        );
+        assert_eq!(mints.get(), 0, "{removed}: no UUID is minted");
+    }
+}
+
+/// `k0` holds slot 0, `k1` slot 1, and `k2` and `k2b` both slot 2, all ahead of
+/// `hidden-0`. TypeScript's `createConstantOne(creature, 2)` would run the same
+/// dedupe merge as for slots 0 and 1, which the port does not follow.
+#[test]
+fn two_tagged_slot_two_holders_are_refused_as_an_unported_merge() {
+    let fixture = in_typescript_order(creature(
+        2,
+        vec![
+            neuron("constant", "k0", None, 0.7),
+            neuron("constant", "k1", None, -0.2),
+            neuron("constant", "k2", None, 0.4),
+            neuron("constant", "k2b", None, 0.6),
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("hidden-0", "output-0", 2.0),
+            edge("input-1", "output-0", 1.0),
+            edge("k0", "output-0", 0.25),
+            edge("k1", "output-0", 0.5),
+            edge("k2", "output-0", 0.75),
+            edge("k2b", "output-0", 0.125),
+        ],
+    ));
+    let slots: Vec<UnitySlot> = [("k0", 0), ("k1", 1), ("k2", 2), ("k2b", 2)]
+        .into_iter()
+        .map(|(uuid, slot)| UnitySlot {
+            uuid: uuid.to_string(),
+            slot,
+        })
+        .collect();
+    let mints = Cell::new(0_u64);
+    let result = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slots,
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    );
+    assert_eq!(
+        result,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k2".to_string(),
+        })
+    );
+    assert_eq!(mints.get(), 0);
+}

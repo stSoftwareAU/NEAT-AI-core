@@ -55,11 +55,16 @@ neuron, so `removeNeuron` asks for slot 2 and mints a fresh constant there.
 `unity_reuse_slot_one_held` captures this: both holders' biases become 1, the
 survivor takes slot 2, and TypeScript mints three UUIDs for it. The native port
 takes this shape too, and it mints only the survivor. With slot 2 held as well
-(`unity_reuse_slot_two_held`), every call returns the removed neuron. The frozen
-code then treats that neuron as the constant it is already wired to, and returns
-`false` after it has set every holder's bias to 1. `compactUnused` still returns
-that changed creature. For an untyped edge it would instead fold the weight into
-the edge it removes. The port refuses this shape.
+(`unity_reuse_slot_two_held`) by one constant, every call returns the removed
+neuron. The frozen code then treats that neuron as the constant it is already
+wired to, and returns `false` after it has set every holder's bias to 1.
+`compactUnused` still returns that changed creature. For an untyped edge it would
+instead fold the weight into the edge it removes. The port refuses this shape.
+With two tagged leading slot-2 holders the count-2 call of
+`createConstantOne(creature, 2)` runs the same dedupe merge as slots 0 and 1, and
+reading the frozen source, `removeNeuron` would succeed. That merge has no
+capture, so the port does not take it and refuses it too (a shape left unported,
+not a TypeScript defect).
 
 A holder listed behind the removed neuron never reaches `removeNeuron`:
 `Creature.fromJSON` puts the constants first, so `unity_reuse_holder_behind`
@@ -80,7 +85,9 @@ only and stops at the temporary constant. The native port takes all of these. It
 refuses a merge that would duplicate one of the first holder's synapses, or that
 would remove a holder with an inward synapse. It also refuses one constant
 holding slots 0 and 1, whose slot-0 tag TypeScript would overwrite. Those
-refusals are read from the frozen source, not captured.
+refusals are read from the frozen source, not captured. It also refuses a merge
+when the removed constant itself leads the list, since it may be one of the
+holders.
 
 **(c) Overflow.** TypeScript throws `weight must be a number` after it has
 inserted the constant. The `after` block keeps that constant with no outward
