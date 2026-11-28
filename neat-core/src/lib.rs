@@ -25,6 +25,8 @@ pub mod compact_parallel_bridge;
 pub mod compact_remove_neuron;
 pub mod compact_simplify_large_weights;
 pub mod compact_unity_constant;
+pub mod compact_unused_choice;
+pub mod compact_unused_tags;
 pub mod compact_zero_weight;
 pub mod creature;
 pub mod creature_validate;
@@ -130,6 +132,15 @@ pub use compact_aggressive_prune::{
 pub use compact_remove_neuron::{RemoveNeuronError, remove_neuron_by_bias_fold};
 // Issue #778 — constant-branch removal (the `useConstant` arm of `removeNeuron`), over the bias fold.
 pub use compact_unity_constant::{NeuronRemoval, NeuronRemovalError, UnitySlot, remove_neuron};
+// Issue #778 — neuron choice for `compactUnused`: the selection loop over the trace statistics.
+pub use compact_unused_choice::{
+    NeuronTraceStats, UnusedChoiceError, UnusedNeuronCandidate, UnusedNeuronChoice,
+    VisitOrderFault, choose_unused_neuron,
+};
+pub use compact_unused_tags::{
+    CompactUnusedPassTags, NEWBORN_GRACE_TAG, NewbornGraceAgeing, age_newborn_grace,
+    compact_unused_pass_tags, newborn_grace_remaining,
+};
 // Issue #778 — large-weight rescaling for homogeneous squashes, and the magnitude penalty it uses.
 pub use compact_simplify_large_weights::{
     McmcAcceptance, SimplifiedLargeWeights, simplify_large_weights, weight_bias_penalty,

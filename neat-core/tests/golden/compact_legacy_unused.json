@@ -1,0 +1,4014 @@
+[
+  {
+    "name": "newborn_no_grace",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/NewbornGrace.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Hand-written tracedCreature() copied from test/compact/NewbornGrace.ts; no data is traced. The global RNG is a seeded generator so the shuffle is reproducible. No grace tag on any neuron.",
+    "seed": 778001,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      1,
+      2,
+      0
+    ],
+    "removalDraws": [],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-quiet",
+      "after": {
+        "neurons": [
+          {
+            "type": "hidden",
+            "uuid": "hidden-loud",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 5e-7,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-0",
+            "weight": 0.5,
+            "type": null
+          },
+          {
+            "fromUUID": "input-1",
+            "toUUID": "hidden-loud",
+            "weight": 1,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-loud",
+            "toUUID": "output-0",
+            "weight": 0.9,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-quiet"
+  },
+  {
+    "name": "newborn_grace_1",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/NewbornGrace.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Hand-written tracedCreature() copied from test/compact/NewbornGrace.ts; no data is traced. The global RNG is a seeded generator so the shuffle is reproducible. Quiet neuron tagged newborn-grace = \"1\".",
+    "seed": 778002,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "tags": [
+            {
+              "name": "newborn-grace",
+              "value": "1"
+            }
+          ],
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      1,
+      0,
+      0
+    ],
+    "shuffled": [
+      0,
+      2,
+      1
+    ],
+    "removalDraws": [],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-loud",
+      "after": {
+        "neurons": [
+          {
+            "type": "hidden",
+            "uuid": "hidden-quiet",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 0.45,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-quiet",
+            "weight": 1,
+            "type": null
+          },
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-0",
+            "weight": 0.5,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-quiet",
+            "toUUID": "output-0",
+            "weight": 0.000001,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-loud"
+  },
+  {
+    "name": "newborn_grace_2",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/NewbornGrace.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Hand-written tracedCreature() copied from test/compact/NewbornGrace.ts; no data is traced. The global RNG is a seeded generator so the shuffle is reproducible. Quiet neuron tagged newborn-grace = \"2\".",
+    "seed": 778003,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "tags": [
+            {
+              "name": "newborn-grace",
+              "value": "2"
+            }
+          ],
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      2,
+      0,
+      0
+    ],
+    "shuffled": [
+      2,
+      0,
+      1
+    ],
+    "removalDraws": [],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-loud",
+      "after": {
+        "neurons": [
+          {
+            "type": "hidden",
+            "uuid": "hidden-quiet",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": [
+              {
+                "name": "newborn-grace",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 0.45,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-quiet",
+            "weight": 1,
+            "type": null
+          },
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-0",
+            "weight": 0.5,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-quiet",
+            "toUUID": "output-0",
+            "weight": 0.000001,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-loud"
+  },
+  {
+    "name": "newborn_grace_0_spent",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/NewbornGrace.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Hand-written tracedCreature() copied from test/compact/NewbornGrace.ts; no data is traced. The global RNG is a seeded generator so the shuffle is reproducible. Quiet neuron tagged newborn-grace = \"0\", the second pass of the original two-pass test.",
+    "seed": 778004,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "tags": [
+            {
+              "name": "newborn-grace",
+              "value": "0"
+            }
+          ],
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      1,
+      2,
+      0
+    ],
+    "removalDraws": [],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-quiet",
+      "after": {
+        "neurons": [
+          {
+            "type": "hidden",
+            "uuid": "hidden-loud",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 5e-7,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-0",
+            "weight": 0.5,
+            "type": null
+          },
+          {
+            "fromUUID": "input-1",
+            "toUUID": "hidden-loud",
+            "weight": 1,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-loud",
+            "toUUID": "output-0",
+            "weight": 0.9,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-quiet"
+  },
+  {
+    "name": "newborn_nothing_to_compact",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/NewbornGrace.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Hand-written tracedCreature() copied from test/compact/NewbornGrace.ts; no data is traced. The global RNG is a seeded generator so the shuffle is reproducible. Both hidden neurons tagged newborn-grace = \"2\", so no candidate is left; the original asserts undefined.",
+    "seed": 778005,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "tags": [
+            {
+              "name": "newborn-grace",
+              "value": "2"
+            }
+          ],
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          },
+          "tags": [
+            {
+              "name": "newborn-grace",
+              "value": "2"
+            }
+          ]
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0,
+            "maximumActivation": 1,
+            "minimumActivation": 0,
+            "totalActivation": 5
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5
+        }
+      ],
+      "input": 2,
+      "output": 1
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-quiet",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-loud",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10,
+            "totalActivation": 5,
+            "maximumActivation": 1,
+            "minimumActivation": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-quiet",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 0.5,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-loud",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-quiet",
+          "toUUID": "output-0",
+          "weight": 0.000001,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-loud",
+          "toUUID": "output-0",
+          "weight": 0.9,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      2,
+      2,
+      0
+    ],
+    "shuffled": [
+      1,
+      2,
+      0
+    ],
+    "removalDraws": [],
+    "minted": 0,
+    "result": null,
+    "chosenUUID": null
+  },
+  {
+    "name": "unused_clipped",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/UnusedClipped.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Creature fixture copied from test/compact/UnusedClipped.ts. The original Math.random() data (1000 rows x 3) is drawn from a seeded generator (seed 778011) instead; the attempt loop, the activateAndTrace/propagate trace and the 1e-6 trace-matches-activation check are kept. The .trace/ files are not written. Retries until compacted, up to 240 attempts.",
+    "seed": 778011,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "bias": 2,
+          "squash": "HARD_TANH",
+          "trace": {
+            "count": 1,
+            "totalBias": 2,
+            "totalAdjustedBias": 2,
+            "hintValue": 2.172989845275879,
+            "maximumActivation": 1,
+            "minimumActivation": 1,
+            "totalActivation": 1,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 1000,
+            "totalAdjustedBias": 1000,
+            "batchBias": 1,
+            "hintValue": 1.600000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858,
+            "totalActivation": 1600.000023841858,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": -0.0000011324882507324219,
+            "totalAdjustedBias": -0.0000011324882507324219,
+            "batchBias": 0,
+            "hintValue": 0.9532036781311035,
+            "maximumActivation": 1.4994086027145386,
+            "minimumActivation": 0.7018265724182129,
+            "totalActivation": 1116.4829051494598,
+            "noChange": true,
+            "totalErrorAbsolute": 0.0000022649765014648438
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 19,
+            "totalPositiveActivation": 8.409838229417801,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 19,
+            "totalPositiveAdjustedValue": 6.727870583534241,
+            "totalNegativeAdjustedValue": 0,
+            "used": true
+          }
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "hidden-3",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 19,
+            "totalPositiveActivation": 19,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 19,
+            "totalPositiveAdjustedValue": 13.29999977350235,
+            "totalNegativeAdjustedValue": 0,
+            "used": true
+          }
+        }
+      ],
+      "input": 3,
+      "output": 2
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "squash": "HARD_TANH",
+          "bias": 2,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1,
+            "maximumActivation": 1,
+            "minimumActivation": 1
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 1,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 1600.000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 1116.4829051494598,
+            "maximumActivation": 1.4994086027145386,
+            "minimumActivation": 0.7018265724182129
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3",
+          "weight": -0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-3",
+          "weight": 0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "output-1",
+          "weight": 0.7,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      2,
+      1,
+      0
+    ],
+    "removalDraws": [
+      0.9522432791259462
+    ],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-3",
+      "after": {
+        "neurons": [
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 1.6,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-1",
+            "squash": "IDENTITY",
+            "bias": 0.7,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-0",
+            "weight": 0,
+            "type": null
+          },
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-3"
+  },
+  {
+    "name": "cascade_cosine_clipped",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/Cascade.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Creature fixture (Cosine -> CLIPPED cascade) copied from test/compact/Cascade.ts and rebuilt each attempt. The original Math.random() data (1000 rows x 3) is drawn once from a seeded generator (seed 778012); the attempt loop and the trace-matches-activation check are kept. The .trace/ files are not written. Retries until compacted, up to 120 attempts.",
+    "seed": 778012,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "bias": 2,
+          "squash": "Cosine",
+          "trace": {
+            "count": 1,
+            "totalBias": 2,
+            "totalAdjustedBias": 2,
+            "hintValue": 2.136427879333496,
+            "maximumActivation": -0.5398056925047516,
+            "minimumActivation": -0.5398056925047516,
+            "totalActivation": -0.5398056925047516,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "bias": 2,
+          "squash": "HARD_TANH",
+          "trace": {
+            "count": 1,
+            "totalBias": 2,
+            "totalAdjustedBias": 2,
+            "hintValue": 2.267974615097046,
+            "maximumActivation": 1,
+            "minimumActivation": 1,
+            "totalActivation": 1,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 1000,
+            "totalAdjustedBias": 1000,
+            "batchBias": 1,
+            "hintValue": 1.600000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858,
+            "totalActivation": 1600.000023841858,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": -0.0000010132789611816406,
+            "totalAdjustedBias": -0.0000010132789611816406,
+            "batchBias": 0,
+            "hintValue": 1.053428292274475,
+            "maximumActivation": 1.4966189861297607,
+            "minimumActivation": 0.7010326385498047,
+            "totalActivation": 1104.8713415265083,
+            "noChange": true,
+            "totalErrorAbsolute": 0.0000020265579223632812
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 17,
+            "totalPositiveActivation": 7.799884229898453,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 17,
+            "totalPositiveAdjustedValue": 6.239907383918762,
+            "totalNegativeAdjustedValue": 0,
+            "used": true
+          }
+        },
+        {
+          "weight": -0.5,
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "hidden-4",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 17,
+            "totalPositiveActivation": 17,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 17,
+            "totalPositiveAdjustedValue": 11.899999797344208,
+            "totalNegativeAdjustedValue": 0,
+            "used": true
+          }
+        }
+      ],
+      "input": 3,
+      "output": 2
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "squash": "Cosine",
+          "bias": 2,
+          "trace": {
+            "count": 1,
+            "totalActivation": -0.5398056925047516,
+            "maximumActivation": -0.5398056925047516,
+            "minimumActivation": -0.5398056925047516
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "squash": "HARD_TANH",
+          "bias": 2,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1,
+            "maximumActivation": 1,
+            "minimumActivation": 1
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 1,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 1600.000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 1104.8713415265083,
+            "maximumActivation": 1.4966189861297607,
+            "minimumActivation": 0.7010326385498047
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3",
+          "weight": -0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-3",
+          "weight": 0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "weight": -0.5,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-4",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "weight": 0.7,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      0,
+      3,
+      2,
+      1
+    ],
+    "removalDraws": [
+      0.6459236125257144
+    ],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-4",
+      "after": {
+        "neurons": [
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 1.6,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-1",
+            "squash": "IDENTITY",
+            "bias": 0.7,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-1",
+            "toUUID": "output-0",
+            "weight": 0,
+            "type": null
+          },
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-4"
+  },
+  {
+    "name": "orphan_cleanup_feeder",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactUnusedOrphanCleanup.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Feeder fixture (input -> A -> B -> output, plus input -> output) copied from the first test of test/compact/CompactUnusedOrphanCleanup.ts. Each attempt builds a fresh creature and traces 100 rows drawn from a seeded generator (seed 778013) instead of Math.random(). Retries until compacted, up to 20 attempts (the original runs all 20 and checks each compacted one).",
+    "seed": 778013,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-A",
+          "bias": 0.5,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1,
+            "totalBias": 0.5,
+            "totalAdjustedBias": 0.5,
+            "hintValue": 0.9772377014160156,
+            "maximumActivation": 2.4962213039398193,
+            "minimumActivation": 2.4962213039398193,
+            "totalActivation": 2.4962213039398193,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-B",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0.9772377014160156,
+            "maximumActivation": 2.4962213039398193,
+            "minimumActivation": 2.4962213039398193,
+            "totalActivation": 2.4962213039398193,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 100,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "batchBias": 0,
+            "hintValue": 0.23959608376026154,
+            "maximumActivation": 1.000606894493103,
+            "minimumActivation": 0.004355994053184986,
+            "totalActivation": 53.932293518446386,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 2,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-A"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "hidden-A",
+          "toUUID": "hidden-B"
+        },
+        {
+          "weight": 0.001,
+          "fromUUID": "hidden-B",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-A",
+          "squash": "IDENTITY",
+          "bias": 0.5,
+          "trace": {
+            "count": 1,
+            "totalActivation": 2.4962213039398193,
+            "maximumActivation": 2.4962213039398193,
+            "minimumActivation": 2.4962213039398193
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-B",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1,
+            "totalActivation": 2.4962213039398193,
+            "maximumActivation": 2.4962213039398193,
+            "minimumActivation": 2.4962213039398193
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 100,
+            "totalActivation": 53.932293518446386,
+            "maximumActivation": 1.000606894493103,
+            "minimumActivation": 0.004355994053184986
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-A",
+          "weight": 2,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-A",
+          "toUUID": "hidden-B",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-B",
+          "toUUID": "output-0",
+          "weight": 0.001,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      2,
+      1,
+      0
+    ],
+    "removalDraws": [
+      0.7888622577254086
+    ],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-A",
+      "after": {
+        "neurons": [
+          {
+            "type": "hidden",
+            "uuid": "hidden-B",
+            "squash": "IDENTITY",
+            "bias": 2.4962213039398193,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-B",
+            "weight": 0,
+            "type": null
+          },
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-0",
+            "weight": 1,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-B",
+            "toUUID": "output-0",
+            "weight": 0.001,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-A"
+  },
+  {
+    "name": "orphan_cleanup_cascade",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactUnusedOrphanCleanup.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Chain fixture (input -> A -> B -> C -> output, plus input -> output) copied from the second test of test/compact/CompactUnusedOrphanCleanup.ts. Each attempt builds a fresh creature and traces 100 rows drawn from a seeded generator (seed 778014) instead of Math.random(). Retries until compacted, up to 20 attempts (the original runs all 20 and checks each compacted one).",
+    "seed": 778014,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-A",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0.8309966921806335,
+            "maximumActivation": 1.472184181213379,
+            "minimumActivation": 1.472184181213379,
+            "totalActivation": 1.472184181213379,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-B",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0.8309966921806335,
+            "maximumActivation": 1.472184181213379,
+            "minimumActivation": 1.472184181213379,
+            "totalActivation": 1.472184181213379,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-C",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "hintValue": 0.8309966921806335,
+            "maximumActivation": 1.472184181213379,
+            "minimumActivation": 1.472184181213379,
+            "totalActivation": 1.472184181213379,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 100,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "batchBias": 0,
+            "hintValue": 0.41632935404777527,
+            "maximumActivation": 0.9801177382469177,
+            "minimumActivation": 0.013254750519990921,
+            "totalActivation": 49.33065281994641,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": 2,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-A"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "input-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "hidden-A",
+          "toUUID": "hidden-B"
+        },
+        {
+          "weight": 1,
+          "fromUUID": "hidden-B",
+          "toUUID": "hidden-C"
+        },
+        {
+          "weight": 0.001,
+          "fromUUID": "hidden-C",
+          "toUUID": "output-0"
+        }
+      ],
+      "input": 1,
+      "output": 1
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-A",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1.472184181213379,
+            "maximumActivation": 1.472184181213379,
+            "minimumActivation": 1.472184181213379
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-B",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1.472184181213379,
+            "maximumActivation": 1.472184181213379,
+            "minimumActivation": 1.472184181213379
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-C",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1.472184181213379,
+            "maximumActivation": 1.472184181213379,
+            "minimumActivation": 1.472184181213379
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 100,
+            "totalActivation": 49.33065281994641,
+            "maximumActivation": 0.9801177382469177,
+            "minimumActivation": 0.013254750519990921
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-A",
+          "weight": 2,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "output-0",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-A",
+          "toUUID": "hidden-B",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-B",
+          "toUUID": "hidden-C",
+          "weight": 1,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-C",
+          "toUUID": "output-0",
+          "weight": 0.001,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      0,
+      3,
+      2,
+      1
+    ],
+    "removalDraws": [
+      0.8929365648645935
+    ],
+    "minted": 0,
+    "result": {
+      "unusedTag": "hidden-B",
+      "after": {
+        "neurons": [
+          {
+            "type": "hidden",
+            "uuid": "hidden-C",
+            "squash": "IDENTITY",
+            "bias": 1.472184181213379,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-C",
+            "weight": 0,
+            "type": null
+          },
+          {
+            "fromUUID": "input-0",
+            "toUUID": "output-0",
+            "weight": 1,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-C",
+            "toUUID": "output-0",
+            "weight": 0.001,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-B"
+  },
+  {
+    "name": "fix_if_compact",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/FixIF.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Creature fixture copied from the test named in the test field; the original Math.random() data is drawn from a seeded generator, and the .trace/ and .test/ files are not written. The 1000 rows x 3 are Math.random() * 2 - 1 in the original (seed 778021). The single compactUnused call is recorded.",
+    "seed": 778021,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "bias": 2,
+          "squash": "HARD_TANH",
+          "trace": {
+            "count": 1,
+            "totalBias": 2,
+            "totalAdjustedBias": 2,
+            "hintValue": 1.7422568798065186,
+            "maximumActivation": 1,
+            "minimumActivation": 1,
+            "totalActivation": 1,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 1000,
+            "totalAdjustedBias": 1000,
+            "batchBias": 1,
+            "hintValue": 1.600000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858,
+            "totalActivation": 1600.000023841858,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 2.9802322387695312e-8,
+            "totalAdjustedBias": 2.9802322387695312e-8,
+            "batchBias": 0,
+            "hintValue": 0.07277767360210419,
+            "maximumActivation": 1.0088797807693481,
+            "minimumActivation": -0.972027063369751,
+            "totalActivation": 118.39680363211664,
+            "noChange": true,
+            "totalErrorAbsolute": 1.1920928955078125e-7
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "type": "condition"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "input-1",
+          "toUUID": "hidden-4",
+          "type": "positive"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1,
+            "totalPositiveActivation": 0.998599648475647,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 1,
+            "totalPositiveAdjustedValue": 0.7988797426223755,
+            "totalNegativeAdjustedValue": 0,
+            "used": true
+          }
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "type": "negative"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1,
+            "totalPositiveActivation": 0.30000001192092896,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 1,
+            "totalPositiveAdjustedValue": 0.21000000834465027,
+            "totalNegativeAdjustedValue": 0,
+            "used": true
+          }
+        }
+      ],
+      "input": 3,
+      "output": 2
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "squash": "HARD_TANH",
+          "bias": 2,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1,
+            "maximumActivation": 1,
+            "minimumActivation": 1
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "squash": "IF",
+          "bias": 0,
+          "trace": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 1,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 1600.000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 118.39680363211664,
+            "maximumActivation": 1.0088797807693481,
+            "minimumActivation": -0.972027063369751
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3",
+          "weight": -0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "weight": -0.3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-3",
+          "weight": 0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-1",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "weight": 0.7,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      1,
+      0,
+      3,
+      2
+    ],
+    "removalDraws": [],
+    "minted": 1,
+    "result": {
+      "unusedTag": "hidden-3",
+      "after": {
+        "neurons": [
+          {
+            "type": "constant",
+            "uuid": "unity-constant-0",
+            "squash": null,
+            "bias": 1,
+            "tags": [
+              {
+                "name": "compact-unity-slot",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "type": "hidden",
+            "uuid": "hidden-4",
+            "squash": "IF",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 1,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-1",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-4",
+            "weight": -0.3,
+            "type": "condition"
+          },
+          {
+            "fromUUID": "input-1",
+            "toUUID": "hidden-4",
+            "weight": 0.3,
+            "type": "positive"
+          },
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          },
+          {
+            "fromUUID": "unity-constant-0",
+            "toUUID": "hidden-4",
+            "weight": 0.3,
+            "type": "negative"
+          },
+          {
+            "fromUUID": "unity-constant-0",
+            "toUUID": "output-0",
+            "weight": 0.6,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-4",
+            "toUUID": "output-1",
+            "weight": 0.7,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-3"
+  },
+  {
+    "name": "compact_constant_first",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactConstant.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Creature fixture copied from the test named in the test field; the original Math.random() data is drawn from a seeded generator, and the .trace/ and .test/ files are not written. The 1000 rows x 3 are Math.random() * 2 - 1 in the original (seed 778031). The first compactUnused call of the test is recorded.",
+    "seed": 778031,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "bias": 2.5,
+          "squash": "HARD_TANH",
+          "trace": {
+            "count": 1,
+            "totalBias": 2.5,
+            "totalAdjustedBias": 2.5,
+            "hintValue": 2.2507307529449463,
+            "maximumActivation": 1,
+            "minimumActivation": 1,
+            "totalActivation": 1,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3b",
+          "bias": -0.1,
+          "squash": "COMPLEMENT",
+          "trace": {
+            "count": 1,
+            "totalBias": -0.1,
+            "totalAdjustedBias": -0.1,
+            "hintValue": 0.20000001788139343,
+            "maximumActivation": 0.8,
+            "minimumActivation": 0.8,
+            "totalActivation": 0.8,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 1000,
+            "totalAdjustedBias": 1000,
+            "batchBias": 1,
+            "hintValue": 1.600000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858,
+            "totalActivation": 1600.000023841858,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "batchBias": 0,
+            "hintValue": 0.7128121256828308,
+            "maximumActivation": 1.0094083547592163,
+            "minimumActivation": -0.6298735737800598,
+            "totalActivation": 204.05514945904724,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "type": "condition"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-2",
+          "toUUID": "output-1"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-3b"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "type": "positive"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3b",
+          "toUUID": "hidden-4",
+          "type": "negative"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1"
+        }
+      ],
+      "input": 3,
+      "output": 2
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "squash": "HARD_TANH",
+          "bias": 2.5,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1,
+            "maximumActivation": 1,
+            "minimumActivation": 1
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3b",
+          "squash": "COMPLEMENT",
+          "bias": -0.1,
+          "trace": {
+            "count": 1,
+            "totalActivation": 0.8,
+            "maximumActivation": 0.8,
+            "minimumActivation": 0.8
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "squash": "IF",
+          "bias": 0,
+          "trace": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 1,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 1600.000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 204.05514945904724,
+            "maximumActivation": 1.0094083547592163,
+            "minimumActivation": -0.6298735737800598
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3",
+          "weight": -0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "weight": -0.3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-3b",
+          "weight": 0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3b",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "weight": 0.7,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      0,
+      2,
+      4,
+      1,
+      3
+    ],
+    "removalDraws": [],
+    "minted": 1,
+    "result": {
+      "unusedTag": "hidden-3b",
+      "after": {
+        "neurons": [
+          {
+            "type": "constant",
+            "uuid": "unity-constant-0",
+            "squash": null,
+            "bias": 1,
+            "tags": [
+              {
+                "name": "compact-unity-slot",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "type": "hidden",
+            "uuid": "hidden-3",
+            "squash": "HARD_TANH",
+            "bias": 2.5,
+            "tags": []
+          },
+          {
+            "type": "hidden",
+            "uuid": "hidden-4",
+            "squash": "IF",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 1,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-1",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-3",
+            "weight": -0.3,
+            "type": null
+          },
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-4",
+            "weight": -0.3,
+            "type": "condition"
+          },
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          },
+          {
+            "fromUUID": "unity-constant-0",
+            "toUUID": "hidden-4",
+            "weight": 0.24,
+            "type": "negative"
+          },
+          {
+            "fromUUID": "hidden-3",
+            "toUUID": "hidden-4",
+            "weight": 0.3,
+            "type": "positive"
+          },
+          {
+            "fromUUID": "hidden-3",
+            "toUUID": "output-0",
+            "weight": 0.6,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-4",
+            "toUUID": "output-1",
+            "weight": 0.7,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-3b"
+  },
+  {
+    "name": "compact_constant_second",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactConstant.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Creature fixture copied from the test named in the test field; the original Math.random() data is drawn from a seeded generator, and the .trace/ and .test/ files are not written. The second compactUnused call of the test, on the creature the test builds from its first compaction (seed 778031, the same data run). The first call runs unrecorded with pinned constant UUIDs; the test's activation and trace passes then run on the compacted creature, and its traceJSON is recorded.",
+    "seed": 778031,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "first-constant-0",
+          "bias": 1,
+          "tags": [
+            {
+              "name": "compact-unity-slot",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "bias": 2.5,
+          "squash": "HARD_TANH",
+          "trace": {
+            "count": 1,
+            "totalBias": 2.5,
+            "totalAdjustedBias": 2.5,
+            "hintValue": 2.2507307529449463,
+            "maximumActivation": 1,
+            "minimumActivation": 1,
+            "totalActivation": 1,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 1000,
+            "totalAdjustedBias": 1000,
+            "batchBias": 1,
+            "hintValue": 1.600000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858,
+            "totalActivation": 1600.000023841858,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 1000,
+            "totalBias": 0,
+            "totalAdjustedBias": 0,
+            "batchBias": 0,
+            "hintValue": 0.7128121256828308,
+            "maximumActivation": 1.0094083547592163,
+            "minimumActivation": -0.6298735737800598,
+            "totalActivation": 204.0551530062221,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "type": "condition"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-2",
+          "toUUID": "output-1"
+        },
+        {
+          "weight": 0.24,
+          "fromUUID": "first-constant-0",
+          "toUUID": "hidden-4",
+          "type": "negative"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "type": "positive"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1"
+        }
+      ],
+      "input": 3,
+      "output": 2,
+      "tags": [
+        {
+          "name": "unused",
+          "value": "hidden-3b"
+        },
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "3"
+        },
+        {
+          "name": "old-synapses",
+          "value": "8"
+        }
+      ]
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "first-constant-0",
+          "squash": null,
+          "bias": 1,
+          "trace": null
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "squash": "HARD_TANH",
+          "bias": 2.5,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1,
+            "maximumActivation": 1,
+            "minimumActivation": 1
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "squash": "IF",
+          "bias": 0,
+          "trace": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 1,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 1600.000023841858,
+            "maximumActivation": 1.600000023841858,
+            "minimumActivation": 1.600000023841858
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 1000,
+            "totalActivation": 204.0551530062221,
+            "maximumActivation": 1.0094083547592163,
+            "minimumActivation": -0.6298735737800598
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3",
+          "weight": -0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "weight": -0.3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "first-constant-0",
+          "toUUID": "hidden-4",
+          "weight": 0.24,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "weight": 0.7,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      2,
+      4,
+      1,
+      0,
+      3
+    ],
+    "removalDraws": [],
+    "minted": 2,
+    "result": {
+      "unusedTag": "hidden-3",
+      "after": {
+        "neurons": [
+          {
+            "type": "constant",
+            "uuid": "first-constant-0",
+            "squash": null,
+            "bias": 1,
+            "tags": [
+              {
+                "name": "compact-unity-slot",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "type": "constant",
+            "uuid": "unity-constant-1",
+            "squash": null,
+            "bias": 1,
+            "tags": [
+              {
+                "name": "compact-unity-slot",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "type": "hidden",
+            "uuid": "hidden-4",
+            "squash": "IF",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 1,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-1",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-4",
+            "weight": -0.3,
+            "type": "condition"
+          },
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          },
+          {
+            "fromUUID": "first-constant-0",
+            "toUUID": "hidden-4",
+            "weight": 0.24,
+            "type": "negative"
+          },
+          {
+            "fromUUID": "unity-constant-1",
+            "toUUID": "hidden-4",
+            "weight": 0.3,
+            "type": "positive"
+          },
+          {
+            "fromUUID": "unity-constant-1",
+            "toUUID": "output-0",
+            "weight": 0.6,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-4",
+            "toUUID": "output-1",
+            "weight": 0.7,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-3"
+  },
+  {
+    "name": "compact_keep_order_first",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactKeepOrder.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Creature fixture copied from the test named in the test field; the original Math.random() data is drawn from a seeded generator, and the .trace/ and .test/ files are not written. The 10 000 rows x 3 are Math.random() * 3 - 1.5 in the original (seed 778041). The first compactUnused call of the test is recorded.",
+    "seed": 778041,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "first-one",
+          "bias": 1
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "bias": 2.5,
+          "squash": "HARD_TANH",
+          "trace": {
+            "count": 1,
+            "totalBias": 2.5,
+            "totalAdjustedBias": 2.5,
+            "hintValue": 2.936325788497925,
+            "maximumActivation": 1,
+            "minimumActivation": 1,
+            "totalActivation": 1,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3b",
+          "bias": -0.1,
+          "squash": "COMPLEMENT",
+          "trace": {
+            "count": 1,
+            "totalBias": -0.1,
+            "totalAdjustedBias": -0.1,
+            "hintValue": 0.20000001788139343,
+            "maximumActivation": 0.8,
+            "minimumActivation": 0.8,
+            "totalActivation": 0.8,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 10000,
+            "totalBias": 10000,
+            "totalAdjustedBias": 10000,
+            "batchBias": 1,
+            "hintValue": 2.5,
+            "maximumActivation": 2.5,
+            "minimumActivation": 2.5,
+            "totalActivation": 25000,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 10000,
+            "totalBias": 0.00009620236232876778,
+            "totalAdjustedBias": 0.00009620236232876778,
+            "batchBias": 0,
+            "hintValue": 1.2016336917877197,
+            "maximumActivation": 2.207850217819214,
+            "minimumActivation": -0.23164428770542145,
+            "totalActivation": 9916.635426795168,
+            "noChange": true,
+            "totalErrorAbsolute": 0.00022780895233154297
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3"
+        },
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "type": "condition"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1649,
+            "totalPositiveActivation": 1324.6094416792039,
+            "totalNegativeActivation": 0.013951656641438603,
+            "countNegativeActivations": 3,
+            "countPositiveActivations": 1646,
+            "totalPositiveAdjustedValue": 1059.687590149697,
+            "totalNegativeAdjustedValue": -0.011161325499415398,
+            "batchAverageWeight": 0.8,
+            "used": true
+          }
+        },
+        {
+          "weight": 0.9,
+          "fromUUID": "first-one",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "first-one",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1649,
+            "totalPositiveActivation": 1649,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 1649,
+            "totalPositiveAdjustedValue": 1319.2000196576118,
+            "totalNegativeAdjustedValue": 0,
+            "batchAverageWeight": 0.8,
+            "used": true
+          }
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-3b"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "type": "positive"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3b",
+          "toUUID": "hidden-4",
+          "type": "negative"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1649,
+            "totalPositiveActivation": 466.02000427246094,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 1649,
+            "totalPositiveAdjustedValue": 326.21400156617165,
+            "totalNegativeAdjustedValue": 0,
+            "batchAverageWeight": 0.7,
+            "used": true
+          }
+        }
+      ],
+      "input": 3,
+      "output": 2
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "first-one",
+          "squash": null,
+          "bias": 1,
+          "trace": null
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3",
+          "squash": "HARD_TANH",
+          "bias": 2.5,
+          "trace": {
+            "count": 1,
+            "totalActivation": 1,
+            "maximumActivation": 1,
+            "minimumActivation": 1
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3b",
+          "squash": "COMPLEMENT",
+          "bias": -0.1,
+          "trace": {
+            "count": 1,
+            "totalActivation": 0.8,
+            "maximumActivation": 0.8,
+            "minimumActivation": 0.8
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "squash": "IF",
+          "bias": 0,
+          "trace": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 1,
+          "trace": {
+            "count": 10000,
+            "totalActivation": 25000,
+            "maximumActivation": 2.5,
+            "minimumActivation": 2.5
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10000,
+            "totalActivation": 9916.635426795168,
+            "maximumActivation": 2.207850217819214,
+            "minimumActivation": -0.23164428770542145
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-3",
+          "weight": -0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "weight": -0.3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "first-one",
+          "toUUID": "output-0",
+          "weight": 0.9,
+          "type": null
+        },
+        {
+          "fromUUID": "first-one",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-3b",
+          "weight": 0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "hidden-3",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3b",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "weight": 0.7,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      0,
+      2,
+      5,
+      3,
+      4,
+      1
+    ],
+    "removalDraws": [],
+    "minted": 1,
+    "result": {
+      "unusedTag": "hidden-3",
+      "after": {
+        "neurons": [
+          {
+            "type": "constant",
+            "uuid": "first-one",
+            "squash": null,
+            "bias": 1,
+            "tags": []
+          },
+          {
+            "type": "constant",
+            "uuid": "unity-constant-0",
+            "squash": null,
+            "bias": 1,
+            "tags": [
+              {
+                "name": "compact-unity-slot",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "type": "hidden",
+            "uuid": "hidden-3b",
+            "squash": "COMPLEMENT",
+            "bias": -0.1,
+            "tags": []
+          },
+          {
+            "type": "hidden",
+            "uuid": "hidden-4",
+            "squash": "IF",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 1,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-1",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-4",
+            "weight": -0.3,
+            "type": "condition"
+          },
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          },
+          {
+            "fromUUID": "first-one",
+            "toUUID": "output-0",
+            "weight": 0.9,
+            "type": null
+          },
+          {
+            "fromUUID": "first-one",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          },
+          {
+            "fromUUID": "unity-constant-0",
+            "toUUID": "hidden-3b",
+            "weight": 0.3,
+            "type": null
+          },
+          {
+            "fromUUID": "unity-constant-0",
+            "toUUID": "hidden-4",
+            "weight": 0.3,
+            "type": "positive"
+          },
+          {
+            "fromUUID": "unity-constant-0",
+            "toUUID": "output-0",
+            "weight": 0.6,
+            "type": null
+          },
+          {
+            "fromUUID": "hidden-3b",
+            "toUUID": "hidden-4",
+            "weight": 0.3,
+            "type": "negative"
+          },
+          {
+            "fromUUID": "hidden-4",
+            "toUUID": "output-1",
+            "weight": 0.7,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-3"
+  },
+  {
+    "name": "compact_keep_order_second",
+    "revision": "60d6b4e5d3af20afbaaeb3420d588ad673ab8dab",
+    "test": "test/compact/CompactKeepOrder.ts",
+    "source": "src/compact/CompactUnused.ts",
+    "operation": "compactUnused",
+    "preparation": "Creature fixture copied from the test named in the test field; the original Math.random() data is drawn from a seeded generator, and the .trace/ and .test/ files are not written. The second compactUnused call of the test, on the creature the test builds from its first compaction (seed 778041, the same data run). The first call runs unrecorded with pinned constant UUIDs; the test's activation and trace passes, which trace the compacted creature with the original sparse config, then run, and its traceJSON is recorded.",
+    "seed": 778041,
+    "attempts": 1,
+    "plankConstant": 1e-7,
+    "traced": {
+      "semanticVersion": "4.0.0",
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "first-one",
+          "bias": 1
+        },
+        {
+          "type": "constant",
+          "uuid": "first-constant-0",
+          "bias": 1,
+          "tags": [
+            {
+              "name": "compact-unity-slot",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3b",
+          "bias": -0.1,
+          "squash": "COMPLEMENT",
+          "trace": {
+            "count": 1,
+            "totalBias": -0.1,
+            "totalAdjustedBias": -0.1,
+            "hintValue": 0.20000001788139343,
+            "maximumActivation": 0.8,
+            "minimumActivation": 0.8,
+            "totalActivation": 0.8,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "bias": 0,
+          "squash": "IF"
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "bias": 1,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 10000,
+            "totalBias": 10000,
+            "totalAdjustedBias": 10000,
+            "batchBias": 1,
+            "hintValue": 2.5,
+            "maximumActivation": 2.5,
+            "minimumActivation": 2.5,
+            "totalActivation": 25000,
+            "noChange": true,
+            "totalErrorAbsolute": 0
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "bias": 0,
+          "squash": "IDENTITY",
+          "trace": {
+            "count": 10000,
+            "totalBias": 0.00009620236232876778,
+            "totalAdjustedBias": 0.00009620236232876778,
+            "batchBias": 0,
+            "hintValue": 1.2016336917877197,
+            "maximumActivation": 2.207850217819214,
+            "minimumActivation": -0.23164428770542145,
+            "totalActivation": 9916.635426795168,
+            "noChange": true,
+            "totalErrorAbsolute": 0.00022780895233154297
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "weight": -0.3,
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "type": "condition"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1649,
+            "totalPositiveActivation": 1324.6094416792039,
+            "totalNegativeActivation": 0.013951656641438603,
+            "countNegativeActivations": 3,
+            "countPositiveActivations": 1646,
+            "totalPositiveAdjustedValue": 1059.687590149697,
+            "totalNegativeAdjustedValue": -0.011161325499415398,
+            "batchAverageWeight": 0.8,
+            "used": true
+          }
+        },
+        {
+          "weight": 0.9,
+          "fromUUID": "first-one",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.8,
+          "fromUUID": "first-one",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1649,
+            "totalPositiveActivation": 1649,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 1649,
+            "totalPositiveAdjustedValue": 1319.2000196576118,
+            "totalNegativeAdjustedValue": 0,
+            "batchAverageWeight": 0.8,
+            "used": true
+          }
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "first-constant-0",
+          "toUUID": "hidden-3b"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "first-constant-0",
+          "toUUID": "hidden-4",
+          "type": "positive"
+        },
+        {
+          "weight": 0.6,
+          "fromUUID": "first-constant-0",
+          "toUUID": "output-0"
+        },
+        {
+          "weight": 0.3,
+          "fromUUID": "hidden-3b",
+          "toUUID": "hidden-4",
+          "type": "negative"
+        },
+        {
+          "weight": 0.7,
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "trace": {
+            "count": 1649,
+            "totalPositiveActivation": 466.02000427246094,
+            "totalNegativeActivation": 0,
+            "countNegativeActivations": 0,
+            "countPositiveActivations": 1649,
+            "totalPositiveAdjustedValue": 326.21400156617165,
+            "totalNegativeAdjustedValue": 0,
+            "batchAverageWeight": 0.7,
+            "used": true
+          }
+        }
+      ],
+      "input": 3,
+      "output": 2,
+      "tags": [
+        {
+          "name": "unused",
+          "value": "hidden-3"
+        },
+        {
+          "name": "approach",
+          "value": "compact"
+        },
+        {
+          "name": "old-neurons",
+          "value": "4"
+        },
+        {
+          "name": "old-synapses",
+          "value": "10"
+        }
+      ]
+    },
+    "aligned": {
+      "neurons": [
+        {
+          "type": "constant",
+          "uuid": "first-one",
+          "squash": null,
+          "bias": 1,
+          "trace": null
+        },
+        {
+          "type": "constant",
+          "uuid": "first-constant-0",
+          "squash": null,
+          "bias": 1,
+          "trace": null
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-3b",
+          "squash": "COMPLEMENT",
+          "bias": -0.1,
+          "trace": {
+            "count": 1,
+            "totalActivation": 0.8,
+            "maximumActivation": 0.8,
+            "minimumActivation": 0.8
+          }
+        },
+        {
+          "type": "hidden",
+          "uuid": "hidden-4",
+          "squash": "IF",
+          "bias": 0,
+          "trace": null
+        },
+        {
+          "type": "output",
+          "uuid": "output-0",
+          "squash": "IDENTITY",
+          "bias": 1,
+          "trace": {
+            "count": 10000,
+            "totalActivation": 25000,
+            "maximumActivation": 2.5,
+            "minimumActivation": 2.5
+          }
+        },
+        {
+          "type": "output",
+          "uuid": "output-1",
+          "squash": "IDENTITY",
+          "bias": 0,
+          "trace": {
+            "count": 10000,
+            "totalActivation": 9916.635426795168,
+            "maximumActivation": 2.207850217819214,
+            "minimumActivation": -0.23164428770542145
+          }
+        }
+      ],
+      "synapses": [
+        {
+          "fromUUID": "input-0",
+          "toUUID": "hidden-4",
+          "weight": -0.3,
+          "type": "condition"
+        },
+        {
+          "fromUUID": "input-2",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "first-one",
+          "toUUID": "output-0",
+          "weight": 0.9,
+          "type": null
+        },
+        {
+          "fromUUID": "first-one",
+          "toUUID": "output-1",
+          "weight": 0.8,
+          "type": null
+        },
+        {
+          "fromUUID": "first-constant-0",
+          "toUUID": "hidden-3b",
+          "weight": 0.3,
+          "type": null
+        },
+        {
+          "fromUUID": "first-constant-0",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "positive"
+        },
+        {
+          "fromUUID": "first-constant-0",
+          "toUUID": "output-0",
+          "weight": 0.6,
+          "type": null
+        },
+        {
+          "fromUUID": "hidden-3b",
+          "toUUID": "hidden-4",
+          "weight": 0.3,
+          "type": "negative"
+        },
+        {
+          "fromUUID": "hidden-4",
+          "toUUID": "output-1",
+          "weight": 0.7,
+          "type": null
+        }
+      ]
+    },
+    "runtimeGraphMatchesAligned": true,
+    "runtimeGraph": null,
+    "graceRemaining": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "shuffled": [
+      4,
+      5,
+      1,
+      2,
+      3,
+      0
+    ],
+    "removalDraws": [],
+    "minted": 2,
+    "result": {
+      "unusedTag": "hidden-3b",
+      "after": {
+        "neurons": [
+          {
+            "type": "constant",
+            "uuid": "first-one",
+            "squash": null,
+            "bias": 1,
+            "tags": []
+          },
+          {
+            "type": "constant",
+            "uuid": "first-constant-0",
+            "squash": null,
+            "bias": 1,
+            "tags": [
+              {
+                "name": "compact-unity-slot",
+                "value": "0"
+              }
+            ]
+          },
+          {
+            "type": "constant",
+            "uuid": "unity-constant-1",
+            "squash": null,
+            "bias": 1,
+            "tags": [
+              {
+                "name": "compact-unity-slot",
+                "value": "1"
+              }
+            ]
+          },
+          {
+            "type": "hidden",
+            "uuid": "hidden-4",
+            "squash": "IF",
+            "bias": 0,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-0",
+            "squash": "IDENTITY",
+            "bias": 1,
+            "tags": []
+          },
+          {
+            "type": "output",
+            "uuid": "output-1",
+            "squash": "IDENTITY",
+            "bias": 0,
+            "tags": []
+          }
+        ],
+        "synapses": [
+          {
+            "fromUUID": "input-0",
+            "toUUID": "hidden-4",
+            "weight": -0.3,
+            "type": "condition"
+          },
+          {
+            "fromUUID": "input-2",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          },
+          {
+            "fromUUID": "first-one",
+            "toUUID": "output-0",
+            "weight": 0.9,
+            "type": null
+          },
+          {
+            "fromUUID": "first-one",
+            "toUUID": "output-1",
+            "weight": 0.8,
+            "type": null
+          },
+          {
+            "fromUUID": "first-constant-0",
+            "toUUID": "hidden-4",
+            "weight": 0.3,
+            "type": "positive"
+          },
+          {
+            "fromUUID": "first-constant-0",
+            "toUUID": "output-0",
+            "weight": 0.6,
+            "type": null
+          },
+          {
+            "fromUUID": "unity-constant-1",
+            "toUUID": "hidden-4",
+            "weight": 0.24,
+            "type": "negative"
+          },
+          {
+            "fromUUID": "hidden-4",
+            "toUUID": "output-1",
+            "weight": 0.7,
+            "type": null
+          }
+        ]
+      }
+    },
+    "chosenUUID": "hidden-3b"
+  }
+]
