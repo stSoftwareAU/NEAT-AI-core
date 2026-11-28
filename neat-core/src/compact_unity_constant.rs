@@ -45,9 +45,10 @@
 //!   When a second leading constant holds the same slot by tag, TypeScript's
 //!   dedupe loop re-sources its outward synapses onto the first holder, removes
 //!   it and stops, and the new constant takes that slot fresh. The port takes that
-//!   merge for slot 0 and slot 1, as `unity_reuse_second_slot_zero_holder`,
-//!   `unity_reuse_third_slot_zero_holder` and `unity_reuse_second_slot_one_holder`
-//!   capture. A further holder, a holder matched by its legacy id alone (the loop
+//!   merge for slots 0, 1 and 2, as `unity_reuse_second_slot_zero_holder`,
+//!   `unity_reuse_third_slot_zero_holder`, `unity_reuse_second_slot_one_holder`
+//!   and `unity_reuse_second_slot_two_holder` capture. A further holder, a
+//!   holder matched by its legacy id alone (the loop
 //!   matches tags only), and a tagged holder behind the insertion point are left
 //!   as they are, as the loop leaves them. Every other held-slot shape is refused
 //!   with [`NeuronRemovalError::UnitySlotReuseNotPorted`] before any change:
@@ -61,14 +62,14 @@
 //!     remove a holder that has an inward synapse, so that its feeder could
 //!     cascade;
 //!   - one constant holding slots 0 and 1, whose slot-0 tag TypeScript would
-//!     overwrite;
-//!   - slot 2 is held as well. With one slot-2 holder, TypeScript treats the
-//!     removed neuron as its own constant and returns `false` after setting every
-//!     holder's bias to 1 (`unity_reuse_slot_two_held`). With two tagged leading
-//!     slot-2 holders, `createConstantOne(creature, 2)` would run the same dedupe
-//!     merge as for slots 0 and 1 and `removeNeuron` would succeed. That merge is
-//!     read from the frozen source, not captured, so it is **not ported** and is
-//!     refused too;
+//!     overwrite, or slots 1 and 2 or slots 0 and 2 (for example slot 1 by
+//!     legacy id -1001 and slot 2 by tag), whose earlier tag it would overwrite
+//!     and for which it returns `false`. This is refused before any slot-2
+//!     merge;
+//!   - slot 2 is held by a single constant. TypeScript treats the removed neuron as
+//!     its own constant and returns `false` after setting every holder's bias to 1
+//!     (`unity_reuse_slot_two_held`). With two tagged leading slot-2 holders the
+//!     dedupe merge applies instead and `removeNeuron` succeeds, as captured;
 //!   - the removed constant itself leads the list while a merge applies: it may be
 //!     one of the holders, and no capture backs the result.
 //!
@@ -79,8 +80,11 @@
 //!   it is removed again, so TypeScript mints two for slot 1 and, for slot 2, one
 //!   more per outward synapse, since the slot-1 call repeats once per synapse. On
 //!   a merge the temporary constant survives, so it mints one for a slot-0 merge
-//!   and two for a slot-1 merge. The port mints only the surviving constant, so
-//!   `mint_uuid` is called once.
+//!   and two for a slot-1 merge. A slot-2 merge mints two, plus one per outward
+//!   synapse, because the slot-1 call repeats once per synapse and each of those
+//!   is stale; `unity_reuse_second_slot_two_holder` has one outward synapse, so
+//!   its captured `minted` is three. The port mints only the surviving constant,
+//!   so `mint_uuid` is called once.
 //! - **A non-finite constant weight is refused before any change.** TypeScript
 //!   inserts the constant and then throws from `connect` (`unity_overflow`). The
 //!   port checks every weight first, and mints no UUID.
@@ -135,9 +139,9 @@ pub enum NeuronRemovalError {
     /// removal is refused. The only slot-0 or slot-1 holder does not lead the
     /// list, the removed neuron is not at the insertion point, merging a second
     /// holder would duplicate a synapse or remove a holder with an inward
-    /// synapse, one constant holds both slots, or slot 2 is held when slots 0
-    /// and 1 are. The field names the constant in the way, and nothing is
-    /// changed.
+    /// synapse, one constant holds slots 0 and 1, slots 1 and 2 or slots 0 and 2, or a single
+    /// constant holds slot 2 when slots 0 and 1 are held. The field names the
+    /// constant in the way, and nothing is changed.
     UnitySlotReuseNotPorted {
         /// The constant that holds the slot in the way.
         constant: String,
@@ -370,20 +374,39 @@ fn constant_branch(
                     constant: one.uuid.clone(),
                 });
             }
-            // A held slot 2 is refused. With one holder, `removeNeuron` treats the
+            // One constant holding slots 1 and 2, or slots 0 and 2, would have its
+            // earlier tag overwritten (`addTag` replaces the value) by
+            // `createConstantOne(creature, 2)`, which then finds the other slot-2
+            // holder alone; TypeScript returns `false` for it. It is refused
+            // before any slot-2 merge, as one constant holding slots 0 and 1 is
+            // above.
+            if let Some((_, both)) = slot_holders(&creature.neurons, unity_slots, 2, -1002)
+                .find(|(_, neuron)| neuron.uuid == one.uuid || neuron.uuid == held.uuid)
+            {
+                return Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+                    constant: both.uuid.clone(),
+                });
+            }
+            // With two tagged leading slot-2 holders, the slot-2 dedupe loop
+            // merges them and `removeNeuron` succeeds, the survivor taking slot 2
+            // fresh (`unity_reuse_second_slot_two_holder`). `merge_second_holder`
+            // has already set the first holder's bias to 1.
+            let merged_two = merge_second_holder(creature, uuid, unity_slots, 2, -1002)?;
+            // A single slot-2 holder is refused. `removeNeuron` treats the
             // removed neuron as its own constant (`unity_reuse_slot_two_held`):
             // TypeScript then returns `false` with every holder's bias already
             // set to 1, or, for an untyped edge, folds the weight into the edge
-            // it removes. With two tagged leading holders TypeScript would merge
-            // them and succeed, but no capture backs that merge, so it is not
-            // ported.
-            if let Some((_, two)) = slot_holder(&creature.neurons, unity_slots, 2, -1002) {
+            // it removes.
+            if merged_two.is_none()
+                && let Some((_, two)) = slot_holder(&creature.neurons, unity_slots, 2, -1002)
+            {
                 return Err(NeuronRemovalError::UnitySlotReuseNotPorted {
                     constant: two.uuid.clone(),
                 });
             }
             reset_bias.push(&one.uuid);
             slot = 2;
+            merged = merged_two;
         }
     }
     // A merge removed a holder, so the insertion point moves up by one.
@@ -535,8 +558,9 @@ fn insertion_point(creature: &CreatureExport) -> usize {
 /// onto the first holder, it is removed, the synapses are re-sorted, and the loop
 /// stops. Any later holder is left as it is. The temporary constant survives with
 /// a valid index and takes `slot`, as `unity_reuse_second_slot_zero_holder`,
-/// `unity_reuse_third_slot_zero_holder` and `unity_reuse_second_slot_one_holder`
-/// capture. The first holder's bias is set to 1, as on every reuse.
+/// `unity_reuse_third_slot_zero_holder`, `unity_reuse_second_slot_one_holder` and
+/// `unity_reuse_second_slot_two_holder` capture. The first holder's bias is set
+/// to 1, as on every reuse.
 ///
 /// Returns `Ok(None)` when no second tagged holder leads; TypeScript then removes
 /// the temporary constant again. A merge the frozen loop does not make soundly is

@@ -2643,11 +2643,10 @@ fn removing_either_of_two_slot_zero_holders_is_refused_and_mints_nothing() {
 }
 
 /// `k0` holds slot 0, `k1` slot 1, and `k2` and `k2b` both slot 2, all ahead of
-/// `hidden-0`. TypeScript's `createConstantOne(creature, 2)` would run the same
-/// dedupe merge as for slots 0 and 1, which the port does not follow.
-#[test]
-fn two_tagged_slot_two_holders_are_refused_as_an_unported_merge() {
-    let fixture = in_typescript_order(creature(
+/// `hidden-0`. Each of the two slot-2 holders feeds `output-0`; `k2b_role` is the
+/// role of `k2b`'s edge, so the caller picks whether it duplicates `k2`'s.
+fn two_slot_two_holders_fixture(k2b_role: Option<&str>) -> CreatureExport {
+    in_typescript_order(creature(
         2,
         vec![
             neuron("constant", "k0", None, 0.7),
@@ -2664,10 +2663,167 @@ fn two_tagged_slot_two_holders_are_refused_as_an_unported_merge() {
             edge("k0", "output-0", 0.25),
             edge("k1", "output-0", 0.5),
             edge("k2", "output-0", 0.75),
-            edge("k2b", "output-0", 0.125),
+            synapse("k2b", "output-0", 0.125, k2b_role),
+        ],
+    ))
+}
+
+fn two_slot_two_holders_slots() -> Vec<UnitySlot> {
+    [("k0", 0), ("k1", 1), ("k2", 2), ("k2b", 2)]
+        .into_iter()
+        .map(|(uuid, slot)| UnitySlot {
+            uuid: uuid.to_string(),
+            slot,
+        })
+        .collect()
+}
+
+#[test]
+fn two_tagged_slot_two_holders_are_merged_as_captured() {
+    // `k2b`'s edge takes a role `k2` does not use, so merging it into `k2` makes
+    // no duplicate. TypeScript's `createConstantOne(creature, 2)` merges it, and
+    // `removeNeuron` succeeds with the survivor in slot 2.
+    let fixture = two_slot_two_holders_fixture(Some("negative"));
+    let mints = Cell::new(0_u64);
+    let removal = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &two_slot_two_holders_slots(),
+        || {
+            mints.set(mints.get() + 1);
+            "survivor".to_string()
+        },
+        never_draw,
+    )
+    .expect("the merge is accepted")
+    .expect("the removal is applied");
+    assert_eq!(mints.get(), 1);
+    assert!(!removal.creature.neurons.iter().any(|n| n.uuid == "k2b"));
+    assert_eq!(
+        removal.unity_constant,
+        Some(UnitySlot {
+            uuid: "survivor".to_string(),
+            slot: 2,
+        })
+    );
+    // `k2b`'s edge is re-sourced onto `k2`, and every holder is reset to bias 1.
+    assert!(removal.creature.synapses.contains(&synapse(
+        "k2",
+        "output-0",
+        0.125,
+        Some("negative")
+    )));
+    for holder in ["k0", "k1", "k2"] {
+        let bias = removal
+            .creature
+            .neurons
+            .iter()
+            .find(|n| n.uuid == holder)
+            .unwrap()
+            .bias;
+        assert_eq!(bias.to_bits(), 1.0_f64.to_bits(), "{holder}");
+    }
+}
+
+#[test]
+fn a_second_slot_two_holder_with_a_duplicate_synapse_is_refused_and_named() {
+    // `k2` and `k2b` both feed `output-0` in the standard role, so merging `k2b`
+    // into `k2` would duplicate that synapse. The control above, whose roles
+    // differ, is accepted.
+    let fixture = two_slot_two_holders_fixture(None);
+    let mints = Cell::new(0_u64);
+    let result = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &two_slot_two_holders_slots(),
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    );
+    assert_eq!(
+        result,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k2b".to_string(),
+        })
+    );
+    assert_eq!(mints.get(), 0);
+}
+
+#[test]
+fn a_second_tagged_slot_two_holder_is_merged_into_the_first_as_captured() {
+    // Slots 0 and 1 are reused, so the slot-2 call runs. Its dedupe loop merges
+    // `k2b` into `k2`, and the temporary slot-2 constant survives. `k0`, `k1` and
+    // `k2` are set to bias 1, `k2b`'s edge into `hidden-1` (0.125) is re-sourced
+    // onto `k2`, and the survivor feeds the IF condition at 3 * 1.5 = 4.5.
+    let removal = replay_merge_capture("unity_reuse_second_slot_two_holder", "unity-constant-2", 2);
+    let uuids: Vec<&str> = removal
+        .creature
+        .neurons
+        .iter()
+        .map(|n| n.uuid.as_str())
+        .collect();
+    assert_eq!(
+        uuids,
+        ["k0", "k1", "k2", "unity-constant-2", "hidden-1", "output-0"]
+    );
+    for holder in &removal.creature.neurons[..3] {
+        assert_eq!(holder.bias.to_bits(), 1.0_f64.to_bits(), "{}", holder.uuid);
+    }
+    assert!(
+        removal
+            .creature
+            .synapses
+            .contains(&edge("k2", "hidden-1", 0.125))
+    );
+    assert!(removal.creature.synapses.contains(&synapse(
+        "unity-constant-2",
+        "output-0",
+        4.5,
+        Some("condition")
+    )));
+    // TypeScript mints the temporary constant for slot 0, slot 1 and slot 2; the
+    // survivor is the third (one slot-1 call per outward synapse, and this
+    // capture has one).
+    assert_eq!(
+        golden_record("unity_reuse_second_slot_two_holder")["minted"],
+        3
+    );
+}
+
+#[test]
+fn one_constant_holding_slot_one_by_id_and_slot_two_by_tag_is_refused_before_a_slot_two_merge() {
+    // `k1` holds slot 1 by its legacy id -1001 and slot 2 by tag, and `k2` holds
+    // slot 2 by tag as well. The slot-2 dedupe loop would merge `k2` into `k1`,
+    // but `createConstantOne(creature, 2)` would then re-tag the slot-1 holder,
+    // a shape the frozen TypeScript answers with `false`. It is refused, as one
+    // constant holding slots 0 and 1 is, and nothing is minted.
+    let mut k1 = neuron("constant", "k1", None, -0.2);
+    k1.id = Some(-1001);
+    let fixture = in_typescript_order(creature(
+        2,
+        vec![
+            neuron("constant", "k0", None, 0.7),
+            k1,
+            neuron("constant", "k2", None, 0.4),
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("hidden", "hidden-1", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("input-0", "hidden-1", 1.0),
+            edge("k0", "hidden-1", 0.5),
+            edge("k1", "hidden-1", 0.25),
+            synapse("k2", "output-0", 0.125, Some("negative")),
+            synapse("hidden-0", "output-0", 3.0, Some("condition")),
+            synapse("hidden-1", "output-0", 2.0, Some("positive")),
         ],
     ));
-    let slots: Vec<UnitySlot> = [("k0", 0), ("k1", 1), ("k2", 2), ("k2b", 2)]
+    let slots: Vec<UnitySlot> = [("k0", 0), ("k1", 2), ("k2", 2)]
         .into_iter()
         .map(|(uuid, slot)| UnitySlot {
             uuid: uuid.to_string(),
@@ -2689,7 +2845,64 @@ fn two_tagged_slot_two_holders_are_refused_as_an_unported_merge() {
     assert_eq!(
         result,
         Err(NeuronRemovalError::UnitySlotReuseNotPorted {
-            constant: "k2".to_string(),
+            constant: "k1".to_string(),
+        })
+    );
+    assert_eq!(mints.get(), 0);
+}
+
+#[test]
+fn one_constant_holding_slot_zero_by_id_and_slot_two_by_tag_is_refused_before_a_slot_two_merge() {
+    // `k0` holds slot 0 by its legacy id -1000 and slot 2 by tag, `k1` holds slot 1
+    // and `k2` holds slot 2 by tag. The slot-2 dedupe loop would merge `k2` into
+    // `k0`, but `createConstantOne(creature, 0)` has already overwritten `k0`'s
+    // tag with "0", so TypeScript finds `k2` alone and answers `false`. It is
+    // refused, as one constant holding slots 1 and 2 is, and nothing is minted.
+    let mut k0 = neuron("constant", "k0", None, 0.7);
+    k0.id = Some(-1000);
+    let fixture = in_typescript_order(creature(
+        2,
+        vec![
+            k0,
+            neuron("constant", "k1", None, -0.2),
+            neuron("constant", "k2", None, 0.4),
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("hidden", "hidden-1", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("input-0", "hidden-1", 1.0),
+            edge("k0", "hidden-1", 0.5),
+            edge("k1", "hidden-1", 0.25),
+            synapse("k2", "output-0", 0.125, Some("negative")),
+            synapse("hidden-0", "output-0", 3.0, Some("condition")),
+            synapse("hidden-1", "output-0", 2.0, Some("positive")),
+        ],
+    ));
+    let slots: Vec<UnitySlot> = [("k0", 2), ("k1", 1), ("k2", 2)]
+        .into_iter()
+        .map(|(uuid, slot)| UnitySlot {
+            uuid: uuid.to_string(),
+            slot,
+        })
+        .collect();
+    let mints = Cell::new(0_u64);
+    let result = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slots,
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    );
+    assert_eq!(
+        result,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k0".to_string(),
         })
     );
     assert_eq!(mints.get(), 0);
