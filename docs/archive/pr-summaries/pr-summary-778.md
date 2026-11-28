@@ -66,15 +66,15 @@ Closes #778.
   inserts a temporary constant after the leading constants. Its dedupe loop then
   meets the tagged constants for slot `n` in list order. Two outcomes follow:
   - When a second tagged holder leads, the loop moves that holder's outward
-    synapses onto the first holder, removes it, re-sorts the synapses and
-    stops. The temporary constant survives in slot `n`.
+    synapses onto the first holder, removes it, re-sorts the synapses and stops.
+    The temporary constant survives in slot `n`.
   - Otherwise it removes the temporary constant again and returns it with a
     stale index. When that index names the removed neuron, `removeNeuron` asks
     for the next slot.
 
   The port follows both outcomes for slots 0 and 1. The survivor therefore takes
-  slot 0, 1 or 2, and every holder TypeScript resolves has its bias set to 1.
-  It refuses, before any change:
+  slot 0, 1 or 2, and every holder TypeScript resolves has its bias set to 1. It
+  refuses, before any change:
   - the stale-index defect;
   - a held slot 2, where TypeScript returns `false` after mutating biases;
   - a merge that would duplicate a synapse, or would remove a holder that has an
@@ -99,9 +99,9 @@ Closes #778.
   and `getTag`/`addTag`/`removeTag` from `jsr:@stsoftware/tags@1.0.41`.
 - `src/compact` has no deadline. The only one is `skipCompaction` in
   `src/architecture/training/TrainingTeardown.ts`, which is asked before and
-  after `compactUnused` runs.
-  Both the skipped and the completed teardown age the trained creature exactly
-  once, so a deadline decides only whether a compacted copy exists.
+  after `compactUnused` runs. Both the skipped and the completed teardown age
+  the trained creature exactly once, so a deadline decides only whether a
+  compacted copy exists.
 - `Creature.fromJSON` moves constants to the front. The new
   `unity_reuse_holder_behind` capture lists its holder behind the removed
   neuron, and TypeScript still runs the leading-holder reuse.
@@ -154,16 +154,16 @@ re-review gave the verdicts below.
 ## Test Plan
 
 - `neat-core/tests/golden/compact_legacy_unity.json` grows from 7 to 13 frozen
-  `removeNeuron` captures. They were made with `scripts/legacy_compaction_unity.ts`
-  against a clean NEAT-AI clone at `60d6b4e5`, and the first 7 records are
-  unchanged. The new cases are `unity_reuse_slot_one_held`,
-  `unity_reuse_slot_two_held`, `unity_reuse_holder_behind`,
-  `unity_reuse_second_slot_zero_holder`, `unity_reuse_third_slot_zero_holder` and
-  `unity_reuse_second_slot_one_holder`.
+  `removeNeuron` captures. They were made with
+  `scripts/legacy_compaction_unity.ts` against a clean NEAT-AI clone at
+  `60d6b4e5`, and the first 7 records are unchanged. The new cases are
+  `unity_reuse_slot_one_held`, `unity_reuse_slot_two_held`,
+  `unity_reuse_holder_behind`, `unity_reuse_second_slot_zero_holder`,
+  `unity_reuse_third_slot_zero_holder` and `unity_reuse_second_slot_one_holder`.
 - `neat-core/tests/compact_unity_constant.rs` has 46 tests, all passing:
   - The four merge and slot-2 captures replay bit for bit. Each replay checks
-    neuron order, biases, synapse order, weights, roles, the reported slot and
-    a single mint.
+    neuron order, biases, synapse order, weights, roles, the reported slot and a
+    single mint.
   - Derived cases cover the legacy ids `-1001` and `-1002`:
     - a holder matched by legacy id alone is left as it is;
     - a tagged holder behind the insertion point is not merged;
@@ -199,8 +199,9 @@ re-review gave the verdicts below.
     the skipped and completed teardown paths age grace differently. Both were
     removed after review.
 - `cargo test --workspace < /dev/null`: 0 failures. Also clean:
-  `cargo clippy -p neat-core --all-targets -- -D warnings`, `cargo fmt --all --check`,
-  `deno fmt --check`, and `markdownlint-cli2` on the research doc.
+  `cargo clippy -p neat-core --all-targets -- -D warnings`,
+  `cargo fmt --all --check`, `deno fmt --check`, and `markdownlint-cli2` on the
+  research doc.
 
 - `neat-core/tests/compact_unused_tags.rs` is new, with 6 tests. Every expected
   value is a literal:
