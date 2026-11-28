@@ -2,14 +2,13 @@
 
 ## Summary
 
-This PR ports the last held-unity-slot shape of `compactUnused`'s
-`removeNeuron` that PR #808 left unported: two tagged leading constants holding
-slot 2. In TypeScript, `createConstantOne(creature, 2)` runs the same dedupe
-merge it runs for slots 0 and 1. It moves the second slot-2 holder's outward
-synapses onto the first, removes the second holder, and keeps the temporary
-constant in slot 2. `removeNeuron` then succeeds. Until now
-`neat-core::remove_neuron` refused this shape with `UnitySlotReuseNotPorted`,
-because no frozen capture backed it.
+This PR ports the last held-unity-slot shape of `compactUnused`'s `removeNeuron`
+that PR #808 left unported: two tagged leading constants holding slot 2. In
+TypeScript, `createConstantOne(creature, 2)` runs the same dedupe merge it runs
+for slots 0 and 1. It moves the second slot-2 holder's outward synapses onto the
+first, removes the second holder, and keeps the temporary constant in slot 2.
+`removeNeuron` then succeeds. Until now `neat-core::remove_neuron` refused this
+shape with `UnitySlotReuseNotPorted`, because no frozen capture backed it.
 
 - `scripts/legacy_compaction_unity.ts` gains the
   `unity_reuse_second_slot_two_holder` case. It was captured from a clean
@@ -17,8 +16,8 @@ because no frozen capture backed it.
   revision.
 - `remove_neuron` (`neat-core/src/compact_unity_constant.rs`) now takes the
   slot-2 merge through the same `merge_second_holder` path that slots 0 and 1
-  use. A single slot-2 holder is still refused, because that is the
-  TypeScript defect `unity_reuse_slot_two_held` captures.
+  use. A single slot-2 holder is still refused, because that is the TypeScript
+  defect `unity_reuse_slot_two_held` captures.
 
 PR #808 named this merge as the one open gap. With it ported, everything the
 issue asks for has landed. The change is additive and no caller is switched.
@@ -33,8 +32,8 @@ Closes #778.
   one shape it named as unported was the two-holder slot-2 merge, because the
   NEAT-AI checkout needed to capture it was not available in that run. This run
   cloned NEAT-AI at the frozen revision. The unchanged capture script reproduced
-  `compact_legacy_unity.json` byte for byte, so the new record was captured
-  from the original TypeScript, not derived by hand.
+  `compact_legacy_unity.json` byte for byte, so the new record was captured from
+  the original TypeScript, not derived by hand.
 
 ### Essential Design Decisions
 
@@ -74,13 +73,13 @@ flowchart LR
 
 ## Test Plan
 
-- `neat-core/tests/golden/compact_legacy_unity.json` grows from 13 to 14
-  records with `unity_reuse_second_slot_two_holder`. The first 13 are
-  unchanged.
+- `neat-core/tests/golden/compact_legacy_unity.json` grows from 13 to 14 records
+  with `unity_reuse_second_slot_two_holder`. The first 13 are unchanged.
 - `neat-core/tests/compact_unity_constant.rs` (50 tests, all passing):
-  - Added `a_second_tagged_slot_two_holder_is_merged_into_the_first_as_captured`.
-    It replays the capture through `replay_merge_capture`, which compares the
-    whole result with the captured `after`. It also asserts these literals:
+  - Added
+    `a_second_tagged_slot_two_holder_is_merged_into_the_first_as_captured`. It
+    replays the capture through `replay_merge_capture`, which compares the whole
+    result with the captured `after`. It also asserts these literals:
     - the neuron order `k0, k1, k2, unity-constant-2, hidden-1, output-0`;
     - bias 1 on the three holders;
     - `k2 → hidden-1` at 0.125, and the survivor's condition weight of 4.5;
@@ -95,9 +94,9 @@ flowchart LR
     - bias 1 on `k0`, `k1` and `k2`.
   - The old fixture, where `k2` and `k2b` both feed `output-0` in the standard
     role, moved to the new test
-    `a_second_slot_two_holder_with_a_duplicate_synapse_is_refused_and_named`.
-    It asserts `UnitySlotReuseNotPorted { constant: "k2b" }` and no mint, and
-    the merge test above is its accepted control.
+    `a_second_slot_two_holder_with_a_duplicate_synapse_is_refused_and_named`. It
+    asserts `UnitySlotReuseNotPorted { constant: "k2b" }` and no mint, and the
+    merge test above is its accepted control.
   - `a_held_slot_two_is_refused_and_the_capture_shows_why`, the single-holder
     refusal, is unchanged and passes.
   - Red run: the three new or renamed tests were written first and run against
@@ -119,5 +118,6 @@ flowchart LR
 - Not run:
   - `cargo check --target wasm32-unknown-unknown`. The change has no `cfg` and
     is target-independent.
-  - `scripts/check-downstream-consumers.sh`. No signature changes: `remove_neuron`
-    now accepts a shape it used to refuse, and its error enum is unchanged.
+  - `scripts/check-downstream-consumers.sh`. No signature changes:
+    `remove_neuron` now accepts a shape it used to refuse, and its error enum is
+    unchanged.
