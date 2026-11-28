@@ -28,8 +28,10 @@
 //!
 //! What stays with the caller, or is refused here:
 //!
-//! - choosing the neuron — `compactUnused`'s trace statistics, shuffle and
-//!   newborn-grace skip are caller policy; this function only rewrites;
+//! - collecting the trace statistics, the shuffle and the newborn-grace tag are
+//!   caller policy. The choice of neuron is ported as
+//!   [`crate::compact_unused_choice::choose_unused_neuron`]; this function only
+//!   rewrites;
 //! - the **constant branch**: when any outward target is an `IF`, `MINIMUM`,
 //!   `MAXIMUM`, `MEAN`, `HYPOT` or `HYPOTv2` neuron (the six squashes that
 //!   define `propagate` at the frozen revision), TypeScript rewires through a
