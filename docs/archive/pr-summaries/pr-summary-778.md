@@ -13,10 +13,11 @@ TypeScript-only. The new module is `neat-core/src/compact_unused_tags.rs`:
 - `compact_unused_pass_tags` gives the `old-neurons` and `old-synapses` counts.
   `compactCreature` writes the same `old-neurons` count.
 
-It also widens `remove_neuron` to every held unity-slot reuse whose TypeScript
-outcome is sound. That covers slot 1 held (the survivor takes slot 2), and a
+It also widens `remove_neuron` to the held unity-slot reuses that a frozen
+capture backs. That covers slot 1 held (the survivor takes slot 2), and a
 second tagged holder of slot 0 or slot 1, which TypeScript's dedupe loop merges
-into the first. Six new frozen `removeNeuron` captures back this change. Four
+into the first. It does not cover every sound reuse: see the unported slot-2
+merge below. Six new frozen `removeNeuron` captures back this change. Four
 show the outcomes that are now ported. Two show why a shape stays refused: the
 defect with slot 2 held, and the loader order that never hands over a trailing
 holder. The remaining refusals are TypeScript defects, shapes its loader never
@@ -148,16 +149,18 @@ vacuous deadline test was deleted, a wrong claim about the teardown was
 corrected, and three sound merge shapes that had been refused were ported. The
 re-review gave the verdicts below. A later review found one more sound shape that
 is still refused, the slot-2 merge. This summary now names it as unported, and
-the second criterion is scoped to what is ported.
+the second criterion is marked partial.
 
 - **met** — "Add tests for ... deadlines" — evidence:
   `neat-core/tests/compact_deadline_boundary.rs::the_callers_grace_round_matches_the_round_a_compacting_pass_writes`,
   `neat-core/tests/compact_deadline_boundary.rs::rerunning_a_stage_after_an_abandoned_attempt_is_bit_identical`
   — reviewer: met
-- **met, for the shapes listed** — "port only existing compaction rules" (the
-  held-slot reuse shapes ported with a capture: slot 1 held, and a second tagged
-  holder of slot 0 or slot 1). The two-holder slot-2 merge is **not ported** and
-  is not claimed. — evidence:
+- **partial** — "port only existing compaction rules" (the held-slot reuse
+  shapes ported with a capture: slot 1 held, and a second tagged holder of
+  slot 0 or slot 1). The two-holder slot-2 merge, where TypeScript's dedupe loop
+  merges two tagged leading slot-2 holders and `removeNeuron` succeeds, is
+  **not ported**: no capture backs it, so the port refuses it. That is the
+  gap. — evidence:
   `neat-core/tests/compact_unity_constant.rs::the_frozen_slot_one_held_capture_replays_exactly`,
   `::a_second_tagged_slot_zero_holder_is_merged_into_the_first_as_captured`,
   `::a_third_slot_zero_holder_is_left_as_it_is_as_captured`,
@@ -165,8 +168,8 @@ the second criterion is scoped to what is ported.
   `::a_holder_behind_the_removed_neuron_is_never_handed_over_by_typescripts_loader`,
   `::a_held_slot_two_is_refused_and_the_capture_shows_why` (the single-holder
   slot-2 refusal), `::two_tagged_slot_two_holders_are_refused_as_an_unported_merge`
-  (the unported shape stays refused and mints nothing) — reviewer: met for the
-  first review's shapes; the unported slot-2 merge came after it
+  (the unported shape stays refused and mints nothing) — reviewer: partial; the
+  ported shapes are met and the slot-2 merge is the open gap
 
 ## Test Plan
 
