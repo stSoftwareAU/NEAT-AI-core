@@ -111,8 +111,8 @@ flowchart LR
     Its fixture is `k0` (tag 0), `k1` (legacy id -1001, tag 2), `k2` (tag 2),
     `hidden-0`, `hidden-1` and an IF `output-0`, and it removes `hidden-0`. It
     asserts `UnitySlotReuseNotPorted { constant: "k1" }` and no mint. Red run:
-    against commit `d819829`, before the check, it failed with `Ok(Some(..))`,
-    a slot-2 merge of `k2` into `k1`. With the check it passes.
+    against commit `d819829`, before the check, it failed with `Ok(Some(..))`, a
+    slot-2 merge of `k2` into `k1`. With the check it passes.
   - `a_held_slot_two_is_refused_and_the_capture_shows_why`, the single-holder
     refusal, is unchanged and passes.
   - Red run: the three new or renamed tests were written first and run against
@@ -133,8 +133,8 @@ flowchart LR
 - Docs: the module docs, the `merge_second_holder` doc, the
   `UnitySlotReuseNotPorted` doc and
   `docs/research/compaction-unity-constant-baseline.md` no longer describe the
-  merge as unported. They also list the slot-1-and-2 refusal. The research doc now gives 14 cases and has a row for the
-  new case.
+  merge as unported. They also list the slot-1-and-2 refusal. The research doc
+  now gives 14 cases and has a row for the new case.
 - Not run:
   - `cargo check --target wasm32-unknown-unknown`. The change has no `cfg` and
     is target-independent.
