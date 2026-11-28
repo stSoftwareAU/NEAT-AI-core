@@ -373,6 +373,38 @@ export async function captureLegacyUnity(root: URL, revision: string) {
       activation: 1.5,
       unitySlots: { k0: "0", k1: "1", k1b: "1" },
     },
+    // Slots 0 and 1 are held by one leading constant each and slot 2 by two. The
+    // slot-1 reuse asks for slot 2, whose dedupe loop merges the second slot-2
+    // holder into the first, so the temporary slot-2 constant survives.
+    {
+      name: "unity_reuse_second_slot_two_holder",
+      input: {
+        neurons: [
+          neuron("constant", "k0", undefined, 0.7),
+          neuron("constant", "k1", undefined, -0.2),
+          neuron("constant", "k2", undefined, 0.3),
+          neuron("constant", "k2b", undefined, 0.6),
+          neuron("hidden", "hidden-0", "IDENTITY", 0),
+          neuron("hidden", "hidden-1", "IDENTITY", 0),
+          neuron("output", "output-0", "IF", 0.25),
+        ],
+        synapses: [
+          edge("input-0", "hidden-0", 1),
+          edge("input-0", "hidden-1", 1),
+          edge("k0", "hidden-1", 0.5),
+          edge("k1", "hidden-1", 0.25),
+          edge("k2b", "hidden-1", 0.125),
+          edge("k2", "output-0", 0.5, "negative"),
+          edge("hidden-0", "output-0", 3, "condition"),
+          edge("hidden-1", "output-0", 2, "positive"),
+        ],
+        input: 2,
+        output: 1,
+      },
+      remove: "hidden-0",
+      activation: 1.5,
+      unitySlots: { k0: "0", k1: "1", k2: "2", k2b: "2" },
+    },
   ];
   const captures: unknown[] = [];
   const originalRandomUUID = crypto.randomUUID.bind(crypto);

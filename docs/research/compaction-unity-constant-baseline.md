@@ -2,7 +2,7 @@
 
 `neat-core/tests/golden/compact_legacy_unity.json` freezes the constant
 ("unity slot") branch of `removeNeuron` from NEAT-AI at revision
-`60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`. It holds 13 cases. The branch is
+`60d6b4e5d3af20afbaaeb3420d588ad673ab8dab`. It holds 14 cases. The branch is
 taken when any outward target's squash defines `propagate`: IF, MINIMUM,
 MAXIMUM, MEAN, HYPOT and HYPOTv2. The constant's uuid is pinned to
 `unity-constant-N` by stubbing `crypto.randomUUID`.
@@ -27,6 +27,7 @@ added in the same change.
 | `unity_reuse_second_slot_zero_holder` | Two leading constants tagged `"0"` | second merged into first; removed, new constant in slot 0 (see b) |
 | `unity_reuse_third_slot_zero_holder` | Three leading constants tagged `"0"` | second merged into first, third left; removed, new constant in slot 0 (see b) |
 | `unity_reuse_second_slot_one_holder` | One leading constant tagged `"0"`, two tagged `"1"` | second slot-1 holder merged into the first; removed, new constant in slot 1 (see b) |
+| `unity_reuse_second_slot_two_holder` | Leading constants tagged `"0"` and `"1"`, two tagged `"2"` | second slot-2 holder merged into the first; removed, new constant in slot 2 (see b) |
 
 ## Findings
 
@@ -62,9 +63,12 @@ wired to, and returns `false` after it has set every holder's bias to 1.
 instead fold the weight into the edge it removes. The port refuses this shape.
 With two tagged leading slot-2 holders the count-2 call of
 `createConstantOne(creature, 2)` runs the same dedupe merge as slots 0 and 1, and
-reading the frozen source, `removeNeuron` would succeed. That merge has no
-capture, so the port does not take it and refuses it too (a shape left unported,
-not a TypeScript defect).
+`removeNeuron` succeeds (`unity_reuse_second_slot_two_holder`). The capture shows
+`k2b` merged into `k2` with its synapse re-sourced from `k2`, `k0`, `k1` and `k2`
+set to bias 1, and a new constant tagged `"2"` carrying the condition weight 4.5.
+TypeScript mints two UUIDs plus one per outward synapse for it, three here
+with one outward synapse. The port takes this shape, and mints only the
+survivor.
 
 A holder listed behind the removed neuron never reaches `removeNeuron`:
 `Creature.fromJSON` puts the constants first, so `unity_reuse_holder_behind`
@@ -73,8 +77,9 @@ reads the order it is handed, so it refuses that order and replays the capture
 once the constants lead.
 
 A second leading constant tagged with the same slot is merged
-(`unity_reuse_second_slot_zero_holder`, and for slot 1
-`unity_reuse_second_slot_one_holder`). The dedupe loop meets both holders ahead
+(`unity_reuse_second_slot_zero_holder`, and for slots 1 and 2
+`unity_reuse_second_slot_one_holder` and
+`unity_reuse_second_slot_two_holder`). The dedupe loop meets both holders ahead
 of the temporary constant. It re-sources the second holder's outward synapses
 onto the first, removes the second, re-sorts the synapses and stops. The
 temporary constant survives in that slot, so TypeScript leaves two constants
