@@ -62,9 +62,10 @@
 //!     remove a holder that has an inward synapse, so that its feeder could
 //!     cascade;
 //!   - one constant holding slots 0 and 1, whose slot-0 tag TypeScript would
-//!     overwrite, or slots 1 and 2 (for example slot 1 by legacy id -1001 and
-//!     slot 2 by tag), whose slot-1 tag it would overwrite and for which it
-//!     returns `false`. This is refused before any slot-2 merge;
+//!     overwrite, or slots 1 and 2 or slots 0 and 2 (for example slot 1 by
+//!     legacy id -1001 and slot 2 by tag), whose earlier tag it would overwrite
+//!     and for which it returns `false`. This is refused before any slot-2
+//!     merge;
 //!   - slot 2 is held by a single constant. TypeScript treats the removed neuron as
 //!     its own constant and returns `false` after setting every holder's bias to 1
 //!     (`unity_reuse_slot_two_held`). With two tagged leading slot-2 holders the
@@ -138,7 +139,7 @@ pub enum NeuronRemovalError {
     /// removal is refused. The only slot-0 or slot-1 holder does not lead the
     /// list, the removed neuron is not at the insertion point, merging a second
     /// holder would duplicate a synapse or remove a holder with an inward
-    /// synapse, one constant holds slots 0 and 1 or slots 1 and 2, or a single
+    /// synapse, one constant holds slots 0 and 1, slots 1 and 2 or slots 0 and 2, or a single
     /// constant holds slot 2 when slots 0 and 1 are held. The field names the
     /// constant in the way, and nothing is changed.
     UnitySlotReuseNotPorted {
@@ -373,12 +374,14 @@ fn constant_branch(
                     constant: one.uuid.clone(),
                 });
             }
-            // One constant holding slots 1 and 2 would have its slot-1 tag
-            // overwritten by `createConstantOne(creature, 2)`; TypeScript returns
-            // `false` for it, so it is refused before any slot-2 merge, as one
-            // constant holding slots 0 and 1 is above.
+            // One constant holding slots 1 and 2, or slots 0 and 2, would have its
+            // earlier tag overwritten (`addTag` replaces the value) by
+            // `createConstantOne(creature, 2)`, which then finds the other slot-2
+            // holder alone; TypeScript returns `false` for it. It is refused
+            // before any slot-2 merge, as one constant holding slots 0 and 1 is
+            // above.
             if let Some((_, both)) = slot_holders(&creature.neurons, unity_slots, 2, -1002)
-                .find(|(_, neuron)| neuron.uuid == one.uuid)
+                .find(|(_, neuron)| neuron.uuid == one.uuid || neuron.uuid == held.uuid)
             {
                 return Err(NeuronRemovalError::UnitySlotReuseNotPorted {
                     constant: both.uuid.clone(),

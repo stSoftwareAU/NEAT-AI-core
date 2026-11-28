@@ -18,9 +18,12 @@ shape with `UnitySlotReuseNotPorted`, because no frozen capture backed it.
   slot-2 merge through the same `merge_second_holder` path that slots 0 and 1
   use. A single slot-2 holder is still refused, because that is the TypeScript
   defect `unity_reuse_slot_two_held` captures.
-- Before that merge, `remove_neuron` refuses one constant that holds slot 1 and
-  also slot 2, for example slot 1 by legacy id -1001 and slot 2 by tag, with a
-  second tagged slot-2 holder. The frozen TypeScript returns `false` for that
+- Before that merge, `remove_neuron` refuses one constant that holds slot 2 and
+  also slot 1 or slot 0, for example slot 1 by legacy id -1001 (or slot 0 by
+  legacy id -1000) and slot 2 by tag, with a second tagged slot-2 holder. In the
+  frozen TypeScript, `createConstantOne` for the earlier slot overwrites that
+  constant's slot-2 tag (`addTag` replaces the value) or `createConstantOne` for
+  slot 2 overwrites its slot-1 tag, and `removeNeuron` returns `false` for that
   shape. Before this PR it was refused because slot 2 was held at all, so
   without this check the port would report a success TypeScript never produces.
   The check mirrors the existing one for one constant holding slots 0 and 1.
@@ -76,7 +79,7 @@ flowchart LR
     S1 -->|"stale index"| S2{"slot 2 holders"}
     S2 -->|"none"| N["new constant in slot 2"]
     S2 -->|"one"| R["refused: TypeScript defect<br/>(unity_reuse_slot_two_held)"]
-    S2 -->|"slot-1 holder also holds slot 2"| B["refused: TypeScript returns false"]
+    S2 -->|"slot-0 or slot-1 holder also holds slot 2"| B["refused: TypeScript returns false"]
     S2 -->|"two tagged, leading"| M["merge_second_holder:<br/>second merged into first,<br/>new constant in slot 2"]
 ```
 
@@ -84,7 +87,7 @@ flowchart LR
 
 - `neat-core/tests/golden/compact_legacy_unity.json` grows from 13 to 14 records
   with `unity_reuse_second_slot_two_holder`. The first 13 are unchanged.
-- `neat-core/tests/compact_unity_constant.rs` (51 tests, all passing):
+- `neat-core/tests/compact_unity_constant.rs` (52 tests, all passing):
   - Added
     `a_second_tagged_slot_two_holder_is_merged_into_the_first_as_captured`. It
     replays the capture through `replay_merge_capture`, which compares the whole
@@ -113,6 +116,14 @@ flowchart LR
     asserts `UnitySlotReuseNotPorted { constant: "k1" }` and no mint. Red run:
     against commit `d819829`, before the check, it failed with `Ok(Some(..))`, a
     slot-2 merge of `k2` into `k1`. With the check it passes.
+  - Added
+    `one_constant_holding_slot_zero_by_id_and_slot_two_by_tag_is_refused_before_a_slot_two_merge`.
+    Its fixture is `k0` (legacy id -1000, tag 2), `k1` (tag 1), `k2` (tag 2,
+    `negative` edge into `output-0`), `hidden-0`, `hidden-1` and an IF
+    `output-0`, and it removes `hidden-0`. It asserts
+    `UnitySlotReuseNotPorted { constant: "k0" }` and no mint. Red run: before
+    the check it failed with `Ok(Some(..))`, a slot-2 merge of `k2` into `k0`
+    that deleted `k2`. With the check it passes.
   - `a_held_slot_two_is_refused_and_the_capture_shows_why`, the single-holder
     refusal, is unchanged and passes.
   - Red run: the three new or renamed tests were written first and run against
@@ -125,16 +136,16 @@ flowchart LR
   `markdownlint-cli2` reports 0 issues on
   `docs/research/compaction-unity-constant-baseline.md`.
 - `./quality.sh < /dev/null` exited 0 on commit `627ed5c`. The slot-1-and-2
-  refusal and its test came after that commit. For them,
-  `cargo test -p neat-core --test compact_unity_constant` (51 passed),
+  and slot-0-and-2 refusals and their tests came after that commit. For them,
+  `cargo test -p neat-core --test compact_unity_constant` (52 passed),
   `cargo test -p neat-core --doc compact_unity` and
   `cargo clippy -p neat-core --all-targets -- -D warnings` were run and are
   clean. The worker re-runs the quality gate on the final head.
 - Docs: the module docs, the `merge_second_holder` doc, the
   `UnitySlotReuseNotPorted` doc and
   `docs/research/compaction-unity-constant-baseline.md` no longer describe the
-  merge as unported. They also list the slot-1-and-2 refusal. The research doc
-  now gives 14 cases and has a row for the new case.
+  merge as unported. They also list the slot-1-and-2 and slot-0-and-2
+  refusals. The research doc now gives 14 cases and has a row for the new case.
 - Not run:
   - `cargo check --target wasm32-unknown-unknown`. The change has no `cfg` and
     is target-independent.
