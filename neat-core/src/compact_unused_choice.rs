@@ -14,10 +14,14 @@
 //!   become [`UnusedNeuronCandidate::trace`];
 //! - the shuffle. TypeScript's `CreatureUtil.shuffle` draws from the run's RNG,
 //!   so the caller passes the resulting visit order as `shuffled`;
-//! - reading the `newborn-grace` tag through `newbornGraceRemaining`, which
-//!   becomes [`UnusedNeuronCandidate::newborn_grace_remaining`];
-//! - writing the `unused`, `approach` and `old-*` tags, ageing the grace, and the
-//!   uuid and score comparison that decides whether the pass changed anything.
+//! - reading the `newborn-grace` tag and converting it with
+//!   [`newborn_grace_remaining`](crate::compact_unused_tags::newborn_grace_remaining),
+//!   which becomes [`UnusedNeuronCandidate::newborn_grace_remaining`];
+//! - writing the `unused`, `approach` and `old-*` tags and the aged grace,
+//!   computing the values with
+//!   [`compact_unused_pass_tags`](crate::compact_unused_tags::compact_unused_pass_tags)
+//!   and [`age_newborn_grace`](crate::compact_unused_tags::age_newborn_grace), and
+//!   the uuid and score comparison that decides whether the pass changed anything.
 //!
 //! The choice feeds the removal. Pass `choice.uuid` and `choice.activation` to
 //! [`remove_neuron`](crate::compact_unity_constant::remove_neuron), which is
@@ -110,8 +114,10 @@ pub struct NeuronTraceStats {
 pub struct UnusedNeuronCandidate {
     /// The neuron's trace, or `None` when it has none.
     pub trace: Option<NeuronTraceStats>,
-    /// The rounds of newborn grace left (TypeScript `newbornGraceRemaining`). A
-    /// neuron with grace left is skipped.
+    /// The rounds of newborn grace left. The caller reads the `newborn-grace` tag
+    /// and converts it with
+    /// [`newborn_grace_remaining`](crate::compact_unused_tags::newborn_grace_remaining).
+    /// A neuron with grace left is skipped.
     pub newborn_grace_remaining: u32,
 }
 

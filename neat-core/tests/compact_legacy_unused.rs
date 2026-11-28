@@ -16,8 +16,9 @@
 use std::cell::Cell;
 
 use neat_core::{
-    CreatureExport, NeuronExport, NeuronTraceStats, SynapseExport, UnitySlot,
-    UnusedNeuronCandidate, UnusedNeuronChoice, choose_unused_neuron, remove_neuron,
+    CreatureExport, NeuronExport, NeuronTraceStats, NewbornGraceAgeing, SynapseExport, UnitySlot,
+    UnusedNeuronCandidate, UnusedNeuronChoice, age_newborn_grace, choose_unused_neuron,
+    newborn_grace_remaining, remove_neuron,
 };
 use serde_json::Value;
 
@@ -448,4 +449,70 @@ fn the_frozen_choice_depends_on_the_callers_visit_order() {
         "hidden-3",
         "the reversed order picks hidden-3"
     );
+}
+
+/// The value of a neuron's first `newborn-grace` tag, as `getTag` returns it.
+fn grace_tag(neuron: &Value) -> Option<&str> {
+    neuron["tags"]
+        .as_array()?
+        .iter()
+        .find(|tag| tag["name"].as_str() == Some("newborn-grace"))
+        .map(|tag| tag["value"].as_str().unwrap())
+}
+
+#[test]
+fn frozen_newborn_grace_tags_read_and_age_like_the_original() {
+    let (mut kept, mut removed, mut set) = (0_usize, 0_usize, 0_usize);
+    for record in &golden() {
+        let name = record["name"].as_str().unwrap();
+        let traced = record["traced"]["neurons"].as_array().unwrap();
+        let aligned = record["aligned"]["neurons"].as_array().unwrap();
+        let grace = record["graceRemaining"].as_array().unwrap();
+        assert_eq!(traced.len(), aligned.len(), "{name}: neuron counts match");
+        for (i, (t, a)) in traced.iter().zip(aligned).enumerate() {
+            assert_eq!(t["uuid"], a["uuid"], "{name}: neuron {i} is aligned");
+            assert_eq!(
+                u64::from(newborn_grace_remaining(grace_tag(t))),
+                grace[i].as_u64().unwrap(),
+                "{name}: grace remaining of neuron {i}"
+            );
+        }
+        if record["result"].is_null() {
+            continue;
+        }
+        for survivor in record["result"]["after"]["neurons"].as_array().unwrap() {
+            let uuid = survivor["uuid"].as_str().unwrap();
+            let Some(before) = traced.iter().find(|n| n["uuid"].as_str() == Some(uuid)) else {
+                continue;
+            };
+            let (expected, counter) = match age_newborn_grace(grace_tag(before)) {
+                NewbornGraceAgeing::Keep => (grace_tag(before).map(str::to_string), &mut kept),
+                NewbornGraceAgeing::Remove => (None, &mut removed),
+                NewbornGraceAgeing::Set(value) => (Some(value), &mut set),
+            };
+            *counter += 1;
+            assert_eq!(
+                grace_tag(survivor).map(str::to_string),
+                expected,
+                "{name}: aged grace of {uuid}"
+            );
+        }
+    }
+    assert!(set >= 1, "at least one survivor had its grace reduced");
+    assert!(removed >= 1, "at least one survivor had its grace removed");
+    assert!(kept >= 1, "at least one survivor kept its tag as it was");
+
+    let surviving_grace = |case: &str| {
+        let record = golden_record(case);
+        let neuron = record["result"]["after"]["neurons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["uuid"].as_str() == Some("hidden-quiet"))
+            .unwrap_or_else(|| panic!("{case}: hidden-quiet survives"))
+            .clone();
+        grace_tag(&neuron).map(str::to_string)
+    };
+    assert_eq!(surviving_grace("newborn_grace_2"), Some("1".to_string()));
+    assert_eq!(surviving_grace("newborn_grace_1"), None);
 }
