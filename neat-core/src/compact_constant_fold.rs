@@ -8,12 +8,12 @@
 //! A `constant` neuron's value is its bias. A hidden neuron whose every
 //! inbound source is already constant, and whose squash is a scalar one, has
 //! value `squash(bias + Σ weight · source)`. That squash is
-//! [`apply_squash`](crate::squash::apply_squash), evaluated at `f32` the way
+//! [`apply_squash`], evaluated at `f32` the way
 //! the forward pass reads it. Aggregate targets are not folded into. A typed
 //! edge is left in place, and an output is never left with no inbound edge.
 //! A producer with no outbound edge is left for [`cleanup_creature`](crate::cleanup_creature).
 //!
-//! `frozen` is not a field of [`CreatureExport`](crate::CreatureExport), so
+//! `frozen` is not a field of [`CreatureExport`], so
 //! this pass has nothing to skip on that account. The memetic record is
 //! pruned of dangling rows; it is not deleted.
 
