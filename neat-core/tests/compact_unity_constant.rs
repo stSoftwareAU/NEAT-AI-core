@@ -2793,3 +2793,60 @@ fn a_second_tagged_slot_two_holder_is_merged_into_the_first_as_captured() {
         3
     );
 }
+
+#[test]
+fn one_constant_holding_slot_one_by_id_and_slot_two_by_tag_is_refused_before_a_slot_two_merge() {
+    // `k1` holds slot 1 by its legacy id -1001 and slot 2 by tag, and `k2` holds
+    // slot 2 by tag as well. The slot-2 dedupe loop would merge `k2` into `k1`,
+    // but `createConstantOne(creature, 2)` would then re-tag the slot-1 holder,
+    // a shape the frozen TypeScript answers with `false`. It is refused, as one
+    // constant holding slots 0 and 1 is, and nothing is minted.
+    let mut k1 = neuron("constant", "k1", None, -0.2);
+    k1.id = Some(-1001);
+    let fixture = in_typescript_order(creature(
+        2,
+        vec![
+            neuron("constant", "k0", None, 0.7),
+            k1,
+            neuron("constant", "k2", None, 0.4),
+            neuron("hidden", "hidden-0", Some("IDENTITY"), 0.0),
+            neuron("hidden", "hidden-1", Some("IDENTITY"), 0.0),
+            neuron("output", "output-0", Some("IF"), 0.25),
+        ],
+        vec![
+            edge("input-0", "hidden-0", 1.0),
+            edge("input-0", "hidden-1", 1.0),
+            edge("k0", "hidden-1", 0.5),
+            edge("k1", "hidden-1", 0.25),
+            synapse("k2", "output-0", 0.125, Some("negative")),
+            synapse("hidden-0", "output-0", 3.0, Some("condition")),
+            synapse("hidden-1", "output-0", 2.0, Some("positive")),
+        ],
+    ));
+    let slots: Vec<UnitySlot> = [("k0", 0), ("k1", 2), ("k2", 2)]
+        .into_iter()
+        .map(|(uuid, slot)| UnitySlot {
+            uuid: uuid.to_string(),
+            slot,
+        })
+        .collect();
+    let mints = Cell::new(0_u64);
+    let result = remove_neuron(
+        &fixture,
+        "hidden-0",
+        1.5,
+        &slots,
+        || {
+            mints.set(mints.get() + 1);
+            fresh_uuid()
+        },
+        never_draw,
+    );
+    assert_eq!(
+        result,
+        Err(NeuronRemovalError::UnitySlotReuseNotPorted {
+            constant: "k1".to_string(),
+        })
+    );
+    assert_eq!(mints.get(), 0);
+}

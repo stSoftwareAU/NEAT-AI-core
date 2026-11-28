@@ -89,8 +89,10 @@ alone or a tagged holder behind the insertion point, since the loop matches tags
 only and stops at the temporary constant. The native port takes all of these. It
 refuses a merge that would duplicate one of the first holder's synapses, or that
 would remove a holder with an inward synapse. It also refuses one constant
-holding slots 0 and 1, whose slot-0 tag TypeScript would overwrite. Those
-refusals are read from the frozen source, not captured. It also refuses a merge
+holding slots 0 and 1, whose slot-0 tag TypeScript would overwrite, and one
+constant holding slots 1 and 2 (for example slot 1 by legacy id -1001 and slot 2
+by tag), whose slot-1 tag it would overwrite and for which it returns `false`;
+that refusal comes before any slot-2 merge. Those refusals are read from the frozen source, not captured. It also refuses a merge
 when the removed constant itself leads the list, since it may be one of the
 holders.
 
