@@ -275,8 +275,8 @@ use std::fmt;
 
 use crate::creature::{
     CreatureExport, MemeticExport, MemeticWeightExport, MemeticWeightRowExport, MemeticWeights,
-    declared_node_count, is_if_squash, parse_squash_name, parse_synapse_type,
-    synapse_type_name_from,
+    canonical_input_index, declared_node_count, input_wire_uuid, is_if_squash, parse_squash_name,
+    parse_synapse_type, synapse_type_name_from,
 };
 use crate::creature_validate_json::oversized_detail;
 use crate::synapse_type::SynapseType;
@@ -962,7 +962,7 @@ impl NeuronView<'_> {
     /// wire UUID, and the two diagnostic fallbacks when there is no UUID.
     fn wire_label(&self, index: usize) -> String {
         if self.kind == NeuronKind::Input {
-            return format!("input-{index}");
+            return input_wire_uuid(index);
         }
         let negative_id = self.id.filter(|id| *id < 0);
         if let (NeuronKind::Output, Some(id)) = (self.kind, negative_id) {
@@ -1207,7 +1207,8 @@ impl<'a> WireIndex<'a> {
             return Some(*index);
         }
         // Implicit input neurons are wired as `input-N`, never listed.
-        let index: usize = uuid.strip_prefix("input-")?.parse().ok()?;
+        // Only the spelling `input_wire_uuid` writes resolves; `input-00` does not.
+        let index = canonical_input_index(uuid)?;
         (index < self.input)
             .then(|| u32::try_from(index).ok())
             .flatten()
