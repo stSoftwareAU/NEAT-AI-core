@@ -110,8 +110,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::creature::{
-    CreatureError, CreatureExport, NeuronExport, SynapseExport, parse_squash_name,
-    parse_synapse_type, squash_name_from, synapse_type_name_from, validate_creature_width,
+    CreatureError, CreatureExport, NeuronExport, SynapseExport, canonical_input_index,
+    input_wire_uuid, parse_squash_name, parse_synapse_type, squash_name_from,
+    synapse_type_name_from, validate_creature_width,
 };
 use crate::creature_validate::{ValidateOptions, ValidationFailure, creature_validate};
 use crate::if_graft::{GraftError, sort_synapses_canonically, validate_creature_topology};
@@ -799,9 +800,7 @@ impl Engine {
     /// that never existed, a value that is not a number — not wreckage a
     /// removal left behind, so they fail loudly instead of being papered over.
     fn check_references(&mut self) -> Result<(), CleanupError> {
-        let mut known: HashSet<String> = (0..self.creature.input)
-            .map(|i| format!("input-{i}"))
-            .collect();
+        let mut known: HashSet<String> = (0..self.creature.input).map(input_wire_uuid).collect();
         let inputs = known.clone();
         let mut constants: HashSet<String> = HashSet::new();
 
@@ -1884,9 +1883,7 @@ pub(crate) fn static_condition_branch(
 /// Input neurons are not listed in `neurons` — the declared width is what says
 /// they exist (Issue #550) — so the name is the only thing to test.
 pub(crate) fn is_observation_uuid(creature: &CreatureExport, uuid: &str) -> bool {
-    uuid.strip_prefix("input-")
-        .and_then(|index| index.parse::<usize>().ok())
-        .is_some_and(|index| index < creature.input)
+    canonical_input_index(uuid).is_some_and(|index| index < creature.input)
 }
 
 /// Is this a value the **forward pass** can carry?

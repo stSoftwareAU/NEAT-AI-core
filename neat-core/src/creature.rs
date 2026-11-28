@@ -524,6 +524,28 @@ impl From<serde_json::Error> for CreatureError {
     }
 }
 
+/// The wire UUID of observation `index`: `input-0`, `input-1`, never `input-00`.
+pub(crate) fn input_wire_uuid(index: usize) -> String {
+    format!("input-{index}")
+}
+
+/// The observation index a wire UUID names, only for the spelling
+/// [`input_wire_uuid`] writes.
+///
+/// ASCII digits, no sign, and no leading zero unless the index is `0`.
+/// `input-+0`, `input-00`, `input-007` and `input-` name nothing. The caller
+/// still checks the index against the declared width.
+pub(crate) fn canonical_input_index(uuid: &str) -> Option<usize> {
+    let digits = uuid.strip_prefix("input-")?;
+    let canonical = !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'));
+    if !canonical {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Parse a squash function name string into a `SquashType` enum value.
 ///
 /// Handles all activation function names from the TypeScript codebase,
@@ -895,7 +917,7 @@ pub fn compile_creature(creature: &CreatureExport) -> Result<CompiledNetwork, Cr
     let mut uuid_to_index: HashMap<String, usize> =
         HashMap::with_capacity(num_inputs + creature.neurons.len());
     for i in 0..num_inputs {
-        uuid_to_index.insert(format!("input-{i}"), i);
+        uuid_to_index.insert(input_wire_uuid(i), i);
     }
 
     // Validate neuron counts

@@ -66,7 +66,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::creature::{CreatureExport, parse_squash_name};
+use crate::creature::{CreatureExport, canonical_input_index, parse_squash_name};
 
 /// Result of [`merge_parallel_bridges`].
 #[derive(Debug, Clone, PartialEq)]
@@ -318,14 +318,7 @@ fn activation_position(
     if let Some(&k) = neuron_index.get(uuid) {
         return Some(Position::Neuron(k));
     }
-    let digits = uuid.strip_prefix("input-")?;
-    let canonical = !digits.is_empty()
-        && digits.bytes().all(|b| b.is_ascii_digit())
-        && (digits == "0" || !digits.starts_with('0'));
-    if !canonical {
-        return None;
-    }
-    let index: usize = digits.parse().ok()?;
+    let index = canonical_input_index(uuid)?;
     (index < input).then_some(Position::Input(index))
 }
 

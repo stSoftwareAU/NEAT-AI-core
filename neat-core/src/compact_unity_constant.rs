@@ -94,7 +94,9 @@ use std::collections::HashMap;
 use crate::compact_remove_neuron::{
     RemoveNeuronError, remove_neuron_by_bias_fold, remove_with_orphan_cascade,
 };
-use crate::creature::{CreatureExport, NeuronExport, SynapseExport, parse_synapse_type};
+use crate::creature::{
+    CreatureExport, NeuronExport, SynapseExport, canonical_input_index, parse_synapse_type,
+};
 
 /// A constant neuron that a `compact-unity-slot` tag marks, with the slot it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,8 +489,7 @@ fn constant_branch(
         .map(|(position, neuron)| (neuron.uuid.as_str(), position))
         .collect();
     let runtime = |uuid: &str| -> Option<usize> {
-        uuid.strip_prefix("input-")
-            .and_then(|i| i.parse::<usize>().ok())
+        canonical_input_index(uuid)
             .filter(|&i| i < input)
             .or_else(|| positions.get(uuid).map(|&p| input + p))
     };
@@ -680,7 +681,5 @@ fn role_rank(synapse: &SynapseExport) -> u8 {
 /// Whether `uuid` is the wire name of one of the `input` inputs, `input-N` with
 /// `N < input`.
 fn names_an_input(uuid: &str, input: usize) -> bool {
-    uuid.strip_prefix("input-")
-        .and_then(|i| i.parse::<usize>().ok())
-        .is_some_and(|i| i < input)
+    canonical_input_index(uuid).is_some_and(|i| i < input)
 }
